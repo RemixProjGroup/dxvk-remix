@@ -28,6 +28,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <mutex>
+#include <vector>
 
 // Forward declarations for NvFlow types (full definitions only in .cpp)
 struct NvFlowLoader;
@@ -54,6 +55,31 @@ namespace dxvk {
 
   class RtxContext;
 
+  // Volume data exported from Flow simulation for renderer consumption
+  struct FlowVolumeData {
+    bool valid = false;
+    Vector3 worldMin = Vector3(0.f);
+    Vector3 worldMax = Vector3(0.f);
+    float cellSize = 0.5f;
+
+    // CPU copies of NanoVDB readback buffers (PNanoVDB format)
+    std::vector<uint8_t> smokeNanoVdb;
+    std::vector<uint8_t> temperatureNanoVdb;
+
+    // CPU dense voxel data (filled by voxelizeOnCpu from NanoVDB readback)
+    std::vector<float> densityDense;      // R32F dense grid
+    std::vector<float> temperatureDense;  // R32F dense grid
+    uint32_t denseResolution = 0;
+    bool denseDataReady = false;
+
+    // GPU resources (created in render step)
+    Rc<DxvkImage> densityTexture3D;
+    Rc<DxvkImage> temperatureTexture3D;
+    Rc<DxvkImageView> densityView;
+    Rc<DxvkImageView> temperatureView;
+    VkExtent3D textureExtent = { 0, 0, 0 };
+  };
+
   class RtxFlowContext {
   public:
     RtxFlowContext(DxvkDevice* device);
@@ -64,6 +90,8 @@ namespace dxvk {
     void render(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput);
 
     bool isActive() const { return enable() && m_initialized; }
+
+    const FlowVolumeData& getVolumeData() const { return m_volumeData; }
 
     void showImguiSettings();
 
@@ -76,6 +104,10 @@ namespace dxvk {
     bool initFlow();
     void shutdownFlow();
 
+    void voxelizeOnCpu();
+    void uploadDenseTextures(RtxContext* ctx);
+    void createDenseTextures(RtxContext* ctx);
+
     DxvkDevice* m_device;
 
     // Flow SDK handles (heap-allocated loader, opaque pointers for the rest)
@@ -87,6 +119,9 @@ namespace dxvk {
     NvFlowGridParamsNamed* m_gridParamsNamed = nullptr;
     NvFlowGridParams* m_gridParams = nullptr;  // mapped from m_gridParamsNamed at init, stays mapped
 
+    // Volume data for renderer
+    FlowVolumeData m_volumeData;
+
     // State
     bool m_initialized = false;
     bool m_initFailed = false;
@@ -97,6 +132,12 @@ namespace dxvk {
     // RTX Options
     RTX_OPTION("rtx.flow", bool, enable, false, "Enables PhysX Flow volumetric fluid simulation for smoke and fire effects.");
     RTX_OPTION("rtx.flow", uint32_t, maxLocations, 4096, "Maximum number of sparse block locations for the Flow grid.");
+
+    // Rendering options
+    RTX_OPTION("rtx.flow.render", float, densityMultiplier, 10.f, "Multiplier for smoke density (controls opacity).");
+    RTX_OPTION("rtx.flow.render", float, emissionIntensity, 5.f, "Intensity of fire emission from temperature.");
+    RTX_OPTION("rtx.flow.render", int, rayMarchSteps, 128, "Maximum number of ray march steps through the volume.");
+    RTX_OPTION("rtx.flow.render", int, textureResolution, 128, "Resolution of the dense 3D volume texture (NxNxN).");
 
     // Emitter options
     RTX_OPTION("rtx.flow.emitter", bool, emitterEnabled, true, "Enable the sphere emitter.");
@@ -113,6 +154,10 @@ namespace dxvk {
     RTX_OPTION("rtx.flow.emitter", float, coupleRateTemperature, 10.f, "Coupling rate for temperature injection.");
     RTX_OPTION("rtx.flow.emitter", float, coupleRateFuel, 10.f, "Coupling rate for fuel injection.");
     RTX_OPTION("rtx.flow.emitter", float, coupleRateVelocity, 2.f, "Coupling rate for velocity injection.");
+
+    // Rendering GPU resources
+    Rc<DxvkBuffer> m_compositeConstantBuffer;
+    Rc<DxvkSampler> m_linearSampler;
 
     // External emitters registered via Remix API
     std::unordered_map<uint64_t, FlowEmitterData> m_externalEmitters;

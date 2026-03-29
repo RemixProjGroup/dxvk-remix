@@ -22,8 +22,12 @@
 
 #include "rtx_flow_context.h"
 #include "rtx_context.h"
+#include "rtx_scene_manager.h"
 #include "../dxvk_device.h"
 #include "rtx_imgui.h"
+#include "rtx_render/rtx_shader_manager.h"
+#include "dxvk_scoped_annotation.h"
+#include "rtx/concept/camera/camera.h"
 
 // Suppress MSVC warnings from Flow headers (C4550: function pointer comparison pattern in NvFlowArray.h)
 #pragma warning(push)
@@ -32,9 +36,40 @@
 #include <NvFlowDatabase.h>
 #pragma warning(pop)
 
+// PNanoVDB for CPU-side NanoVDB tree traversal (used to convert readback → dense 3D array)
+#define PNANOVDB_C
+#pragma warning(push)
+#pragma warning(disable: 4244 4267) // conversion warnings in PNanoVDB macros
+#include <nanovdb/PNanoVDB.h>
+#pragma warning(pop)
+
 #include "../../util/log/log.h"
 
+// Compiled shader headers (generated at build time from .comp.slang files)
+#include <rtx_shaders/flow_composite.h>
+
+// Shader binding includes
+#include "rtx/pass/flow/flow_composite_binding_indices.h"
+#include "rtx/pass/flow/flow_composite_args.h"
+
 namespace dxvk {
+
+  // Shader class definitions for Flow rendering passes
+  namespace {
+    class FlowCompositeShader : public ManagedShader {
+      SHADER_SOURCE(FlowCompositeShader, VK_SHADER_STAGE_COMPUTE_BIT, flow_composite)
+
+      BEGIN_PARAMETER()
+        SAMPLER3D(FLOW_COMPOSITE_DENSITY_TEXTURE)
+        SAMPLER3D(FLOW_COMPOSITE_TEMPERATURE_TEXTURE)
+        RW_TEXTURE2D(FLOW_COMPOSITE_OUTPUT)
+        TEXTURE2D(FLOW_COMPOSITE_DEPTH_INPUT)
+        CONSTANT_BUFFER(FLOW_COMPOSITE_CONSTANTS)
+      END_PARAMETER()
+    };
+
+    PREWARM_SHADER_PIPELINE(FlowCompositeShader);
+  }
 
   static void flowLogPrint(NvFlowLogLevel level, const char* format, ...) {
     va_list args;
@@ -352,6 +387,12 @@ namespace dxvk {
     NvFlowGridSimulateLayerParams simulateLayerParams = NvFlowGridSimulateLayerParams_default;
     NvFlowGridOffscreenLayerParams offscreenLayerParams = NvFlowGridOffscreenLayerParams_default;
     NvFlowGridRenderLayerParams renderLayerParams = NvFlowGridRenderLayerParams_default;
+
+    // Enable NanoVDB export with readback for smoke and temperature channels
+    simulateLayerParams.nanoVdbExport.enabled = NV_FLOW_TRUE;
+    simulateLayerParams.nanoVdbExport.readbackEnabled = NV_FLOW_TRUE;
+    simulateLayerParams.nanoVdbExport.smokeEnabled = NV_FLOW_TRUE;
+    simulateLayerParams.nanoVdbExport.temperatureEnabled = NV_FLOW_TRUE;
     NvFlowUint8* pSimulateLayer = reinterpret_cast<NvFlowUint8*>(&simulateLayerParams);
     NvFlowUint8* pOffscreenLayer = reinterpret_cast<NvFlowUint8*>(&offscreenLayerParams);
     NvFlowUint8* pRenderLayer = reinterpret_cast<NvFlowUint8*>(&renderLayerParams);
@@ -463,15 +504,333 @@ namespace dxvk {
     if (logThisFrame) {
       Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: flushedFrame=", flushedFrame, " — frame complete"));
     }
+
+    // --- Retrieve NanoVDB readback data for rendering ---
+    {
+      NvFlowContext* ctx = m_loader->deviceInterface.getContext(m_deviceQueue);
+      NvFlowGridRenderData renderData = {};
+      m_loader->gridInterface.getRenderData(ctx, m_grid, &renderData);
+
+      // Extract world-space AABB from sparse params
+      m_volumeData.valid = false;
+      if (renderData.sparseParams.layerCount > 0 && renderData.sparseParams.layers != nullptr) {
+        const auto& layer = renderData.sparseParams.layers[0];
+        m_volumeData.worldMin = Vector3(layer.worldMin.x, layer.worldMin.y, layer.worldMin.z);
+        m_volumeData.worldMax = Vector3(layer.worldMax.x, layer.worldMax.y, layer.worldMax.z);
+        m_volumeData.cellSize = simulateLayerParams.densityCellSize;
+
+        if (logThisFrame) {
+          Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: AABB min=(", layer.worldMin.x, ",", layer.worldMin.y, ",", layer.worldMin.z,
+            ") max=(", layer.worldMax.x, ",", layer.worldMax.y, ",", layer.worldMax.z, ")"));
+        }
+      }
+
+      // Copy NanoVDB readback data (CPU pointers valid after waitIdle)
+      if (renderData.nanoVdb.readbackCount > 0 && renderData.nanoVdb.readbacks != nullptr) {
+        const auto& rb = renderData.nanoVdb.readbacks[0];
+
+        if (rb.smokeNanoVdbReadback != nullptr && rb.smokeNanoVdbReadbackSize > 0) {
+          m_volumeData.smokeNanoVdb.resize(rb.smokeNanoVdbReadbackSize);
+          memcpy(m_volumeData.smokeNanoVdb.data(), rb.smokeNanoVdbReadback, rb.smokeNanoVdbReadbackSize);
+          m_volumeData.valid = true;
+
+          if (logThisFrame) {
+            Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: smoke NanoVDB readback size=", rb.smokeNanoVdbReadbackSize, " bytes"));
+          }
+        } else {
+          m_volumeData.smokeNanoVdb.clear();
+        }
+
+        if (rb.temperatureNanoVdbReadback != nullptr && rb.temperatureNanoVdbReadbackSize > 0) {
+          m_volumeData.temperatureNanoVdb.resize(rb.temperatureNanoVdbReadbackSize);
+          memcpy(m_volumeData.temperatureNanoVdb.data(), rb.temperatureNanoVdbReadback, rb.temperatureNanoVdbReadbackSize);
+          m_volumeData.valid = true;
+
+          if (logThisFrame) {
+            Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: temperature NanoVDB readback size=", rb.temperatureNanoVdbReadbackSize, " bytes"));
+          }
+        } else {
+          m_volumeData.temperatureNanoVdb.clear();
+        }
+
+        if (logThisFrame && !m_volumeData.valid) {
+          Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: readback available but no smoke/temperature data yet (ring buffer filling)"));
+        }
+      } else {
+        m_volumeData.smokeNanoVdb.clear();
+        m_volumeData.temperatureNanoVdb.clear();
+
+        if (logThisFrame) {
+          Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: no NanoVDB readback available yet"));
+        }
+      }
+    }
+
+    // Convert NanoVDB readback data to dense 3D float arrays for GPU upload
+    voxelizeOnCpu();
+  }
+
+  void RtxFlowContext::createDenseTextures(RtxContext* ctx) {
+    uint32_t res = static_cast<uint32_t>(textureResolution());
+    VkExtent3D extent = { res, res, res };
+
+    // Only recreate if resolution changed
+    if (m_volumeData.textureExtent.width == extent.width &&
+        m_volumeData.textureExtent.height == extent.height &&
+        m_volumeData.textureExtent.depth == extent.depth &&
+        m_volumeData.densityTexture3D != nullptr) {
+      return;
+    }
+
+    m_volumeData.textureExtent = extent;
+
+    // Create 3D images directly via device
+    DxvkImageCreateInfo imgInfo;
+    imgInfo.type = VK_IMAGE_TYPE_3D;
+    imgInfo.format = VK_FORMAT_R32_SFLOAT;
+    imgInfo.flags = 0;
+    imgInfo.sampleCount = VK_SAMPLE_COUNT_1_BIT;
+    imgInfo.extent = extent;
+    imgInfo.numLayers = 1;
+    imgInfo.mipLevels = 1;
+    imgInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imgInfo.stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    imgInfo.access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imgInfo.layout = VK_IMAGE_LAYOUT_GENERAL;
+
+    m_volumeData.densityTexture3D = m_device->createImage(imgInfo,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXRenderTarget, "flow density 3D");
+    m_volumeData.temperatureTexture3D = m_device->createImage(imgInfo,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXRenderTarget, "flow temperature 3D");
+
+    // Create image views
+    DxvkImageViewCreateInfo viewInfo;
+    viewInfo.type = VK_IMAGE_VIEW_TYPE_3D;
+    viewInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    viewInfo.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.minLevel = 0;
+    viewInfo.numLevels = 1;
+    viewInfo.minLayer = 0;
+    viewInfo.numLayers = 1;
+    viewInfo.format = VK_FORMAT_R32_SFLOAT;
+
+    m_volumeData.densityView = m_device->createImageView(m_volumeData.densityTexture3D, viewInfo);
+    m_volumeData.temperatureView = m_device->createImageView(m_volumeData.temperatureTexture3D, viewInfo);
+
+    Logger::info(str::format("NvFlow: Created dense 3D textures at resolution ", res, "^3"));
+  }
+
+  static float sampleNanoVdbFloat(const std::vector<uint8_t>& nanoVdbData, const pnanovdb_vec3_t& worldPos) {
+    if (nanoVdbData.size() < PNANOVDB_GRID_SIZE + PNANOVDB_TREE_SIZE)
+      return 0.f;
+
+    pnanovdb_buf_t buf = pnanovdb_make_buf(
+      const_cast<uint32_t*>(reinterpret_cast<const uint32_t*>(nanoVdbData.data())),
+      nanoVdbData.size() / 4);
+
+    pnanovdb_grid_handle_t grid = { {0} };
+    pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(buf, grid);
+    pnanovdb_root_handle_t root = pnanovdb_tree_get_root(buf, tree);
+
+    pnanovdb_vec3_t indexf = pnanovdb_grid_world_to_indexf(buf, grid, PNANOVDB_REF(worldPos));
+    pnanovdb_coord_t ijk;
+    ijk.x = (pnanovdb_int32_t)floorf(indexf.x);
+    ijk.y = (pnanovdb_int32_t)floorf(indexf.y);
+    ijk.z = (pnanovdb_int32_t)floorf(indexf.z);
+
+    pnanovdb_address_t address = pnanovdb_root_get_value_address(
+      PNANOVDB_GRID_TYPE_FLOAT, buf, root, PNANOVDB_REF(ijk));
+    return pnanovdb_read_float(buf, address);
+  }
+
+  void RtxFlowContext::voxelizeOnCpu() {
+    m_volumeData.denseDataReady = false;
+
+    if (m_volumeData.smokeNanoVdb.empty() && m_volumeData.temperatureNanoVdb.empty())
+      return;
+
+    uint32_t res = static_cast<uint32_t>(textureResolution());
+    uint32_t totalVoxels = res * res * res;
+
+    m_volumeData.densityDense.resize(totalVoxels, 0.f);
+    m_volumeData.temperatureDense.resize(totalVoxels, 0.f);
+    m_volumeData.denseResolution = res;
+
+    Vector3 extent = m_volumeData.worldMax - m_volumeData.worldMin;
+    float invRes = 1.f / static_cast<float>(res);
+
+    bool hasDensity = !m_volumeData.smokeNanoVdb.empty() &&
+                      m_volumeData.smokeNanoVdb.size() >= PNANOVDB_GRID_SIZE + PNANOVDB_TREE_SIZE;
+    bool hasTemp = !m_volumeData.temperatureNanoVdb.empty() &&
+                   m_volumeData.temperatureNanoVdb.size() >= PNANOVDB_GRID_SIZE + PNANOVDB_TREE_SIZE;
+
+    if (!hasDensity && !hasTemp)
+      return;
+
+    for (uint32_t z = 0; z < res; z++) {
+      for (uint32_t y = 0; y < res; y++) {
+        for (uint32_t x = 0; x < res; x++) {
+          // Compute world position at voxel center
+          pnanovdb_vec3_t worldPos;
+          worldPos.x = m_volumeData.worldMin.x + (static_cast<float>(x) + 0.5f) * invRes * extent.x;
+          worldPos.y = m_volumeData.worldMin.y + (static_cast<float>(y) + 0.5f) * invRes * extent.y;
+          worldPos.z = m_volumeData.worldMin.z + (static_cast<float>(z) + 0.5f) * invRes * extent.z;
+
+          uint32_t idx = z * res * res + y * res + x;
+
+          if (hasDensity) {
+            m_volumeData.densityDense[idx] = sampleNanoVdbFloat(m_volumeData.smokeNanoVdb, worldPos);
+          }
+          if (hasTemp) {
+            m_volumeData.temperatureDense[idx] = sampleNanoVdbFloat(m_volumeData.temperatureNanoVdb, worldPos);
+          }
+        }
+      }
+    }
+
+    m_volumeData.denseDataReady = true;
+
+    if ((m_frameCount <= 5) || (m_frameCount % 300 == 0)) {
+      // Count non-zero voxels for debug
+      uint32_t nonZeroDensity = 0, nonZeroTemp = 0;
+      for (uint32_t i = 0; i < totalVoxels; i++) {
+        if (m_volumeData.densityDense[i] > 0.f) nonZeroDensity++;
+        if (m_volumeData.temperatureDense[i] > 0.f) nonZeroTemp++;
+      }
+      Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: voxelized ", res, "^3 = ", totalVoxels,
+        " voxels, non-zero density=", nonZeroDensity, " temp=", nonZeroTemp));
+    }
+  }
+
+  void RtxFlowContext::uploadDenseTextures(RtxContext* ctx) {
+    if (!m_volumeData.denseDataReady) return;
+
+    uint32_t res = m_volumeData.denseResolution;
+    VkExtent3D extent = { res, res, res };
+
+    VkImageSubresourceLayers subresources;
+    subresources.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    subresources.mipLevel = 0;
+    subresources.baseArrayLayer = 0;
+    subresources.layerCount = 1;
+
+    VkDeviceSize rowPitch = res * sizeof(float);
+    VkDeviceSize layerPitch = res * res * sizeof(float);
+
+    ctx->updateImage(m_volumeData.densityTexture3D,
+      subresources, VkOffset3D { 0, 0, 0 }, extent,
+      m_volumeData.densityDense.data(), rowPitch, layerPitch);
+
+    ctx->updateImage(m_volumeData.temperatureTexture3D,
+      subresources, VkOffset3D { 0, 0, 0 }, extent,
+      m_volumeData.temperatureDense.data(), rowPitch, layerPitch);
   }
 
   void RtxFlowContext::render(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput) {
     if (!m_initialized) return;
+    if (m_activeBlockCount == 0) return;
 
-    // Phase 1: Flow simulation runs but we don't yet composite into the scene.
-    // The simulation is running and m_activeBlockCount shows activity.
-    // Full rendering integration (Flow's ray marcher or direct grid sampling)
-    // requires cross-device texture sharing which will be implemented in Phase 2.
+    ScopedGpuProfileZone(ctx, "Flow Volume Rendering");
+
+    // Ensure 3D textures exist at the correct resolution
+    createDenseTextures(ctx);
+    if (m_volumeData.densityView == nullptr || m_volumeData.temperatureView == nullptr)
+      return;
+
+    // voxelizeOnCpu() is called at the end of simulate() after readback capture
+
+    // Upload dense data to GPU 3D textures
+    if (m_volumeData.denseDataReady) {
+      uploadDenseTextures(ctx);
+    } else {
+      return; // No data to render yet
+    }
+
+    // --- Pass 2: Integrated Volume Rendering (into composite output) ---
+    {
+      ScopedGpuProfileZone(ctx, "Flow Volume Composite");
+
+      const auto& sceneManager = ctx->getSceneManager();
+      Camera cameraConstants = sceneManager.getCamera().getShaderConstants();
+
+      FlowCompositeArgs args = {};
+      args.viewToWorld = cameraConstants.viewToWorld;
+      args.projectionToView = cameraConstants.projectionToViewJittered;
+      args.resolution.x = static_cast<float>(rtOutput.m_compositeOutputExtent.width);
+      args.resolution.y = static_cast<float>(rtOutput.m_compositeOutputExtent.height);
+      args.nearPlane = sceneManager.getCamera().getNearPlane();
+      args.densityMultiplier = densityMultiplier();
+      args.volumeMin.x = m_volumeData.worldMin.x;
+      args.volumeMin.y = m_volumeData.worldMin.y;
+      args.volumeMin.z = m_volumeData.worldMin.z;
+      args.emissionIntensity = emissionIntensity();
+      args.volumeMax.x = m_volumeData.worldMax.x;
+      args.volumeMax.y = m_volumeData.worldMax.y;
+      args.volumeMax.z = m_volumeData.worldMax.z;
+
+      // Step size: fraction of volume extent for quality
+      float extent = std::max({
+        m_volumeData.worldMax.x - m_volumeData.worldMin.x,
+        m_volumeData.worldMax.y - m_volumeData.worldMin.y,
+        m_volumeData.worldMax.z - m_volumeData.worldMin.z
+      });
+      args.stepSizeWorld = extent / static_cast<float>(rayMarchSteps());
+
+      // Create or reuse composite constant buffer
+      if (m_compositeConstantBuffer == nullptr) {
+        DxvkBufferCreateInfo info;
+        info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        info.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        info.access = VK_ACCESS_TRANSFER_WRITE_BIT;
+        info.size = sizeof(FlowCompositeArgs);
+        m_compositeConstantBuffer = m_device->createBuffer(info,
+          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, "Flow composite constants");
+      }
+      ctx->writeToBuffer(m_compositeConstantBuffer, 0, sizeof(args), &args);
+
+      // Create sampler for 3D texture filtering
+      if (m_linearSampler == nullptr) {
+        DxvkSamplerCreateInfo samplerInfo;
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.mipmapLodBias = 0.0f;
+        samplerInfo.mipmapLodMin = 0.0f;
+        samplerInfo.mipmapLodMax = 0.0f;
+        samplerInfo.useAnisotropy = VK_FALSE;
+        samplerInfo.maxAnisotropy = 1.0f;
+        samplerInfo.compareToDepth = VK_FALSE;
+        samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+        samplerInfo.borderColor = VkClearColorValue();
+        samplerInfo.usePixelCoord = VK_FALSE;
+        m_linearSampler = m_device->createSampler(samplerInfo);
+      }
+
+      // Bind resources
+      ctx->bindResourceView(FLOW_COMPOSITE_DENSITY_TEXTURE, m_volumeData.densityView, nullptr);
+      ctx->bindResourceSampler(FLOW_COMPOSITE_DENSITY_TEXTURE, m_linearSampler);
+      ctx->bindResourceView(FLOW_COMPOSITE_TEMPERATURE_TEXTURE, m_volumeData.temperatureView, nullptr);
+      ctx->bindResourceSampler(FLOW_COMPOSITE_TEMPERATURE_TEXTURE, m_linearSampler);
+
+      ctx->bindResourceView(FLOW_COMPOSITE_OUTPUT,
+        rtOutput.m_compositeOutput.view(Resources::AccessType::Write), nullptr);
+      ctx->bindResourceView(FLOW_COMPOSITE_DEPTH_INPUT,
+        rtOutput.m_primaryLinearViewZ.view, nullptr);
+
+      ctx->bindResourceBuffer(FLOW_COMPOSITE_CONSTANTS,
+        DxvkBufferSlice(m_compositeConstantBuffer, 0, m_compositeConstantBuffer->info().size));
+
+      // Dispatch: 8x8 threads per group
+      VkExtent3D workgroups = util::computeBlockCount(
+        rtOutput.m_compositeOutputExtent, VkExtent3D { 8, 8, 1 });
+
+      ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, FlowCompositeShader::getShader());
+      ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
+    }
   }
 
   void RtxFlowContext::showImguiSettings() {
@@ -499,6 +858,20 @@ namespace dxvk {
       ImGui::Separator();
       ImGui::Text("Grid Settings");
       ImGui::Text("Max Locations: %u (set via rtx.conf)", maxLocations());
+
+      ImGui::Separator();
+      ImGui::Text("Rendering");
+      RemixGui::DragFloat("Density Multiplier", &densityMultiplierObject(), 0.5f, 0.0f, 100.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Emission Intensity", &emissionIntensityObject(), 0.5f, 0.0f, 100.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragInt("Ray March Steps", &rayMarchStepsObject(), 1.0f, 16, 512);
+      RemixGui::DragInt("Texture Resolution", &textureResolutionObject(), 1.0f, 32, 256);
+      if (m_volumeData.valid) {
+        ImGui::Text("Volume AABB: (%.1f,%.1f,%.1f) - (%.1f,%.1f,%.1f)",
+          m_volumeData.worldMin.x, m_volumeData.worldMin.y, m_volumeData.worldMin.z,
+          m_volumeData.worldMax.x, m_volumeData.worldMax.y, m_volumeData.worldMax.z);
+        ImGui::Text("Smoke NanoVDB: %zu KB", m_volumeData.smokeNanoVdb.size() / 1024);
+        ImGui::Text("Temp NanoVDB: %zu KB", m_volumeData.temperatureNanoVdb.size() / 1024);
+      }
 
       ImGui::Separator();
       ImGui::Text("Emitter");
