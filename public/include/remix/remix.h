@@ -204,6 +204,11 @@ namespace remix {
     Result< void >                           pick_HighlightObjects(const uint32_t* objectPickingValues_values,
                                                                    uint32_t objectPickingValues_count,
                                                                    uint8_t colorR, uint8_t colorG, uint8_t colorB);
+
+    // PhysX Flow
+    Result< remixapi_FlowEmitterHandle >  CreateFlowEmitter(const remixapi_FlowEmitterInfo& info);
+    Result< void >                        DestroyFlowEmitter(remixapi_FlowEmitterHandle handle);
+    Result< void >                        DrawFlowEmitterInstance(remixapi_FlowEmitterHandle handle);
   };
 
   namespace lib {
@@ -1002,6 +1007,23 @@ namespace remix {
 
   inline Result< void > Interface::DrawLightInstance(remixapi_LightHandle handle) {
     return m_CInterface.DrawLightInstance(handle);
+  }
+
+  inline Result< remixapi_FlowEmitterHandle > Interface::CreateFlowEmitter(const remixapi_FlowEmitterInfo& info) {
+    remixapi_FlowEmitterHandle handle = nullptr;
+    remixapi_ErrorCode status = m_CInterface.CreateFlowEmitter(&info, &handle);
+    if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
+      return status;
+    }
+    return handle;
+  }
+
+  inline Result< void > Interface::DestroyFlowEmitter(remixapi_FlowEmitterHandle handle) {
+    return m_CInterface.DestroyFlowEmitter(handle);
+  }
+
+  inline Result< void > Interface::DrawFlowEmitterInstance(remixapi_FlowEmitterHandle handle) {
+    return m_CInterface.DrawFlowEmitterInstance(handle);
   }
 
   namespace detail {
