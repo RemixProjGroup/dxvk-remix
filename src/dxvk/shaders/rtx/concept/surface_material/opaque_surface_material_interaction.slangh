@@ -851,6 +851,167 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
     
   metallic = saturate(metallic * cb.opaqueMaterialArgs.metallicScale + cb.opaqueMaterialArgs.metallicBias);
 
+  // Slope-adaptive triplanar blending for baked terrain side projections
+  if (isBakedTerrain && cb.terrainArgs.enableSideProjections != 0)
+  {
+    // Compute triplanar blend weights from the triangle normal
+    f16vec3 upDir = cb.isZUp ? f16vec3(0.h, 0.h, 1.h) : f16vec3(0.h, 1.h, 0.h);
+    f16vec3 forwardDir = cb.isZUp ? f16vec3(0.h, 1.h, 0.h) : f16vec3(0.h, 0.h, 1.h);
+    f16vec3 rightDir = f16vec3(1.h, 0.h, 0.h);
+
+    float16_t upWeight = abs(dot(surfaceInteraction.triangleNormal, upDir));
+    float16_t frontWeight = abs(dot(surfaceInteraction.triangleNormal, forwardDir));
+    float16_t rightWeight = abs(dot(surfaceInteraction.triangleNormal, rightDir));
+
+    // Apply sharpness to sharpen the blend transition
+    float16_t sharpness = float16_t(cb.terrainArgs.slopeBlendSharpness);
+    upWeight = pow(upWeight, sharpness);
+    frontWeight = pow(frontWeight, sharpness);
+    rightWeight = pow(rightWeight, sharpness);
+
+    // Normalize weights
+    float16_t totalWeight = upWeight + frontWeight + rightWeight;
+    totalWeight = max(totalWeight, float16_t(0.001h));
+    upWeight /= totalWeight;
+    frontWeight /= totalWeight;
+    rightWeight /= totalWeight;
+
+    // Only sample side projections if they contribute significantly
+    if (upWeight < float16_t(0.99h))
+    {
+      // Compute side projection UVs from world position
+      vec2 frontUV = computeSideProjectionTexCoord(
+        cb.terrainArgs.worldToFrontCascade0Row0,
+        cb.terrainArgs.worldToFrontCascade0Row1,
+        surfaceInteraction.position);
+      vec2 rightUV = computeSideProjectionTexCoord(
+        cb.terrainArgs.worldToRightCascade0Row0,
+        cb.terrainArgs.worldToRightCascade0Row1,
+        surfaceInteraction.position);
+
+      // Unpack front texture indices
+      uint16_t frontAlbedoIdx = uint16_t(cb.terrainArgs.frontAlbedoNormalIndices & 0xFFFFu);
+      uint16_t frontNormalIdx = uint16_t(cb.terrainArgs.frontAlbedoNormalIndices >> 16u);
+      uint16_t frontRoughnessIdx = uint16_t(cb.terrainArgs.frontRoughnessMetallicIndices & 0xFFFFu);
+      uint16_t frontMetallicIdx = uint16_t(cb.terrainArgs.frontRoughnessMetallicIndices >> 16u);
+      uint16_t frontEmissiveIdx = uint16_t(cb.terrainArgs.frontEmissivePadIndices & 0xFFFFu);
+
+      // Unpack right texture indices
+      uint16_t rightAlbedoIdx = uint16_t(cb.terrainArgs.rightAlbedoNormalIndices & 0xFFFFu);
+      uint16_t rightNormalIdx = uint16_t(cb.terrainArgs.rightAlbedoNormalIndices >> 16u);
+      uint16_t rightRoughnessIdx = uint16_t(cb.terrainArgs.rightRoughnessMetallicIndices & 0xFFFFu);
+      uint16_t rightMetallicIdx = uint16_t(cb.terrainArgs.rightRoughnessMetallicIndices >> 16u);
+      uint16_t rightEmissiveIdx = uint16_t(cb.terrainArgs.rightEmissivePadIndices & 0xFFFFu);
+
+      uint samplerIdx = uint(opaqueSurfaceMaterial.samplerIndex);
+
+      // Sample front projection textures
+      f16vec3 frontAlbedo = albedo;
+      f16vec3 frontNormal = normal;
+      float16_t frontRoughness = roughness;
+      float16_t frontMetallic = metallic;
+      f16vec3 frontEmissive = emissiveColor;
+
+      if (frontAlbedoIdx != BINDING_INDEX_INVALID)
+      {
+        f16vec4 frontAlbedoSample = textures[nonuniformEXT(uint(frontAlbedoIdx))].SampleLevel(
+          samplers[nonuniformEXT(samplerIdx)], frontUV, 0);
+        frontAlbedo = gammaToLinear(frontAlbedoSample.rgb);
+        frontAlbedo = saturate(frontAlbedo * cb.opaqueMaterialArgs.albedoScale + cb.opaqueMaterialArgs.albedoBias);
+      }
+
+      if (frontNormalIdx != BINDING_INDEX_INVALID)
+      {
+        f16vec4 frontNormalSample = textures[nonuniformEXT(uint(frontNormalIdx))].SampleLevel(
+          samplers[nonuniformEXT(samplerIdx)], frontUV, 0);
+        // Baked terrain normals are already decoded, transform from front tangent space to world
+        f16vec3 frontTangentNormal = sanitize(frontNormalSample.xyz,
+          cb.isZUp ? f16vec3(0.h, 0.h, 1.h) : f16vec3(0.h, 1.h, 0.h));
+        // Front projection tangent frame: tangent=right, bitangent=up, normal=forward
+        f16mat3 frontTangentToWorld = f16mat3(rightDir, upDir, forwardDir);
+        frontNormal = normalize(frontTangentToWorld * frontTangentNormal);
+        frontNormal = sanitize(frontNormal, cb.isZUp ? f16vec3(0.h, 0.h, 1.h) : f16vec3(0.h, 1.h, 0.h));
+      }
+
+      if (frontRoughnessIdx != BINDING_INDEX_INVALID)
+      {
+        frontRoughness = textures[nonuniformEXT(uint(frontRoughnessIdx))].SampleLevel(
+          samplers[nonuniformEXT(samplerIdx)], frontUV, 0).x;
+        frontRoughness = saturate(frontRoughness * cb.opaqueMaterialArgs.roughnessScale + cb.opaqueMaterialArgs.roughnessBias);
+      }
+
+      if (frontMetallicIdx != BINDING_INDEX_INVALID)
+      {
+        frontMetallic = textures[nonuniformEXT(uint(frontMetallicIdx))].SampleLevel(
+          samplers[nonuniformEXT(samplerIdx)], frontUV, 0).x;
+        frontMetallic = saturate(frontMetallic * cb.opaqueMaterialArgs.metallicScale + cb.opaqueMaterialArgs.metallicBias);
+      }
+
+      if (frontEmissiveIdx != BINDING_INDEX_INVALID)
+      {
+        frontEmissive = gammaToLinear(textures[nonuniformEXT(uint(frontEmissiveIdx))].SampleLevel(
+          samplers[nonuniformEXT(samplerIdx)], frontUV, 0).rgb);
+      }
+
+      // Sample right projection textures
+      f16vec3 rightAlbedo = albedo;
+      f16vec3 rightNormal = normal;
+      float16_t rightRoughness = roughness;
+      float16_t rightMetallic = metallic;
+      f16vec3 rightEmissive = emissiveColor;
+
+      if (rightAlbedoIdx != BINDING_INDEX_INVALID)
+      {
+        f16vec4 rightAlbedoSample = textures[nonuniformEXT(uint(rightAlbedoIdx))].SampleLevel(
+          samplers[nonuniformEXT(samplerIdx)], rightUV, 0);
+        rightAlbedo = gammaToLinear(rightAlbedoSample.rgb);
+        rightAlbedo = saturate(rightAlbedo * cb.opaqueMaterialArgs.albedoScale + cb.opaqueMaterialArgs.albedoBias);
+      }
+
+      if (rightNormalIdx != BINDING_INDEX_INVALID)
+      {
+        f16vec4 rightNormalSample = textures[nonuniformEXT(uint(rightNormalIdx))].SampleLevel(
+          samplers[nonuniformEXT(samplerIdx)], rightUV, 0);
+        f16vec3 rightTangentNormal = sanitize(rightNormalSample.xyz,
+          cb.isZUp ? f16vec3(0.h, 0.h, 1.h) : f16vec3(0.h, 1.h, 0.h));
+        // Right projection tangent frame: tangent=forward, bitangent=up, normal=right
+        f16mat3 rightTangentToWorld = f16mat3(forwardDir, upDir, rightDir);
+        rightNormal = normalize(rightTangentToWorld * rightTangentNormal);
+        rightNormal = sanitize(rightNormal, cb.isZUp ? f16vec3(0.h, 0.h, 1.h) : f16vec3(0.h, 1.h, 0.h));
+      }
+
+      if (rightRoughnessIdx != BINDING_INDEX_INVALID)
+      {
+        rightRoughness = textures[nonuniformEXT(uint(rightRoughnessIdx))].SampleLevel(
+          samplers[nonuniformEXT(samplerIdx)], rightUV, 0).x;
+        rightRoughness = saturate(rightRoughness * cb.opaqueMaterialArgs.roughnessScale + cb.opaqueMaterialArgs.roughnessBias);
+      }
+
+      if (rightMetallicIdx != BINDING_INDEX_INVALID)
+      {
+        rightMetallic = textures[nonuniformEXT(uint(rightMetallicIdx))].SampleLevel(
+          samplers[nonuniformEXT(samplerIdx)], rightUV, 0).x;
+        rightMetallic = saturate(rightMetallic * cb.opaqueMaterialArgs.metallicScale + cb.opaqueMaterialArgs.metallicBias);
+      }
+
+      if (rightEmissiveIdx != BINDING_INDEX_INVALID)
+      {
+        rightEmissive = gammaToLinear(textures[nonuniformEXT(uint(rightEmissiveIdx))].SampleLevel(
+          samplers[nonuniformEXT(samplerIdx)], rightUV, 0).rgb);
+      }
+
+      // Blend all material properties using triplanar weights
+      albedo = upWeight * albedo + frontWeight * frontAlbedo + rightWeight * rightAlbedo;
+      roughness = upWeight * roughness + frontWeight * frontRoughness + rightWeight * rightRoughness;
+      metallic = upWeight * metallic + frontWeight * frontMetallic + rightWeight * rightMetallic;
+      emissiveColor = upWeight * emissiveColor + frontWeight * frontEmissive + rightWeight * rightEmissive;
+
+      // Blend normals in world space and re-normalize
+      normal = normalize(upWeight * normal + frontWeight * frontNormal + rightWeight * rightNormal);
+      normal = sanitize(normal, cb.isZUp ? f16vec3(0.h, 0.h, 1.h) : f16vec3(0.h, 1.h, 0.h));
+    }
+  }
+
   // Transform to desired Opaque Material Interaction values
 
   opaqueSurfaceMaterialInteraction.shadingNormal = getBentNormal(surfaceInteraction.triangleNormal, normal, -minimalRayInteraction.viewDirection);

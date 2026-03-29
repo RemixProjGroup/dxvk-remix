@@ -131,11 +131,36 @@ namespace dxvk {
                       args.minValue = 1,
                       args.maxValue = 32 * 1024,
                       args.environment = "RTX_TERRAIN_BAKER_LEVEL_RESOLUTION");
-      RTX_OPTION("rtx.terrainBaker.cascadeMap", bool, expandLastCascade, true, 
+      RTX_OPTION("rtx.terrainBaker.cascadeMap", bool, expandLastCascade, true,
                  "Expands the last cascade's footprint to cover the whole cascade map.\n"
                  "This ensures whole terrain surface has valid baked texture data to sample from\n"
                  "even if there isn't enough cascades generated (due to the current settings or limitations).");
     } cascadeMap;
+
+    static struct SlopeAdaptive {
+      friend class ImGUI; // <-- we want to modify these values directly.
+      friend class TerrainBaker; // <-- we want to modify these values directly.
+
+      RTX_OPTION("rtx.terrainBaker.slopeAdaptive", bool, enable, false,
+                 "Enables slope-adaptive terrain baking which adds additional side projections (front and right) for steep terrain.\n"
+                 "When enabled, surfaces such as cliffs and mountains will receive properly projected textures instead of stretched top-down projections.\n"
+                 "The shader blends between top-down and side projections based on the surface normal orientation.\n"
+                 "Costs additional GPU memory and baking time proportional to the side resolution scale.");
+      RTX_OPTION("rtx.terrainBaker.slopeAdaptive", float, steepnessThreshold, 0.5f,
+                 "Controls the surface normal threshold at which side projections begin blending in.\n"
+                 "This is the dot product of the surface normal with the up direction below which surfaces are considered steep.\n"
+                 "0.0: Only perfectly vertical surfaces use side projections. 1.0: All surfaces blend side projections.\n"
+                 "Valid range is <0, 1>.");
+      RTX_OPTION("rtx.terrainBaker.slopeAdaptive", float, blendSharpness, 4.0f,
+                 "Controls the sharpness of the blend transition between top-down and side projections.\n"
+                 "Higher values create a sharper transition. Lower values create a smoother gradient.\n"
+                 "Valid range is <1, 16>.");
+      RTX_OPTION("rtx.terrainBaker.slopeAdaptive", float, sideResolutionScale, 0.5f,
+                 "Resolution scale for side projection atlases relative to the top-down atlas.\n"
+                 "0.5 means each side projection is at half the resolution per cascade level.\n"
+                 "Lower values save memory and baking time but reduce quality on steep surfaces.\n"
+                 "Valid range is <0.1, 1.0>.");
+    } slopeAdaptive;
     
     // RTX OPTIONS
 
@@ -165,8 +190,21 @@ namespace dxvk {
     void calculateCascadeMapResolution(const Rc<DxvkDevice>& device);
     const RtxMipmap::Resource& getTerrainTexture(Rc<DxvkContext> ctx, RtxTextureManager& textureManager, ReplacementMaterialTextureType::Enum textureType, uint32_t width, uint32_t height);
     void clearMaterialTexture(Rc<DxvkContext> ctx, ReplacementMaterialTextureType::Enum textureType);
+    void clearSideTexture(Rc<DxvkContext> ctx, Resources::Resource& texture, ReplacementMaterialTextureType::Enum textureType);
     static bool isPSReplacementSupportEnabled(const DrawCallState& drawCallState);
     VkClearColorValue getClearColor(ReplacementMaterialTextureType::Enum textureType);
+
+    // Side projection baking parameters (front and right views)
+    struct SideProjectionParams {
+      Matrix4 sceneView;
+      Matrix4 inverseSceneView;
+      std::vector<Matrix4> bakingCameraOrthoProjection;
+      Matrix4 viewToCascade0TextureSpace;
+      float zNear;
+      float zFar;
+      VkExtent2D cascadeLevelResolution;
+      VkExtent2D cascadeMapResolution;
+    };
 
     BakingParameters m_bakingParams;
 
@@ -253,6 +291,29 @@ namespace dxvk {
     };
 
     BakedTexture m_materialTextures[ReplacementMaterialTextureType::Count];
+
+    // Side projection textures and parameters
+    BakedTexture m_frontTextures[ReplacementMaterialTextureType::Count];
+    BakedTexture m_rightTextures[ReplacementMaterialTextureType::Count];
+    SideProjectionParams m_frontParams;
+    SideProjectionParams m_rightParams;
+    uint32_t m_frontTextureIndices[ReplacementMaterialTextureType::Count] = { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
+    uint32_t m_rightTextureIndices[ReplacementMaterialTextureType::Count] = { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
+
+    void calculateSideProjectionParameters(Rc<RtxContext> ctx, const DxvkContextState& dxvkCtxState);
+    void bakeSideProjection(Rc<RtxContext> ctx, const DxvkContextState& dxvkCtxState,
+                            DxvkRaytracingInstanceState& rtState, const DrawParameters& params,
+                            const DrawCallState& drawCallState,
+                            const std::vector<RtxGeometryUtils::TextureConversionInfo>& replacementTextures,
+                            bool bakeReplacementTextures,
+                            uint32_t colorTextureSlot, uint32_t secondaryTextureSlot,
+                            const SideProjectionParams& sideParams,
+                            BakedTexture* sideTextures);
+    void trackSideProjectionTextures(Rc<RtxContext> ctx);
+    const RtxMipmap::Resource& getSideTexture(Rc<DxvkContext> ctx, RtxTextureManager& textureManager,
+                                              BakedTexture& bakedTexture, ReplacementMaterialTextureType::Enum textureType,
+                                              uint32_t width, uint32_t height);
+    static uint32_t packTextureIndexPair(uint32_t lowIndex, uint32_t highIndex);
 
     Rc<DxvkSampler> m_terrainSampler;
   };

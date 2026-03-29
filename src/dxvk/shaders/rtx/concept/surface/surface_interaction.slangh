@@ -148,6 +148,42 @@ void convert1stCascadeTexCoordsToTargetCascadeLevel(uint targetCascadeLevel, ino
   }
 }
 
+// Computes tiled cascade texture coordinates for a side projection from world position.
+// worldToProjectionRow0/Row1 are the first two rows of the world-to-cascade-0-texture-space matrix.
+vec2 computeSideProjectionTexCoord(vec4 worldToProjectionRow0, vec4 worldToProjectionRow1, vec3 worldPos)
+{
+  // Transform world position to cascade 0 UV space
+  vec4 worldPos4 = vec4(worldPos, 1.0f);
+  vec2 cascade0UV;
+  cascade0UV.x = dot(worldToProjectionRow0, worldPos4);
+  cascade0UV.y = dot(worldToProjectionRow1, worldPos4);
+
+  // Cascade level selection (same logic as top-down)
+  uint cascadeLevel = 0;
+
+  if (cb.terrainArgs.maxCascadeLevel > 0)
+  {
+    vec2 textureCenterOffset = texcoordToOffsetFromTextureCenter(cascade0UV);
+    float maxOffset = max(abs(textureCenterOffset.x), abs(textureCenterOffset.y));
+
+    if (maxOffset >= 0.5f)
+    {
+      float normalizedOffset = maxOffset * 2.0f;
+      cascadeLevel = min(uint(ceil(log2(normalizedOffset))), cb.terrainArgs.maxCascadeLevel);
+    }
+  }
+
+  // Convert to tiled texture space
+  ivec2 cascade2DIndex;
+  cascade2DIndex.y = int(cascadeLevel * cb.terrainArgs.rcpCascadeMapSize.x);
+  cascade2DIndex.x = int(cascadeLevel) - cascade2DIndex.y * int(cb.terrainArgs.cascadeMapSize.x);
+
+  float baseCascadeScale = cascadeLevel == cb.terrainArgs.maxCascadeLevel ? cb.terrainArgs.lastCascadeScale : 1.0f;
+  float rcpScale = 1.0f / (baseCascadeScale * pow(2, cascadeLevel));
+
+  return cb.terrainArgs.rcpCascadeMapSize * (cascade2DIndex + convert1stCascadeTexCoordToTargetCascadeLevel(rcpScale, cascade0UV));
+}
+
 // Adjusts a specified set of texture coordinates and gradients with respect to specified spritesheet information.
 void calcSpriteSheetAdjustment(
   inout vec2 textureCoordinates,

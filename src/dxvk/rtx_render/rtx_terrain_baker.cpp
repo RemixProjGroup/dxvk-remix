@@ -588,6 +588,18 @@ namespace dxvk {
       }
     }
 
+    // Bake side projections if enabled
+    if (slopeAdaptive.enable() && bakingResult) {
+      bakeSideProjection(ctx, dxvkCtxState, rtState, drawParams, drawCallState,
+                         replacementTextures, bakeReplacementTextures,
+                         colorTextureSlot, secondaryTextureSlot,
+                         m_frontParams, m_frontTextures);
+      bakeSideProjection(ctx, dxvkCtxState, rtState, drawParams, drawCallState,
+                         replacementTextures, bakeReplacementTextures,
+                         colorTextureSlot, secondaryTextureSlot,
+                         m_rightParams, m_rightTextures);
+    }
+
     // Restore prev state
     {
       ctx->setViewports(prevViewportCount, prevViewportState.viewports.data(), prevViewportState.scissorRects.data());
@@ -754,7 +766,52 @@ namespace dxvk {
     }
     args.lastCascadeScale = m_bakingParams.lastCascadeScale;
 
+    args.enableSideProjections = slopeAdaptive.enable() ? 1 : 0;
+    args.slopeBlendSharpness = slopeAdaptive.blendSharpness();
+    args.slopeBlendThreshold = slopeAdaptive.steepnessThreshold();
+
+    if (slopeAdaptive.enable()) {
+      // Extract first 2 rows from world-to-cascade-0 matrices for side projections
+      // Row i of a column-major Matrix4 M: (M[0][i], M[1][i], M[2][i], M[3][i])
+      const Matrix4& frontM = m_frontParams.viewToCascade0TextureSpace;
+      args.worldToFrontCascade0Row0 = vec4(frontM[0][0], frontM[1][0], frontM[2][0], frontM[3][0]);
+      args.worldToFrontCascade0Row1 = vec4(frontM[0][1], frontM[1][1], frontM[2][1], frontM[3][1]);
+
+      const Matrix4& rightM = m_rightParams.viewToCascade0TextureSpace;
+      args.worldToRightCascade0Row0 = vec4(rightM[0][0], rightM[1][0], rightM[2][0], rightM[3][0]);
+      args.worldToRightCascade0Row1 = vec4(rightM[0][1], rightM[1][1], rightM[2][1], rightM[3][1]);
+
+      // Pack bindless texture indices as pairs of uint16
+      args.frontAlbedoNormalIndices = packTextureIndexPair(
+        m_frontTextureIndices[ReplacementMaterialTextureType::AlbedoOpacity],
+        m_frontTextureIndices[ReplacementMaterialTextureType::Normal]);
+      args.frontTangentHeightIndices = packTextureIndexPair(
+        m_frontTextureIndices[ReplacementMaterialTextureType::Tangent],
+        m_frontTextureIndices[ReplacementMaterialTextureType::Height]);
+      args.frontRoughnessMetallicIndices = packTextureIndexPair(
+        m_frontTextureIndices[ReplacementMaterialTextureType::Roughness],
+        m_frontTextureIndices[ReplacementMaterialTextureType::Metallic]);
+      args.frontEmissivePadIndices = packTextureIndexPair(
+        m_frontTextureIndices[ReplacementMaterialTextureType::Emissive], 0);
+
+      args.rightAlbedoNormalIndices = packTextureIndexPair(
+        m_rightTextureIndices[ReplacementMaterialTextureType::AlbedoOpacity],
+        m_rightTextureIndices[ReplacementMaterialTextureType::Normal]);
+      args.rightTangentHeightIndices = packTextureIndexPair(
+        m_rightTextureIndices[ReplacementMaterialTextureType::Tangent],
+        m_rightTextureIndices[ReplacementMaterialTextureType::Height]);
+      args.rightRoughnessMetallicIndices = packTextureIndexPair(
+        m_rightTextureIndices[ReplacementMaterialTextureType::Roughness],
+        m_rightTextureIndices[ReplacementMaterialTextureType::Metallic]);
+      args.rightEmissivePadIndices = packTextureIndexPair(
+        m_rightTextureIndices[ReplacementMaterialTextureType::Emissive], 0);
+    }
+
     return args;
+  }
+
+  uint32_t TerrainBaker::packTextureIndexPair(uint32_t lowIndex, uint32_t highIndex) {
+    return (lowIndex & 0xFFFF) | ((highIndex & 0xFFFF) << 16);
   }
 
   void TerrainBaker::showImguiSettings() const {
@@ -826,6 +883,19 @@ namespace dxvk {
         ImGui::Unindent();
       }
 
+      if (RemixGui::CollapsingHeader("Slope Adaptive")) {
+        ImGui::Indent();
+
+        RemixGui::Checkbox("Enable Side Projections", &slopeAdaptive.enableObject());
+        ImGui::BeginDisabled(!slopeAdaptive.enable());
+        RemixGui::DragFloat("Steepness Threshold", &slopeAdaptive.steepnessThresholdObject(), 0.01f, 0.f, 1.f, "%.3f", sliderFlags);
+        RemixGui::DragFloat("Blend Sharpness", &slopeAdaptive.blendSharpnessObject(), 0.1f, 1.f, 16.f, "%.1f", sliderFlags);
+        RemixGui::DragFloat("Side Resolution Scale", &slopeAdaptive.sideResolutionScaleObject(), 0.05f, 0.1f, 1.f, "%.2f", sliderFlags);
+        ImGui::EndDisabled();
+
+        ImGui::Unindent();
+      }
+
       RemixGui::Checkbox("Debug: Disable Baking", &debugDisableBakingObject());
       RemixGui::Checkbox("Debug: Disable Binding", &debugDisableBindingObject());
     }
@@ -859,6 +929,14 @@ namespace dxvk {
       texture.onFrameEnd(ctx);
     }
 
+    for (BakedTexture& texture : m_frontTextures) {
+      texture.onFrameEnd(ctx);
+    }
+
+    for (BakedTexture& texture : m_rightTextures) {
+      texture.onFrameEnd(ctx);
+    }
+
     if (m_calculatingDisplaceInFactor) {
       m_calculatingDisplaceInFactor = false;
       Material::Properties::displaceInFactor.setDeferred(m_calculatedDisplaceInFactor);
@@ -885,6 +963,20 @@ namespace dxvk {
       if (m_materialTextures[ReplacementMaterialTextureType::Height].texture.isValid()) {
         ScopedGpuProfileZone(ctx, "Terrain Height Mip Map");
         RtxMipmap::updateMipmap(ctx, m_materialTextures[ReplacementMaterialTextureType::Height].texture, MipmapMethod::Maximum);
+      }
+
+      if (slopeAdaptive.enable()) {
+        if (m_frontTextures[ReplacementMaterialTextureType::Height].texture.isValid()) {
+          ScopedGpuProfileZone(ctx, "Terrain Front Height Mip Map");
+          RtxMipmap::updateMipmap(ctx, m_frontTextures[ReplacementMaterialTextureType::Height].texture, MipmapMethod::Maximum);
+        }
+
+        if (m_rightTextures[ReplacementMaterialTextureType::Height].texture.isValid()) {
+          ScopedGpuProfileZone(ctx, "Terrain Right Height Mip Map");
+          RtxMipmap::updateMipmap(ctx, m_rightTextures[ReplacementMaterialTextureType::Height].texture, MipmapMethod::Maximum);
+        }
+
+        trackSideProjectionTextures(ctx);
       }
     }
   }
@@ -947,6 +1039,15 @@ namespace dxvk {
     ctx->clearColorImage(texture.image, getClearColor(textureType), subRange);
   }
 
+  void TerrainBaker::clearSideTexture(Rc<DxvkContext> ctx, Resources::Resource& texture, ReplacementMaterialTextureType::Enum textureType) {
+    VkImageSubresourceRange subRange = {};
+    subRange.layerCount = 1;
+    subRange.levelCount = 1;
+    subRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+
+    ctx->clearColorImage(texture.image, getClearColor(textureType), subRange);
+  }
+
   TerrainBaker::AxisAlignedBoundingBoxLink::AxisAlignedBoundingBoxLink(const DrawCallState& drawCallState)
     : aabbObjectSpace(drawCallState.getGeometryData().boundingBox)
     , objectToWorld(drawCallState.getTransformData().objectToWorld) {
@@ -978,6 +1079,18 @@ namespace dxvk {
       for (uint32_t i = 0; i < ReplacementMaterialTextureType::Count; i++) {
         if (m_materialTextures[i].texture.isValid()) {
           clearMaterialTexture(ctx, static_cast<ReplacementMaterialTextureType::Enum>(i));
+        }
+      }
+
+      if (slopeAdaptive.enable()) {
+        for (uint32_t i = 0; i < ReplacementMaterialTextureType::Count; i++) {
+          auto textureType = static_cast<ReplacementMaterialTextureType::Enum>(i);
+          if (m_frontTextures[i].texture.isValid()) {
+            clearSideTexture(ctx, m_frontTextures[i].texture, textureType);
+          }
+          if (m_rightTextures[i].texture.isValid()) {
+            clearSideTexture(ctx, m_rightTextures[i].texture, textureType);
+          }
         }
       }
     }
@@ -1023,6 +1136,353 @@ namespace dxvk {
 
       ONCE(Logger::warn(str::format("[RTX Terrain Baker] Requested terrain cascade map resolution {", prevCascadeMapResolution.width, ", ", prevCascadeMapResolution.height, "} is outside the device limits {", maxDimension, ", ", maxDimension, "}. Reducing the cascade map resolution to {", m_bakingParams.cascadeMapResolution.width, ", ", m_bakingParams.cascadeMapResolution.height, "}.")));
     }
+  }
+
+  void TerrainBaker::trackSideProjectionTextures(Rc<RtxContext> ctx) {
+    if (!slopeAdaptive.enable()) {
+      return;
+    }
+
+    SceneManager& sceneManager = ctx->getSceneManager();
+
+    for (uint32_t i = 0; i < ReplacementMaterialTextureType::Count; i++) {
+      if (m_frontTextures[i].isBaked()) {
+        TextureRef ref(m_frontTextures[i].texture.view);
+        sceneManager.trackTexture(ref, m_frontTextureIndices[i], true);
+      } else {
+        m_frontTextureIndices[i] = 0xFFFF;
+      }
+
+      if (m_rightTextures[i].isBaked()) {
+        TextureRef ref(m_rightTextures[i].texture.view);
+        sceneManager.trackTexture(ref, m_rightTextureIndices[i], true);
+      } else {
+        m_rightTextureIndices[i] = 0xFFFF;
+      }
+    }
+  }
+
+  const RtxMipmap::Resource& TerrainBaker::getSideTexture(
+    Rc<DxvkContext> ctx,
+    RtxTextureManager& textureManager,
+    BakedTexture& bakedTexture,
+    ReplacementMaterialTextureType::Enum textureType,
+    uint32_t width,
+    uint32_t height) {
+
+    VkExtent3D resolution = { width, height, 1 };
+    RtxMipmap::Resource& texture = bakedTexture.texture;
+
+    if (!texture.isValid() || texture.image->info().extent != resolution) {
+      // Release previous texture if it exists
+      if (texture.isValid()) {
+        TextureRef textureRef = TextureRef(texture.view);
+        textureManager.releaseTexture(textureRef);
+
+        for (Rc<DxvkImageView>& view : texture.views) {
+          auto viewRef = TextureRef(view);
+          textureManager.releaseTexture(viewRef);
+        }
+      }
+
+      texture = RtxMipmap::createResource(
+        ctx, "baked terrain side texture", resolution, getTextureFormat(textureType),
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, getClearColor(textureType), getMipLevels(textureType, resolution));
+    }
+
+    return texture;
+  }
+
+  void TerrainBaker::bakeSideProjection(
+    Rc<RtxContext> ctx,
+    const DxvkContextState& dxvkCtxState,
+    DxvkRaytracingInstanceState& rtState,
+    const DrawParameters& drawParams,
+    const DrawCallState& drawCallState,
+    const std::vector<RtxGeometryUtils::TextureConversionInfo>& replacementTextures,
+    bool bakeReplacementTextures,
+    uint32_t colorTextureSlot,
+    uint32_t secondaryTextureSlot,
+    const SideProjectionParams& sideParams,
+    BakedTexture* sideTextures) {
+
+    ScopedGpuProfileZone(ctx, "Terrain Baker: Bake Side Projection");
+
+    RtxTextureManager& textureManager = ctx->getCommonObjects()->getTextureManager();
+
+    const uint32_t numTexturesToBake = bakeReplacementTextures ? replacementTextures.size() : 1;
+
+    const float2 float2CascadeLevelRes = float2 {
+      static_cast<float>(sideParams.cascadeLevelResolution.width),
+      static_cast<float>(sideParams.cascadeLevelResolution.height)
+    };
+
+    const float prevFrameTotalHeight = m_prevFrameMaxDisplaceIn + m_prevFrameMaxDisplaceOut;
+    const float neutralDisplacement = prevFrameTotalHeight != 0.f ? m_prevFrameMaxDisplaceIn / prevFrameTotalHeight : kDefaultNeutralHeight;
+
+    // Reconstruct prev constant buffers from current state since bakeDrawCall may have modified them
+    union UnifiedCB {
+      D3D9RtxVertexCaptureData programmablePipeline;
+      D3D9FixedFunctionVS fixedFunction;
+      UnifiedCB() { }
+    };
+
+    UnifiedCB prevCB;
+    if (drawCallState.usesVertexShader) {
+      prevCB.programmablePipeline = *static_cast<D3D9RtxVertexCaptureData*>(rtState.vertexCaptureCB->mapPtr(0));
+    } else {
+      prevCB.fixedFunction = *static_cast<D3D9FixedFunctionVS*>(rtState.vsFixedFunctionCB->mapPtr(0));
+    }
+    D3D9SharedPS prevSharedState = *static_cast<D3D9SharedPS*>(rtState.psSharedStateCB->mapPtr(0));
+
+    for (uint32_t iTexture = 0; iTexture < numTexturesToBake; iTexture++) {
+      ReplacementMaterialTextureType::Enum textureType = ReplacementMaterialTextureType::AlbedoOpacity;
+      float texturePreOffset = 0.f;
+      float textureScale = 1.f;
+
+      if (bakeReplacementTextures) {
+        const TextureRef& replacementTexture = replacementTextures[iTexture].targetTexture;
+        textureType = replacementTextures[iTexture].type;
+        textureScale = replacementTextures[iTexture].scale;
+        texturePreOffset = replacementTextures[iTexture].offset;
+
+        ctx->bindResourceView(colorTextureSlot, replacementTexture.getImageView(), nullptr);
+
+        if (isPSReplacementSupportEnabled(drawCallState)) {
+          if (drawCallState.usesPixelShader) {
+            if (textureType != ReplacementMaterialTextureType::Enum::AlbedoOpacity &&
+                drawCallState.programmablePixelShaderInfo.majorVersion() >= 2) {
+              continue;
+            }
+          }
+
+          switch (textureType) {
+          case ReplacementMaterialTextureType::Enum::AlbedoOpacity:
+          default:
+            ctx->setSpecConstant(VK_PIPELINE_BIND_POINT_GRAPHICS, D3D9SpecConstantId::ReplacementTextureCategory,
+              static_cast<uint32_t>(ReplacementMaterialTextureCategory::AlbedoOpacity));
+            break;
+          case ReplacementMaterialTextureType::Enum::Normal:
+          case ReplacementMaterialTextureType::Enum::Tangent:
+            ctx->setSpecConstant(VK_PIPELINE_BIND_POINT_GRAPHICS, D3D9SpecConstantId::ReplacementTextureCategory,
+              static_cast<uint32_t>(ReplacementMaterialTextureCategory::SecondaryOctahedralEncoded));
+            break;
+          case ReplacementMaterialTextureType::Enum::Roughness:
+          case ReplacementMaterialTextureType::Enum::Metallic:
+          case ReplacementMaterialTextureType::Enum::Emissive:
+            ctx->setSpecConstant(VK_PIPELINE_BIND_POINT_GRAPHICS, D3D9SpecConstantId::ReplacementTextureCategory,
+              static_cast<uint32_t>(ReplacementMaterialTextureCategory::SecondaryRaw));
+            break;
+          case ReplacementMaterialTextureType::Enum::Height:
+            ctx->setSpecConstant(VK_PIPELINE_BIND_POINT_GRAPHICS, D3D9SpecConstantId::ReplacementTextureCategory,
+              static_cast<uint32_t>(ReplacementMaterialTextureCategory::SecondaryScaled));
+            break;
+          }
+
+          if (textureType != ReplacementMaterialTextureType::AlbedoOpacity && secondaryTextureSlot != kInvalidResourceSlot) {
+            const TextureRef& albedoOpacityTexture = replacementTextures[ReplacementMaterialTextureType::AlbedoOpacity].targetTexture;
+            ctx->bindResourceView(secondaryTextureSlot, albedoOpacityTexture.getImageView(), nullptr);
+            ctx->bindResourceSampler(secondaryTextureSlot, ctx->getShaderResourceSlot(colorTextureSlot).sampler);
+          }
+        }
+      }
+
+      // Create/resize side atlas texture
+      const RtxMipmap::Resource& terrainResource = getSideTexture(
+        ctx, textureManager, sideTextures[textureType], textureType,
+        sideParams.cascadeMapResolution.width, sideParams.cascadeMapResolution.height);
+      const Rc<DxvkImageView>& terrainTextureView = terrainResource.views.empty() ? terrainResource.view : terrainResource.views[0];
+
+      if (terrainTextureView == nullptr) {
+        if (textureType == ReplacementMaterialTextureType::AlbedoOpacity) {
+          break;
+        }
+        continue;
+      }
+
+      DxvkRenderTargets terrainRt;
+      terrainRt.color[0].view = terrainTextureView;
+      terrainRt.color[0].layout = VK_IMAGE_LAYOUT_GENERAL;
+      ctx->bindRenderTargets(terrainRt);
+
+      sideTextures[textureType].markAsBaked();
+
+      const Matrix4& world = drawCallState.usesVertexShader ? prevCB.programmablePipeline.normalTransform : prevCB.fixedFunction.World;
+      Matrix4 worldSideView = sideParams.sceneView * world;
+
+      for (uint32_t iCascade = 0; iCascade < m_bakingParams.numCascades; iCascade++) {
+        Vector2i cascade2DIndex;
+        cascade2DIndex.y = iCascade / m_bakingParams.cascadeMapSize.x;
+        cascade2DIndex.x = iCascade - cascade2DIndex.y * m_bakingParams.cascadeMapSize.x;
+
+        VkViewport viewport {
+          cascade2DIndex.x * float2CascadeLevelRes.x,
+          (cascade2DIndex.y + 1) * float2CascadeLevelRes.y,
+          float2CascadeLevelRes.x,
+          -float2CascadeLevelRes.y,
+          0.f, 1.f
+        };
+
+        VkOffset2D cascadeOffset = VkOffset2D {
+          static_cast<int>(cascade2DIndex.x * sideParams.cascadeLevelResolution.width),
+          static_cast<int>(cascade2DIndex.y * sideParams.cascadeLevelResolution.height) };
+
+        VkRect2D scissor = { cascadeOffset, sideParams.cascadeLevelResolution };
+
+        ctx->setViewports(1, &viewport, &scissor);
+
+        float cascadeUvDensity = Material::Properties::displaceInFactor() / std::max(sideParams.cascadeMapResolution.width, sideParams.cascadeMapResolution.height);
+
+        D3D9SharedPS& sharedState = ctx->allocAndMapPSSharedStateConstantBuffer();
+        for (int i = 0; i < caps::TextureStageCount; ++i) {
+          sharedState.Stages[i] = prevSharedState.Stages[i];
+        }
+        sharedState.Stages[kTerrainBakerSecondaryTextureStage].texturePreOffset = texturePreOffset;
+        sharedState.Stages[kTerrainBakerSecondaryTextureStage].textureScale = textureScale * cascadeUvDensity;
+        sharedState.Stages[kTerrainBakerSecondaryTextureStage].texturePostOffset = neutralDisplacement;
+
+        if (drawCallState.usesVertexShader) {
+          D3D9RtxVertexCaptureData& cbData = ctx->allocAndMapVertexCaptureConstantBuffer();
+          cbData = prevCB.programmablePipeline;
+          cbData.customWorldToProjection = sideParams.bakingCameraOrthoProjection[iCascade] * worldSideView;
+        } else {
+          D3D9FixedFunctionVS& cbData = ctx->allocAndMapFixedFunctionVSConstantBuffer();
+          cbData = prevCB.fixedFunction;
+
+          cbData.InverseView = sideParams.inverseSceneView;
+          cbData.View = sideParams.sceneView;
+          cbData.WorldView = worldSideView;
+          cbData.Projection = sideParams.bakingCameraOrthoProjection[iCascade];
+
+          for (auto& light : cbData.Lights) {
+            light.Diffuse = Vector4(0.f);
+            light.Specular = Vector4(0.f);
+            light.Ambient = Vector4(1.f);
+          }
+        }
+
+        if (drawParams.indexCount == 0) {
+          ctx->DxvkContext::draw(drawParams.vertexCount, drawParams.instanceCount, drawParams.vertexOffset, 0);
+        } else {
+          ctx->DxvkContext::drawIndexed(drawParams.indexCount, drawParams.instanceCount, drawParams.firstIndex, drawParams.vertexOffset, 0);
+        }
+      }
+    }
+  }
+
+  void TerrainBaker::calculateSideProjectionParameters(Rc<RtxContext> ctx, const DxvkContextState& dxvkCtxState) {
+    if (!slopeAdaptive.enable()) {
+      return;
+    }
+
+    const RtCamera& camera = ctx->getSceneManager().getCamera();
+    const float metersToWorldUnitScale = RtxOptions::getMeterToWorldUnitScale();
+    const Vector3 up = SceneManager::getSceneUp();
+    const Vector3 forward = SceneManager::getSceneForward();
+    const Vector3 right = SceneManager::calculateSceneRight();
+
+    const bool terrainBBOXIsValid = m_bakedTerrainBBOX.isValid();
+    const float epsilon = 0.01f;
+
+    const VkPhysicalDeviceLimits& limits = ctx->getDevice()->adapter()->deviceProperties().limits;
+    const uint32_t maxDimension = limits.maxImageDimension2D;
+
+    // Calculate terrain extents in scene-oriented space (x=right, y=forward, z=up)
+    const Vector3 terrainExtent = terrainBBOXIsValid
+      ? SceneManager::worldToSceneOrientedVector(m_bakedTerrainBBOX.maxPos - m_bakedTerrainBBOX.minPos)
+      : Vector3(metersToWorldUnitScale * cascadeMap.defaultHalfWidth() * 2.f);
+
+    const Vector3 cameraRelativeMax = terrainBBOXIsValid
+      ? SceneManager::worldToSceneOrientedVector(m_bakedTerrainBBOX.maxPos - camera.getPosition())
+      : Vector3(metersToWorldUnitScale * cascadeMap.defaultHalfWidth());
+
+    auto setupSideProjection = [&](SideProjectionParams& params,
+                                   const Vector3& viewX, const Vector3& viewY, const Vector3& viewZ,
+                                   float viewAxisExtent, float cameraRelativeExtent) {
+      const float zNear = 0.01f;
+      const float zFar = (std::abs(viewAxisExtent) + 1.f) * (1 + epsilon) + zNear;
+
+      params.zNear = zNear;
+      params.zFar = zFar;
+
+      // Position baking camera at the far end of terrain along the viewing axis
+      const Vector3 bakingCameraPosition = cameraRelativeExtent >= 0.f
+        ? camera.getPosition() + (cameraRelativeExtent * (1 + epsilon) + zNear) * viewZ
+        : camera.getPosition() + (cameraRelativeExtent * (1 - epsilon) - zNear) * viewZ;
+
+      // Construct view matrix: X=viewX, Y=viewY, Z=viewZ (depth)
+      const Vector3 translation = Vector3(
+        dot(viewX, -bakingCameraPosition),
+        dot(viewY, -bakingCameraPosition),
+        dot(viewZ, -bakingCameraPosition));
+
+      Matrix4 sideSceneView;
+      sideSceneView[0] = Vector4(viewX.x, viewY.x, viewZ.x, 0.f);
+      sideSceneView[1] = Vector4(viewX.y, viewY.y, viewZ.y, 0.f);
+      sideSceneView[2] = Vector4(viewX.z, viewY.z, viewZ.z, 0.f);
+      sideSceneView[3] = Vector4(translation.x, translation.y, translation.z, 1.f);
+
+      params.sceneView = sideSceneView;
+      params.inverseSceneView = inverse(sideSceneView);
+
+      // Calculate side resolution (scaled from top-down)
+      uint32_t sideLevelRes = std::max(1u,
+        static_cast<uint32_t>(cascadeMap.levelResolution() * slopeAdaptive.sideResolutionScale()));
+
+      params.cascadeLevelResolution = VkExtent2D { sideLevelRes, sideLevelRes };
+      params.cascadeMapResolution.width = m_bakingParams.cascadeMapSize.x * sideLevelRes;
+      params.cascadeMapResolution.height = m_bakingParams.cascadeMapSize.y * sideLevelRes;
+
+      // Clamp to device limits
+      if (params.cascadeMapResolution.width > maxDimension || params.cascadeMapResolution.height > maxDimension) {
+        const float downscale = std::min(
+          static_cast<float>(maxDimension) / params.cascadeMapResolution.width,
+          static_cast<float>(maxDimension) / params.cascadeMapResolution.height);
+
+        params.cascadeLevelResolution.width = static_cast<uint32_t>(
+          floor(downscale * params.cascadeMapResolution.width) / m_bakingParams.cascadeMapSize.x);
+        params.cascadeLevelResolution.height = static_cast<uint32_t>(
+          floor(downscale * params.cascadeMapResolution.height) / m_bakingParams.cascadeMapSize.y);
+        params.cascadeMapResolution.width = params.cascadeLevelResolution.width * m_bakingParams.cascadeMapSize.x;
+        params.cascadeMapResolution.height = params.cascadeLevelResolution.height * m_bakingParams.cascadeMapSize.y;
+      }
+
+      // Setup ortho projections for each cascade level (same half-widths as top-down)
+      params.bakingCameraOrthoProjection.resize(m_bakingParams.numCascades);
+
+      for (uint32_t iCascade = 0; iCascade < m_bakingParams.numCascades; iCascade++) {
+        float halfWidth = metersToWorldUnitScale * cascadeMap.levelHalfWidth() * pow(2, iCascade);
+
+        // Apply last cascade expansion if needed
+        const bool isLastCascade = iCascade == m_bakingParams.numCascades - 1;
+        if (isLastCascade && m_bakingParams.lastCascadeScale > 1.f && cascadeMap.expandLastCascade()) {
+          halfWidth *= m_bakingParams.lastCascadeScale;
+        }
+
+        float4x4& proj = *reinterpret_cast<float4x4*>(&params.bakingCameraOrthoProjection[iCascade]);
+        proj.SetupByOrthoProjection(-halfWidth, halfWidth, -halfWidth, halfWidth, zNear, zFar);
+
+        if (iCascade == 0) {
+          // Clip space <-1, 1> to UV <0, 1> with Vulkan y-flip
+          const Matrix4 textureOffset = Matrix4(
+            Vector4(.5f, 0, 0, 0),
+            Vector4(0, -.5f, 0, 0),
+            Vector4(0, 0, 1, 0),
+            Vector4(.5f, .5f, 0, 1));
+
+          // Transform world position directly to cascade 0 UV (no camera.getViewToWorld())
+          params.viewToCascade0TextureSpace = textureOffset * params.bakingCameraOrthoProjection[iCascade] * sideSceneView;
+        }
+      }
+    };
+
+    // Front projection: looks along -forward, X=right, Y=up, Z=forward
+    setupSideProjection(m_frontParams, right, up, forward,
+                        terrainExtent.y, cameraRelativeMax.y);
+
+    // Right projection: looks along -right, X=forward, Y=up, Z=right
+    setupSideProjection(m_rightParams, forward, up, right,
+                        terrainExtent.x, cameraRelativeMax.x);
   }
 
   void TerrainBaker::calculateBakingParameters(Rc<RtxContext> ctx, const DxvkContextState& dxvkCtxState) {
@@ -1179,5 +1639,8 @@ namespace dxvk {
         m_bakingParams.viewToCascade0TextureSpace = textureOffset * m_bakingParams.bakingCameraOrthoProjection[iCascade] * sceneView * camera.getViewToWorld();
       }
     }
+
+    // Calculate side projection parameters after the top-down cascade structure is finalized
+    calculateSideProjectionParameters(ctx, dxvkCtxState);
   }
 }

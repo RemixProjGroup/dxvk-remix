@@ -56,7 +56,33 @@ struct TerrainArgs {
   uint maxCascadeLevel;
   float lastCascadeScale;
   float displaceIn;
-  uint pad0;
+  uint enableSideProjections;
+
+  // Slope-adaptive blending parameters
+  float slopeBlendSharpness;
+  float slopeBlendThreshold;
+  float2 sideProjectionPad;
+
+  // World-to-cascade-0-texture-space for front projection (first 2 rows of the 4x4 matrix)
+  vec4 worldToFrontCascade0Row0;
+  vec4 worldToFrontCascade0Row1;
+
+  // World-to-cascade-0-texture-space for right projection (first 2 rows of the 4x4 matrix)
+  vec4 worldToRightCascade0Row0;
+  vec4 worldToRightCascade0Row1;
+
+  // Bindless texture indices for front side projection (packed as pairs of uint16)
+  // x: albedoOpacity | normal, y: tangent | height, z: roughness | metallic, w: emissive | pad
+  uint frontAlbedoNormalIndices;
+  uint frontTangentHeightIndices;
+  uint frontRoughnessMetallicIndices;
+  uint frontEmissivePadIndices;
+
+  // Bindless texture indices for right side projection (same packing)
+  uint rightAlbedoNormalIndices;
+  uint rightTangentHeightIndices;
+  uint rightRoughnessMetallicIndices;
+  uint rightEmissivePadIndices;
 };
 
 struct NeeCacheArgs {
