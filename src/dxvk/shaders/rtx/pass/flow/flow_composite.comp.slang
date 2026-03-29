@@ -33,6 +33,39 @@
 
 #include "rtx/pass/flow/flow_composite_binding_indices.h"
 #include "rtx/pass/flow/flow_composite_args.h"
+#include "rtx/utility/color.slangh"
+#include "rtx/concept/light/spherical_harmonics.slangh"
+
+// Inlined from froxel.slangh — only the functions needed for froxel UVW lookup.
+// Cannot include froxel.slangh directly because it contains functions that depend
+// on VolumeArgs/VolumeDefinitionCamera types from the full raytracing constant buffer.
+
+float depthToFroxelDepthSlice(float depth, uint depthSlices, float depthSliceDistributionExponent, float maxDistance, float nearPlane, bool invertViewZ) {
+  float linearDepth = invertViewZ ? -depth : depth;
+  float normalizedDepth = saturate((linearDepth - nearPlane) / (maxDistance - nearPlane));
+  float depthSlice = pow(normalizedDepth, 1.0 / depthSliceDistributionExponent) * float(depthSlices);
+  return depthSlice;
+}
+
+vec3 translatedWorldPositionToFroxelUVW_flow(
+  mat4 translatedWorldToView, mat4 translatedWorldToProjection, bool invertViewZ,
+  uint depthSlices, float depthSliceDistributionExponent, float maxDistance, float nearPlane,
+  vec3 translatedWorldPosition)
+{
+  vec4 projectedPosition = mul(translatedWorldToProjection, vec4(translatedWorldPosition, 1.0f));
+  vec2 screenUV = projectedPosition.xy / projectedPosition.w * vec2(0.5f, -0.5f) + vec2(0.5f, 0.5f);
+  float viewZ = mul(translatedWorldToView, vec4(translatedWorldPosition, 1.0f)).z;
+  float depthSlice = depthToFroxelDepthSlice(viewZ, depthSlices, depthSliceDistributionExponent, maxDistance, nearPlane, invertViewZ);
+  return vec3(screenUV, depthSlice / float(depthSlices));
+}
+
+vec3 virtualFroxelUVWToPhysicalFroxelUVW_flow(
+  vec3 froxelUVW, uint froxelVolume, float minFilteredRadianceU, float maxFilteredRadianceU, float inverseNumFroxelVolumes)
+{
+  float clampedU = clamp(froxelUVW.x, minFilteredRadianceU, maxFilteredRadianceU);
+  float physicalU = (clampedU + float(froxelVolume)) * inverseNumFroxelVolumes;
+  return vec3(physicalU, froxelUVW.y, froxelUVW.z);
+}
 
 layout(binding = FLOW_COMPOSITE_DENSITY_TEXTURE)
 Sampler3D<float> DensityTexture;
@@ -48,6 +81,12 @@ Texture2D<float> DepthInput;
 
 layout(binding = FLOW_COMPOSITE_CONSTANTS)
 ConstantBuffer<FlowCompositeArgs> cb;
+
+// Froxel radiance cache for in-scattered light from scene lights
+layout(binding = FLOW_COMPOSITE_VOLUME_RADIANCE_Y)
+Sampler3D<float4> VolumeRadianceY;
+layout(binding = FLOW_COMPOSITE_VOLUME_RADIANCE_CO_CG)
+Sampler3D<float2> VolumeRadianceCoCg;
 
 // Intersect ray with AABB, returns (tNear, tFar) or tNear > tFar if miss
 float2 intersectAABB(float3 rayOrigin, float3 rayDirInv, float3 boxMin, float3 boxMax) {
@@ -123,11 +162,16 @@ void main(uint3 threadId : SV_DispatchThreadID) {
   float marchStepSize = max(cb.stepSizeWorld, 0.01);
   int maxSteps = min(int((tHit.y - tHit.x) / marchStepSize), 256);
 
+  // Per-pixel temporal jitter to break up ray march banding
+  // Uses a simple hash of pixel position + frame index for cheap blue-noise-like dither
+  uint pixelSeed = threadId.x + threadId.y * 1920u + cb.frameIndex * 277u;
+  float jitter = frac(float(pixelSeed) * 0.6180339887); // golden ratio hash
+
   float transmittance = 1.0;
   float3 accumulatedRadiance = float3(0, 0, 0);
 
   for (int step = 0; step < maxSteps; step++) {
-    float t = tHit.x + (float(step) + 0.5) * marchStepSize;
+    float t = tHit.x + (float(step) + jitter) * marchStepSize;
     if (t >= tHit.y) break;
 
     float3 worldPos = rayOrigin + rayDir * t;
@@ -143,18 +187,49 @@ void main(uint3 threadId : SV_DispatchThreadID) {
       continue;
 
     // Beer-Lambert extinction
-    float extinction = max(density, 0.0) * cb.densityMultiplier * marchStepSize;
+    float sigma_t = max(density, 0.0) * cb.densityMultiplier;
+    float extinction = sigma_t * marchStepSize;
     float sampleTransmittance = exp(-extinction);
 
     // Emission from temperature (blackbody radiation)
     float3 emission = blackbodyEmission(temp) * cb.emissionIntensity * marchStepSize;
 
-    // TODO: Sample froxel radiance cache here for proper in-scattered lighting
-    // For now, emission-only (fire glow) + extinction (smoke darkening)
-    // This will be enhanced in the froxel integration step to use scene lighting.
+    // In-scattered radiance from scene lights via froxel radiance cache
+    float3 inScatteredRadiance = float3(0, 0, 0);
+    if (cb.froxelRadianceEnabled && sigma_t > 0) {
+      // Convert world position to translated world space (translatedWorld = world - offset)
+      float3 translatedWorldPos = worldPos - cb.translatedWorldOffset;
 
-    // Front-to-back compositing
-    accumulatedRadiance += transmittance * emission;
+      // Convert to froxel UVW
+      float3 froxelUVW = translatedWorldPositionToFroxelUVW_flow(
+        cb.translatedWorldToView, cb.translatedWorldToProjection,
+        (cb.cameraFlags & 1) != 0,
+        cb.froxelDepthSlices, cb.froxelDepthSliceDistributionExponent,
+        cb.froxelMaxDistance, cb.nearPlane,
+        translatedWorldPos);
+
+      if (all(froxelUVW > 0) && all(froxelUVW < 1)) {
+        // Convert virtual UVW to physical UVW for texture sampling
+        float3 physicalUVW = virtualFroxelUVWToPhysicalFroxelUVW_flow(
+          froxelUVW, 0 /*main volume*/,
+          cb.minFilteredRadianceU, cb.maxFilteredRadianceU,
+          cb.inverseNumFroxelVolumes);
+
+        // Sample radiance spherical harmonics from froxel cache
+        SphericalHarmonic sh = HarmonicsHelpers::loadFiltered3D<SphericalHarmonic>(
+          VolumeRadianceY, VolumeRadianceCoCg, physicalUVW);
+
+        // Evaluate with Henyey-Greenstein phase function along view direction
+        inScatteredRadiance = sh.evaluateHenyeyGreenstein(-rayDir, cb.volumetricFogAnisotropy);
+      }
+    }
+
+    // Scattering coefficient: sigma_s = sigma_t * scatteringAlbedo
+    float sigma_s = sigma_t * cb.scatteringAlbedo;
+
+    // Front-to-back compositing: emission + in-scattered light
+    float3 sourceRadiance = emission + inScatteredRadiance * sigma_s * marchStepSize;
+    accumulatedRadiance += transmittance * sourceRadiance;
     transmittance *= sampleTransmittance;
 
     // Early termination if nearly opaque

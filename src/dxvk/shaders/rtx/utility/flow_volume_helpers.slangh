@@ -1,0 +1,84 @@
+/*
+* Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+*
+* Permission is hereby granted, free of charge, to any person obtaining a
+* copy of this software and associated documentation files (the "Software"),
+* to deal in the Software without restriction, including without limitation
+* the rights to use, copy, modify, merge, publish, distribute, sublicense,
+* and/or sell copies of the Software, and to permit persons to whom the
+* Software is furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+* DEALINGS IN THE SOFTWARE.
+*/
+#pragma once
+
+// Helpers for sampling PhysX Flow density/temperature 3D textures within
+// the froxel volumetric lighting system. These require FlowDensityTexture
+// and FlowTemperatureTexture to be declared as Sampler3D<float> in the
+// including shader's bindings.
+
+#include "rtx/pass/volume_args.h"
+
+// Sample Flow density at a world position. Returns 0 if outside the Flow volume or disabled.
+float sampleFlowDensityAtWorldPos(VolumeArgs volumeArgs, Sampler3D<float> flowDensityTex, float3 worldPos) {
+  if (!volumeArgs.flowEnabled) return 0;
+
+  float3 extent = volumeArgs.flowVolumeMax - volumeArgs.flowVolumeMin;
+  float3 uvw = (worldPos - volumeArgs.flowVolumeMin) / extent;
+
+  if (any(uvw < 0) || any(uvw > 1)) return 0;
+
+  return max(flowDensityTex.SampleLevel(uvw, 0), 0);
+}
+
+// Intersect ray with AABB, returns (tNear, tFar). tNear > tFar means no hit.
+float2 intersectFlowAABB(float3 origin, float3 direction, float3 boxMin, float3 boxMax) {
+  float3 safeDir = direction + sign(direction + float3(1e-8, 1e-8, 1e-8)) * float3(1e-8, 1e-8, 1e-8);
+  float3 invDir = 1.0 / safeDir;
+  float3 t0 = (boxMin - origin) * invDir;
+  float3 t1 = (boxMax - origin) * invDir;
+  float3 tmin = min(t0, t1);
+  float3 tmax = max(t0, t1);
+  float tNear = max(max(tmin.x, tmin.y), tmin.z);
+  float tFar  = min(min(tmax.x, tmax.y), tmax.z);
+  return float2(tNear, tFar);
+}
+
+// Compute Beer-Lambert attenuation of Flow smoke along a ray segment.
+// Uses a small number of samples (N=4) for efficiency in NEE visibility.
+// Returns transmittance in [0, 1].
+float calcFlowTransmittance(VolumeArgs volumeArgs, Sampler3D<float> flowDensityTex,
+                             float3 origin, float3 direction, float maxDist) {
+  if (!volumeArgs.flowEnabled) return 1.0;
+
+  float2 tHit = intersectFlowAABB(origin, direction, volumeArgs.flowVolumeMin, volumeArgs.flowVolumeMax);
+  tHit.x = max(tHit.x, 0);
+  tHit.y = min(tHit.y, maxDist);
+
+  if (tHit.x >= tHit.y) return 1.0;
+
+  // Sample density at 4 points along the ray through the Flow volume
+  float totalDensity = 0;
+  const int N = 4;
+  float3 extent = volumeArgs.flowVolumeMax - volumeArgs.flowVolumeMin;
+
+  for (int i = 0; i < N; i++) {
+    float t = lerp(tHit.x, tHit.y, (float(i) + 0.5) / float(N));
+    float3 pos = origin + direction * t;
+    float3 uvw = (pos - volumeArgs.flowVolumeMin) / extent;
+    totalDensity += max(flowDensityTex.SampleLevel(uvw, 0), 0);
+  }
+
+  float avgDensity = totalDensity / float(N);
+  float pathLength = tHit.y - tHit.x;
+  return exp(-avgDensity * volumeArgs.flowDensityMultiplier * pathLength);
+}

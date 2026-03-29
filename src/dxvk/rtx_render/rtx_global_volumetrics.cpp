@@ -35,6 +35,7 @@
 
 #include "dxvk_scoped_annotation.h"
 #include "rtx_context.h"
+#include "rtx_flow_context.h"
 #include "rtx_imgui.h"
 
 namespace dxvk {
@@ -681,6 +682,25 @@ namespace dxvk {
     ctx->bindResourceView(VOLUME_INTEGRATE_BINDING_ACCUMULATED_RADIANCE_OUTPUT_CO_CG, getCurrentVolumeAccumulatedRadianceCoCg().view, nullptr);
     ctx->bindResourceView(VOLUME_INTEGRATE_BINDING_ACCUMULATED_RADIANCE_OUTPUT_AGE, getCurrentVolumeAccumulatedRadianceAge().view, nullptr);
 
+    // Bind Flow density/temperature 3D textures (or dummy if Flow is inactive)
+    {
+      auto& flowCtx = ctx->getCommonObjects()->metaFlowContext();
+      const auto& flowData = flowCtx.getVolumeData();
+      const bool flowActive = flowCtx.isActive() && flowData.valid && flowData.densityView != nullptr;
+
+      if (flowActive) {
+        ctx->bindResourceView(VOLUME_INTEGRATE_BINDING_FLOW_DENSITY_TEXTURE_INPUT, flowData.densityView, nullptr);
+        ctx->bindResourceSampler(VOLUME_INTEGRATE_BINDING_FLOW_DENSITY_TEXTURE_INPUT, linearSampler);
+        ctx->bindResourceView(VOLUME_INTEGRATE_BINDING_FLOW_TEMPERATURE_TEXTURE_INPUT, flowData.temperatureView, nullptr);
+        ctx->bindResourceSampler(VOLUME_INTEGRATE_BINDING_FLOW_TEMPERATURE_TEXTURE_INPUT, linearSampler);
+      } else if (m_dummyTexture3D.view != nullptr) {
+        ctx->bindResourceView(VOLUME_INTEGRATE_BINDING_FLOW_DENSITY_TEXTURE_INPUT, m_dummyTexture3D.view, nullptr);
+        ctx->bindResourceSampler(VOLUME_INTEGRATE_BINDING_FLOW_DENSITY_TEXTURE_INPUT, linearSampler);
+        ctx->bindResourceView(VOLUME_INTEGRATE_BINDING_FLOW_TEMPERATURE_TEXTURE_INPUT, m_dummyTexture3D.view, nullptr);
+        ctx->bindResourceSampler(VOLUME_INTEGRATE_BINDING_FLOW_TEMPERATURE_TEXTURE_INPUT, linearSampler);
+      }
+    }
+
     auto numRaysExtent = m_froxelVolumeExtent;
     numRaysExtent.width *= numActiveFroxelVolumes;
 
@@ -819,6 +839,12 @@ namespace dxvk {
     m_volumeAccumulatedRadianceCoCg[1] = Resources::createImageResource(ctx, "volume accumulated radiance (Co, Cg) 1", froxelGridFullDimensions, VK_FORMAT_R16G16_SFLOAT, 1, VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D);
     m_volumeAccumulatedRadianceAge[0] = Resources::createImageResource(ctx, "volume accumulated radiance (Age) 0", froxelGridFullDimensions, VK_FORMAT_R8_UNORM, 1, VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D);
     m_volumeAccumulatedRadianceAge[1] = Resources::createImageResource(ctx, "volume accumulated radiance (Age) 1", froxelGridFullDimensions, VK_FORMAT_R8_UNORM, 1, VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D);
+
+    // Dummy 1x1x1 black 3D texture for when Flow is inactive (only create once)
+    if (m_dummyTexture3D.image == nullptr) {
+      m_dummyTexture3D = Resources::createImageResource(ctx, "flow dummy 3D",
+        VkExtent3D { 1, 1, 1 }, VK_FORMAT_R32_SFLOAT, 1, VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D);
+    }
 
     // Calculate the restir grid resolution
     m_restirFroxelVolumeExtent = util::computeBlockCount(m_froxelVolumeExtent, VkExtent3D { restirGridScale(), restirGridScale(), 1 });

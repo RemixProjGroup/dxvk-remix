@@ -97,7 +97,15 @@ struct VolumeArgs {
 
   float maxAttenuationDistanceForNoAtmosphere;
   uint resetHistory;
-  vec2 pad0;
+  uint16_t flowEnabled;
+  uint16_t flowPad0;
+  float flowDensityMultiplier;
+
+  // Flow volume integration
+  vec3 flowVolumeMin;
+  float flowTemperatureScale;
+  vec3 flowVolumeMax;
+  float flowPad1;
 };
 
 #ifdef __cplusplus

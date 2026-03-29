@@ -26,3 +26,7 @@
 #define FLOW_COMPOSITE_OUTPUT              2
 #define FLOW_COMPOSITE_DEPTH_INPUT         3
 #define FLOW_COMPOSITE_CONSTANTS           4
+
+// Froxel radiance cache textures for in-scattered light from scene lights
+#define FLOW_COMPOSITE_VOLUME_RADIANCE_Y       5
+#define FLOW_COMPOSITE_VOLUME_RADIANCE_CO_CG   6

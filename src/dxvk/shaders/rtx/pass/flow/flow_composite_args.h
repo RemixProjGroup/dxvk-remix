@@ -36,4 +36,22 @@ struct FlowCompositeArgs {
 
   vec3 volumeMax;
   float stepSizeWorld;
+
+  // Froxel radiance cache parameters for in-scattered light
+  mat4 translatedWorldToView;
+  mat4 translatedWorldToProjection;
+  vec3 translatedWorldOffset;
+  float froxelMaxDistance;
+  uint froxelDepthSlices;
+  float froxelDepthSliceDistributionExponent;
+  float volumetricFogAnisotropy;
+  float minFilteredRadianceU;
+  float maxFilteredRadianceU;
+  float inverseNumFroxelVolumes;
+  float scatteringAlbedo;
+  uint froxelRadianceEnabled;
+  uint cameraFlags;
+  uint numActiveFroxelVolumes;
+  uint frameIndex;
+  float pad0;
 };

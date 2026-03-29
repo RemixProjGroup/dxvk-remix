@@ -591,7 +591,12 @@ namespace dxvk {
 
         getCommonObjects()->getTextureManager().prepareSamplerFeedback(this);
 
-        // Generate ray tracing constant buffer
+        // PhysX Flow: prepare GPU textures (simulate + voxelize + upload)
+        // Must run BEFORE updateRaytraceArgsConstantBuffer so VolumeArgs.flowEnabled is correct,
+        // and BEFORE volumetrics so froxel pass can sample Flow density
+        dispatchFlowPrepare(GlobalTime::get().deltaTimeMs() * 0.001f);
+
+        // Generate ray tracing constant buffer (includes Flow VolumeArgs)
         updateRaytraceArgsConstantBuffer(rtOutput, downscaledExtent, targetImage->info().extent);
 
         // Volumetric Lighting
@@ -636,8 +641,8 @@ namespace dxvk {
         // Composition
         dispatchComposite(rtOutput);
 
-        // PhysX Flow volumetric simulation + compositing
-        dispatchFlow(GlobalTime::get().deltaTimeMs() * 0.001f, rtOutput);
+        // PhysX Flow composite (ray march + in-scattered light from froxel cache)
+        dispatchFlowComposite(rtOutput);
 
         // Post composite Debug View that may overwrite Composite output
         dispatchReplaceCompositeWithDebugView(rtOutput);
@@ -816,13 +821,16 @@ namespace dxvk {
     GpuMemoryTracker::onFrameEnd();
   }
 
-  void RtxContext::dispatchFlow(float deltaTime, const Resources::RaytracingOutput& rtOutput) {
+  void RtxContext::dispatchFlowPrepare(float deltaTime) {
     auto& flow = m_common->metaFlowContext();
     if (!flow.isActive() && !RtxFlowContext::enable()) return;
+    flow.prepare(this, deltaTime);
+  }
 
-    ScopedCpuProfileZone();
-    flow.simulate(deltaTime);
-    flow.render(this, rtOutput);
+  void RtxContext::dispatchFlowComposite(const Resources::RaytracingOutput& rtOutput) {
+    auto& flow = m_common->metaFlowContext();
+    if (!flow.isActive()) return;
+    flow.composite(this, rtOutput);
   }
 
   void RtxContext::updateMetrics(const float gpuIdleTimeMilliseconds) const {
@@ -1266,6 +1274,21 @@ namespace dxvk {
     
     const RtxGlobalVolumetrics& globalVolumetrics = getCommonObjects()->metaGlobalVolumetrics();
     constants.volumeArgs = globalVolumetrics.getVolumeArgs(cameraManager, getSceneManager().getFogState(), enablePortalVolumes);
+
+    // Populate Flow volume fields in VolumeArgs
+    {
+      auto& flowCtx = getCommonObjects()->metaFlowContext();
+      const auto& flowData = flowCtx.getVolumeData();
+      const bool flowActive = flowCtx.isActive() && flowData.valid && flowData.densityView != nullptr;
+      constants.volumeArgs.flowEnabled = flowActive ? 1 : 0;
+      if (flowActive) {
+        constants.volumeArgs.flowVolumeMin = flowData.worldMin;
+        constants.volumeArgs.flowVolumeMax = flowData.worldMax;
+        constants.volumeArgs.flowDensityMultiplier = flowCtx.getDensityMultiplier();
+        constants.volumeArgs.flowTemperatureScale = flowCtx.getEmissionIntensity();
+      }
+    }
+
     constants.startInMediumMaterialIndex = getSceneManager().getStartInMediumMaterialIndex();
     OpaqueMaterialOptions::fillShaderParams(constants.opaqueMaterialArgs);
     TranslucentMaterialOptions::fillShaderParams(constants.translucentMaterialArgs);

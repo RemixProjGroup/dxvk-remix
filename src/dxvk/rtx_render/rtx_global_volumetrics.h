@@ -247,6 +247,8 @@ namespace dxvk {
     const Resources::Resource& getCurrentVolumeAccumulatedRadianceAge() const { return m_volumeAccumulatedRadianceAge[m_swapTextures]; }
     const Resources::Resource& getPreviousVolumeAccumulatedRadianceAge() const { return m_volumeAccumulatedRadianceAge[!m_swapTextures]; }
 
+    const Rc<DxvkImageView>& getDummyTexture3DView() const { return m_dummyTexture3D.view; }
+
     void showPresetMenu();
     void showImguiUserSettings();
     void showImguiSettings();
@@ -270,6 +272,9 @@ namespace dxvk {
     Resources::Resource m_volumeAccumulatedRadianceAge[2];
     bool m_swapTextures = false;
     bool m_rebuildFroxels = false;
+
+    // Dummy 1x1x1 black 3D texture for when Flow is inactive
+    Resources::Resource m_dummyTexture3D;
 
     DxvkRaytracingPipelineShaders getPipelineShaders(bool useRayQuery) const;
 

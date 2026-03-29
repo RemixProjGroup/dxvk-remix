@@ -23,6 +23,8 @@
 #include "rtx_flow_context.h"
 #include "rtx_context.h"
 #include "rtx_scene_manager.h"
+#include "rtx_global_volumetrics.h"
+#include "rtx_camera_manager.h"
 #include "../dxvk_device.h"
 #include "rtx_imgui.h"
 #include "rtx_render/rtx_shader_manager.h"
@@ -65,6 +67,8 @@ namespace dxvk {
         RW_TEXTURE2D(FLOW_COMPOSITE_OUTPUT)
         TEXTURE2D(FLOW_COMPOSITE_DEPTH_INPUT)
         CONSTANT_BUFFER(FLOW_COMPOSITE_CONSTANTS)
+        SAMPLER3D(FLOW_COMPOSITE_VOLUME_RADIANCE_Y)
+        SAMPLER3D(FLOW_COMPOSITE_VOLUME_RADIANCE_CO_CG)
       END_PARAMETER()
     };
 
@@ -727,27 +731,37 @@ namespace dxvk {
       m_volumeData.temperatureDense.data(), rowPitch, layerPitch);
   }
 
-  void RtxFlowContext::render(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput) {
+  void RtxFlowContext::prepare(RtxContext* ctx, float deltaTime) {
+    if (!isActive() && !enable()) return;
+
+    ScopedCpuProfileZone();
+
+    // Run CPU simulation (PhysX Flow + NanoVDB readback + voxelizeOnCpu)
+    simulate(deltaTime);
+
     if (!m_initialized) return;
     if (m_activeBlockCount == 0) return;
 
-    ScopedGpuProfileZone(ctx, "Flow Volume Rendering");
+    ScopedGpuProfileZone(ctx, "Flow Volume Prepare");
 
-    // Ensure 3D textures exist at the correct resolution
+    // Create GPU textures if needed and upload dense data
     createDenseTextures(ctx);
     if (m_volumeData.densityView == nullptr || m_volumeData.temperatureView == nullptr)
       return;
 
-    // voxelizeOnCpu() is called at the end of simulate() after readback capture
-
-    // Upload dense data to GPU 3D textures
     if (m_volumeData.denseDataReady) {
       uploadDenseTextures(ctx);
-    } else {
-      return; // No data to render yet
     }
+  }
 
-    // --- Pass 2: Integrated Volume Rendering (into composite output) ---
+  void RtxFlowContext::composite(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput) {
+    if (!m_initialized) return;
+    if (m_activeBlockCount == 0) return;
+    if (m_volumeData.densityView == nullptr || m_volumeData.temperatureView == nullptr)
+      return;
+    if (!m_volumeData.denseDataReady) return;
+
+    // --- Integrated Volume Rendering (into composite output) ---
     {
       ScopedGpuProfileZone(ctx, "Flow Volume Composite");
 
@@ -777,8 +791,39 @@ namespace dxvk {
       });
       args.stepSizeWorld = extent / static_cast<float>(rayMarchSteps());
 
-      // Create or reuse composite constant buffer
-      if (m_compositeConstantBuffer == nullptr) {
+      // Populate froxel radiance cache parameters for in-scattered light
+      auto& globalVolumetrics = ctx->getCommonObjects()->metaGlobalVolumetrics();
+      auto& cameraManager = sceneManager.getCameraManager();
+      const auto& mainCamera = cameraManager.getMainCamera();
+      const auto volumeArgs = globalVolumetrics.getVolumeArgs(cameraManager, sceneManager.getFogState(), false);
+
+      const bool froxelRadianceAvailable = volumeArgs.enable && globalVolumetrics.getCurrentVolumeAccumulatedRadianceY().view != nullptr;
+      args.froxelRadianceEnabled = froxelRadianceAvailable ? 1 : 0;
+
+      if (froxelRadianceAvailable) {
+        auto volumeCam = mainCamera.getVolumeShaderConstants(volumeArgs.froxelMaxDistance);
+        args.translatedWorldToView = volumeCam.translatedWorldToView;
+        args.translatedWorldToProjection = volumeCam.translatedWorldToProjectionJittered;
+        args.translatedWorldOffset = volumeCam.translatedWorldOffset;
+        args.froxelMaxDistance = volumeArgs.froxelMaxDistance;
+        args.froxelDepthSlices = volumeArgs.froxelDepthSlices;
+        args.froxelDepthSliceDistributionExponent = volumeArgs.froxelDepthSliceDistributionExponent;
+        args.volumetricFogAnisotropy = volumeArgs.volumetricFogAnisotropy;
+        args.minFilteredRadianceU = volumeArgs.minFilteredRadianceU;
+        args.maxFilteredRadianceU = volumeArgs.maxFilteredRadianceU;
+        args.inverseNumFroxelVolumes = volumeArgs.inverseNumFroxelVolumes;
+        args.numActiveFroxelVolumes = volumeArgs.numActiveFroxelVolumes;
+        args.cameraFlags = volumeCam.flags;
+        // Single scattering albedo: ratio of scattering to total extinction
+        float avgAttenuation = (volumeArgs.attenuationCoefficient.x + volumeArgs.attenuationCoefficient.y + volumeArgs.attenuationCoefficient.z) / 3.0f;
+        float avgScattering = (volumeArgs.scatteringCoefficient.x + volumeArgs.scatteringCoefficient.y + volumeArgs.scatteringCoefficient.z) / 3.0f;
+        args.scatteringAlbedo = avgAttenuation > 0.0f ? avgScattering / avgAttenuation : 0.9f;
+      }
+
+      args.frameIndex = static_cast<uint32_t>(m_frameCount);
+
+      // Create or reuse composite constant buffer (recreate if size changed due to struct expansion)
+      if (m_compositeConstantBuffer == nullptr || m_compositeConstantBuffer->info().size < sizeof(FlowCompositeArgs)) {
         DxvkBufferCreateInfo info;
         info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         info.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
@@ -823,6 +868,25 @@ namespace dxvk {
 
       ctx->bindResourceBuffer(FLOW_COMPOSITE_CONSTANTS,
         DxvkBufferSlice(m_compositeConstantBuffer, 0, m_compositeConstantBuffer->info().size));
+
+      // Bind froxel radiance cache textures for in-scattered light
+      if (froxelRadianceAvailable) {
+        ctx->bindResourceView(FLOW_COMPOSITE_VOLUME_RADIANCE_Y,
+          globalVolumetrics.getCurrentVolumeAccumulatedRadianceY().view, nullptr);
+        ctx->bindResourceSampler(FLOW_COMPOSITE_VOLUME_RADIANCE_Y, m_linearSampler);
+        ctx->bindResourceView(FLOW_COMPOSITE_VOLUME_RADIANCE_CO_CG,
+          globalVolumetrics.getCurrentVolumeAccumulatedRadianceCoCg().view, nullptr);
+        ctx->bindResourceSampler(FLOW_COMPOSITE_VOLUME_RADIANCE_CO_CG, m_linearSampler);
+      } else {
+        // Bind dummy textures
+        const auto& dummyView = globalVolumetrics.getDummyTexture3DView();
+        if (dummyView != nullptr) {
+          ctx->bindResourceView(FLOW_COMPOSITE_VOLUME_RADIANCE_Y, dummyView, nullptr);
+          ctx->bindResourceSampler(FLOW_COMPOSITE_VOLUME_RADIANCE_Y, m_linearSampler);
+          ctx->bindResourceView(FLOW_COMPOSITE_VOLUME_RADIANCE_CO_CG, dummyView, nullptr);
+          ctx->bindResourceSampler(FLOW_COMPOSITE_VOLUME_RADIANCE_CO_CG, m_linearSampler);
+        }
+      }
 
       // Dispatch: 8x8 threads per group
       VkExtent3D workgroups = util::computeBlockCount(

@@ -86,8 +86,14 @@ namespace dxvk {
     ~RtxFlowContext();
 
     // Main simulation + render entry points called from the render loop
-    void simulate(float deltaTime);
-    void render(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput);
+    // prepare() runs simulation + creates/uploads GPU textures (must run BEFORE volumetrics)
+    void prepare(RtxContext* ctx, float deltaTime);
+    // composite() does the ray march compositing (runs AFTER scene composite)
+    void composite(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput);
+
+    // Public accessors for rendering options (needed by volumetrics integration)
+    float getDensityMultiplier() const { return densityMultiplier(); }
+    float getEmissionIntensity() const { return emissionIntensity(); }
 
     bool isActive() const { return enable() && m_initialized; }
 
@@ -101,6 +107,7 @@ namespace dxvk {
     void markExternalEmitterActive(uint64_t handle);
 
   private:
+    void simulate(float deltaTime);
     bool initFlow();
     void shutdownFlow();
 

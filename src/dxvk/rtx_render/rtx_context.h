@@ -201,7 +201,8 @@ namespace dxvk {
     void dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage);
     void dispatchObjectPicking(Resources::RaytracingOutput& rtOutput, const VkExtent3D& srcExtent, const VkExtent3D& targetExtent);
     void dispatchDLFG();
-    void dispatchFlow(float deltaTime, const Resources::RaytracingOutput& rtOutput);
+    void dispatchFlowPrepare(float deltaTime);
+    void dispatchFlowComposite(const Resources::RaytracingOutput& rtOutput);
     void updateMetrics(const float gpuIdleTimeMilliseconds) const;
 
     void rasterizeToSkyMatte(const DrawParameters& params, const DrawCallState& drawCallState);
