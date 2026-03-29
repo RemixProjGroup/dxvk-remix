@@ -232,8 +232,37 @@ namespace dxvk {
     Logger::info("NvFlow: Shutdown complete");
   }
 
+  static constexpr uint64_t kDebugEmitterHandle = UINT64_MAX;
+
   void RtxFlowContext::simulate(float deltaTime) {
-    if (!enable()) return;
+    // Route the ImGui debug emitter through the same external emitter system
+    {
+      std::lock_guard<std::mutex> lock(m_emitterMutex);
+      if (enable() && emitterEnabled()) {
+        FlowEmitterData dbg;
+        dbg.posX = posX(); dbg.posY = posY(); dbg.posZ = posZ();
+        dbg.radius = radius();
+        dbg.temperature = temperature();
+        dbg.fuel = fuel();
+        dbg.smoke = smoke();
+        dbg.velocityX = velocityX(); dbg.velocityY = velocityY(); dbg.velocityZ = velocityZ();
+        dbg.coupleRateTemperature = coupleRateTemperature();
+        dbg.coupleRateFuel = coupleRateFuel();
+        dbg.coupleRateVelocity = coupleRateVelocity();
+        m_externalEmitters[kDebugEmitterHandle] = dbg;
+        m_activeEmitterInstances.insert(kDebugEmitterHandle);
+      } else {
+        m_externalEmitters.erase(kDebugEmitterHandle);
+        m_activeEmitterInstances.erase(kDebugEmitterHandle);
+      }
+    }
+
+    bool hasActiveEmitters;
+    {
+      std::lock_guard<std::mutex> lock(m_emitterMutex);
+      hasActiveEmitters = !m_activeEmitterInstances.empty();
+    }
+    if (!hasActiveEmitters) return;
     if (!initFlow()) return;
 
     m_simTime += static_cast<double>(deltaTime);
@@ -274,32 +303,48 @@ namespace dxvk {
       }
     }
 
-    // Set up emitter params
-    NvFlowEmitterSphereParams emitterParams = NvFlowEmitterSphereParams_default;
+    // Build array of all active emitters (debug + API emitters, unified path)
+    NvFlowArray<NvFlowEmitterSphereParams> allEmitterParams;
     bool emitterMatched = false;
-    if (emitterEnabled()) {
-      emitterParams.enabled = NV_FLOW_TRUE;
-      emitterParams.position = { posX(), posY(), posZ() };
-      emitterParams.radius = radius();
-      emitterParams.radiusIsWorldSpace = NV_FLOW_TRUE;
-      emitterParams.velocity = { velocityX(), velocityY(), velocityZ() };
-      emitterParams.velocityIsWorldSpace = NV_FLOW_TRUE;
-      emitterParams.temperature = temperature();
-      emitterParams.fuel = fuel();
-      emitterParams.smoke = smoke();
-      emitterParams.coupleRateTemperature = coupleRateTemperature();
-      emitterParams.coupleRateFuel = coupleRateFuel();
-      emitterParams.coupleRateVelocity = coupleRateVelocity();
-    } else {
-      emitterParams.enabled = NV_FLOW_FALSE;
+
+    {
+      std::lock_guard<std::mutex> lock(m_emitterMutex);
+      for (auto handle : m_activeEmitterInstances) {
+        auto it = m_externalEmitters.find(handle);
+        if (it != m_externalEmitters.end()) {
+          const auto& ed = it->second;
+          NvFlowEmitterSphereParams p = NvFlowEmitterSphereParams_default;
+          p.enabled = NV_FLOW_TRUE;
+          p.position = { ed.posX, ed.posY, ed.posZ };
+          p.radius = ed.radius;
+          p.radiusIsWorldSpace = NV_FLOW_TRUE;
+          p.velocity = { ed.velocityX, ed.velocityY, ed.velocityZ };
+          p.velocityIsWorldSpace = NV_FLOW_TRUE;
+          p.temperature = ed.temperature;
+          p.fuel = ed.fuel;
+          p.smoke = ed.smoke;
+          p.coupleRateTemperature = ed.coupleRateTemperature;
+          p.coupleRateFuel = ed.coupleRateFuel;
+          p.coupleRateVelocity = ed.coupleRateVelocity;
+          allEmitterParams.pushBack(p);
+        }
+      }
+      m_activeEmitterInstances.clear();
     }
-    NvFlowUint8* pEmitterParams = reinterpret_cast<NvFlowUint8*>(&emitterParams);
+
+    // Build pointer array for NvFlow
+    NvFlowArray<NvFlowUint8*> emitterPtrs;
+    for (NvFlowUint64 i = 0; i < allEmitterParams.size; i++) {
+      emitterPtrs.pushBack(reinterpret_cast<NvFlowUint8*>(&allEmitterParams[i]));
+    }
 
     if (logThisFrame) {
-      Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: emitter enabled=", (int)emitterParams.enabled,
-        " pos=(", emitterParams.position.x, ",", emitterParams.position.y, ",", emitterParams.position.z, ")",
-        " radius=", emitterParams.radius, " temp=", emitterParams.temperature,
-        " fuel=", emitterParams.fuel, " smoke=", emitterParams.smoke));
+      Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: totalEmitters=", allEmitterParams.size));
+      for (NvFlowUint64 i = 0; i < allEmitterParams.size; i++) {
+        const auto& ep = allEmitterParams[i];
+        Logger::info(str::format("NvFlow   emitter[", i, "]: pos=(", ep.position.x, ",", ep.position.y, ",", ep.position.z, ")",
+          " radius=", ep.radius, " temp=", ep.temperature, " fuel=", ep.fuel, " smoke=", ep.smoke));
+      }
     }
 
     // Build type snapshots manually using the DLL's dataType pointers
@@ -314,9 +359,9 @@ namespace dxvk {
       ts.instanceDatas = nullptr;
       ts.instanceCount = 0;
 
-      if (strcmp(typenames[i], "NvFlowGridEmitterSphereParams") == 0) {
-        ts.instanceDatas = &pEmitterParams;
-        ts.instanceCount = 1;
+      if (strcmp(typenames[i], "NvFlowGridEmitterSphereParams") == 0 && emitterPtrs.size > 0) {
+        ts.instanceDatas = emitterPtrs.data;
+        ts.instanceCount = emitterPtrs.size;
         emitterMatched = true;
       }
 
@@ -362,16 +407,20 @@ namespace dxvk {
 
     if (mapResult) {
       if (logThisFrame) {
-        Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: gridParamsDesc deltaTime=", gridParamsDesc.deltaTime,
-          " simTime=", gridParamsDesc.absoluteSimTime,
-          " snapshotCount=", gridParamsDesc.snapshot.typeSnapshotCount,
-          " snapshotVersion=", gridParamsDesc.snapshot.version));
+        Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: gridParamsDesc snapshotCount=", gridParamsDesc.snapshotCount));
 
-        // Log what the mapped snapshot actually contains
-        for (NvFlowUint64 i = 0; i < gridParamsDesc.snapshot.typeSnapshotCount; i++) {
-          const auto& ts = gridParamsDesc.snapshot.typeSnapshots[i];
-          Logger::info(str::format("NvFlow   mapped type[", i, "]: dataType=", (uintptr_t)ts.dataType,
-            " instanceCount=", ts.instanceCount, " version=", ts.version));
+        for (NvFlowUint64 s = 0; s < gridParamsDesc.snapshotCount; s++) {
+          const auto& snap = gridParamsDesc.snapshots[s];
+          Logger::info(str::format("NvFlow   snapshot[", s, "]: deltaTime=", snap.deltaTime,
+            " simTime=", snap.absoluteSimTime,
+            " typeSnapshotCount=", snap.snapshot.typeSnapshotCount,
+            " version=", snap.snapshot.version));
+
+          for (NvFlowUint64 i = 0; i < snap.snapshot.typeSnapshotCount; i++) {
+            const auto& ts = snap.snapshot.typeSnapshots[i];
+            Logger::info(str::format("NvFlow     type[", i, "]: dataType=", (uintptr_t)ts.dataType,
+              " instanceCount=", ts.instanceCount, " version=", ts.version));
+          }
         }
       }
 
@@ -399,7 +448,7 @@ namespace dxvk {
   }
 
   void RtxFlowContext::render(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput) {
-    if (!m_initialized || !enable()) return;
+    if (!m_initialized) return;
 
     // Phase 1: Flow simulation runs but we don't yet composite into the scene.
     // The simulation is running and m_activeBlockCount shows activity.
@@ -455,6 +504,24 @@ namespace dxvk {
     }
 
     ImGui::PopID();
+  }
+
+  void RtxFlowContext::addExternalEmitter(uint64_t handle, const FlowEmitterData& data) {
+    std::lock_guard<std::mutex> lock(m_emitterMutex);
+    m_externalEmitters[handle] = data;
+  }
+
+  void RtxFlowContext::removeExternalEmitter(uint64_t handle) {
+    std::lock_guard<std::mutex> lock(m_emitterMutex);
+    m_externalEmitters.erase(handle);
+    m_activeEmitterInstances.erase(handle);
+  }
+
+  void RtxFlowContext::markExternalEmitterActive(uint64_t handle) {
+    std::lock_guard<std::mutex> lock(m_emitterMutex);
+    if (m_externalEmitters.find(handle) != m_externalEmitters.end()) {
+      m_activeEmitterInstances.insert(handle);
+    }
   }
 
 } // namespace dxvk

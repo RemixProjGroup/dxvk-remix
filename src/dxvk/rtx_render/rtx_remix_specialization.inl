@@ -95,7 +95,9 @@ namespace pnext::detail {
     remixapi_InstanceInfoParticleSystemLegacyEXT,
     remixapi_InstanceInfoGpuInstancingEXT,
     remixapi_CameraInfo,
-    remixapi_CameraInfoParameterizedEXT
+    remixapi_CameraInfoParameterizedEXT,
+    remixapi_FlowEmitterInfo,
+    remixapi_FlowEmitterInfoSphereEXT
   >;
 
   template< typename T > constexpr remixapi_StructType ToEnum                 = REMIXAPI_STRUCT_TYPE_NONE;
@@ -122,6 +124,8 @@ namespace pnext::detail {
   template<> constexpr auto ToEnum< remixapi_InstanceInfoGpuInstancingEXT   > = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT;
   template<> constexpr auto ToEnum< remixapi_CameraInfo                     > = REMIXAPI_STRUCT_TYPE_CAMERA_INFO;
   template<> constexpr auto ToEnum< remixapi_CameraInfoParameterizedEXT     > = REMIXAPI_STRUCT_TYPE_CAMERA_INFO_PARAMETERIZED_EXT;
+  template<> constexpr auto ToEnum< remixapi_FlowEmitterInfo                > = REMIXAPI_STRUCT_TYPE_FLOW_EMITTER_INFO;
+  template<> constexpr auto ToEnum< remixapi_FlowEmitterInfoSphereEXT       > = REMIXAPI_STRUCT_TYPE_FLOW_EMITTER_INFO_SPHERE_EXT;
 
   template< typename T > struct Root                                         { using Type = T; /* by default, a root is self */ };
   template<>           struct Root< remixapi_MaterialInfoPortalEXT          >{ using Type = remixapi_MaterialInfo;              };
@@ -142,5 +146,6 @@ namespace pnext::detail {
   template<>           struct Root< remixapi_InstanceInfoParticleSystemLegacyEXT >{ using Type = remixapi_InstanceInfo;         };
   template<>           struct Root< remixapi_InstanceInfoGpuInstancingEXT   >{ using Type = remixapi_InstanceInfo;              };
   template<>           struct Root< remixapi_CameraInfoParameterizedEXT     >{ using Type = remixapi_CameraInfo;                };
+  template<>           struct Root< remixapi_FlowEmitterInfoSphereEXT      >{ using Type = remixapi_FlowEmitterInfo;            };
   // clang-format on
 }

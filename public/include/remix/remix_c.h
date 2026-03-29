@@ -53,8 +53,8 @@
 #define REMIXAPI_VERSION_GET_PATCH(version) (((uint64_t)(version)      ) & (uint64_t)0xFFFF)
 
 #define REMIXAPI_VERSION_MAJOR 0
-#define REMIXAPI_VERSION_MINOR 6
-#define REMIXAPI_VERSION_PATCH 2
+#define REMIXAPI_VERSION_MINOR 7
+#define REMIXAPI_VERSION_PATCH 0
 
 
 // External
@@ -95,8 +95,10 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_DEPRECATED_LEGACY_PARTICLE_SYSTEM    = 24,
     REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_PARTICLE_SYSTEM_EXT    = 25,
     REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT    = 26,
+    REMIXAPI_STRUCT_TYPE_FLOW_EMITTER_INFO                  = 27,
+    REMIXAPI_STRUCT_TYPE_FLOW_EMITTER_INFO_SPHERE_EXT       = 28,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
-    //       and only extend this enum by appending, never adjust the order of these 
+    //       and only extend this enum by appending, never adjust the order of these
     //       as that will break backwards compatibility.
   } remixapi_StructType;
 
@@ -164,6 +166,7 @@ extern "C" {
   typedef struct remixapi_MaterialHandle_T* remixapi_MaterialHandle;
   typedef struct remixapi_MeshHandle_T* remixapi_MeshHandle;
   typedef struct remixapi_LightHandle_T* remixapi_LightHandle;
+  typedef struct remixapi_FlowEmitterHandle_T* remixapi_FlowEmitterHandle;
 
   typedef const wchar_t* remixapi_Path;
 
@@ -643,6 +646,40 @@ extern "C" {
     remixapi_LightHandle      lightHandle);
 
 
+  // PhysX Flow emitter
+  // The pNext chain must contain exactly one shape extension
+  // (e.g., remixapi_FlowEmitterInfoSphereEXT).
+  typedef struct remixapi_FlowEmitterInfo {
+    remixapi_StructType sType;
+    void*               pNext;
+    uint64_t            hash;
+    remixapi_Float3D    position;
+    float               temperature;
+    float               fuel;
+    float               smoke;
+    remixapi_Float3D    velocity;
+    float               coupleRateTemperature;
+    float               coupleRateFuel;
+    float               coupleRateVelocity;
+  } remixapi_FlowEmitterInfo;
+
+  typedef struct remixapi_FlowEmitterInfoSphereEXT {
+    remixapi_StructType sType;
+    void*               pNext;
+    float               radius;
+  } remixapi_FlowEmitterInfoSphereEXT;
+
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateFlowEmitter)(
+    const remixapi_FlowEmitterInfo* info,
+    remixapi_FlowEmitterHandle*     out_handle);
+
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_DestroyFlowEmitter)(
+    remixapi_FlowEmitterHandle      handle);
+
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_DrawFlowEmitterInstance)(
+    remixapi_FlowEmitterHandle      emitterHandle);
+
+
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_SetConfigVariable)(
     const char*               key,
     const char*               value);
@@ -741,6 +778,11 @@ extern "C" {
 
     PFN_remixapi_Startup            Startup;
     PFN_remixapi_Present            Present;
+
+    // PhysX Flow
+    PFN_remixapi_CreateFlowEmitter       CreateFlowEmitter;
+    PFN_remixapi_DestroyFlowEmitter      DestroyFlowEmitter;
+    PFN_remixapi_DrawFlowEmitterInstance  DrawFlowEmitterInstance;
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(

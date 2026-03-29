@@ -25,6 +25,10 @@
 #include "rtx_resources.h"
 #include "rtx_option.h"
 
+#include <unordered_map>
+#include <unordered_set>
+#include <mutex>
+
 // Forward declarations for NvFlow types (full definitions only in .cpp)
 struct NvFlowLoader;
 struct NvFlowDeviceManager;
@@ -35,6 +39,18 @@ struct NvFlowGridParams;
 struct NvFlowGridParamsNamed;
 
 namespace dxvk {
+
+  struct FlowEmitterData {
+    float posX = 0.f, posY = 0.f, posZ = 0.f;
+    float radius = 5.f;
+    float temperature = 2.f;
+    float fuel = 1.5f;
+    float smoke = 0.f;
+    float velocityX = 0.f, velocityY = 0.f, velocityZ = 0.f;
+    float coupleRateTemperature = 10.f;
+    float coupleRateFuel = 10.f;
+    float coupleRateVelocity = 2.f;
+  };
 
   class RtxContext;
 
@@ -50,6 +66,11 @@ namespace dxvk {
     bool isActive() const { return enable() && m_initialized; }
 
     void showImguiSettings();
+
+    // External emitter management (called from Remix API via EmitCs)
+    void addExternalEmitter(uint64_t handle, const FlowEmitterData& data);
+    void removeExternalEmitter(uint64_t handle);
+    void markExternalEmitterActive(uint64_t handle);
 
   private:
     bool initFlow();
@@ -92,6 +113,11 @@ namespace dxvk {
     RTX_OPTION("rtx.flow.emitter", float, coupleRateTemperature, 10.f, "Coupling rate for temperature injection.");
     RTX_OPTION("rtx.flow.emitter", float, coupleRateFuel, 10.f, "Coupling rate for fuel injection.");
     RTX_OPTION("rtx.flow.emitter", float, coupleRateVelocity, 2.f, "Coupling rate for velocity injection.");
+
+    // External emitters registered via Remix API
+    std::unordered_map<uint64_t, FlowEmitterData> m_externalEmitters;
+    std::unordered_set<uint64_t> m_activeEmitterInstances;
+    std::mutex m_emitterMutex;
   };
 
 } // namespace dxvk

@@ -24,6 +24,7 @@
 
 #include "rtx_asset_data_manager.h"
 #include "rtx_asset_replacer.h"
+#include "rtx_flow_context.h"
 #include "rtx_light_manager.h"
 #include "rtx_objectpicking.h"
 #include "rtx_option.h"
@@ -1202,6 +1203,89 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
+  // --- PhysX Flow emitter API ---
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_CreateFlowEmitter(
+    const remixapi_FlowEmitterInfo* info,
+    remixapi_FlowEmitterHandle* out_handle) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (!out_handle || !info || info->sType != REMIXAPI_STRUCT_TYPE_FLOW_EMITTER_INFO) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    static_assert(sizeof(remixapi_FlowEmitterHandle) == sizeof(info->hash));
+    auto handle = reinterpret_cast<remixapi_FlowEmitterHandle>(info->hash);
+    if (!handle) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    dxvk::FlowEmitterData emitterData;
+    emitterData.posX = info->position.x;
+    emitterData.posY = info->position.y;
+    emitterData.posZ = info->position.z;
+    emitterData.temperature = info->temperature;
+    emitterData.fuel = info->fuel;
+    emitterData.smoke = info->smoke;
+    emitterData.velocityX = info->velocity.x;
+    emitterData.velocityY = info->velocity.y;
+    emitterData.velocityZ = info->velocity.z;
+    emitterData.coupleRateTemperature = info->coupleRateTemperature;
+    emitterData.coupleRateFuel = info->coupleRateFuel;
+    emitterData.coupleRateVelocity = info->coupleRateVelocity;
+
+    if (auto sphere = pnext::find<remixapi_FlowEmitterInfoSphereEXT>(info)) {
+      emitterData.radius = sphere->radius;
+    }
+
+    auto hashVal = info->hash;
+    std::lock_guard lock { s_mutex };
+    remixDevice->EmitCs([hashVal, cData = emitterData](dxvk::DxvkContext* ctx) {
+      auto& flow = ctx->getCommonObjects()->metaFlowContext();
+      flow.addExternalEmitter(hashVal, cData);
+    });
+
+    *out_handle = handle;
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_DestroyFlowEmitter(
+    remixapi_FlowEmitterHandle handle) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (!handle) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    auto hashVal = reinterpret_cast<uint64_t>(handle);
+    std::lock_guard lock { s_mutex };
+    remixDevice->EmitCs([hashVal](dxvk::DxvkContext* ctx) {
+      auto& flow = ctx->getCommonObjects()->metaFlowContext();
+      flow.removeExternalEmitter(hashVal);
+    });
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_DrawFlowEmitterInstance(
+    remixapi_FlowEmitterHandle emitterHandle) {
+    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (!emitterHandle) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    auto hashVal = reinterpret_cast<uint64_t>(emitterHandle);
+    std::lock_guard lock { s_mutex };
+    remixDevice->EmitCs([hashVal](dxvk::DxvkContext* ctx) {
+      auto& flow = ctx->getCommonObjects()->metaFlowContext();
+      flow.markExternalEmitterActive(hashVal);
+    });
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   remixapi_ErrorCode REMIXAPI_CALL remixapi_SetConfigVariable(
     const char* key,
     const char* value) {
@@ -1711,8 +1795,11 @@ extern "C"
       interf.dxvk_SetDefaultOutput = remixapi_dxvk_SetDefaultOutput;
       interf.pick_RequestObjectPicking = remixapi_pick_RequestObjectPicking;
       interf.pick_HighlightObjects = remixapi_pick_HighlightObjects;
+      interf.CreateFlowEmitter = remixapi_CreateFlowEmitter;
+      interf.DestroyFlowEmitter = remixapi_DestroyFlowEmitter;
+      interf.DrawFlowEmitterInstance = remixapi_DrawFlowEmitterInstance;
     }
-    static_assert(sizeof(interf) == 168, "Add/remove function registration");
+    static_assert(sizeof(interf) == 192, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;
