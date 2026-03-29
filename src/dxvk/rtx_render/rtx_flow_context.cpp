@@ -575,8 +575,16 @@ namespace dxvk {
   }
 
   void RtxFlowContext::createDenseTextures(RtxContext* ctx) {
-    uint32_t res = static_cast<uint32_t>(textureResolution());
-    VkExtent3D extent = { res, res, res };
+    // Compute per-axis resolution from AABB extent / cellSize (matching voxelizeOnCpu)
+    Vector3 worldExtent = m_volumeData.worldMax - m_volumeData.worldMin;
+    float cellSize = std::max(m_volumeData.cellSize, 0.1f);
+    uint32_t maxRes = static_cast<uint32_t>(textureResolution());
+
+    uint32_t resX = std::clamp(static_cast<uint32_t>(std::ceil(worldExtent.x / cellSize)), 1u, maxRes);
+    uint32_t resY = std::clamp(static_cast<uint32_t>(std::ceil(worldExtent.y / cellSize)), 1u, maxRes);
+    uint32_t resZ = std::clamp(static_cast<uint32_t>(std::ceil(worldExtent.z / cellSize)), 1u, maxRes);
+
+    VkExtent3D extent = { resX, resY, resZ };
 
     // Only recreate if resolution changed
     if (m_volumeData.textureExtent.width == extent.width &&
@@ -622,7 +630,7 @@ namespace dxvk {
     m_volumeData.densityView = m_device->createImageView(m_volumeData.densityTexture3D, viewInfo);
     m_volumeData.temperatureView = m_device->createImageView(m_volumeData.temperatureTexture3D, viewInfo);
 
-    Logger::info(str::format("NvFlow: Created dense 3D textures at resolution ", res, "^3"));
+    Logger::info(str::format("NvFlow: Created dense 3D textures at resolution ", extent.width, "x", extent.height, "x", extent.depth));
   }
 
   static float sampleNanoVdbFloat(const std::vector<uint8_t>& nanoVdbData, const pnanovdb_vec3_t& worldPos) {
@@ -654,15 +662,25 @@ namespace dxvk {
     if (m_volumeData.smokeNanoVdb.empty() && m_volumeData.temperatureNanoVdb.empty())
       return;
 
-    uint32_t res = static_cast<uint32_t>(textureResolution());
-    uint32_t totalVoxels = res * res * res;
+    Vector3 extent = m_volumeData.worldMax - m_volumeData.worldMin;
+    float cellSize = std::max(m_volumeData.cellSize, 0.1f);
+    uint32_t maxRes = static_cast<uint32_t>(textureResolution());
+
+    // Derive per-axis resolution from AABB extent / simulation cell size, capped at maxRes
+    uint32_t resX = std::min(static_cast<uint32_t>(std::ceil(extent.x / cellSize)), maxRes);
+    uint32_t resY = std::min(static_cast<uint32_t>(std::ceil(extent.y / cellSize)), maxRes);
+    uint32_t resZ = std::min(static_cast<uint32_t>(std::ceil(extent.z / cellSize)), maxRes);
+    resX = std::max(resX, 1u);
+    resY = std::max(resY, 1u);
+    resZ = std::max(resZ, 1u);
+
+    uint32_t totalVoxels = resX * resY * resZ;
 
     m_volumeData.densityDense.resize(totalVoxels, 0.f);
     m_volumeData.temperatureDense.resize(totalVoxels, 0.f);
-    m_volumeData.denseResolution = res;
-
-    Vector3 extent = m_volumeData.worldMax - m_volumeData.worldMin;
-    float invRes = 1.f / static_cast<float>(res);
+    m_volumeData.denseResX = resX;
+    m_volumeData.denseResY = resY;
+    m_volumeData.denseResZ = resZ;
 
     bool hasDensity = !m_volumeData.smokeNanoVdb.empty() &&
                       m_volumeData.smokeNanoVdb.size() >= PNANOVDB_GRID_SIZE + PNANOVDB_TREE_SIZE;
@@ -672,16 +690,16 @@ namespace dxvk {
     if (!hasDensity && !hasTemp)
       return;
 
-    for (uint32_t z = 0; z < res; z++) {
-      for (uint32_t y = 0; y < res; y++) {
-        for (uint32_t x = 0; x < res; x++) {
+    for (uint32_t z = 0; z < resZ; z++) {
+      for (uint32_t y = 0; y < resY; y++) {
+        for (uint32_t x = 0; x < resX; x++) {
           // Compute world position at voxel center
           pnanovdb_vec3_t worldPos;
-          worldPos.x = m_volumeData.worldMin.x + (static_cast<float>(x) + 0.5f) * invRes * extent.x;
-          worldPos.y = m_volumeData.worldMin.y + (static_cast<float>(y) + 0.5f) * invRes * extent.y;
-          worldPos.z = m_volumeData.worldMin.z + (static_cast<float>(z) + 0.5f) * invRes * extent.z;
+          worldPos.x = m_volumeData.worldMin.x + (static_cast<float>(x) + 0.5f) / static_cast<float>(resX) * extent.x;
+          worldPos.y = m_volumeData.worldMin.y + (static_cast<float>(y) + 0.5f) / static_cast<float>(resY) * extent.y;
+          worldPos.z = m_volumeData.worldMin.z + (static_cast<float>(z) + 0.5f) / static_cast<float>(resZ) * extent.z;
 
-          uint32_t idx = z * res * res + y * res + x;
+          uint32_t idx = z * resY * resX + y * resX + x;
 
           if (hasDensity) {
             m_volumeData.densityDense[idx] = sampleNanoVdbFloat(m_volumeData.smokeNanoVdb, worldPos);
@@ -702,16 +720,18 @@ namespace dxvk {
         if (m_volumeData.densityDense[i] > 0.f) nonZeroDensity++;
         if (m_volumeData.temperatureDense[i] > 0.f) nonZeroTemp++;
       }
-      Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: voxelized ", res, "^3 = ", totalVoxels,
-        " voxels, non-zero density=", nonZeroDensity, " temp=", nonZeroTemp));
+      Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: voxelized ", resX, "x", resY, "x", resZ, " = ", totalVoxels,
+        " voxels (cellSize=", cellSize, "), non-zero density=", nonZeroDensity, " temp=", nonZeroTemp));
     }
   }
 
   void RtxFlowContext::uploadDenseTextures(RtxContext* ctx) {
     if (!m_volumeData.denseDataReady) return;
 
-    uint32_t res = m_volumeData.denseResolution;
-    VkExtent3D extent = { res, res, res };
+    uint32_t resX = m_volumeData.denseResX;
+    uint32_t resY = m_volumeData.denseResY;
+    uint32_t resZ = m_volumeData.denseResZ;
+    VkExtent3D extent = { resX, resY, resZ };
 
     VkImageSubresourceLayers subresources;
     subresources.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -719,8 +739,8 @@ namespace dxvk {
     subresources.baseArrayLayer = 0;
     subresources.layerCount = 1;
 
-    VkDeviceSize rowPitch = res * sizeof(float);
-    VkDeviceSize layerPitch = res * res * sizeof(float);
+    VkDeviceSize rowPitch = resX * sizeof(float);
+    VkDeviceSize layerPitch = resX * resY * sizeof(float);
 
     ctx->updateImage(m_volumeData.densityTexture3D,
       subresources, VkOffset3D { 0, 0, 0 }, extent,

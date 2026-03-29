@@ -69,7 +69,9 @@ namespace dxvk {
     // CPU dense voxel data (filled by voxelizeOnCpu from NanoVDB readback)
     std::vector<float> densityDense;      // R32F dense grid
     std::vector<float> temperatureDense;  // R32F dense grid
-    uint32_t denseResolution = 0;
+    uint32_t denseResX = 0;
+    uint32_t denseResY = 0;
+    uint32_t denseResZ = 0;
     bool denseDataReady = false;
 
     // GPU resources (created in render step)
