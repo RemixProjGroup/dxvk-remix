@@ -347,6 +347,15 @@ namespace dxvk {
       }
     }
 
+    // Default layer params — the grid requires at least one instance of each
+    // layer type to allocate blocks and run the simulation (matching StandaloneTest pattern)
+    NvFlowGridSimulateLayerParams simulateLayerParams = NvFlowGridSimulateLayerParams_default;
+    NvFlowGridOffscreenLayerParams offscreenLayerParams = NvFlowGridOffscreenLayerParams_default;
+    NvFlowGridRenderLayerParams renderLayerParams = NvFlowGridRenderLayerParams_default;
+    NvFlowUint8* pSimulateLayer = reinterpret_cast<NvFlowUint8*>(&simulateLayerParams);
+    NvFlowUint8* pOffscreenLayer = reinterpret_cast<NvFlowUint8*>(&offscreenLayerParams);
+    NvFlowUint8* pRenderLayer = reinterpret_cast<NvFlowUint8*>(&renderLayerParams);
+
     // Build type snapshots manually using the DLL's dataType pointers
     NvFlowArray<NvFlowDatabaseTypeSnapshot> typeSnapshots;
     typeSnapshots.reserve(typeCount);
@@ -363,6 +372,15 @@ namespace dxvk {
         ts.instanceDatas = emitterPtrs.data;
         ts.instanceCount = emitterPtrs.size;
         emitterMatched = true;
+      } else if (strcmp(typenames[i], "NvFlowGridSimulateLayerParams") == 0) {
+        ts.instanceDatas = &pSimulateLayer;
+        ts.instanceCount = 1;
+      } else if (strcmp(typenames[i], "NvFlowGridOffscreenLayerParams") == 0) {
+        ts.instanceDatas = &pOffscreenLayer;
+        ts.instanceCount = 1;
+      } else if (strcmp(typenames[i], "NvFlowGridRenderLayerParams") == 0) {
+        ts.instanceDatas = &pRenderLayer;
+        ts.instanceCount = 1;
       }
 
       typeSnapshots.pushBack(ts);
