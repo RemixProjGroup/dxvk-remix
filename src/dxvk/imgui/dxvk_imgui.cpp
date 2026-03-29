@@ -3713,6 +3713,12 @@ namespace dxvk {
 
       common->metaDustParticles().showImguiSettings();
 
+      if (RemixGui::CollapsingHeader("PhysX Flow", collapsingHeaderClosedFlags)) {
+        ImGui::Indent();
+        common->metaFlowContext().showImguiSettings();
+        ImGui::Unindent();
+      }
+
       ImGui::Unindent();
     }
 

@@ -59,6 +59,7 @@
 #include "rtx_render/rtx_dust_particles.h"
 #include "rtx_render/rtx_particle_system.h"
 #include "rtx_render/rtx_point_instancer_system.h"
+#include "rtx_render/rtx_flow_context.h"
 
 #include "rtx_render/rtx_denoise_type.h"
 #include "../util/util_lazy.h"
@@ -313,6 +314,10 @@ namespace dxvk {
       return m_pointInstancerSystem.get(m_device);
     }
 
+    RtxFlowContext& metaFlowContext() {
+      return m_flowContext.get(m_device);
+    }
+
     void onDestroy();
 
     void setWindowHandle(const HWND hwnd) {
@@ -392,6 +397,7 @@ namespace dxvk {
     Lazy<RtxDustParticles>                  m_dustParticles;
     Lazy<RtxParticleSystemManager>          m_particleSystem;
     Lazy<RtxPointInstancerSystem>            m_pointInstancerSystem;
+    Lazy<RtxFlowContext>                    m_flowContext;
 
     std::atomic<HWND>                       m_lastKnownWindowHandle;
   };

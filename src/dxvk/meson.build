@@ -217,6 +217,8 @@ dxvk_src = files([
   'rtx_render/rtx_draw_call_cache.h',
   'rtx_render/rtx_dust_particles.cpp',
   'rtx_render/rtx_dust_particles.h',
+  'rtx_render/rtx_flow_context.cpp',
+  'rtx_render/rtx_flow_context.h',
   'rtx_render/rtx_env.cpp',
   'rtx_render/rtx_env.h',
   'rtx_render/rtx_file_watch.cpp',
@@ -466,6 +468,16 @@ submodules_dep = declare_dependency(
   include_directories : include_directories('../../submodules')
 )
 
+# PhysX Flow dependency (header-only, DLLs loaded dynamically at runtime)
+flow_include_dir = include_directories(
+  '../../submodules/PhysX/flow/include/nvflow',
+  '../../submodules/PhysX/flow/include/nvflowext',
+  '../../submodules/PhysX/flow/shared'
+)
+flow_dep = declare_dependency(
+  include_directories : flow_include_dir
+)
+
 generated_dxvk_shaders = glsl_generator.process(dxvk_shaders)
 rtx_shaders = custom_target(
   'rtx_shaders',
@@ -482,7 +494,7 @@ dxvk_embedded_data_files = files([
 
 dxvk_generated_embedded_files = embedding_compiler.process(dxvk_embedded_data_files)
 
-dxvk_deps = [ thread_dep, vkcommon_dep, dxvk_extradep, usd_dep, lssUsd_dep, nrc_dep, nrd_dep, dlss_dep, submodules_dep, xess_dep, tracy_dep, tracy_dep_dynamic, aftermath_dep, nvapi_dep, reflex_dep, usd_plugin_deps ]
+dxvk_deps = [ thread_dep, vkcommon_dep, dxvk_extradep, usd_dep, lssUsd_dep, nrc_dep, nrd_dep, dlss_dep, submodules_dep, xess_dep, tracy_dep, tracy_dep_dynamic, aftermath_dep, nvapi_dep, reflex_dep, usd_plugin_deps, flow_dep ]
 
 if enable_rtxio
   dxvk_deps += rtxio_dep

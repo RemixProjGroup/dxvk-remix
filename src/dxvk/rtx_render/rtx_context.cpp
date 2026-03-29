@@ -636,6 +636,9 @@ namespace dxvk {
         // Composition
         dispatchComposite(rtOutput);
 
+        // PhysX Flow volumetric simulation + compositing
+        dispatchFlow(GlobalTime::get().deltaTimeMs() * 0.001f, rtOutput);
+
         // Post composite Debug View that may overwrite Composite output
         dispatchReplaceCompositeWithDebugView(rtOutput);
         
@@ -811,6 +814,15 @@ namespace dxvk {
 
     // This needs to happen at the end of frame, after ImGUI rendering
     GpuMemoryTracker::onFrameEnd();
+  }
+
+  void RtxContext::dispatchFlow(float deltaTime, const Resources::RaytracingOutput& rtOutput) {
+    auto& flow = m_common->metaFlowContext();
+    if (!flow.isActive() && !RtxFlowContext::enable()) return;
+
+    ScopedCpuProfileZone();
+    flow.simulate(deltaTime);
+    flow.render(this, rtOutput);
   }
 
   void RtxContext::updateMetrics(const float gpuIdleTimeMilliseconds) const {

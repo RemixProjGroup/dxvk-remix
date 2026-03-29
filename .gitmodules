@@ -42,3 +42,6 @@
 [submodule "submodules/xess"]
 	path = submodules/xess
 	url = https://github.com/intel/xess.git
+[submodule "submodules/PhysX"]
+	path = submodules/PhysX
+	url = https://github.com/NVIDIA-Omniverse/PhysX
