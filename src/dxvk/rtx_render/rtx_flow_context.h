@@ -35,6 +35,7 @@ struct NvFlowLoader;
 struct NvFlowDeviceManager;
 struct NvFlowDevice;
 struct NvFlowDeviceQueue;
+struct NvFlowDeviceSemaphore;
 struct NvFlowGrid;
 struct NvFlowGridParams;
 struct NvFlowGridParamsNamed;
@@ -98,6 +99,7 @@ namespace dxvk {
     float getEmissionIntensity() const { return emissionIntensity(); }
 
     bool isActive() const { return enable() && m_initialized; }
+    VkSemaphore flowCompleteSemaphore() const { return m_flowCompleteSemaphore; }
 
     const FlowVolumeData& getVolumeData() const { return m_volumeData; }
 
@@ -124,9 +126,15 @@ namespace dxvk {
     NvFlowDeviceManager* m_deviceManager = nullptr;
     NvFlowDevice* m_flowDevice = nullptr;
     NvFlowDeviceQueue* m_deviceQueue = nullptr;
+    NvFlowDeviceSemaphore* m_nvflowSignalSemaphore = nullptr;
     NvFlowGrid* m_grid = nullptr;
     NvFlowGridParamsNamed* m_gridParamsNamed = nullptr;
     NvFlowGridParams* m_gridParams = nullptr;  // mapped from m_gridParamsNamed at init, stays mapped
+
+    VkSemaphore m_flowCompleteSemaphore = VK_NULL_HANDLE;
+#if defined(_WIN32)
+    HANDLE m_flowSemaphoreWin32Handle = nullptr;
+#endif
 
     // Volume data for renderer
     FlowVolumeData m_volumeData;

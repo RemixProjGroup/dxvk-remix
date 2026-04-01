@@ -188,6 +188,60 @@ namespace dxvk {
 
     // Get device queue and context interface
     m_deviceQueue = m_loader->deviceInterface.getDeviceQueue(m_flowDevice);
+
+    if (!m_device->extensions().khrExternalSemaphore || !m_device->extensions().khrExternalSemaphoreWin32) {
+      Logger::err("NvFlow: Missing required Vulkan external semaphore device extensions");
+      m_initFailed = true;
+      return false;
+    }
+
+    // Create a Remix Vulkan semaphore that will be signaled by Flow when a flush completes.
+    VkExportSemaphoreCreateInfo exportInfo = { VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO };
+    exportInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+
+    VkSemaphoreCreateInfo semaphoreInfo = { VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+    semaphoreInfo.pNext = &exportInfo;
+
+    if (m_device->vkd()->vkCreateSemaphore(m_device->handle(), &semaphoreInfo, nullptr, &m_flowCompleteSemaphore) != VK_SUCCESS) {
+      Logger::err("NvFlow: Failed to create external Vulkan semaphore");
+      m_initFailed = true;
+      return false;
+    }
+
+    // Create NvFlow semaphore and import its external handle into the Remix Vulkan semaphore.
+    // This gives both runtimes a shared synchronization primitive.
+    m_nvflowSignalSemaphore = m_loader->deviceInterface.createSemaphore(m_flowDevice);
+    if (!m_nvflowSignalSemaphore) {
+      Logger::err("NvFlow: Failed to create NvFlow semaphore");
+      m_initFailed = true;
+      return false;
+    }
+
+#if defined(_WIN32)
+    m_loader->deviceInterface.getSemaphoreExternalHandle(m_nvflowSignalSemaphore, &m_flowSemaphoreWin32Handle, sizeof(m_flowSemaphoreWin32Handle));
+    if (!m_flowSemaphoreWin32Handle) {
+      Logger::err("NvFlow: Failed to export NvFlow semaphore handle");
+      m_initFailed = true;
+      return false;
+    }
+
+    VkImportSemaphoreWin32HandleInfoKHR importInfo = { VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR };
+    importInfo.semaphore = m_flowCompleteSemaphore;
+    importInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+    importInfo.handle = m_flowSemaphoreWin32Handle;
+    importInfo.flags = 0;
+
+    if (m_device->vkd()->vkImportSemaphoreWin32HandleKHR(m_device->handle(), &importInfo) != VK_SUCCESS) {
+      Logger::err("NvFlow: Failed to import Win32 semaphore handle into Remix Vulkan semaphore");
+      m_initFailed = true;
+      return false;
+    }
+
+    // The imported handle is consumed by Vulkan.
+    m_loader->deviceInterface.closeSemaphoreExternalHandle(m_nvflowSignalSemaphore, &m_flowSemaphoreWin32Handle, sizeof(m_flowSemaphoreWin32Handle));
+    m_flowSemaphoreWin32Handle = nullptr;
+#endif
+
     NvFlowContextInterface* contextInterface = m_loader->deviceInterface.getContextInterface(m_deviceQueue);
     NvFlowContext* context = m_loader->deviceInterface.getContext(m_deviceQueue);
 
@@ -251,6 +305,16 @@ namespace dxvk {
     NvFlowUint64 flushedFrame = 0;
     m_loader->deviceInterface.flush(m_deviceQueue, &flushedFrame, nullptr, nullptr);
     m_loader->deviceInterface.waitIdle(m_deviceQueue);
+
+    if (m_nvflowSignalSemaphore) {
+      m_loader->deviceInterface.destroySemaphore(m_nvflowSignalSemaphore);
+      m_nvflowSignalSemaphore = nullptr;
+    }
+
+    if (m_flowCompleteSemaphore != VK_NULL_HANDLE) {
+      m_device->vkd()->vkDestroySemaphore(m_device->handle(), m_flowCompleteSemaphore, nullptr);
+      m_flowCompleteSemaphore = VK_NULL_HANDLE;
+    }
 
     if (m_flowDevice) {
       m_loader->deviceInterface.destroyDevice(m_deviceManager, m_flowDevice);
@@ -500,10 +564,9 @@ namespace dxvk {
       m_loader->gridParamsInterface.unmapParamsDesc(m_gridParams, paramsSnapshot);
     }
 
-    // Flush and wait
+    // Flush and signal semaphore for Remix GPU-side synchronization.
     NvFlowUint64 flushedFrame = 0;
-    m_loader->deviceInterface.flush(m_deviceQueue, &flushedFrame, nullptr, nullptr);
-    m_loader->deviceInterface.waitIdle(m_deviceQueue);
+    m_loader->deviceInterface.flush(m_deviceQueue, &flushedFrame, nullptr, m_nvflowSignalSemaphore);
 
     if (logThisFrame) {
       Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: flushedFrame=", flushedFrame, " — frame complete"));
@@ -529,7 +592,7 @@ namespace dxvk {
         }
       }
 
-      // Copy NanoVDB readback data (CPU pointers valid after waitIdle)
+      // Copy NanoVDB readback data when available (Flow may provide this asynchronously).
       if (renderData.nanoVdb.readbackCount > 0 && renderData.nanoVdb.readbacks != nullptr) {
         const auto& rb = renderData.nanoVdb.readbacks[0];
 
