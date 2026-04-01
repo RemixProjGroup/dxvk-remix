@@ -827,7 +827,7 @@ namespace dxvk {
     flow.prepare(this, deltaTime);
 
     if (VkSemaphore flowWaitSemaphore = flow.flowCompleteSemaphore()) {
-      m_cmd->addWaitSemaphore(flowWaitSemaphore);
+      m_cmd->addWaitSemaphore(flowWaitSemaphore, uint64_t(-1), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
     }
   }
 

@@ -80,10 +80,14 @@ namespace dxvk {
   }
 
   // NV-DXVK start: DLFG integration
-  void DxvkCommandList::addWaitSemaphore(VkSemaphore waitSemaphore, uint64_t waitSemaphoreValue) {
+  void DxvkCommandList::addWaitSemaphore(
+          VkSemaphore           waitSemaphore,
+          uint64_t              waitSemaphoreValue,
+          VkPipelineStageFlags  waitStageMask) {
     assert(!m_additionalWaitSemaphore);
     m_additionalWaitSemaphore = waitSemaphore;
     m_additionalWaitSemaphoreValue = waitSemaphoreValue;
+    m_additionalWaitSemaphoreStageMask = waitStageMask;
   }
 
   void DxvkCommandList::addSignalSemaphore(VkSemaphore signalSemaphore, uint64_t signalSemaphoreValue) {
@@ -144,12 +148,13 @@ namespace dxvk {
     if (m_additionalWaitSemaphore) {
       assert(info.waitCount < (sizeof(info.waitSync) / sizeof(info.waitSync[0])));
       info.waitSync[info.waitCount] = m_additionalWaitSemaphore;
-      info.waitMask[info.waitCount] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+      info.waitMask[info.waitCount] = m_additionalWaitSemaphoreStageMask;
       info.waitValue[info.waitCount] = m_additionalWaitSemaphoreValue;
       info.waitCount += 1;
 
       m_additionalWaitSemaphore = nullptr;
       m_additionalWaitSemaphoreValue = uint64_t(-1);
+      m_additionalWaitSemaphoreStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
     }
     if (m_additionalSignalSemaphore) {
       assert(info.wakeCount < (sizeof(info.wakeSync) / sizeof(info.wakeSync[0])));

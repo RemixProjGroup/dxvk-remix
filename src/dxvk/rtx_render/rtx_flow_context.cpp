@@ -397,11 +397,12 @@ namespace dxvk {
     allocInfo.allocationSize = memReq.size;
     allocInfo.memoryTypeIndex = 0;
 
-    const uint32_t memTypeBits = memReq.memoryTypeBits;
     const auto memProps = m_device->adapter()->memoryProperties();
     bool foundMemoryType = false;
     for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
-      if ((memTypeBits & (1u << i)) != 0u) {
+      const bool supported = (memReq.memoryTypeBits & (1u << i)) != 0u;
+      const bool isDeviceLocal = (memProps.memoryHeaps[memProps.memoryTypes[i].heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0u;
+      if (supported && isDeviceLocal) {
         allocInfo.memoryTypeIndex = i;
         foundMemoryType = true;
         break;
