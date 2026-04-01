@@ -825,6 +825,10 @@ namespace dxvk {
     auto& flow = m_common->metaFlowContext();
     if (!flow.isActive() && !RtxFlowContext::enable()) return;
     flow.prepare(this, deltaTime);
+
+    if (VkSemaphore flowWaitSemaphore = flow.flowCompleteSemaphore()) {
+      m_cmd->addWaitSemaphore(flowWaitSemaphore);
+    }
   }
 
   void RtxContext::dispatchFlowComposite(const Resources::RaytracingOutput& rtOutput) {
