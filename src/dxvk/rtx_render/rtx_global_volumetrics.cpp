@@ -682,25 +682,6 @@ namespace dxvk {
     ctx->bindResourceView(VOLUME_INTEGRATE_BINDING_ACCUMULATED_RADIANCE_OUTPUT_CO_CG, getCurrentVolumeAccumulatedRadianceCoCg().view, nullptr);
     ctx->bindResourceView(VOLUME_INTEGRATE_BINDING_ACCUMULATED_RADIANCE_OUTPUT_AGE, getCurrentVolumeAccumulatedRadianceAge().view, nullptr);
 
-    // Bind Flow density/temperature 3D textures (or dummy if Flow is inactive)
-    {
-      auto& flowCtx = ctx->getCommonObjects()->metaFlowContext();
-      const auto& flowData = flowCtx.getVolumeData();
-      const bool flowActive = flowCtx.isActive() && flowData.valid && flowData.densityView != nullptr;
-
-      if (flowActive) {
-        ctx->bindResourceView(VOLUME_INTEGRATE_BINDING_FLOW_DENSITY_TEXTURE_INPUT, flowData.densityView, nullptr);
-        ctx->bindResourceSampler(VOLUME_INTEGRATE_BINDING_FLOW_DENSITY_TEXTURE_INPUT, linearSampler);
-        ctx->bindResourceView(VOLUME_INTEGRATE_BINDING_FLOW_TEMPERATURE_TEXTURE_INPUT, flowData.temperatureView, nullptr);
-        ctx->bindResourceSampler(VOLUME_INTEGRATE_BINDING_FLOW_TEMPERATURE_TEXTURE_INPUT, linearSampler);
-      } else if (m_dummyTexture3D.view != nullptr) {
-        ctx->bindResourceView(VOLUME_INTEGRATE_BINDING_FLOW_DENSITY_TEXTURE_INPUT, m_dummyTexture3D.view, nullptr);
-        ctx->bindResourceSampler(VOLUME_INTEGRATE_BINDING_FLOW_DENSITY_TEXTURE_INPUT, linearSampler);
-        ctx->bindResourceView(VOLUME_INTEGRATE_BINDING_FLOW_TEMPERATURE_TEXTURE_INPUT, m_dummyTexture3D.view, nullptr);
-        ctx->bindResourceSampler(VOLUME_INTEGRATE_BINDING_FLOW_TEMPERATURE_TEXTURE_INPUT, linearSampler);
-      }
-    }
-
     auto numRaysExtent = m_froxelVolumeExtent;
     numRaysExtent.width *= numActiveFroxelVolumes;
 

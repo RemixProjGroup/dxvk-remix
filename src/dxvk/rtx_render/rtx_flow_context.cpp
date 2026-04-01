@@ -21,12 +21,14 @@
 */
 
 #include <cstring>
+#include <cmath>
 
 #include "rtx_flow_context.h"
 #include "rtx_context.h"
 #include "rtx_scene_manager.h"
 #include "rtx_global_volumetrics.h"
 #include "rtx_camera_manager.h"
+#include "rtx_types.h"
 #include "../dxvk_device.h"
 #include "rtx_imgui.h"
 #include "rtx_options.h"
@@ -43,33 +45,7 @@
 
 #include "../../util/log/log.h"
 
-// Compiled shader headers (generated at build time from .comp.slang files)
-#include <rtx_shaders/flow_composite.h>
-
-// Shader binding includes
-#include "rtx/pass/flow/flow_composite_binding_indices.h"
-#include "rtx/pass/flow/flow_composite_args.h"
-
 namespace dxvk {
-
-  // Shader class definitions for Flow rendering passes
-  namespace {
-    class FlowCompositeShader : public ManagedShader {
-      SHADER_SOURCE(FlowCompositeShader, VK_SHADER_STAGE_COMPUTE_BIT, flow_composite)
-
-      BEGIN_PARAMETER()
-        SAMPLER3D(FLOW_COMPOSITE_DENSITY_TEXTURE)
-        SAMPLER3D(FLOW_COMPOSITE_TEMPERATURE_TEXTURE)
-        RW_TEXTURE2D(FLOW_COMPOSITE_OUTPUT)
-        TEXTURE2D(FLOW_COMPOSITE_DEPTH_INPUT)
-        CONSTANT_BUFFER(FLOW_COMPOSITE_CONSTANTS)
-        SAMPLER3D(FLOW_COMPOSITE_VOLUME_RADIANCE_Y)
-        SAMPLER3D(FLOW_COMPOSITE_VOLUME_RADIANCE_CO_CG)
-      END_PARAMETER()
-    };
-
-    PREWARM_SHADER_PIPELINE(FlowCompositeShader);
-  }
 
   static void flowLogPrint(NvFlowLogLevel level, const char* format, ...) {
     va_list args;
@@ -829,147 +805,90 @@ namespace dxvk {
     createDenseTextures(ctx);
     if (m_volumeData.densityView == nullptr || m_volumeData.temperatureView == nullptr)
       return;
+
+    buildVolumeBlas(ctx);
   }
 
-  void RtxFlowContext::composite(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput) {
-    if (!m_initialized) return;
-    if (m_activeBlockCount == 0) return;
-    if (m_volumeData.densityView == nullptr || m_volumeData.temperatureView == nullptr)
+  void RtxFlowContext::buildVolumeBlas(DxvkContext* ctx) {
+    if (!m_volumeData.valid) {
       return;
-    // --- Integrated Volume Rendering (into composite output) ---
-    {
-      ScopedGpuProfileZone(ctx, "Flow Volume Composite");
-
-      const auto& sceneManager = ctx->getSceneManager();
-      Camera cameraConstants = sceneManager.getCamera().getShaderConstants();
-
-      FlowCompositeArgs args = {};
-      args.viewToWorld = cameraConstants.viewToWorld;
-      args.projectionToView = cameraConstants.projectionToViewJittered;
-      args.resolution.x = static_cast<float>(rtOutput.m_compositeOutputExtent.width);
-      args.resolution.y = static_cast<float>(rtOutput.m_compositeOutputExtent.height);
-      args.nearPlane = sceneManager.getCamera().getNearPlane();
-      args.densityMultiplier = densityMultiplier();
-      args.volumeMin.x = m_volumeData.worldMin.x;
-      args.volumeMin.y = m_volumeData.worldMin.y;
-      args.volumeMin.z = m_volumeData.worldMin.z;
-      args.emissionIntensity = emissionIntensity();
-      args.volumeMax.x = m_volumeData.worldMax.x;
-      args.volumeMax.y = m_volumeData.worldMax.y;
-      args.volumeMax.z = m_volumeData.worldMax.z;
-
-      // Step size: fraction of volume extent for quality
-      float extent = std::max({
-        m_volumeData.worldMax.x - m_volumeData.worldMin.x,
-        m_volumeData.worldMax.y - m_volumeData.worldMin.y,
-        m_volumeData.worldMax.z - m_volumeData.worldMin.z
-      });
-      args.stepSizeWorld = extent / static_cast<float>(rayMarchSteps());
-
-      // Populate froxel radiance cache parameters for in-scattered light
-      auto& globalVolumetrics = ctx->getCommonObjects()->metaGlobalVolumetrics();
-      auto& cameraManager = sceneManager.getCameraManager();
-      const auto& mainCamera = cameraManager.getMainCamera();
-      const auto volumeArgs = globalVolumetrics.getVolumeArgs(cameraManager, sceneManager.getFogState(), false);
-
-      const bool froxelRadianceAvailable = volumeArgs.enable && globalVolumetrics.getCurrentVolumeAccumulatedRadianceY().view != nullptr;
-      args.froxelRadianceEnabled = froxelRadianceAvailable ? 1 : 0;
-
-      if (froxelRadianceAvailable) {
-        auto volumeCam = mainCamera.getVolumeShaderConstants(volumeArgs.froxelMaxDistance);
-        args.translatedWorldToView = volumeCam.translatedWorldToView;
-        args.translatedWorldToProjection = volumeCam.translatedWorldToProjectionJittered;
-        args.translatedWorldOffset = volumeCam.translatedWorldOffset;
-        args.froxelMaxDistance = volumeArgs.froxelMaxDistance;
-        args.froxelDepthSlices = volumeArgs.froxelDepthSlices;
-        args.froxelDepthSliceDistributionExponent = volumeArgs.froxelDepthSliceDistributionExponent;
-        args.volumetricFogAnisotropy = volumeArgs.volumetricFogAnisotropy;
-        args.minFilteredRadianceU = volumeArgs.minFilteredRadianceU;
-        args.maxFilteredRadianceU = volumeArgs.maxFilteredRadianceU;
-        args.inverseNumFroxelVolumes = volumeArgs.inverseNumFroxelVolumes;
-        args.numActiveFroxelVolumes = volumeArgs.numActiveFroxelVolumes;
-        args.cameraFlags = volumeCam.flags;
-        // Single scattering albedo: ratio of scattering to total extinction
-        float avgAttenuation = (volumeArgs.attenuationCoefficient.x + volumeArgs.attenuationCoefficient.y + volumeArgs.attenuationCoefficient.z) / 3.0f;
-        float avgScattering = (volumeArgs.scatteringCoefficient.x + volumeArgs.scatteringCoefficient.y + volumeArgs.scatteringCoefficient.z) / 3.0f;
-        args.scatteringAlbedo = avgAttenuation > 0.0f ? avgScattering / avgAttenuation : 0.9f;
-      }
-
-      args.frameIndex = static_cast<uint32_t>(m_frameCount);
-
-      // Create or reuse composite constant buffer (recreate if size changed due to struct expansion)
-      if (m_compositeConstantBuffer == nullptr || m_compositeConstantBuffer->info().size < sizeof(FlowCompositeArgs)) {
-        DxvkBufferCreateInfo info;
-        info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        info.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-        info.access = VK_ACCESS_TRANSFER_WRITE_BIT;
-        info.size = sizeof(FlowCompositeArgs);
-        m_compositeConstantBuffer = m_device->createBuffer(info,
-          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, "Flow composite constants");
-      }
-      ctx->writeToBuffer(m_compositeConstantBuffer, 0, sizeof(args), &args);
-
-      // Create sampler for 3D texture filtering
-      if (m_linearSampler == nullptr) {
-        DxvkSamplerCreateInfo samplerInfo;
-        samplerInfo.magFilter = VK_FILTER_LINEAR;
-        samplerInfo.minFilter = VK_FILTER_LINEAR;
-        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        samplerInfo.mipmapLodBias = 0.0f;
-        samplerInfo.mipmapLodMin = 0.0f;
-        samplerInfo.mipmapLodMax = 0.0f;
-        samplerInfo.useAnisotropy = VK_FALSE;
-        samplerInfo.maxAnisotropy = 1.0f;
-        samplerInfo.compareToDepth = VK_FALSE;
-        samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
-        samplerInfo.borderColor = VkClearColorValue();
-        samplerInfo.usePixelCoord = VK_FALSE;
-        m_linearSampler = m_device->createSampler(samplerInfo);
-      }
-
-      // Bind resources
-      ctx->bindResourceView(FLOW_COMPOSITE_DENSITY_TEXTURE, m_volumeData.densityView, nullptr);
-      ctx->bindResourceSampler(FLOW_COMPOSITE_DENSITY_TEXTURE, m_linearSampler);
-      ctx->bindResourceView(FLOW_COMPOSITE_TEMPERATURE_TEXTURE, m_volumeData.temperatureView, nullptr);
-      ctx->bindResourceSampler(FLOW_COMPOSITE_TEMPERATURE_TEXTURE, m_linearSampler);
-
-      ctx->bindResourceView(FLOW_COMPOSITE_OUTPUT,
-        rtOutput.m_compositeOutput.view(Resources::AccessType::Write), nullptr);
-      ctx->bindResourceView(FLOW_COMPOSITE_DEPTH_INPUT,
-        rtOutput.m_primaryLinearViewZ.view, nullptr);
-
-      ctx->bindResourceBuffer(FLOW_COMPOSITE_CONSTANTS,
-        DxvkBufferSlice(m_compositeConstantBuffer, 0, m_compositeConstantBuffer->info().size));
-
-      // Bind froxel radiance cache textures for in-scattered light
-      if (froxelRadianceAvailable) {
-        ctx->bindResourceView(FLOW_COMPOSITE_VOLUME_RADIANCE_Y,
-          globalVolumetrics.getCurrentVolumeAccumulatedRadianceY().view, nullptr);
-        ctx->bindResourceSampler(FLOW_COMPOSITE_VOLUME_RADIANCE_Y, m_linearSampler);
-        ctx->bindResourceView(FLOW_COMPOSITE_VOLUME_RADIANCE_CO_CG,
-          globalVolumetrics.getCurrentVolumeAccumulatedRadianceCoCg().view, nullptr);
-        ctx->bindResourceSampler(FLOW_COMPOSITE_VOLUME_RADIANCE_CO_CG, m_linearSampler);
-      } else {
-        // Bind dummy textures
-        const auto& dummyView = globalVolumetrics.getDummyTexture3DView();
-        if (dummyView != nullptr) {
-          ctx->bindResourceView(FLOW_COMPOSITE_VOLUME_RADIANCE_Y, dummyView, nullptr);
-          ctx->bindResourceSampler(FLOW_COMPOSITE_VOLUME_RADIANCE_Y, m_linearSampler);
-          ctx->bindResourceView(FLOW_COMPOSITE_VOLUME_RADIANCE_CO_CG, dummyView, nullptr);
-          ctx->bindResourceSampler(FLOW_COMPOSITE_VOLUME_RADIANCE_CO_CG, m_linearSampler);
-        }
-      }
-
-      // Dispatch: 8x8 threads per group
-      VkExtent3D workgroups = util::computeBlockCount(
-        rtOutput.m_compositeOutputExtent, VkExtent3D { 8, 8, 1 });
-
-      ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, FlowCompositeShader::getShader());
-      ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
     }
+
+    VkAabbPositionsKHR aabb = {
+      m_volumeData.worldMin.x, m_volumeData.worldMin.y, m_volumeData.worldMin.z,
+      m_volumeData.worldMax.x, m_volumeData.worldMax.y, m_volumeData.worldMax.z
+    };
+
+    if (m_aabbBuffer == nullptr) {
+      DxvkBufferCreateInfo info {};
+      info.size = sizeof(VkAabbPositionsKHR);
+      info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                 | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
+                 | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+      info.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+      info.access = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+      m_aabbBuffer = m_device->createBuffer(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXAccelerationStructure, "Flow Volume AABB Buffer");
+    }
+    ctx->writeToBuffer(m_aabbBuffer, 0, sizeof(aabb), &aabb);
+
+    VkAccelerationStructureGeometryKHR geometry { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR };
+    geometry.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
+    geometry.geometry.aabbs.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
+    geometry.geometry.aabbs.stride = sizeof(VkAabbPositionsKHR);
+    geometry.geometry.aabbs.data.deviceAddress = m_aabbBuffer->getDeviceAddress();
+    geometry.flags = 0;
+
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
+    buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR
+                    | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+    buildInfo.geometryCount = 1;
+    buildInfo.pGeometries = &geometry;
+    buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+
+    const uint32_t primitiveCount = 1u;
+    VkAccelerationStructureBuildSizesInfoKHR sizeInfo { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+    m_device->vkd()->vkGetAccelerationStructureBuildSizesKHR(m_device->handle(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &primitiveCount, &sizeInfo);
+
+    if (m_volumeBlas == nullptr || m_volumeBlas->accelStructure == nullptr || m_volumeBlas->accelStructure->info().size < sizeInfo.accelerationStructureSize) {
+      m_volumeBlas = new PooledBlas();
+      DxvkBufferCreateInfo asInfo {};
+      asInfo.size = sizeInfo.accelerationStructureSize;
+      asInfo.access = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+      asInfo.stages = VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+      asInfo.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+      m_volumeBlas->accelStructure = m_device->createAccelStructure(asInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, "BLAS FlowVolume");
+      m_volumeBlas->accelerationStructureReference = m_volumeBlas->accelStructure->getAccelDeviceAddress();
+    }
+
+    const Vector3 deltaMin = m_volumeData.worldMin - m_lastVolumeMin;
+    const Vector3 deltaMax = m_volumeData.worldMax - m_lastVolumeMax;
+    const bool smallChange = m_hasVolumeAabb
+      && std::abs(deltaMin.x) < 1.0f && std::abs(deltaMin.y) < 1.0f && std::abs(deltaMin.z) < 1.0f
+      && std::abs(deltaMax.x) < 1.0f && std::abs(deltaMax.y) < 1.0f && std::abs(deltaMax.z) < 1.0f;
+    buildInfo.mode = smallChange ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    buildInfo.dstAccelerationStructure = m_volumeBlas->accelStructure->getAccelStructure();
+    buildInfo.srcAccelerationStructure = smallChange ? m_volumeBlas->accelStructure->getAccelStructure() : VK_NULL_HANDLE;
+
+    DxvkBufferCreateInfo scratchInfo {};
+    scratchInfo.size = align(sizeInfo.buildScratchSize + 255, 256);
+    scratchInfo.access = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    scratchInfo.stages = VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+    scratchInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    Rc<DxvkBuffer> scratch = m_device->createBuffer(scratchInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXAccelerationStructure, "Flow Volume BLAS Scratch");
+    buildInfo.scratchData.deviceAddress = align(scratch->getDeviceAddress(), 256);
+
+    VkAccelerationStructureBuildRangeInfoKHR rangeInfo {};
+    rangeInfo.primitiveCount = 1;
+    const VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = &rangeInfo;
+    ctx->getCommandList()->vkCmdBuildAccelerationStructuresKHR(1, &buildInfo, &pRangeInfo);
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_aabbBuffer);
+    ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_volumeBlas->accelStructure);
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(scratch);
+
+    m_lastVolumeMin = m_volumeData.worldMin;
+    m_lastVolumeMax = m_volumeData.worldMax;
+    m_hasVolumeAabb = true;
   }
 
   void RtxFlowContext::showImguiSettings() {
