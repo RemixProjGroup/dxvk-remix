@@ -20,6 +20,8 @@
 * DEALINGS IN THE SOFTWARE.
 */
 
+#include <cstring>
+
 #include "rtx_flow_context.h"
 #include "rtx_context.h"
 #include "rtx_scene_manager.h"
@@ -684,6 +686,7 @@ namespace dxvk {
         const auto& layer = renderData.sparseParams.layers[0];
         m_volumeData.worldMin = Vector3(layer.worldMin.x, layer.worldMin.y, layer.worldMin.z);
         m_volumeData.worldMax = Vector3(layer.worldMax.x, layer.worldMax.y, layer.worldMax.z);
+        std::memcpy(m_volumeData.gridToWorld.data, &layer.gridToWorld, sizeof(m_volumeData.gridToWorld.data));
         m_volumeData.cellSize = simulateLayerParams.densityCellSize;
 
         if (logThisFrame) {
@@ -775,7 +778,7 @@ namespace dxvk {
     // Create 3D images directly via device
     DxvkImageCreateInfo imgInfo;
     imgInfo.type = VK_IMAGE_TYPE_3D;
-    imgInfo.format = VK_FORMAT_R32_SFLOAT;
+    imgInfo.format = VK_FORMAT_R16_SFLOAT;
     imgInfo.flags = 0;
     imgInfo.sampleCount = VK_SAMPLE_COUNT_1_BIT;
     imgInfo.extent = extent;
@@ -801,7 +804,7 @@ namespace dxvk {
     viewInfo.numLevels = 1;
     viewInfo.minLayer = 0;
     viewInfo.numLayers = 1;
-    viewInfo.format = VK_FORMAT_R32_SFLOAT;
+    viewInfo.format = VK_FORMAT_R16_SFLOAT;
 
     m_volumeData.densityView = m_device->createImageView(m_volumeData.densityTexture3D, viewInfo);
     m_volumeData.temperatureView = m_device->createImageView(m_volumeData.temperatureTexture3D, viewInfo);
