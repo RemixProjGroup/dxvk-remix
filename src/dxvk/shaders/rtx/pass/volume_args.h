@@ -97,8 +97,7 @@ struct VolumeArgs {
 
   float maxAttenuationDistanceForNoAtmosphere;
   uint resetHistory;
-  uint16_t flowEnabled;
-  uint16_t flowPad0;
+  uint flowEnabled; // 0 = disabled, 1 = enabled, no pad needed
   float flowDensityMultiplier;
 
   // Flow volume integration
