@@ -656,12 +656,29 @@ namespace dxvk {
       NvFlowGridRenderData renderData = {};
       m_loader->gridInterface.getRenderData(ctx, m_grid, &renderData);
 
-      // Extract world-space AABB from sparse params
+      // Extract and validate candidate world-space AABB from sparse params
       m_volumeData.valid = false;
       if (renderData.sparseParams.layerCount > 0 && renderData.sparseParams.layers != nullptr) {
         const auto& layer = renderData.sparseParams.layers[0];
-        m_volumeData.worldMin = Vector3(layer.worldMin.x, layer.worldMin.y, layer.worldMin.z);
-        m_volumeData.worldMax = Vector3(layer.worldMax.x, layer.worldMax.y, layer.worldMax.z);
+        Vector3 candidateMin = {
+          layer.worldMin.x,
+          layer.worldMin.y,
+          layer.worldMin.z
+        };
+        Vector3 candidateMax = {
+          layer.worldMax.x,
+          layer.worldMax.y,
+          layer.worldMax.z
+        };
+        Vector3 extent = candidateMax - candidateMin;
+        if (extent.x < 1e-3f || extent.y < 1e-3f || extent.z < 1e-3f) {
+          m_volumeData.valid = false;
+          return;
+        }
+
+        m_volumeData.worldMin = candidateMin;
+        m_volumeData.worldMax = candidateMax;
+        m_volumeData.valid = true;
         std::memcpy(m_volumeData.gridToWorld.data, &layer.gridToWorld, sizeof(m_volumeData.gridToWorld.data));
         m_volumeData.cellSize = simulateLayerParams.densityCellSize;
 
@@ -798,6 +815,7 @@ namespace dxvk {
 
     if (!m_initialized) return;
     if (m_activeBlockCount == 0) return;
+    if (!m_volumeData.valid) return;
 
     ScopedGpuProfileZone(ctx, "Flow Volume Prepare");
 
