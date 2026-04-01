@@ -641,9 +641,6 @@ namespace dxvk {
         // Composition
         dispatchComposite(rtOutput);
 
-        // PhysX Flow composite (ray march + in-scattered light from froxel cache)
-        dispatchFlowComposite(rtOutput);
-
         // Post composite Debug View that may overwrite Composite output
         dispatchReplaceCompositeWithDebugView(rtOutput);
         
@@ -829,12 +826,6 @@ namespace dxvk {
     if (VkSemaphore flowWaitSemaphore = flow.flowCompleteSemaphore()) {
       m_cmd->addWaitSemaphore(flowWaitSemaphore, uint64_t(-1), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
     }
-  }
-
-  void RtxContext::dispatchFlowComposite(const Resources::RaytracingOutput& rtOutput) {
-    auto& flow = m_common->metaFlowContext();
-    if (!flow.isActive()) return;
-    flow.composite(this, rtOutput);
   }
 
   void RtxContext::updateMetrics(const float gpuIdleTimeMilliseconds) const {

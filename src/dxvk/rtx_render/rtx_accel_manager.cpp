@@ -683,6 +683,26 @@ namespace dxvk {
       trackBlasBuildResources(ctx, execBarriers, blasEntry);
     }
 
+    {
+      auto& flowCtx = ctx->getCommonObjects()->metaFlowContext();
+      const auto& flowData = flowCtx.getVolumeData();
+      const auto& flowBlas = flowCtx.getVolumeBlas();
+      if (flowCtx.isActive() && flowData.valid && flowBlas != nullptr && flowBlas->accelerationStructureReference != 0) {
+        VkAccelerationStructureInstanceKHR instance {};
+        instance.transform = VkTransformMatrixKHR {
+          { 1.f, 0.f, 0.f, 0.f },
+          { 0.f, 1.f, 0.f, 0.f },
+          { 0.f, 0.f, 1.f, 0.f }
+        };
+        instance.instanceCustomIndex = FLOW_VOLUME_INSTANCE_INDEX;
+        instance.mask = 0x02;
+        instance.instanceShaderBindingTableRecordOffset = FLOW_HIT_GROUP_OFFSET;
+        instance.flags = 0;
+        instance.accelerationStructureReference = flowBlas->accelerationStructureReference;
+        m_mergedInstances[Tlas::Opaque].push_back(instance);
+      }
+    }
+
     // Copy the instance transform data to the device
     if (instanceTransforms.size() > 0) {
       ctx->writeToBuffer(m_transformBuffer, 0, instanceTransforms.size() * sizeof(VkTransformMatrixKHR), instanceTransforms.data());

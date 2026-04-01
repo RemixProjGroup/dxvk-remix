@@ -41,6 +41,7 @@ struct NvFlowGridParams;
 struct NvFlowGridParamsNamed;
 
 namespace dxvk {
+  struct PooledBlas;
 
   struct FlowEmitterData {
     float posX = 0.f, posY = 0.f, posZ = 0.f;
@@ -80,9 +81,6 @@ namespace dxvk {
     // Main simulation + render entry points called from the render loop
     // prepare() runs simulation + creates/uploads GPU textures (must run BEFORE volumetrics)
     void prepare(RtxContext* ctx, float deltaTime);
-    // composite() does the ray march compositing (runs AFTER scene composite)
-    void composite(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput);
-
     // Public accessors for rendering options (needed by volumetrics integration)
     float getDensityMultiplier() const { return densityMultiplier(); }
     float getEmissionIntensity() const { return emissionIntensity(); }
@@ -91,6 +89,7 @@ namespace dxvk {
     VkSemaphore flowCompleteSemaphore() const { return m_flowCompleteSemaphore; }
 
     const FlowVolumeData& getVolumeData() const { return m_volumeData; }
+    const Rc<PooledBlas>& getVolumeBlas() const { return m_volumeBlas; }
 
     void showImguiSettings();
 
@@ -108,6 +107,7 @@ namespace dxvk {
     void importNanoVdbBuffer(HANDLE win32Handle, VkDeviceSize size, VkBuffer& outBuf, VkDeviceMemory& outMem);
 #endif
     void createDenseTextures(RtxContext* ctx);
+    void buildVolumeBlas(DxvkContext* ctx);
 
     DxvkDevice* m_device;
 
@@ -170,9 +170,12 @@ namespace dxvk {
     RTX_OPTION("rtx.flow.emitter", float, coupleRateFuel, 10.f, "Coupling rate for fuel injection.");
     RTX_OPTION("rtx.flow.emitter", float, coupleRateVelocity, 2.f, "Coupling rate for velocity injection.");
 
-    // Rendering GPU resources
-    Rc<DxvkBuffer> m_compositeConstantBuffer;
-    Rc<DxvkSampler> m_linearSampler;
+    // Flow acceleration structures
+    Rc<PooledBlas> m_volumeBlas;
+    Rc<DxvkBuffer> m_aabbBuffer;
+    Vector3 m_lastVolumeMin = Vector3(0.f);
+    Vector3 m_lastVolumeMax = Vector3(0.f);
+    bool m_hasVolumeAabb = false;
 
     // External emitters registered via Remix API
     std::unordered_map<uint64_t, FlowEmitterData> m_externalEmitters;

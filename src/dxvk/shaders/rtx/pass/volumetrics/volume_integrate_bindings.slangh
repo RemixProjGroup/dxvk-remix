@@ -44,9 +44,3 @@ RWTexture3D<float2> AccumulatedRadianceCoCg;
 layout(r8, binding = VOLUME_INTEGRATE_BINDING_ACCUMULATED_RADIANCE_OUTPUT_AGE)
 RWTexture3D<float> AccumulatedRadianceAge;
 
-// Flow volume textures (bound when Flow is active, otherwise a dummy 1x1x1 black texture)
-layout(binding = VOLUME_INTEGRATE_BINDING_FLOW_DENSITY_TEXTURE_INPUT)
-Sampler3D<float> FlowDensityTexture;
-layout(binding = VOLUME_INTEGRATE_BINDING_FLOW_TEMPERATURE_TEXTURE_INPUT)
-Sampler3D<float> FlowTemperatureTexture;
-
