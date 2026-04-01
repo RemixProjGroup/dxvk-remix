@@ -94,6 +94,7 @@ namespace dxvk {
           "Samuel 'CR' Bowman'",
           "Alexis 'Sortifal' Bruneteau",
           "Ethan 'Xenthio' Cardwell",
+          "OpenAI Codex",
           "Alexander 'xoxor4d' Engel",
           "James Horsley 'mmdanggg2'",
           "Leonardo Leotte",

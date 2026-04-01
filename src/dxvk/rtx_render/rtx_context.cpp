@@ -641,9 +641,6 @@ namespace dxvk {
         // Composition
         dispatchComposite(rtOutput);
 
-        // PhysX Flow composite (ray march + in-scattered light from froxel cache)
-        dispatchFlowComposite(rtOutput);
-
         // Post composite Debug View that may overwrite Composite output
         dispatchReplaceCompositeWithDebugView(rtOutput);
         
@@ -829,12 +826,6 @@ namespace dxvk {
     if (VkSemaphore flowWaitSemaphore = flow.flowCompleteSemaphore()) {
       m_cmd->addWaitSemaphore(flowWaitSemaphore, uint64_t(-1), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
     }
-  }
-
-  void RtxContext::dispatchFlowComposite(const Resources::RaytracingOutput& rtOutput) {
-    auto& flow = m_common->metaFlowContext();
-    if (!flow.isActive()) return;
-    flow.composite(this, rtOutput);
   }
 
   void RtxContext::updateMetrics(const float gpuIdleTimeMilliseconds) const {
@@ -1377,6 +1368,10 @@ namespace dxvk {
     Rc<DxvkImageView> valueNoiseLut = getResourceManager().getValueNoiseLut(this);
     Rc<DxvkSampler> linearSampler = getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT);
     Rc<DxvkBuffer> samplerFeedbackBuffer = getResourceManager().getRaytracingOutput().m_samplerFeedbackDevice;
+    auto& flowCtx = getCommonObjects()->metaFlowContext();
+    const auto& flowData = flowCtx.getVolumeData();
+    auto& globalVolumetrics = getCommonObjects()->metaGlobalVolumetrics();
+    const bool flowActive = flowCtx.isActive() && flowData.valid && flowData.densityView != nullptr && flowData.temperatureView != nullptr;
 
     DebugView& debugView = getCommonObjects()->metaDebugView();
 
@@ -1400,6 +1395,12 @@ namespace dxvk {
     bindResourceView(BINDING_VALUE_NOISE_SAMPLER, valueNoiseLut, nullptr);
     bindResourceSampler(BINDING_VALUE_NOISE_SAMPLER, linearSampler);
     bindResourceBuffer(BINDING_SAMPLER_READBACK_BUFFER, DxvkBufferSlice(samplerFeedbackBuffer, 0, samplerFeedbackBuffer.ptr() ? samplerFeedbackBuffer->info().size : 0));
+    bindResourceView(BINDING_FLOW_DENSITY_TEXTURE,
+      flowActive ? flowData.densityView : globalVolumetrics.getDummyTexture3DView(), nullptr);
+    bindResourceSampler(BINDING_FLOW_DENSITY_TEXTURE, linearSampler);
+    bindResourceView(BINDING_FLOW_TEMPERATURE_TEXTURE,
+      flowActive ? flowData.temperatureView : globalVolumetrics.getDummyTexture3DView(), nullptr);
+    bindResourceSampler(BINDING_FLOW_TEMPERATURE_TEXTURE, linearSampler);
   }
 
   void RtxContext::bindResourceView(const uint32_t slot, const Rc<DxvkImageView>& imageView, const Rc<DxvkBufferView>& bufferView)

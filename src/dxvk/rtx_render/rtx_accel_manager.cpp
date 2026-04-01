@@ -29,6 +29,7 @@
 #include "rtx_scene_manager.h"
 #include "rtx_accel_manager.h"
 #include "rtx_point_instancer_system.h"
+#include "rtx_flow_context.h"
 
 #include "../d3d9/d3d9_state.h"
 #include "rtx_matrix_helpers.h"
@@ -42,6 +43,7 @@
 #include "rtx/pass/common_binding_indices.h"
 
 namespace dxvk {
+  static constexpr uint32_t FLOW_VOLUME_INSTANCE_INDEX = 255;
 
   // Make this static and not a member of AccelManager to make it safe updating the count from ~PooledBlas()
   static int g_blasCount = 0;
@@ -975,6 +977,24 @@ namespace dxvk {
       }
 
       numActiveBillboards = index;
+    }
+
+    {
+      auto& flowCtx = m_device->getCommon()->metaFlowContext();
+      if (flowCtx.isActive() && flowCtx.getVolumeBlasAddress() != 0) {
+        VkAccelerationStructureInstanceKHR flowInstance {};
+        flowInstance.accelerationStructureReference = flowCtx.getVolumeBlasAddress();
+        flowInstance.instanceCustomIndex = FLOW_VOLUME_INSTANCE_INDEX;
+        // Keep Flow instance masked off until a dedicated flow hit group is wired
+        // into every RT pipeline that consumes this TLAS.
+        flowInstance.mask = 0x00;
+        flowInstance.instanceShaderBindingTableRecordOffset = 0;
+        flowInstance.flags = 0;
+        flowInstance.transform.matrix[0][0] = 1.f;
+        flowInstance.transform.matrix[1][1] = 1.f;
+        flowInstance.transform.matrix[2][2] = 1.f;
+        m_mergedInstances[Tlas::Opaque].push_back(flowInstance);
+      }
     }
 
     // Allocate the instance buffer and copy its contents from host to device memory
