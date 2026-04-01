@@ -27,6 +27,7 @@
 #include "rtx_camera_manager.h"
 #include "../dxvk_device.h"
 #include "rtx_imgui.h"
+#include "rtx_options.h"
 #include "rtx_render/rtx_shader_manager.h"
 #include "dxvk_scoped_annotation.h"
 #include "rtx/concept/camera/camera.h"
@@ -456,9 +457,16 @@ namespace dxvk {
     NvFlowGridOffscreenLayerParams offscreenLayerParams = NvFlowGridOffscreenLayerParams_default;
     NvFlowGridRenderLayerParams renderLayerParams = NvFlowGridRenderLayerParams_default;
 
-    // Enable NanoVDB export with readback for smoke and temperature channels
+    // Enable NanoVDB export for smoke and temperature channels.
+    // Disable readback and internal 2D rendering when not using the fallback 2D path.
+    const bool useFallback2D = RtxOptions::Get()->flowUseFallback2D();
+    if (!useFallback2D) {
+      offscreenLayerParams.enabled = NV_FLOW_FALSE;
+      renderLayerParams.enabled = NV_FLOW_FALSE;
+    }
+
     simulateLayerParams.nanoVdbExport.enabled = NV_FLOW_TRUE;
-    simulateLayerParams.nanoVdbExport.readbackEnabled = NV_FLOW_TRUE;
+    simulateLayerParams.nanoVdbExport.readbackEnabled = useFallback2D ? NV_FLOW_TRUE : NV_FLOW_FALSE;
     simulateLayerParams.nanoVdbExport.smokeEnabled = NV_FLOW_TRUE;
     simulateLayerParams.nanoVdbExport.temperatureEnabled = NV_FLOW_TRUE;
     NvFlowUint8* pSimulateLayer = reinterpret_cast<NvFlowUint8*>(&simulateLayerParams);
