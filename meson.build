@@ -266,6 +266,9 @@ shader_compile_script = join_paths(global_src_root_norm, 'scripts-common/compile
 
 glsl_args = [ '-V', '--vn', '@BASENAME@', '@INPUT@', '-o', '@OUTPUT@', '--target-env', 'vulkan1.2', '@EXTRA_ARGS@' ]
 
+flow_shader_include = join_paths(global_src_root_norm, 'submodules/PhysX/flow/include/nvflow/shaders')
+glsl_args += [ '--include-path', flow_shader_include ]
+
 if run_command(glsl_compiler, [ '--quiet', '--version' ], check: false).returncode() == 0
   glsl_args += [ '--quiet' ]
 endif

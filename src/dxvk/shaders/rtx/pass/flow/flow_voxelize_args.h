@@ -24,6 +24,7 @@
 #include "rtx/utility/shader_types.h"
 
 struct FlowVoxelizeArgs {
+  mat4 gridToWorld;
   vec3 volumeMin;
   uint resolution;
   vec3 volumeMax;

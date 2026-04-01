@@ -61,6 +61,7 @@ namespace dxvk {
     bool valid = false;
     Vector3 worldMin = Vector3(0.f);
     Vector3 worldMax = Vector3(0.f);
+    Matrix4 gridToWorld = Matrix4();
     float cellSize = 0.5f;
 
     // GPU resources (created in render step)
