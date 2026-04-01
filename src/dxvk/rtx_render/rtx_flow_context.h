@@ -63,18 +63,6 @@ namespace dxvk {
     Vector3 worldMax = Vector3(0.f);
     float cellSize = 0.5f;
 
-    // CPU copies of NanoVDB readback buffers (PNanoVDB format)
-    std::vector<uint8_t> smokeNanoVdb;
-    std::vector<uint8_t> temperatureNanoVdb;
-
-    // CPU dense voxel data (filled by voxelizeOnCpu from NanoVDB readback)
-    std::vector<float> densityDense;      // R32F dense grid
-    std::vector<float> temperatureDense;  // R32F dense grid
-    uint32_t denseResX = 0;
-    uint32_t denseResY = 0;
-    uint32_t denseResZ = 0;
-    bool denseDataReady = false;
-
     // GPU resources (created in render step)
     Rc<DxvkImage> densityTexture3D;
     Rc<DxvkImage> temperatureTexture3D;
@@ -115,8 +103,9 @@ namespace dxvk {
     bool initFlow();
     void shutdownFlow();
 
-    void voxelizeOnCpu();
-    void uploadDenseTextures(RtxContext* ctx);
+#if defined(_WIN32)
+    void importNanoVdbBuffer(HANDLE win32Handle, VkDeviceSize size, VkBuffer& outBuf, VkDeviceMemory& outMem);
+#endif
     void createDenseTextures(RtxContext* ctx);
 
     DxvkDevice* m_device;
@@ -135,6 +124,13 @@ namespace dxvk {
 #if defined(_WIN32)
     HANDLE m_flowSemaphoreWin32Handle = nullptr;
 #endif
+    VkBuffer m_importedSmokeBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_importedSmokeMemory = VK_NULL_HANDLE;
+    VkBuffer m_importedTempBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory m_importedTempMemory = VK_NULL_HANDLE;
+    VkDeviceSize m_importedSmokeSize = 0;
+    VkDeviceSize m_importedTempSize = 0;
+    bool m_nanoVdbImported = false;
 
     // Volume data for renderer
     FlowVolumeData m_volumeData;

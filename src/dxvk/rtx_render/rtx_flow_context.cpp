@@ -39,13 +39,6 @@
 #include <NvFlowDatabase.h>
 #pragma warning(pop)
 
-// PNanoVDB for CPU-side NanoVDB tree traversal (used to convert readback → dense 3D array)
-#define PNANOVDB_C
-#pragma warning(push)
-#pragma warning(disable: 4244 4267) // conversion warnings in PNanoVDB macros
-#include <nanovdb/PNanoVDB.h>
-#pragma warning(pop)
-
 #include "../../util/log/log.h"
 
 // Compiled shader headers (generated at build time from .comp.slang files)
@@ -289,6 +282,26 @@ namespace dxvk {
 
     m_loader->deviceInterface.waitIdle(m_deviceQueue);
 
+    if (m_importedSmokeBuffer != VK_NULL_HANDLE) {
+      m_device->vkd()->vkDestroyBuffer(m_device->handle(), m_importedSmokeBuffer, nullptr);
+      m_importedSmokeBuffer = VK_NULL_HANDLE;
+    }
+    if (m_importedSmokeMemory != VK_NULL_HANDLE) {
+      m_device->vkd()->vkFreeMemory(m_device->handle(), m_importedSmokeMemory, nullptr);
+      m_importedSmokeMemory = VK_NULL_HANDLE;
+    }
+    if (m_importedTempBuffer != VK_NULL_HANDLE) {
+      m_device->vkd()->vkDestroyBuffer(m_device->handle(), m_importedTempBuffer, nullptr);
+      m_importedTempBuffer = VK_NULL_HANDLE;
+    }
+    if (m_importedTempMemory != VK_NULL_HANDLE) {
+      m_device->vkd()->vkFreeMemory(m_device->handle(), m_importedTempMemory, nullptr);
+      m_importedTempMemory = VK_NULL_HANDLE;
+    }
+    m_importedSmokeSize = 0;
+    m_importedTempSize = 0;
+    m_nanoVdbImported = false;
+
     NvFlowContext* context = m_loader->deviceInterface.getContext(m_deviceQueue);
 
     if (m_grid) {
@@ -337,6 +350,72 @@ namespace dxvk {
   }
 
   static constexpr uint64_t kDebugEmitterHandle = UINT64_MAX;
+
+#if defined(_WIN32)
+  void RtxFlowContext::importNanoVdbBuffer(HANDLE win32Handle, VkDeviceSize size, VkBuffer& outBuf, VkDeviceMemory& outMem) {
+    if (outBuf != VK_NULL_HANDLE) {
+      m_device->vkd()->vkDestroyBuffer(m_device->handle(), outBuf, nullptr);
+      outBuf = VK_NULL_HANDLE;
+    }
+    if (outMem != VK_NULL_HANDLE) {
+      m_device->vkd()->vkFreeMemory(m_device->handle(), outMem, nullptr);
+      outMem = VK_NULL_HANDLE;
+    }
+
+    VkExternalMemoryBufferCreateInfo extBufferInfo = { VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO };
+    extBufferInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+
+    VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+    bufferInfo.pNext = &extBufferInfo;
+    bufferInfo.size = size;
+    bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (m_device->vkd()->vkCreateBuffer(m_device->handle(), &bufferInfo, nullptr, &outBuf) != VK_SUCCESS) {
+      Logger::err("NvFlow: Failed to create imported NanoVDB buffer on Remix device");
+      return;
+    }
+
+    VkMemoryRequirements memReq = {};
+    m_device->vkd()->vkGetBufferMemoryRequirements(m_device->handle(), outBuf, &memReq);
+
+    VkImportMemoryWin32HandleInfoKHR importInfo = { VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR };
+    importInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+    importInfo.handle = win32Handle;
+
+    VkMemoryAllocateInfo allocInfo = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+    allocInfo.pNext = &importInfo;
+    allocInfo.allocationSize = memReq.size;
+    allocInfo.memoryTypeIndex = 0;
+
+    const uint32_t memTypeBits = memReq.memoryTypeBits;
+    const auto memProps = m_device->adapter()->memoryProperties();
+    bool foundMemoryType = false;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+      if ((memTypeBits & (1u << i)) != 0u) {
+        allocInfo.memoryTypeIndex = i;
+        foundMemoryType = true;
+        break;
+      }
+    }
+
+    if (!foundMemoryType ||
+        m_device->vkd()->vkAllocateMemory(m_device->handle(), &allocInfo, nullptr, &outMem) != VK_SUCCESS) {
+      Logger::err("NvFlow: Failed to allocate imported NanoVDB memory on Remix device");
+      m_device->vkd()->vkDestroyBuffer(m_device->handle(), outBuf, nullptr);
+      outBuf = VK_NULL_HANDLE;
+      return;
+    }
+
+    if (m_device->vkd()->vkBindBufferMemory(m_device->handle(), outBuf, outMem, 0) != VK_SUCCESS) {
+      Logger::err("NvFlow: Failed to bind imported NanoVDB buffer memory");
+      m_device->vkd()->vkFreeMemory(m_device->handle(), outMem, nullptr);
+      m_device->vkd()->vkDestroyBuffer(m_device->handle(), outBuf, nullptr);
+      outMem = VK_NULL_HANDLE;
+      outBuf = VK_NULL_HANDLE;
+    }
+  }
+#endif
 
   void RtxFlowContext::simulate(float deltaTime) {
     // Route the ImGui debug emitter through the same external emitter system
@@ -600,53 +679,66 @@ namespace dxvk {
         }
       }
 
-      // Copy NanoVDB readback data when available (Flow may provide this asynchronously).
-      if (renderData.nanoVdb.readbackCount > 0 && renderData.nanoVdb.readbacks != nullptr) {
-        const auto& rb = renderData.nanoVdb.readbacks[0];
+      if (renderData.nanoVdb.smokeNanoVdb != nullptr && renderData.nanoVdb.temperatureNanoVdb != nullptr) {
+#if defined(_WIN32)
+        NvFlowContextInterface* contextInterface = m_loader->deviceInterface.getContextInterface(m_deviceQueue);
+        NvFlowBuffer* smokeBuffer = nullptr;
+        NvFlowBuffer* tempBuffer = nullptr;
 
-        if (rb.smokeNanoVdbReadback != nullptr && rb.smokeNanoVdbReadbackSize > 0) {
-          m_volumeData.smokeNanoVdb.resize(rb.smokeNanoVdbReadbackSize);
-          memcpy(m_volumeData.smokeNanoVdb.data(), rb.smokeNanoVdbReadback, rb.smokeNanoVdbReadbackSize);
-          m_volumeData.valid = true;
+        NvFlowBufferAcquire* smokeAcquire = contextInterface->enqueueAcquireBuffer(ctx, renderData.nanoVdb.smokeNanoVdb);
+        NvFlowBufferAcquire* tempAcquire = contextInterface->enqueueAcquireBuffer(ctx, renderData.nanoVdb.temperatureNanoVdb);
+        const NvFlowBool32 haveSmoke = smokeAcquire != nullptr && contextInterface->getAcquiredBuffer(ctx, smokeAcquire, &smokeBuffer) && smokeBuffer != nullptr;
+        const NvFlowBool32 haveTemp = tempAcquire != nullptr && contextInterface->getAcquiredBuffer(ctx, tempAcquire, &tempBuffer) && tempBuffer != nullptr;
 
-          if (logThisFrame) {
-            Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: smoke NanoVDB readback size=", rb.smokeNanoVdbReadbackSize, " bytes"));
+        HANDLE smokeHandle = nullptr;
+        HANDLE tempHandle = nullptr;
+        NvFlowUint64 smokeSize = 0u;
+        NvFlowUint64 tempSize = 0u;
+
+        if (haveSmoke) {
+          m_loader->deviceInterface.getBufferExternalHandle(ctx, smokeBuffer, &smokeHandle, sizeof(smokeHandle), &smokeSize);
+        }
+        if (haveTemp) {
+          m_loader->deviceInterface.getBufferExternalHandle(ctx, tempBuffer, &tempHandle, sizeof(tempHandle), &tempSize);
+        }
+
+        const bool smokeSizeChanged = m_importedSmokeSize != static_cast<VkDeviceSize>(smokeSize);
+        const bool tempSizeChanged = m_importedTempSize != static_cast<VkDeviceSize>(tempSize);
+        if ((!m_nanoVdbImported || smokeSizeChanged || tempSizeChanged) && haveSmoke && haveTemp) {
+          if (smokeHandle != nullptr && smokeSize > 0u) {
+            importNanoVdbBuffer(smokeHandle, static_cast<VkDeviceSize>(smokeSize), m_importedSmokeBuffer, m_importedSmokeMemory);
+            m_importedSmokeSize = static_cast<VkDeviceSize>(smokeSize);
           }
-        } else {
-          m_volumeData.smokeNanoVdb.clear();
-        }
-
-        if (rb.temperatureNanoVdbReadback != nullptr && rb.temperatureNanoVdbReadbackSize > 0) {
-          m_volumeData.temperatureNanoVdb.resize(rb.temperatureNanoVdbReadbackSize);
-          memcpy(m_volumeData.temperatureNanoVdb.data(), rb.temperatureNanoVdbReadback, rb.temperatureNanoVdbReadbackSize);
-          m_volumeData.valid = true;
-
-          if (logThisFrame) {
-            Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: temperature NanoVDB readback size=", rb.temperatureNanoVdbReadbackSize, " bytes"));
+          if (tempHandle != nullptr && tempSize > 0u) {
+            importNanoVdbBuffer(tempHandle, static_cast<VkDeviceSize>(tempSize), m_importedTempBuffer, m_importedTempMemory);
+            m_importedTempSize = static_cast<VkDeviceSize>(tempSize);
           }
-        } else {
-          m_volumeData.temperatureNanoVdb.clear();
+
+          m_nanoVdbImported = (m_importedSmokeBuffer != VK_NULL_HANDLE) && (m_importedTempBuffer != VK_NULL_HANDLE);
+          if (logThisFrame) {
+            Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: NanoVDB import ",
+              m_nanoVdbImported ? "succeeded" : "failed",
+              " smokeSize=", smokeSize, " tempSize=", tempSize));
+          }
         }
 
-        if (logThisFrame && !m_volumeData.valid) {
-          Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: readback available but no smoke/temperature data yet (ring buffer filling)"));
+        if (smokeHandle != nullptr && smokeBuffer != nullptr) {
+          m_loader->deviceInterface.closeBufferExternalHandle(ctx, smokeBuffer, &smokeHandle, sizeof(smokeHandle));
         }
-      } else {
-        m_volumeData.smokeNanoVdb.clear();
-        m_volumeData.temperatureNanoVdb.clear();
+        if (tempHandle != nullptr && tempBuffer != nullptr) {
+          m_loader->deviceInterface.closeBufferExternalHandle(ctx, tempBuffer, &tempHandle, sizeof(tempHandle));
+        }
 
-        if (logThisFrame) {
-          Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: no NanoVDB readback available yet"));
-        }
+        m_volumeData.valid = m_nanoVdbImported;
+#else
+        m_volumeData.valid = false;
+#endif
       }
     }
-
-    // Convert NanoVDB readback data to dense 3D float arrays for GPU upload
-    voxelizeOnCpu();
   }
 
   void RtxFlowContext::createDenseTextures(RtxContext* ctx) {
-    // Compute per-axis resolution from AABB extent / cellSize (matching voxelizeOnCpu)
+    // Compute per-axis resolution from AABB extent / cellSize
     Vector3 worldExtent = m_volumeData.worldMax - m_volumeData.worldMin;
     float cellSize = std::max(m_volumeData.cellSize, 0.1f);
     uint32_t maxRes = static_cast<uint32_t>(textureResolution());
@@ -704,130 +796,12 @@ namespace dxvk {
     Logger::info(str::format("NvFlow: Created dense 3D textures at resolution ", extent.width, "x", extent.height, "x", extent.depth));
   }
 
-  static float sampleNanoVdbFloat(const std::vector<uint8_t>& nanoVdbData, const pnanovdb_vec3_t& worldPos) {
-    if (nanoVdbData.size() < PNANOVDB_GRID_SIZE + PNANOVDB_TREE_SIZE)
-      return 0.f;
-
-    pnanovdb_buf_t buf = pnanovdb_make_buf(
-      const_cast<uint32_t*>(reinterpret_cast<const uint32_t*>(nanoVdbData.data())),
-      nanoVdbData.size() / 4);
-
-    pnanovdb_grid_handle_t grid = { {0} };
-    pnanovdb_tree_handle_t tree = pnanovdb_grid_get_tree(buf, grid);
-    pnanovdb_root_handle_t root = pnanovdb_tree_get_root(buf, tree);
-
-    pnanovdb_vec3_t indexf = pnanovdb_grid_world_to_indexf(buf, grid, PNANOVDB_REF(worldPos));
-    pnanovdb_coord_t ijk;
-    ijk.x = (pnanovdb_int32_t)floorf(indexf.x);
-    ijk.y = (pnanovdb_int32_t)floorf(indexf.y);
-    ijk.z = (pnanovdb_int32_t)floorf(indexf.z);
-
-    pnanovdb_address_t address = pnanovdb_root_get_value_address(
-      PNANOVDB_GRID_TYPE_FLOAT, buf, root, PNANOVDB_REF(ijk));
-    return pnanovdb_read_float(buf, address);
-  }
-
-  void RtxFlowContext::voxelizeOnCpu() {
-    m_volumeData.denseDataReady = false;
-
-    if (m_volumeData.smokeNanoVdb.empty() && m_volumeData.temperatureNanoVdb.empty())
-      return;
-
-    Vector3 extent = m_volumeData.worldMax - m_volumeData.worldMin;
-    float cellSize = std::max(m_volumeData.cellSize, 0.1f);
-    uint32_t maxRes = static_cast<uint32_t>(textureResolution());
-
-    // Derive per-axis resolution from AABB extent / simulation cell size, capped at maxRes
-    uint32_t resX = std::min(static_cast<uint32_t>(std::ceil(extent.x / cellSize)), maxRes);
-    uint32_t resY = std::min(static_cast<uint32_t>(std::ceil(extent.y / cellSize)), maxRes);
-    uint32_t resZ = std::min(static_cast<uint32_t>(std::ceil(extent.z / cellSize)), maxRes);
-    resX = std::max(resX, 1u);
-    resY = std::max(resY, 1u);
-    resZ = std::max(resZ, 1u);
-
-    uint32_t totalVoxels = resX * resY * resZ;
-
-    m_volumeData.densityDense.resize(totalVoxels, 0.f);
-    m_volumeData.temperatureDense.resize(totalVoxels, 0.f);
-    m_volumeData.denseResX = resX;
-    m_volumeData.denseResY = resY;
-    m_volumeData.denseResZ = resZ;
-
-    bool hasDensity = !m_volumeData.smokeNanoVdb.empty() &&
-                      m_volumeData.smokeNanoVdb.size() >= PNANOVDB_GRID_SIZE + PNANOVDB_TREE_SIZE;
-    bool hasTemp = !m_volumeData.temperatureNanoVdb.empty() &&
-                   m_volumeData.temperatureNanoVdb.size() >= PNANOVDB_GRID_SIZE + PNANOVDB_TREE_SIZE;
-
-    if (!hasDensity && !hasTemp)
-      return;
-
-    for (uint32_t z = 0; z < resZ; z++) {
-      for (uint32_t y = 0; y < resY; y++) {
-        for (uint32_t x = 0; x < resX; x++) {
-          // Compute world position at voxel center
-          pnanovdb_vec3_t worldPos;
-          worldPos.x = m_volumeData.worldMin.x + (static_cast<float>(x) + 0.5f) / static_cast<float>(resX) * extent.x;
-          worldPos.y = m_volumeData.worldMin.y + (static_cast<float>(y) + 0.5f) / static_cast<float>(resY) * extent.y;
-          worldPos.z = m_volumeData.worldMin.z + (static_cast<float>(z) + 0.5f) / static_cast<float>(resZ) * extent.z;
-
-          uint32_t idx = z * resY * resX + y * resX + x;
-
-          if (hasDensity) {
-            m_volumeData.densityDense[idx] = sampleNanoVdbFloat(m_volumeData.smokeNanoVdb, worldPos);
-          }
-          if (hasTemp) {
-            m_volumeData.temperatureDense[idx] = sampleNanoVdbFloat(m_volumeData.temperatureNanoVdb, worldPos);
-          }
-        }
-      }
-    }
-
-    m_volumeData.denseDataReady = true;
-
-    if ((m_frameCount <= 5) || (m_frameCount % 300 == 0)) {
-      // Count non-zero voxels for debug
-      uint32_t nonZeroDensity = 0, nonZeroTemp = 0;
-      for (uint32_t i = 0; i < totalVoxels; i++) {
-        if (m_volumeData.densityDense[i] > 0.f) nonZeroDensity++;
-        if (m_volumeData.temperatureDense[i] > 0.f) nonZeroTemp++;
-      }
-      Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: voxelized ", resX, "x", resY, "x", resZ, " = ", totalVoxels,
-        " voxels (cellSize=", cellSize, "), non-zero density=", nonZeroDensity, " temp=", nonZeroTemp));
-    }
-  }
-
-  void RtxFlowContext::uploadDenseTextures(RtxContext* ctx) {
-    if (!m_volumeData.denseDataReady) return;
-
-    uint32_t resX = m_volumeData.denseResX;
-    uint32_t resY = m_volumeData.denseResY;
-    uint32_t resZ = m_volumeData.denseResZ;
-    VkExtent3D extent = { resX, resY, resZ };
-
-    VkImageSubresourceLayers subresources;
-    subresources.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    subresources.mipLevel = 0;
-    subresources.baseArrayLayer = 0;
-    subresources.layerCount = 1;
-
-    VkDeviceSize rowPitch = resX * sizeof(float);
-    VkDeviceSize layerPitch = resX * resY * sizeof(float);
-
-    ctx->updateImage(m_volumeData.densityTexture3D,
-      subresources, VkOffset3D { 0, 0, 0 }, extent,
-      m_volumeData.densityDense.data(), rowPitch, layerPitch);
-
-    ctx->updateImage(m_volumeData.temperatureTexture3D,
-      subresources, VkOffset3D { 0, 0, 0 }, extent,
-      m_volumeData.temperatureDense.data(), rowPitch, layerPitch);
-  }
-
   void RtxFlowContext::prepare(RtxContext* ctx, float deltaTime) {
     if (!isActive() && !enable()) return;
 
     ScopedCpuProfileZone();
 
-    // Run CPU simulation (PhysX Flow + NanoVDB readback + voxelizeOnCpu)
+    // Run simulation and import NanoVDB buffers from Flow when available.
     simulate(deltaTime);
 
     if (!m_initialized) return;
@@ -835,14 +809,10 @@ namespace dxvk {
 
     ScopedGpuProfileZone(ctx, "Flow Volume Prepare");
 
-    // Create GPU textures if needed and upload dense data
+    // Create GPU textures if needed.
     createDenseTextures(ctx);
     if (m_volumeData.densityView == nullptr || m_volumeData.temperatureView == nullptr)
       return;
-
-    if (m_volumeData.denseDataReady) {
-      uploadDenseTextures(ctx);
-    }
   }
 
   void RtxFlowContext::composite(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput) {
@@ -850,8 +820,6 @@ namespace dxvk {
     if (m_activeBlockCount == 0) return;
     if (m_volumeData.densityView == nullptr || m_volumeData.temperatureView == nullptr)
       return;
-    if (!m_volumeData.denseDataReady) return;
-
     // --- Integrated Volume Rendering (into composite output) ---
     {
       ScopedGpuProfileZone(ctx, "Flow Volume Composite");
@@ -1024,8 +992,8 @@ namespace dxvk {
         ImGui::Text("Volume AABB: (%.1f,%.1f,%.1f) - (%.1f,%.1f,%.1f)",
           m_volumeData.worldMin.x, m_volumeData.worldMin.y, m_volumeData.worldMin.z,
           m_volumeData.worldMax.x, m_volumeData.worldMax.y, m_volumeData.worldMax.z);
-        ImGui::Text("Smoke NanoVDB: %zu KB", m_volumeData.smokeNanoVdb.size() / 1024);
-        ImGui::Text("Temp NanoVDB: %zu KB", m_volumeData.temperatureNanoVdb.size() / 1024);
+        ImGui::Text("Smoke NanoVDB import: %s (%zu KB)", m_importedSmokeBuffer != VK_NULL_HANDLE ? "ready" : "pending", m_importedSmokeSize / 1024);
+        ImGui::Text("Temp NanoVDB import: %s (%zu KB)", m_importedTempBuffer != VK_NULL_HANDLE ? "ready" : "pending", m_importedTempSize / 1024);
       }
 
       ImGui::Separator();
