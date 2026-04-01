@@ -182,6 +182,8 @@ namespace dxvk {
     friend class RtxInitializer;
     friend class RtxComposite;
 
+    RTX_OPTION("rtx.flow", bool, flowUseFallback2D, false, "Uses NvFlow internal 2D fallback rendering and NanoVDB CPU readback path.");
+
     RTX_OPTION("rtx", fast_unordered_set, lightmapTextures, {},
                   "Textures used for lightmapping (baked static lighting on surfaces) in older games.\n"
                   "These textures will be ignored when attempting to determine the desired textures from a draw to use for ray tracing.");
