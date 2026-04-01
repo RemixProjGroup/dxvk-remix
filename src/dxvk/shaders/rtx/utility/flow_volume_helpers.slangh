@@ -54,31 +54,33 @@ float2 intersectFlowAABB(float3 origin, float3 direction, float3 boxMin, float3 
 }
 
 // Compute Beer-Lambert attenuation of Flow smoke along a ray segment.
-// Uses a small number of samples (N=4) for efficiency in NEE visibility.
+// Uses jittered samples to reduce structured light leaks in dense smoke.
 // Returns transmittance in [0, 1].
 float calcFlowTransmittance(VolumeArgs volumeArgs, Sampler3D<float> flowDensityTex,
-                             float3 origin, float3 direction, float maxDist) {
+                            float3 origin, float3 direction, float maxDist, float randVal) {
   if (!volumeArgs.flowEnabled) return 1.0;
 
   float2 tHit = intersectFlowAABB(origin, direction, volumeArgs.flowVolumeMin, volumeArgs.flowVolumeMax);
-  tHit.x = max(tHit.x, 0);
-  tHit.y = min(tHit.y, maxDist);
+  float tEnter = max(tHit.x, 0.0);
+  float tExit = min(tHit.y, maxDist);
+  float pathLen = tExit - tEnter;
 
-  if (tHit.x >= tHit.y) return 1.0;
+  if (tEnter >= tExit || pathLen <= 0.0) return 1.0;
 
-  // Sample density at 4 points along the ray through the Flow volume
-  float totalDensity = 0;
-  const int N = 4;
+  const int N = 8;
+  float step = pathLen / float(N);
+  float totalDensity = 0.0;
   float3 extent = volumeArgs.flowVolumeMax - volumeArgs.flowVolumeMin;
+  float t = tEnter + randVal * step;
 
+  [unroll]
   for (int i = 0; i < N; i++) {
-    float t = lerp(tHit.x, tHit.y, (float(i) + 0.5) / float(N));
     float3 pos = origin + direction * t;
     float3 uvw = (pos - volumeArgs.flowVolumeMin) / extent;
-    totalDensity += max(flowDensityTex.SampleLevel(uvw, 0), 0);
+    if (all(uvw >= 0.0) && all(uvw <= 1.0))
+      totalDensity += max(flowDensityTex.SampleLevel(uvw, 0), 0.0);
+    t += step;
   }
 
-  float avgDensity = totalDensity / float(N);
-  float pathLength = tHit.y - tHit.x;
-  return exp(-avgDensity * volumeArgs.flowDensityMultiplier * pathLength);
+  return exp(-(totalDensity / float(N)) * volumeArgs.flowDensityMultiplier * pathLen);
 }
