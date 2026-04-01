@@ -93,7 +93,10 @@ namespace dxvk {
     /**
      * \brief Adds an extra wait semaphore to this command list
      */
-    void addWaitSemaphore(VkSemaphore waitSemaphore, uint64_t waitSemaphoreValue = -1);
+    void addWaitSemaphore(
+            VkSemaphore           waitSemaphore,
+            uint64_t              waitSemaphoreValue = -1,
+            VkPipelineStageFlags  waitStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
     /**
      * \brief Adds an extra signal semaphore to this command list
      */
@@ -947,6 +950,7 @@ namespace dxvk {
     // NV-DXVK start: DLFG integration
     VkSemaphore m_additionalWaitSemaphore = nullptr;
     uint64_t m_additionalWaitSemaphoreValue = uint64_t(-1);
+    VkPipelineStageFlags m_additionalWaitSemaphoreStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
     VkSemaphore m_additionalSignalSemaphore = nullptr;
     uint64_t m_additionalSignalSemaphoreValue = uint64_t(-1);
     // NV-DXVK end
