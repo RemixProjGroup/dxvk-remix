@@ -46,6 +46,15 @@
 #include "../../util/log/log.h"
 
 namespace dxvk {
+  static NvFlowFloat4x4 toNvFlowMatrix(const Matrix4d& m) {
+    NvFlowFloat4x4 result = {};
+    for (uint32_t r = 0; r < 4; r++) {
+      for (uint32_t c = 0; c < 4; c++) {
+        result.m[r][c] = m.data[c][r];
+      }
+    }
+    return result;
+  }
 
   static void flowLogPrint(NvFlowLogLevel level, const char* format, ...) {
     va_list args;
@@ -287,6 +296,10 @@ namespace dxvk {
     m_importedSmokeSize = 0;
     m_importedTempSize = 0;
     m_nanoVdbImported = false;
+    m_importedColorView = nullptr;
+    m_importedColorImage = nullptr;
+    m_fallbackColorImported = false;
+    m_fallbackImportExtent = { 0, 0, 1 };
 
     NvFlowContext* context = m_loader->deviceInterface.getContext(m_deviceQueue);
 
@@ -405,7 +418,7 @@ namespace dxvk {
   }
 #endif
 
-  void RtxFlowContext::simulate(float deltaTime) {
+  void RtxFlowContext::simulate(RtxContext* ctx, float deltaTime) {
     // Route the ImGui debug emitter through the same external emitter system
     {
       std::lock_guard<std::mutex> lock(m_emitterMutex);
@@ -526,14 +539,26 @@ namespace dxvk {
 
     // Enable NanoVDB export for smoke and temperature channels.
     // Disable readback and internal 2D rendering when not using the fallback 2D path.
-    const bool useFallback2D = RtxOptions::Get()->flowUseFallback2D();
-    if (!useFallback2D) {
+    m_useFallback2D = useFallback2D();
+    if (m_useFallback2D) {
+      NvFlowGridRenderLayerParams renderParams = NvFlowGridRenderLayerParams_default;
+      renderParams.renderSettings.flowEnabled = NV_FLOW_TRUE;
+      renderParams.renderSettings.pathTracingEnabled = NV_FLOW_FALSE;
+      renderParams.renderSettings.compositeEnabled = NV_FLOW_TRUE;
+      const NvFlowFloat4x4 projectionMatrix = toNvFlowMatrix(m_remixCamera.getViewToProjection());
+      const NvFlowFloat4x4 viewMatrix = toNvFlowMatrix(m_remixCamera.getWorldToView());
+      (void)projectionMatrix;
+      (void)viewMatrix;
+      renderLayerParams = renderParams;
+      renderLayerParams.renderSettings.pathTracingEnabled = NV_FLOW_FALSE;
+      renderLayerParams.renderSettings.compositeEnabled = NV_FLOW_TRUE;
+    } else {
       offscreenLayerParams.enabled = NV_FLOW_FALSE;
       renderLayerParams.enabled = NV_FLOW_FALSE;
     }
 
     simulateLayerParams.nanoVdbExport.enabled = NV_FLOW_TRUE;
-    simulateLayerParams.nanoVdbExport.readbackEnabled = useFallback2D ? NV_FLOW_TRUE : NV_FLOW_FALSE;
+    simulateLayerParams.nanoVdbExport.readbackEnabled = m_useFallback2D ? NV_FLOW_TRUE : NV_FLOW_FALSE;
     simulateLayerParams.nanoVdbExport.smokeEnabled = NV_FLOW_TRUE;
     simulateLayerParams.nanoVdbExport.temperatureEnabled = NV_FLOW_TRUE;
     NvFlowUint8* pSimulateLayer = reinterpret_cast<NvFlowUint8*>(&simulateLayerParams);
@@ -655,6 +680,23 @@ namespace dxvk {
       NvFlowContext* ctx = m_loader->deviceInterface.getContext(m_deviceQueue);
       NvFlowGridRenderData renderData = {};
       m_loader->gridInterface.getRenderData(ctx, m_grid, &renderData);
+
+#if defined(_WIN32)
+      if (m_useFallback2D && m_renderResolution.width > 0 && m_renderResolution.height > 0) {
+        const bool resolutionChanged = m_fallbackImportExtent.width != m_renderResolution.width
+          || m_fallbackImportExtent.height != m_renderResolution.height;
+
+        if (resolutionChanged) {
+          m_importedColorView = nullptr;
+          m_importedColorImage = nullptr;
+          m_fallbackColorImported = false;
+        }
+        // Note: Current NvFlowExt API does not expose an external handle for render color textures.
+        // Keep import state synchronized with resolution changes; when a texture handle path is added
+        // this branch can import and expose the fallback 2D color image here.
+        m_fallbackImportExtent = { m_renderResolution.width, m_renderResolution.height, 1u };
+      }
+#endif
 
       // Extract and validate candidate world-space AABB from sparse params
       m_volumeData.valid = false;
@@ -811,7 +853,10 @@ namespace dxvk {
     ScopedCpuProfileZone();
 
     // Run simulation and import NanoVDB buffers from Flow when available.
-    simulate(deltaTime);
+    const auto& camera = ctx->getSceneManager().getCamera();
+    m_remixCamera = camera;
+    m_renderResolution = { camera.m_renderResolution[0], camera.m_renderResolution[1], 1u };
+    simulate(ctx, deltaTime);
 
     if (!m_initialized) return;
     if (m_activeBlockCount == 0) return;

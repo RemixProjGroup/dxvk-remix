@@ -71,11 +71,27 @@
 
 #include "rtx_matrix_helpers.h"
 #include "../util/util_fastops.h"
+#include <rtx_shaders/flow_fallback_composite.h>
 
 // Destructor requires the struct definitions
 #include "rtx_sky.h"
 
 namespace dxvk {
+  namespace {
+    class FlowFallbackCompositeShader : public ManagedShader {
+      SHADER_SOURCE(FlowFallbackCompositeShader, VK_SHADER_STAGE_COMPUTE_BIT, flow_fallback_composite)
+      PUSH_CONSTANTS(FlowCompositeArgs)
+      BEGIN_PARAMETER()
+        SAMPLER2D(0)
+        RW_TEXTURE2D(1)
+        TEXTURE2D(2)
+        SAMPLER3D(3)
+        SAMPLER3D(4)
+      END_PARAMETER()
+    };
+
+    PREWARM_SHADER_PIPELINE(FlowFallbackCompositeShader);
+  }
 
   Metrics Metrics::s_instance;
 
@@ -677,6 +693,8 @@ namespace dxvk {
             { 0, 0, 0 },
             rtOutput.m_compositeOutputExtent);
         }
+
+        dispatchFlowFallbackComposite(rtOutput);
         m_previousUpscaler = m_currentUpscaler;
 
         RtxDustParticles& dust = m_common->metaDustParticles();
@@ -827,6 +845,41 @@ namespace dxvk {
     if (VkSemaphore flowWaitSemaphore = flow.flowCompleteSemaphore()) {
       m_cmd->addWaitSemaphore(flowWaitSemaphore, uint64_t(-1), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
     }
+  }
+
+  void RtxContext::dispatchFlowFallbackComposite(Resources::RaytracingOutput& rtOutput) {
+    auto& flowCtx = m_common->metaFlowContext();
+    if (!flowCtx.isActive() || !RtxFlowContext::useFallback2D() || !flowCtx.isFallbackColorImported()) {
+      return;
+    }
+
+    ScopedGpuProfileZone(this, "Flow Fallback Composite");
+    setPushConstantBank(DxvkPushConstantBank::RTX);
+
+    auto& globalVolumetrics = m_common->metaGlobalVolumetrics();
+    FlowCompositeArgs args = {};
+    args.camera = rtOutput.m_raytraceArgs.camera;
+    args.volumeArgs = rtOutput.m_raytraceArgs.volumeArgs;
+    args.projectionToViewJittered = rtOutput.m_raytraceArgs.camera.projectionToViewJittered;
+    args.viewToWorld = rtOutput.m_raytraceArgs.camera.viewToWorld;
+    args.resolution = Vector2(rtOutput.m_finalOutputExtent.width, rtOutput.m_finalOutputExtent.height);
+    args.nearPlane = rtOutput.m_raytraceArgs.camera.nearPlane;
+    args.froxelRadianceEnabled = (rtOutput.m_raytraceArgs.volumeArgs.enable != 0);
+    args.scatteringAlbedo = rtOutput.m_raytraceArgs.volumeArgs.scatteringCoefficient;
+    pushConstants(0, sizeof(args), &args);
+
+    bindResourceView(0, flowCtx.getFallbackColorView(), nullptr);
+    bindResourceSampler(0, getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+    bindResourceView(1, rtOutput.m_finalOutput.resource(Resources::AccessType::Write).view, nullptr);
+    bindResourceView(2, rtOutput.m_primaryDepth.view, nullptr);
+    bindResourceView(3, globalVolumetrics.getCurrentVolumeAccumulatedRadianceY().view, nullptr);
+    bindResourceSampler(3, getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+    bindResourceView(4, globalVolumetrics.getCurrentVolumeAccumulatedRadianceCoCg().view, nullptr);
+    bindResourceSampler(4, getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+
+    bindShader(VK_SHADER_STAGE_COMPUTE_BIT, FlowFallbackCompositeShader::getShader());
+    const VkExtent3D wg = util::computeBlockCount(rtOutput.m_finalOutputExtent, VkExtent3D { 8, 8, 1 });
+    dispatch(wg.width, wg.height, 1);
   }
 
   void RtxContext::updateMetrics(const float gpuIdleTimeMilliseconds) const {

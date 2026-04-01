@@ -22,6 +22,7 @@
 #pragma once
 
 #include "../dxvk_include.h"
+#include "rtx_camera.h"
 #include "rtx_resources.h"
 #include "rtx_option.h"
 
@@ -90,6 +91,8 @@ namespace dxvk {
 
     const FlowVolumeData& getVolumeData() const { return m_volumeData; }
     const Rc<PooledBlas>& getVolumeBlas() const { return m_volumeBlas; }
+    const Rc<DxvkImageView>& getFallbackColorView() const { return m_importedColorView; }
+    bool isFallbackColorImported() const { return m_fallbackColorImported && m_importedColorView != nullptr; }
 
     void showImguiSettings();
 
@@ -100,7 +103,7 @@ namespace dxvk {
     void markExternalEmitterActive(uint64_t handle);
 
   private:
-    void simulate(float deltaTime);
+    void simulate(RtxContext* ctx, float deltaTime);
     bool initFlow();
     void shutdownFlow();
 
@@ -134,6 +137,13 @@ namespace dxvk {
     VkDeviceSize m_importedSmokeSize = 0;
     VkDeviceSize m_importedTempSize = 0;
     bool m_nanoVdbImported = false;
+    Rc<DxvkImage> m_importedColorImage;
+    Rc<DxvkImageView> m_importedColorView;
+    bool m_fallbackColorImported = false;
+    VkExtent3D m_fallbackImportExtent = { 0, 0, 1 };
+    bool m_useFallback2D = false;
+    RtCamera m_remixCamera;
+    VkExtent3D m_renderResolution = { 0, 0, 1 };
 
     // Volume data for renderer
     FlowVolumeData m_volumeData;
@@ -147,6 +157,8 @@ namespace dxvk {
 
     // RTX Options
     RTX_OPTION("rtx.flow", bool, enable, false, "Enables PhysX Flow volumetric fluid simulation for smoke and fire effects.");
+    RTX_OPTION("rtx.flow", bool, useFallback2D, false,
+      "Composite Flow's pre-rendered 2D output instead of path tracer volume integration. Use when custom intersection shaders are unavailable or for performance modes.");
     RTX_OPTION("rtx.flow", uint32_t, maxLocations, 4096, "Maximum number of sparse block locations for the Flow grid.");
 
     // Rendering options
