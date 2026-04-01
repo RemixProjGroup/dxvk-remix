@@ -482,6 +482,7 @@ namespace dxvk::vk {
 
     #ifdef VK_KHR_external_semaphore_win32
     VULKAN_FN(vkGetSemaphoreWin32HandleKHR);
+    VULKAN_FN(vkImportSemaphoreWin32HandleKHR);
     #endif
 
   };

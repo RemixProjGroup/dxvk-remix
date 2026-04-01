@@ -22,6 +22,7 @@
 #pragma once
 
 #include "rtx/utility/common.slangh"
+#include "rtx/utility/packing.slangh"
 
 // Note on conventions:
 // * Froxel - View frustrum oriented voxel grid cell

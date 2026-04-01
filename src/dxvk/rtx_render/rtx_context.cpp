@@ -71,6 +71,7 @@
 
 #include "rtx_matrix_helpers.h"
 #include "../util/util_fastops.h"
+#include "rtx/pass/flow/flow_fallback_composite_args.h"
 #include <rtx_shaders/flow_fallback_composite.h>
 
 // Destructor requires the struct definitions
@@ -862,7 +863,7 @@ namespace dxvk {
     args.volumeArgs = rtOutput.m_raytraceArgs.volumeArgs;
     args.projectionToViewJittered = rtOutput.m_raytraceArgs.camera.projectionToViewJittered;
     args.viewToWorld = rtOutput.m_raytraceArgs.camera.viewToWorld;
-    args.resolution = Vector2(rtOutput.m_finalOutputExtent.width, rtOutput.m_finalOutputExtent.height);
+    args.resolution = Vector2(float(rtOutput.m_finalOutputExtent.width), float(rtOutput.m_finalOutputExtent.height));
     args.nearPlane = rtOutput.m_raytraceArgs.camera.nearPlane;
     args.froxelRadianceEnabled = (rtOutput.m_raytraceArgs.volumeArgs.enable != 0);
     args.scatteringAlbedo = rtOutput.m_raytraceArgs.volumeArgs.scatteringCoefficient;

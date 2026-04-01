@@ -48,10 +48,12 @@
 namespace dxvk {
   static NvFlowFloat4x4 toNvFlowMatrix(const Matrix4d& m) {
     NvFlowFloat4x4 result = {};
+    NvFlowFloat4* rows[4] = { &result.x, &result.y, &result.z, &result.w };
     for (uint32_t r = 0; r < 4; r++) {
-      for (uint32_t c = 0; c < 4; c++) {
-        result.m[r][c] = m.data[c][r];
-      }
+      rows[r]->x = m.data[0][r];
+      rows[r]->y = m.data[1][r];
+      rows[r]->z = m.data[2][r];
+      rows[r]->w = m.data[3][r];
     }
     return result;
   }
@@ -205,7 +207,6 @@ namespace dxvk {
       return false;
     }
 
-#if defined(_WIN32)
     m_loader->deviceInterface.getSemaphoreExternalHandle(m_nvflowSignalSemaphore, &m_flowSemaphoreWin32Handle, sizeof(m_flowSemaphoreWin32Handle));
     if (!m_flowSemaphoreWin32Handle) {
       Logger::err("NvFlow: Failed to export NvFlow semaphore handle");
@@ -553,8 +554,8 @@ namespace dxvk {
       renderLayerParams.renderSettings.pathTracingEnabled = NV_FLOW_FALSE;
       renderLayerParams.renderSettings.compositeEnabled = NV_FLOW_TRUE;
     } else {
-      offscreenLayerParams.enabled = NV_FLOW_FALSE;
-      renderLayerParams.enabled = NV_FLOW_FALSE;
+      offscreenLayerParams = {};
+      renderLayerParams = {};
     }
 
     simulateLayerParams.nanoVdbExport.enabled = NV_FLOW_TRUE;
@@ -702,16 +703,16 @@ namespace dxvk {
       m_volumeData.valid = false;
       if (renderData.sparseParams.layerCount > 0 && renderData.sparseParams.layers != nullptr) {
         const auto& layer = renderData.sparseParams.layers[0];
-        Vector3 candidateMin = {
+        Vector3 candidateMin(
           layer.worldMin.x,
           layer.worldMin.y,
           layer.worldMin.z
-        };
-        Vector3 candidateMax = {
+        );
+        Vector3 candidateMax(
           layer.worldMax.x,
           layer.worldMax.y,
           layer.worldMax.z
-        };
+        );
         Vector3 extent = candidateMax - candidateMin;
         if (extent.x < 1e-3f || extent.y < 1e-3f || extent.z < 1e-3f) {
           m_volumeData.valid = false;
@@ -721,7 +722,15 @@ namespace dxvk {
         m_volumeData.worldMin = candidateMin;
         m_volumeData.worldMax = candidateMax;
         m_volumeData.valid = true;
-        std::memcpy(m_volumeData.gridToWorld.data, &layer.gridToWorld, sizeof(m_volumeData.gridToWorld.data));
+        // NvFlowSparseLayerParams does not expose gridToWorld directly;
+        // construct a scale+translate matrix from the world-space AABB.
+        m_volumeData.gridToWorld = Matrix4();
+        m_volumeData.gridToWorld[0][0] = extent.x;
+        m_volumeData.gridToWorld[1][1] = extent.y;
+        m_volumeData.gridToWorld[2][2] = extent.z;
+        m_volumeData.gridToWorld[3][0] = candidateMin.x;
+        m_volumeData.gridToWorld[3][1] = candidateMin.y;
+        m_volumeData.gridToWorld[3][2] = candidateMin.z;
         m_volumeData.cellSize = simulateLayerParams.densityCellSize;
 
         if (logThisFrame) {

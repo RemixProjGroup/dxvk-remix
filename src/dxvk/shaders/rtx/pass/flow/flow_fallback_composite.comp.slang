@@ -19,19 +19,22 @@ layout(binding = 4)
 Sampler3D<float2> FroxelRadianceCoCg;
 
 float3 depthToWorldPos(uint2 pixel, float hwDepth, FlowCompositeArgs args) {
-  Camera camera = args.camera;
-  camera.projectionToViewJittered = args.projectionToViewJittered;
-  camera.viewToWorld = args.viewToWorld;
-  camera.resolution = uint2(args.resolution);
-  camera.nearPlane = args.nearPlane;
-
-  const CameraDirections directions = cameraPixelCoordinateToDirection(camera, pixel);
-  const float3 viewPos = cameraReconstructViewPositionFromDeviceZ(camera, directions.viewDirection, hwDepth);
-  return mul(camera.viewToWorld, float4(viewPos, 1.0f)).xyz;
+  float2 uv = (float2(pixel) + 0.5f) / args.resolution;
+  float2 ndc = uv * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f);
+  float4 clipPos = float4(ndc, hwDepth, 1.0f);
+  float4 viewPos = mul(args.projectionToViewJittered, clipPos);
+  viewPos /= viewPos.w;
+  return mul(args.viewToWorld, float4(viewPos.xyz, 1.0f)).xyz;
 }
 
 float3 worldToFroxelUVW(float3 worldPos, FlowCompositeArgs args) {
-  return calculateVolumeUVW(worldPos, args.volumeArgs.cameras[froxelVolumeMain], args.volumeArgs.froxelDepthSlices);
+  VolumeDefinitionCamera cam = args.volumeArgs.cameras[froxelVolumeMain];
+  float3 translatedWorldPos = worldPos - cam.translatedWorldOffset;
+  bool invertViewZ = packedFlagGet(cam.flags, rightHandedFlag);
+  return translatedWorldPositionToFroxelUVW(
+    cam.translatedWorldToView, cam.translatedWorldToProjectionJittered, invertViewZ,
+    args.volumeArgs.froxelDepthSlices, args.volumeArgs.froxelDepthSliceDistributionExponent,
+    args.volumeArgs.froxelMaxDistance, cam.nearPlane, translatedWorldPos);
 }
 
 [shader("compute")]
@@ -69,7 +72,7 @@ void main(uint2 pixel : SV_DispatchThreadID) {
   if (cb.froxelRadianceEnabled && all(froxelUVW >= 0.0f) && all(froxelUVW <= 1.0f)) {
     float4 radY = FroxelRadianceY.SampleLevel(froxelUVW, 0);
     float2 radCoCg = FroxelRadianceCoCg.SampleLevel(froxelUVW, 0);
-    inScatter = YCoCgToRGB(radY.rgb, radCoCg) * cb.scatteringAlbedo * (1.0f - flowColor.a);
+    inScatter = yCoCgToRGB(float3(radY.r, radCoCg)) * cb.scatteringAlbedo * (1.0f - flowColor.a);
   }
 
   float4 scene = SceneOutput[pixel];

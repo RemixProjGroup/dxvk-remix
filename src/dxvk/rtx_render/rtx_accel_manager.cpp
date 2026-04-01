@@ -689,11 +689,9 @@ namespace dxvk {
       const auto& flowBlas = flowCtx.getVolumeBlas();
       if (flowCtx.isActive() && flowData.valid && flowBlas != nullptr && flowBlas->accelerationStructureReference != 0) {
         VkAccelerationStructureInstanceKHR instance {};
-        instance.transform = VkTransformMatrixKHR {
-          { 1.f, 0.f, 0.f, 0.f },
-          { 0.f, 1.f, 0.f, 0.f },
-          { 0.f, 0.f, 1.f, 0.f }
-        };
+        instance.transform.matrix[0][0] = 1.f;
+        instance.transform.matrix[1][1] = 1.f;
+        instance.transform.matrix[2][2] = 1.f;
         instance.instanceCustomIndex = FLOW_VOLUME_INSTANCE_INDEX;
         instance.mask = 0x02;
         instance.instanceShaderBindingTableRecordOffset = FLOW_HIT_GROUP_OFFSET;
