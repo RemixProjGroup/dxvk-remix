@@ -1215,6 +1215,25 @@ namespace {
     if (!out_handle || !info || info->sType != REMIXAPI_STRUCT_TYPE_FLOW_EMITTER_INFO) {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
+    if (info->pNext == nullptr) {
+      Logger::err("remixapi_CreateFlowEmitter: pNext is null. "
+                  "Must point to remixapi_FlowEmitterInfoSphereEXT.");
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    const auto* sphereExt =
+      static_cast<const remixapi_FlowEmitterInfoSphereEXT*>(info->pNext);
+    if (sphereExt->sType != REMIXAPI_STRUCT_TYPE_FLOW_EMITTER_INFO_SPHERE_EXT) {
+      Logger::err("remixapi_CreateFlowEmitter: pNext->sType is not "
+                  "REMIXAPI_STRUCT_TYPE_FLOW_EMITTER_INFO_SPHERE_EXT. "
+                  "No other shape extensions are currently supported.");
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    if (sphereExt->radius <= 0.0f) {
+      Logger::warn("remixapi_CreateFlowEmitter: radius <= 0. "
+                   "Emitter will have no visible effect.");
+    }
+
     static_assert(sizeof(remixapi_FlowEmitterHandle) == sizeof(info->hash));
     auto handle = reinterpret_cast<remixapi_FlowEmitterHandle>(info->hash);
     if (!handle) {
@@ -1234,15 +1253,16 @@ namespace {
     emitterData.coupleRateTemperature = info->coupleRateTemperature;
     emitterData.coupleRateFuel = info->coupleRateFuel;
     emitterData.coupleRateVelocity = info->coupleRateVelocity;
-
-    if (auto sphere = pnext::find<remixapi_FlowEmitterInfoSphereEXT>(info)) {
-      emitterData.radius = sphere->radius;
-    }
+    emitterData.radius = sphereExt->radius;
 
     auto hashVal = info->hash;
     std::lock_guard lock { s_mutex };
     remixDevice->EmitCs([hashVal, cData = emitterData](dxvk::DxvkContext* ctx) {
       auto& flow = ctx->getCommonObjects()->metaFlowContext();
+      if (flow.hasExternalEmitter(hashVal)) {
+        Logger::warn("remixapi_CreateFlowEmitter: hash already exists. Overwriting existing emitter.");
+        flow.removeExternalEmitter(hashVal);
+      }
       flow.addExternalEmitter(hashVal, cData);
     });
 

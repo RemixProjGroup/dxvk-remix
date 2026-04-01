@@ -978,6 +978,11 @@ namespace dxvk {
     m_externalEmitters[handle] = data;
   }
 
+  bool RtxFlowContext::hasExternalEmitter(uint64_t handle) {
+    std::lock_guard<std::mutex> lock(m_emitterMutex);
+    return m_externalEmitters.find(handle) != m_externalEmitters.end();
+  }
+
   void RtxFlowContext::removeExternalEmitter(uint64_t handle) {
     std::lock_guard<std::mutex> lock(m_emitterMutex);
     m_externalEmitters.erase(handle);

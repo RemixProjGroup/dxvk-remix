@@ -95,6 +95,7 @@ namespace dxvk {
 
     // External emitter management (called from Remix API via EmitCs)
     void addExternalEmitter(uint64_t handle, const FlowEmitterData& data);
+    bool hasExternalEmitter(uint64_t handle);
     void removeExternalEmitter(uint64_t handle);
     void markExternalEmitterActive(uint64_t handle);
 
