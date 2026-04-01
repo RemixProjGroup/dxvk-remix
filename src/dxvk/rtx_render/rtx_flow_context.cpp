@@ -183,8 +183,15 @@ namespace dxvk {
     // Get device queue and context interface
     m_deviceQueue = m_loader->deviceInterface.getDeviceQueue(m_flowDevice);
 
-    if (!m_device->extensions().khrExternalSemaphore || !m_device->extensions().khrExternalSemaphoreWin32) {
-      Logger::err("NvFlow: Missing required Vulkan external semaphore device extensions");
+    if (!m_device->extensions().khrExternalSemaphore) {
+      Logger::err("NvFlow: Missing required Vulkan external semaphore device extension");
+      m_initFailed = true;
+      return false;
+    }
+
+#if defined(_WIN32)
+    if (!m_device->extensions().khrExternalSemaphoreWin32) {
+      Logger::err("NvFlow: Missing required Vulkan external semaphore Win32 extension");
       m_initFailed = true;
       return false;
     }
@@ -234,6 +241,7 @@ namespace dxvk {
     // The imported handle is consumed by Vulkan.
     m_loader->deviceInterface.closeSemaphoreExternalHandle(m_nvflowSignalSemaphore, &m_flowSemaphoreWin32Handle, sizeof(m_flowSemaphoreWin32Handle));
     m_flowSemaphoreWin32Handle = nullptr;
+    m_useExternalFlowSync = true;
 #endif
 
     NvFlowContextInterface* contextInterface = m_loader->deviceInterface.getContextInterface(m_deviceQueue);
@@ -329,6 +337,7 @@ namespace dxvk {
       m_device->vkd()->vkDestroySemaphore(m_device->handle(), m_flowCompleteSemaphore, nullptr);
       m_flowCompleteSemaphore = VK_NULL_HANDLE;
     }
+    m_useExternalFlowSync = false;
 
     if (m_flowDevice) {
       m_loader->deviceInterface.destroyDevice(m_deviceManager, m_flowDevice);
@@ -651,9 +660,12 @@ namespace dxvk {
       m_loader->gridParamsInterface.unmapParamsDesc(m_gridParams, paramsSnapshot);
     }
 
-    // Flush and signal semaphore for Remix GPU-side synchronization.
+    // Flush and signal semaphore for Remix GPU-side synchronization when available.
     NvFlowUint64 flushedFrame = 0;
-    m_loader->deviceInterface.flush(m_deviceQueue, &flushedFrame, nullptr, m_nvflowSignalSemaphore);
+    NvFlowDeviceSemaphore* pSignalSemaphore = (m_useExternalFlowSync && m_nvflowSignalSemaphore)
+      ? m_nvflowSignalSemaphore
+      : nullptr;
+    m_loader->deviceInterface.flush(m_deviceQueue, &flushedFrame, nullptr, pSignalSemaphore);
 
     if (logThisFrame) {
       Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: flushedFrame=", flushedFrame, " — frame complete"));

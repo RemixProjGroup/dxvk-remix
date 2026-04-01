@@ -121,6 +121,7 @@ namespace dxvk {
     NvFlowGridParams* m_gridParams = nullptr;  // mapped from m_gridParamsNamed at init, stays mapped
 
     VkSemaphore m_flowCompleteSemaphore = VK_NULL_HANDLE;
+    bool m_useExternalFlowSync = false;
 #if defined(_WIN32)
     HANDLE m_flowSemaphoreWin32Handle = nullptr;
 #endif
