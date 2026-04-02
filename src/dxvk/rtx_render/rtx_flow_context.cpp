@@ -296,10 +296,6 @@ namespace dxvk {
     m_importedSmokeSize = 0;
     m_importedTempSize = 0;
     m_nanoVdbImported = false;
-    m_importedColorView = nullptr;
-    m_importedColorImage = nullptr;
-    m_fallbackColorImported = false;
-    m_fallbackImportExtent = { 0, 0, 1 };
 
     NvFlowContext* context = m_loader->deviceInterface.getContext(m_deviceQueue);
 
@@ -680,23 +676,6 @@ namespace dxvk {
       NvFlowContext* ctx = m_loader->deviceInterface.getContext(m_deviceQueue);
       NvFlowGridRenderData renderData = {};
       m_loader->gridInterface.getRenderData(ctx, m_grid, &renderData);
-
-#if defined(_WIN32)
-      if (m_useFallback2D && m_renderResolution.width > 0 && m_renderResolution.height > 0) {
-        const bool resolutionChanged = m_fallbackImportExtent.width != m_renderResolution.width
-          || m_fallbackImportExtent.height != m_renderResolution.height;
-
-        if (resolutionChanged) {
-          m_importedColorView = nullptr;
-          m_importedColorImage = nullptr;
-          m_fallbackColorImported = false;
-        }
-        // Note: Current NvFlowExt API does not expose an external handle for render color textures.
-        // Keep import state synchronized with resolution changes; when a texture handle path is added
-        // this branch can import and expose the fallback 2D color image here.
-        m_fallbackImportExtent = { m_renderResolution.width, m_renderResolution.height, 1u };
-      }
-#endif
 
       // Extract and validate candidate world-space AABB from sparse params
       m_volumeData.valid = false;
