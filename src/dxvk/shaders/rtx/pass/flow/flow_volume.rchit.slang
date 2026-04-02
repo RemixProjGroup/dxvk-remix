@@ -1,4 +1,13 @@
 #include "rtx/utility/flow_volume_helpers.slangh"
+#include "rtx/pass/flow/flow_volume_binding_indices.h"
+
+#define FLOW_VOLUME_SET_INDEX 0
+
+[[vk::binding(FLOW_VOLUME_DENSITY_SLOT, FLOW_VOLUME_SET_INDEX)]]
+Sampler3D<float> g_flowDensityTex;
+
+[[vk::binding(FLOW_VOLUME_TEMP_SLOT, FLOW_VOLUME_SET_INDEX)]]
+Sampler3D<float> g_flowTempTex;
 
 //!variant flow_volume_intersection.rint FLOW_VOLUME_INTERSECTION
 //!variant flow_volume_anyhit.rahit FLOW_VOLUME_ANYHIT
