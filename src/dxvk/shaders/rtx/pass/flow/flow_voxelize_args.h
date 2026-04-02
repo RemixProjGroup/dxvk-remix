@@ -26,7 +26,9 @@
 struct FlowVoxelizeArgs {
   mat4 gridToWorld;
   vec3 volumeMin;
-  uint resolution;
+  uint resX;
+  uint resY;
+  uint resZ;
   vec3 volumeMax;
   uint hasNanoVdbData;  // 0 = generate procedural test data, 1 = sample NanoVDB
   uint smokeBufferSize; // in uint32s

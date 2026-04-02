@@ -74,12 +74,11 @@ float sampleNanoVdbGrid(StructuredBuffer<uint> nanoVdbBuffer, float3 worldPos) {
 [shader("compute")]
 [numthreads(4, 4, 4)]
 void main(uint3 dispatchId : SV_DispatchThreadID) {
-  uint res = FlowVoxelizeConstants.resolution;
-  if (dispatchId.x >= res || dispatchId.y >= res || dispatchId.z >= res) {
+  if (any(dispatchId >= uint3(FlowVoxelizeConstants.resX, FlowVoxelizeConstants.resY, FlowVoxelizeConstants.resZ))) {
     return;
   }
 
-  float3 uvw = (float3(dispatchId) + 0.5) / float(res);
+  float3 uvw = float3(dispatchId) / float3(FlowVoxelizeConstants.resX, FlowVoxelizeConstants.resY, FlowVoxelizeConstants.resZ);
   float3 worldPos = FlowVoxelizeConstants.volumeMin + uvw * (FlowVoxelizeConstants.volumeMax - FlowVoxelizeConstants.volumeMin);
 
   float density = sampleNanoVdbGrid(FlowVoxelizeSmokeNanoVdb, worldPos);
