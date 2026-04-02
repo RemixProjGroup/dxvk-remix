@@ -849,7 +849,11 @@ namespace dxvk {
 
   void RtxContext::dispatchFlowFallbackComposite(Resources::RaytracingOutput& rtOutput) {
     auto& flowCtx = m_common->metaFlowContext();
-    if (!flowCtx.isActive() || !RtxFlowContext::useFallback2D() || !flowCtx.isFallbackColorImported()) {
+    const auto& flowData = flowCtx.getVolumeData();
+    if (!flowCtx.isActive()
+      || !RtxFlowContext::useFallback2D()
+      || !flowData.valid
+      || flowData.densityView == nullptr) {
       return;
     }
 
@@ -864,18 +868,23 @@ namespace dxvk {
     args.viewToWorld = rtOutput.m_raytraceArgs.camera.viewToWorld;
     args.resolution = Vector2(rtOutput.m_finalOutputExtent.width, rtOutput.m_finalOutputExtent.height);
     args.nearPlane = rtOutput.m_raytraceArgs.camera.nearPlane;
+    args.rayMarchSteps = RtxFlowContext::rayMarchSteps();
+    args.frameIndex = static_cast<uint32_t>(m_device->getCurrentFrameId());
     args.froxelRadianceEnabled = (rtOutput.m_raytraceArgs.volumeArgs.enable != 0);
+    args.densityMultiplier = RtxFlowContext::densityMultiplier();
     args.scatteringAlbedo = rtOutput.m_raytraceArgs.volumeArgs.scatteringCoefficient;
     pushConstants(0, sizeof(args), &args);
 
-    bindResourceView(0, flowCtx.getFallbackColorView(), nullptr);
+    bindResourceView(0, flowData.densityView, nullptr);
     bindResourceSampler(0, getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
     bindResourceView(1, rtOutput.m_finalOutput.resource(Resources::AccessType::Write).view, nullptr);
     bindResourceView(2, rtOutput.m_primaryDepth.view, nullptr);
-    bindResourceView(3, globalVolumetrics.getCurrentVolumeAccumulatedRadianceY().view, nullptr);
+    bindResourceView(3, flowData.temperatureView, nullptr);
     bindResourceSampler(3, getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
-    bindResourceView(4, globalVolumetrics.getCurrentVolumeAccumulatedRadianceCoCg().view, nullptr);
+    bindResourceView(4, globalVolumetrics.getCurrentVolumeAccumulatedRadianceY().view, nullptr);
     bindResourceSampler(4, getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+    bindResourceView(5, globalVolumetrics.getCurrentVolumeAccumulatedRadianceCoCg().view, nullptr);
+    bindResourceSampler(5, getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
 
     bindShader(VK_SHADER_STAGE_COMPUTE_BIT, FlowFallbackCompositeShader::getShader());
     const VkExtent3D wg = util::computeBlockCount(rtOutput.m_finalOutputExtent, VkExtent3D { 8, 8, 1 });
