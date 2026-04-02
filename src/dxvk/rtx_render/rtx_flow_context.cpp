@@ -932,7 +932,9 @@ namespace dxvk {
       args.volumeMin = { m_volumeData.worldMin.x, m_volumeData.worldMin.y, m_volumeData.worldMin.z };
       args.volumeMax = { m_volumeData.worldMax.x, m_volumeData.worldMax.y, m_volumeData.worldMax.z };
       args.gridToWorld = m_volumeData.gridToWorld;
-      args.resolution = m_volumeData.textureExtent.width;
+      args.resX = m_volumeData.textureExtent.width;
+      args.resY = m_volumeData.textureExtent.height;
+      args.resZ = m_volumeData.textureExtent.depth;
       args.hasNanoVdbData = 1;
       args.smokeBufferSize = static_cast<uint32_t>(m_importedSmokeSize / sizeof(uint32_t));
       args.tempBufferSize = static_cast<uint32_t>(m_importedTempSize / sizeof(uint32_t));
