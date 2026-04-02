@@ -44,7 +44,7 @@ Sampler3D<float> g_flowDensityTex;
 Sampler3D<float> g_flowTempTex;
 
 //!variant flow_volume_intersection.rint FLOW_VOLUME_INTERSECTION
-//!variant flow_volume_anyhit.rahit FLOW_VOLUME_ANYHIT
+//!variant flow_volume_closesthit.rchit FLOW_VOLUME_CLOSESTHIT
 //!end-variants
 
 float3 flowBlackbodyRamp(float temperature) {
@@ -74,20 +74,13 @@ void main() {
 }
 #endif
 
-#ifdef FLOW_VOLUME_ANYHIT
-[shader("anyhit")]
-void main(inout GeometryResolverState payload : SV_RayPayload, in float tEnter : SV_IntersectionAttributes) {
+#ifdef FLOW_VOLUME_CLOSESTHIT
+void FlowVolumeClosestHit(inout GeometryResolverState payload : SV_RayPayload, in float tEnter : SV_IntersectionAttributes) {
     float3 o = WorldRayOrigin(), d = WorldRayDirection();
     float3 volMin = cb.volumeArgs.flowVolumeMin;
     float3 volMax = cb.volumeArgs.flowVolumeMax;
     float tExit = intersectFlowAABB(o, d, volMin, volMax).y;
     float pathLen = tExit - tEnter;
-    if (pathLen <= 0.0f) { IgnoreHit(); return; }
-
-    // Fixed-step ray march through the volume
-    const int stepCount = 16;
-    float dt = pathLen / float(stepCount);
-    float t = tEnter + dt * 0.5f;
 
     float3 volumeExtent = volMax - volMin;
     float densityMult = cb.volumeArgs.flowDensityMultiplier;
@@ -96,8 +89,14 @@ void main(inout GeometryResolverState payload : SV_RayPayload, in float tEnter :
     float3 accumRadiance = 0.0f;
     float transmittance = 1.0f;
 
-    [loop]
-    for (int i = 0; i < stepCount; i++) {
+    if (pathLen > 0.0f) {
+      // Fixed-step ray march through the volume
+      const int stepCount = 16;
+      float dt = pathLen / float(stepCount);
+      float t = tEnter + dt * 0.5f;
+
+      [loop]
+      for (int i = 0; i < stepCount; i++) {
         float3 pos = o + d * t;
         float3 uvw = (pos - volMin) / volumeExtent;
 
@@ -115,12 +114,15 @@ void main(inout GeometryResolverState payload : SV_RayPayload, in float tEnter :
 
         t += dt;
         if (t >= tExit) break;
+      }
     }
 
     payload.radiance += accumRadiance;
     payload.attenuation *= float16_t3(transmittance);
+}
 
-    if (transmittance < 0.01f) AcceptHitAndEndSearch();
-    else                       IgnoreHit();
+[shader("closesthit")]
+void main(inout GeometryResolverState payload : SV_RayPayload, in float tEnter : SV_IntersectionAttributes) {
+  FlowVolumeClosestHit(payload, tEnter);
 }
 #endif
