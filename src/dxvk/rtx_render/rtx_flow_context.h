@@ -172,7 +172,7 @@ namespace dxvk {
     RTX_OPTION("rtx.flow.emitter", float, radius, 5.f, "Emitter sphere radius.");
     RTX_OPTION("rtx.flow.emitter", float, temperature, 2.f, "Emitted temperature value.");
     RTX_OPTION("rtx.flow.emitter", float, fuel, 1.5f, "Emitted fuel value.");
-    RTX_OPTION("rtx.flow.emitter", float, smoke, 0.f, "Emitted smoke density.");
+    RTX_OPTION("rtx.flow.emitter", float, smoke, 1.f, "Emitted smoke density.");
     RTX_OPTION("rtx.flow.emitter", float, velocityX, 0.f, "Emission velocity X component.");
     RTX_OPTION("rtx.flow.emitter", float, velocityY, 100.f, "Emission velocity Y component (up).");
     RTX_OPTION("rtx.flow.emitter", float, velocityZ, 0.f, "Emission velocity Z component.");
