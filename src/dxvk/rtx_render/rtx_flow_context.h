@@ -132,6 +132,9 @@ namespace dxvk {
     VkDeviceMemory m_importedSmokeMemory = VK_NULL_HANDLE;
     VkBuffer m_importedTempBuffer = VK_NULL_HANDLE;
     VkDeviceMemory m_importedTempMemory = VK_NULL_HANDLE;
+    Rc<DxvkBuffer> m_importedSmokeDxvkBuffer;
+    Rc<DxvkBuffer> m_importedTempDxvkBuffer;
+    Rc<DxvkBuffer> m_flowVoxelizeConstantsBuffer;
     VkDeviceSize m_importedSmokeSize = 0;
     VkDeviceSize m_importedTempSize = 0;
     bool m_nanoVdbImported = false;
