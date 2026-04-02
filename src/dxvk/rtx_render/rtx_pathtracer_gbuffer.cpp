@@ -26,6 +26,7 @@
 #include "rtx_neural_radiance_cache.h"
 
 #include "rtx/pass/common_binding_indices.h"
+#include "rtx/pass/flow/flow_volume_binding_indices.h"
 #include "rtx/pass/gbuffer/gbuffer_binding_indices.h"
 #include "rtx/concept/surface_material/surface_material_hitgroup.h"
 
@@ -197,6 +198,9 @@ namespace dxvk {
         RW_TEXTURE2D(GBUFFER_BINDING_NRC_TRAINING_GBUFFER_SURFACE_RADIANCE_RG_OUTPUT)
         RW_TEXTURE2D(GBUFFER_BINDING_NRC_TRAINING_GBUFFER_SURFACE_RADIANCE_B_OUTPUT)
 
+        SAMPLER3D(FLOW_VOLUME_DENSITY_SLOT)
+        SAMPLER3D(FLOW_VOLUME_TEMP_SLOT)
+
       END_PARAMETER()
     };
 
@@ -214,6 +218,8 @@ namespace dxvk {
 
     class FlowVolumeAnyHitShader : public ManagedShader {
       BEGIN_PARAMETER()
+        SAMPLER3D(FLOW_VOLUME_DENSITY_SLOT)
+        SAMPLER3D(FLOW_VOLUME_TEMP_SLOT)
       END_PARAMETER()
     };
 
@@ -312,6 +318,21 @@ namespace dxvk {
     // Requires the probe too for PSRR/T miss
     ctx->bindResourceView(GBUFFER_BINDING_SKYPROBE, ctx->getResourceManager().getSkyProbe(ctx).view, nullptr);
     ctx->bindResourceSampler(GBUFFER_BINDING_SKYPROBE, linearClampSampler);
+
+    const auto& flowData = ctx->getCommonObjects()->metaFlowContext().getVolumeData();
+    const auto& flowFallbackView = globalVolumetrics.getDummyTexture3DView();
+
+    const Rc<DxvkImageView>& flowDensityView = flowData.valid && flowData.densityView != nullptr
+      ? flowData.densityView
+      : flowFallbackView;
+    const Rc<DxvkImageView>& flowTemperatureView = flowData.valid && flowData.temperatureView != nullptr
+      ? flowData.temperatureView
+      : flowFallbackView;
+
+    ctx->bindResourceView(FLOW_VOLUME_DENSITY_SLOT, flowDensityView, nullptr);
+    ctx->bindResourceSampler(FLOW_VOLUME_DENSITY_SLOT, linearClampSampler);
+    ctx->bindResourceView(FLOW_VOLUME_TEMP_SLOT, flowTemperatureView, nullptr);
+    ctx->bindResourceSampler(FLOW_VOLUME_TEMP_SLOT, linearClampSampler);
 
     // Output resources
 
