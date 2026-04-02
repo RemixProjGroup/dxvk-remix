@@ -92,6 +92,8 @@
 #include <rtx_shaders/gbuffer_psr_material_rayPortal_closesthit_wboit.h>
 #include <rtx_shaders/gbuffer_psr_nrc_material_opaque_translucent_closesthit_wboit.h>
 #include <rtx_shaders/gbuffer_psr_nrc_material_rayPortal_closesthit_wboit.h>
+#include <rtx_shaders/flow_volume_anyhit.h>
+#include <rtx_shaders/flow_volume_intersection.h>
 
 #include "dxvk_scoped_annotation.h"
 #include "rtx_context.h"
@@ -206,6 +208,16 @@ namespace dxvk {
 
     class GbufferMissShader : public ManagedShader {
       
+      BEGIN_PARAMETER()
+      END_PARAMETER()
+    };
+
+    class FlowVolumeAnyHitShader : public ManagedShader {
+      BEGIN_PARAMETER()
+      END_PARAMETER()
+    };
+
+    class FlowVolumeIntersectionShader : public ManagedShader {
       BEGIN_PARAMETER()
       END_PARAMETER()
     };
@@ -675,6 +687,11 @@ namespace dxvk {
 
         shaders.debugName = "GBuffer TraceRay (RGS)";
       }
+
+      shaders.addHitGroup(
+        nullptr,
+        GET_SHADER_VARIANT(VK_SHADER_STAGE_ANY_HIT_BIT_KHR, FlowVolumeAnyHitShader, flow_volume_anyhit),
+        GET_SHADER_VARIANT(VK_SHADER_STAGE_INTERSECTION_BIT_KHR, FlowVolumeIntersectionShader, flow_volume_intersection));
     }
 
     if (ommEnabled) {

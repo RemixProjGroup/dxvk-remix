@@ -1,7 +1,12 @@
 #include "rtx/utility/flow_volume_helpers.slangh"
 
+//!variant flow_volume_intersection.rint FLOW_VOLUME_INTERSECTION
+//!variant flow_volume_anyhit.rahit FLOW_VOLUME_ANYHIT
+//!end-variants
+
+#ifdef FLOW_VOLUME_INTERSECTION
 [shader("intersection")]
-void flowVolumeIntersection() {
+void main() {
     float3 o = WorldRayOrigin(), d = WorldRayDirection();
     float2 t = intersectFlowAABB(o, d, g_flowVolumeMin, g_flowVolumeMax);
     float tEnter = max(t.x, RayTmin());
@@ -9,9 +14,11 @@ void flowVolumeIntersection() {
     if (tEnter < tExit)
         ReportHit(tEnter, 0, tEnter);
 }
+#endif
 
+#ifdef FLOW_VOLUME_ANYHIT
 [shader("anyhit")]
-void flowVolumeAnyHit(inout RayPayload payload, in float tEnter) {
+void main(inout RayPayload payload, in float tEnter) {
     float3 o = WorldRayOrigin(), d = WorldRayDirection();
     float tExit = min(
         intersectFlowAABB(o, d, g_flowVolumeMin, g_flowVolumeMax).y,
@@ -48,3 +55,4 @@ void flowVolumeAnyHit(inout RayPayload payload, in float tEnter) {
     if (transmit < 0.01f) AcceptHitAndEndSearch();
     else                  IgnoreHit();
 }
+#endif
