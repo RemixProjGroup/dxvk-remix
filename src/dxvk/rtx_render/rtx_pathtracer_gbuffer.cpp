@@ -93,8 +93,9 @@
 #include <rtx_shaders/gbuffer_psr_material_rayPortal_closesthit_wboit.h>
 #include <rtx_shaders/gbuffer_psr_nrc_material_opaque_translucent_closesthit_wboit.h>
 #include <rtx_shaders/gbuffer_psr_nrc_material_rayPortal_closesthit_wboit.h>
-#include <rtx_shaders/flow_volume_anyhit.h>
-#include <rtx_shaders/flow_volume_intersection.h>
+// TODO: Re-enable once flow_volume.rchit.slang has full raytracing infrastructure (RayPayload, blackbodyEmission, sampleNEE, etc.)
+//#include <rtx_shaders/flow_volume_anyhit.h>
+//#include <rtx_shaders/flow_volume_intersection.h>
 
 #include "dxvk_scoped_annotation.h"
 #include "rtx_context.h"
@@ -198,8 +199,9 @@ namespace dxvk {
         RW_TEXTURE2D(GBUFFER_BINDING_NRC_TRAINING_GBUFFER_SURFACE_RADIANCE_RG_OUTPUT)
         RW_TEXTURE2D(GBUFFER_BINDING_NRC_TRAINING_GBUFFER_SURFACE_RADIANCE_B_OUTPUT)
 
-        SAMPLER3D(FLOW_VOLUME_DENSITY_SLOT)
-        SAMPLER3D(FLOW_VOLUME_TEMP_SLOT)
+        // TODO: Re-enable once flow_volume.rchit.slang has full raytracing infrastructure
+        //SAMPLER3D(FLOW_VOLUME_DENSITY_SLOT)
+        //SAMPLER3D(FLOW_VOLUME_TEMP_SLOT)
 
       END_PARAMETER()
     };
@@ -216,17 +218,18 @@ namespace dxvk {
       END_PARAMETER()
     };
 
-    class FlowVolumeAnyHitShader : public ManagedShader {
-      BEGIN_PARAMETER()
-        SAMPLER3D(FLOW_VOLUME_DENSITY_SLOT)
-        SAMPLER3D(FLOW_VOLUME_TEMP_SLOT)
-      END_PARAMETER()
-    };
+    // TODO: Re-enable once flow_volume.rchit.slang has full raytracing infrastructure
+    //class FlowVolumeAnyHitShader : public ManagedShader {
+    //  BEGIN_PARAMETER()
+    //    SAMPLER3D(FLOW_VOLUME_DENSITY_SLOT)
+    //    SAMPLER3D(FLOW_VOLUME_TEMP_SLOT)
+    //  END_PARAMETER()
+    //};
 
-    class FlowVolumeIntersectionShader : public ManagedShader {
-      BEGIN_PARAMETER()
-      END_PARAMETER()
-    };
+    //class FlowVolumeIntersectionShader : public ManagedShader {
+    //  BEGIN_PARAMETER()
+    //  END_PARAMETER()
+    //};
   }
 
   DxvkPathtracerGbuffer::DxvkPathtracerGbuffer(DxvkDevice* device) : CommonDeviceObject(device) {
@@ -319,20 +322,21 @@ namespace dxvk {
     ctx->bindResourceView(GBUFFER_BINDING_SKYPROBE, ctx->getResourceManager().getSkyProbe(ctx).view, nullptr);
     ctx->bindResourceSampler(GBUFFER_BINDING_SKYPROBE, linearClampSampler);
 
-    const auto& flowData = ctx->getCommonObjects()->metaFlowContext().getVolumeData();
-    const auto& flowFallbackView = globalVolumetrics.getDummyTexture3DView();
-
-    const Rc<DxvkImageView>& flowDensityView = flowData.valid && flowData.densityView != nullptr
-      ? flowData.densityView
-      : flowFallbackView;
-    const Rc<DxvkImageView>& flowTemperatureView = flowData.valid && flowData.temperatureView != nullptr
-      ? flowData.temperatureView
-      : flowFallbackView;
-
-    ctx->bindResourceView(FLOW_VOLUME_DENSITY_SLOT, flowDensityView, nullptr);
-    ctx->bindResourceSampler(FLOW_VOLUME_DENSITY_SLOT, linearClampSampler);
-    ctx->bindResourceView(FLOW_VOLUME_TEMP_SLOT, flowTemperatureView, nullptr);
-    ctx->bindResourceSampler(FLOW_VOLUME_TEMP_SLOT, linearClampSampler);
+    // TODO: Re-enable once flow_volume.rchit.slang has full raytracing infrastructure
+    //const auto& flowData = ctx->getCommonObjects()->metaFlowContext().getVolumeData();
+    //const auto& flowFallbackView = globalVolumetrics.getDummyTexture3DView();
+    //
+    //const Rc<DxvkImageView>& flowDensityView = flowData.valid && flowData.densityView != nullptr
+    //  ? flowData.densityView
+    //  : flowFallbackView;
+    //const Rc<DxvkImageView>& flowTemperatureView = flowData.valid && flowData.temperatureView != nullptr
+    //  ? flowData.temperatureView
+    //  : flowFallbackView;
+    //
+    //ctx->bindResourceView(FLOW_VOLUME_DENSITY_SLOT, flowDensityView, nullptr);
+    //ctx->bindResourceSampler(FLOW_VOLUME_DENSITY_SLOT, linearClampSampler);
+    //ctx->bindResourceView(FLOW_VOLUME_TEMP_SLOT, flowTemperatureView, nullptr);
+    //ctx->bindResourceSampler(FLOW_VOLUME_TEMP_SLOT, linearClampSampler);
 
     // Output resources
 
@@ -709,10 +713,11 @@ namespace dxvk {
         shaders.debugName = "GBuffer TraceRay (RGS)";
       }
 
-      shaders.addHitGroup(
-        nullptr,
-        GET_SHADER_VARIANT(VK_SHADER_STAGE_ANY_HIT_BIT_KHR, FlowVolumeAnyHitShader, flow_volume_anyhit),
-        GET_SHADER_VARIANT(VK_SHADER_STAGE_INTERSECTION_BIT_KHR, FlowVolumeIntersectionShader, flow_volume_intersection));
+      // TODO: Re-enable once flow_volume.rchit.slang has full raytracing infrastructure
+      //shaders.addHitGroup(
+      //  nullptr,
+      //  GET_SHADER_VARIANT(VK_SHADER_STAGE_ANY_HIT_BIT_KHR, FlowVolumeAnyHitShader, flow_volume_anyhit),
+      //  GET_SHADER_VARIANT(VK_SHADER_STAGE_INTERSECTION_BIT_KHR, FlowVolumeIntersectionShader, flow_volume_intersection));
     }
 
     if (ommEnabled) {
