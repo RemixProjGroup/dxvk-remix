@@ -35,6 +35,10 @@
 #include "rtx_render/rtx_shader_manager.h"
 #include "dxvk_scoped_annotation.h"
 #include "rtx/concept/camera/camera.h"
+#include "rtx/pass/flow/flow_voxelize_args.h"
+#include "rtx/pass/flow/flow_voxelize_binding_indices.h"
+
+#include <rtx_shaders/flow_voxelize.h>
 
 // Suppress MSVC warnings from Flow headers (C4550: function pointer comparison pattern in NvFlowArray.h)
 #pragma warning(push)
@@ -46,6 +50,21 @@
 #include "../../util/log/log.h"
 
 namespace dxvk {
+  namespace {
+    class FlowVoxelizeShader : public ManagedShader {
+      SHADER_SOURCE(FlowVoxelizeShader, VK_SHADER_STAGE_COMPUTE_BIT, flow_voxelize)
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(FLOW_VOXELIZE_CONSTANTS)
+        STRUCTURED_BUFFER(FLOW_VOXELIZE_SMOKE_NANOVDB)
+        STRUCTURED_BUFFER(FLOW_VOXELIZE_TEMPERATURE_NANOVDB)
+        RW_TEXTURE3D(FLOW_VOXELIZE_DENSITY_OUTPUT)
+        RW_TEXTURE3D(FLOW_VOXELIZE_TEMPERATURE_OUTPUT)
+      END_PARAMETER()
+    };
+
+    PREWARM_SHADER_PIPELINE(FlowVoxelizeShader);
+  }
+
   static NvFlowFloat4x4 toNvFlowMatrix(const Matrix4d& m) {
     NvFlowFloat4x4 result = {};
     NvFlowFloat4* rows[4] = { &result.x, &result.y, &result.z, &result.w };
@@ -297,10 +316,6 @@ namespace dxvk {
     m_importedSmokeSize = 0;
     m_importedTempSize = 0;
     m_nanoVdbImported = false;
-    m_importedColorView = nullptr;
-    m_importedColorImage = nullptr;
-    m_fallbackColorImported = false;
-    m_fallbackImportExtent = { 0, 0, 1 };
 
     NvFlowContext* context = m_loader->deviceInterface.getContext(m_deviceQueue);
 
@@ -682,23 +697,6 @@ namespace dxvk {
       NvFlowGridRenderData renderData = {};
       m_loader->gridInterface.getRenderData(ctx, m_grid, &renderData);
 
-#if defined(_WIN32)
-      if (m_useFallback2D && m_renderResolution.width > 0 && m_renderResolution.height > 0) {
-        const bool resolutionChanged = m_fallbackImportExtent.width != m_renderResolution.width
-          || m_fallbackImportExtent.height != m_renderResolution.height;
-
-        if (resolutionChanged) {
-          m_importedColorView = nullptr;
-          m_importedColorImage = nullptr;
-          m_fallbackColorImported = false;
-        }
-        // Note: Current NvFlowExt API does not expose an external handle for render color textures.
-        // Keep import state synchronized with resolution changes; when a texture handle path is added
-        // this branch can import and expose the fallback 2D color image here.
-        m_fallbackImportExtent = { m_renderResolution.width, m_renderResolution.height, 1u };
-      }
-#endif
-
       // Extract and validate candidate world-space AABB from sparse params
       m_volumeData.valid = false;
       if (renderData.sparseParams.layerCount > 0 && renderData.sparseParams.layers != nullptr) {
@@ -877,6 +875,92 @@ namespace dxvk {
     createDenseTextures(ctx);
     if (m_volumeData.densityView == nullptr || m_volumeData.temperatureView == nullptr)
       return;
+
+    if (!m_useFallback2D) {
+      if (m_flowCompleteSemaphore != VK_NULL_HANDLE) {
+        ctx->getCommandList()->addWaitSemaphore(m_flowCompleteSemaphore, uint64_t(-1), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+      }
+
+      if (!m_nanoVdbImported
+        || m_importedSmokeBuffer == VK_NULL_HANDLE
+        || m_importedTempBuffer == VK_NULL_HANDLE) {
+        return;
+      }
+
+      auto createNanoVdbBuffer = [this](Rc<DxvkBuffer>& buffer, VkDeviceSize size, const char* pDebugName) {
+        if (buffer != nullptr && buffer->info().size >= size) {
+          return;
+        }
+
+        DxvkBufferCreateInfo info = {};
+        info.size = size;
+        info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+                   | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        info.stages = VK_PIPELINE_STAGE_TRANSFER_BIT
+                    | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        info.access = VK_ACCESS_TRANSFER_WRITE_BIT
+                    | VK_ACCESS_SHADER_READ_BIT;
+        buffer = m_device->createBuffer(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, pDebugName);
+      };
+
+      createNanoVdbBuffer(m_importedSmokeDxvkBuffer, m_importedSmokeSize, "flow imported smoke nanovdb");
+      createNanoVdbBuffer(m_importedTempDxvkBuffer, m_importedTempSize, "flow imported temperature nanovdb");
+
+      VkBufferCopy smokeCopy = { 0, 0, m_importedSmokeSize };
+      VkBufferCopy tempCopy = { 0, 0, m_importedTempSize };
+      const auto smokeDst = m_importedSmokeDxvkBuffer->getSliceHandle();
+      const auto tempDst = m_importedTempDxvkBuffer->getSliceHandle();
+
+      ctx->getCommandList()->cmdCopyBuffer(DxvkCmdBuffer::ExecBuffer, m_importedSmokeBuffer, smokeDst.handle, 1, &smokeCopy);
+      ctx->getCommandList()->cmdCopyBuffer(DxvkCmdBuffer::ExecBuffer, m_importedTempBuffer, tempDst.handle, 1, &tempCopy);
+      ctx->emitMemoryBarrier(0,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_READ_BIT);
+
+      if (m_flowVoxelizeConstantsBuffer == nullptr) {
+        DxvkBufferCreateInfo info = {};
+        info.size = sizeof(FlowVoxelizeArgs);
+        info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        info.stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        info.access = VK_ACCESS_SHADER_READ_BIT;
+        m_flowVoxelizeConstantsBuffer = m_device->createBuffer(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, "flow voxelize constants");
+      }
+
+      FlowVoxelizeArgs args = {};
+      args.volumeMin = { m_volumeData.worldMin.x, m_volumeData.worldMin.y, m_volumeData.worldMin.z };
+      args.volumeMax = { m_volumeData.worldMax.x, m_volumeData.worldMax.y, m_volumeData.worldMax.z };
+      args.gridToWorld = m_volumeData.gridToWorld;
+      args.resolution = m_volumeData.textureExtent.width;
+      args.hasNanoVdbData = 1;
+      args.smokeBufferSize = static_cast<uint32_t>(m_importedSmokeSize / sizeof(uint32_t));
+      args.tempBufferSize = static_cast<uint32_t>(m_importedTempSize / sizeof(uint32_t));
+
+      ctx->writeToBuffer(m_flowVoxelizeConstantsBuffer, 0, sizeof(args), &args);
+      ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_flowVoxelizeConstantsBuffer);
+      ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_importedSmokeDxvkBuffer);
+      ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_importedTempDxvkBuffer);
+
+      ctx->changeImageLayout(m_volumeData.densityTexture3D, VK_IMAGE_LAYOUT_GENERAL);
+      ctx->changeImageLayout(m_volumeData.temperatureTexture3D, VK_IMAGE_LAYOUT_GENERAL);
+
+      ctx->bindResourceBuffer(FLOW_VOXELIZE_CONSTANTS, DxvkBufferSlice(m_flowVoxelizeConstantsBuffer, 0, sizeof(FlowVoxelizeArgs)));
+      ctx->bindResourceBuffer(FLOW_VOXELIZE_SMOKE_NANOVDB, DxvkBufferSlice(m_importedSmokeDxvkBuffer, 0, m_importedSmokeSize));
+      ctx->bindResourceBuffer(FLOW_VOXELIZE_TEMPERATURE_NANOVDB, DxvkBufferSlice(m_importedTempDxvkBuffer, 0, m_importedTempSize));
+      ctx->bindResourceView(FLOW_VOXELIZE_DENSITY_OUTPUT, m_volumeData.densityView, nullptr);
+      ctx->bindResourceView(FLOW_VOXELIZE_TEMPERATURE_OUTPUT, m_volumeData.temperatureView, nullptr);
+
+      ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, FlowVoxelizeShader::getShader());
+
+      uint32_t gx = (m_volumeData.textureExtent.width + 3) / 4;
+      uint32_t gy = (m_volumeData.textureExtent.height + 3) / 4;
+      uint32_t gz = (m_volumeData.textureExtent.depth + 3) / 4;
+      ctx->dispatch(gx, gy, gz);
+
+      ctx->changeImageLayout(m_volumeData.densityTexture3D, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+      ctx->changeImageLayout(m_volumeData.temperatureTexture3D, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
 
     buildVolumeBlas(ctx);
   }

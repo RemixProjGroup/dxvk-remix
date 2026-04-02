@@ -91,8 +91,6 @@ namespace dxvk {
 
     const FlowVolumeData& getVolumeData() const { return m_volumeData; }
     const Rc<PooledBlas>& getVolumeBlas() const { return m_volumeBlas; }
-    const Rc<DxvkImageView>& getFallbackColorView() const { return m_importedColorView; }
-    bool isFallbackColorImported() const { return m_fallbackColorImported && m_importedColorView != nullptr; }
 
     void showImguiSettings();
 
@@ -134,13 +132,12 @@ namespace dxvk {
     VkDeviceMemory m_importedSmokeMemory = VK_NULL_HANDLE;
     VkBuffer m_importedTempBuffer = VK_NULL_HANDLE;
     VkDeviceMemory m_importedTempMemory = VK_NULL_HANDLE;
+    Rc<DxvkBuffer> m_importedSmokeDxvkBuffer;
+    Rc<DxvkBuffer> m_importedTempDxvkBuffer;
+    Rc<DxvkBuffer> m_flowVoxelizeConstantsBuffer;
     VkDeviceSize m_importedSmokeSize = 0;
     VkDeviceSize m_importedTempSize = 0;
     bool m_nanoVdbImported = false;
-    Rc<DxvkImage> m_importedColorImage;
-    Rc<DxvkImageView> m_importedColorView;
-    bool m_fallbackColorImported = false;
-    VkExtent3D m_fallbackImportExtent = { 0, 0, 1 };
     bool m_useFallback2D = false;
     RtCamera m_remixCamera;
     VkExtent3D m_renderResolution = { 0, 0, 1 };

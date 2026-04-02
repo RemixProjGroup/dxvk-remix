@@ -20,8 +20,10 @@ struct FlowCompositeArgs {
 
   vec2 resolution;
   float nearPlane;
+  int rayMarchSteps;
+  uint frameIndex;
   uint froxelRadianceEnabled;
-
+  float densityMultiplier;
   vec3 scatteringAlbedo;
   float pad0;
 };
