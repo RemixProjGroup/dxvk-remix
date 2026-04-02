@@ -93,7 +93,7 @@
 #include <rtx_shaders/gbuffer_psr_material_rayPortal_closesthit_wboit.h>
 #include <rtx_shaders/gbuffer_psr_nrc_material_opaque_translucent_closesthit_wboit.h>
 #include <rtx_shaders/gbuffer_psr_nrc_material_rayPortal_closesthit_wboit.h>
-#include <rtx_shaders/flow_volume_anyhit.h>
+#include <rtx_shaders/flow_volume_closesthit.h>
 #include <rtx_shaders/flow_volume_intersection.h>
 
 #include "dxvk_scoped_annotation.h"
@@ -216,7 +216,7 @@ namespace dxvk {
       END_PARAMETER()
     };
 
-    class FlowVolumeAnyHitShader : public ManagedShader {
+    class FlowVolumeClosestHitShader : public ManagedShader {
       BEGIN_PARAMETER()
         SAMPLER3D(FLOW_VOLUME_DENSITY_SLOT)
         SAMPLER3D(FLOW_VOLUME_TEMP_SLOT)
@@ -710,8 +710,8 @@ namespace dxvk {
       }
 
       shaders.addHitGroup(
+        GET_SHADER_VARIANT(VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR, FlowVolumeClosestHitShader, flow_volume_closesthit),
         nullptr,
-        GET_SHADER_VARIANT(VK_SHADER_STAGE_ANY_HIT_BIT_KHR, FlowVolumeAnyHitShader, flow_volume_anyhit),
         GET_SHADER_VARIANT(VK_SHADER_STAGE_INTERSECTION_BIT_KHR, FlowVolumeIntersectionShader, flow_volume_intersection));
     }
 
