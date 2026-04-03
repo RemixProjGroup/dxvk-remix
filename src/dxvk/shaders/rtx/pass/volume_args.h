@@ -103,6 +103,7 @@ struct VolumeArgs {
   // Flow volume integration
   vec3 flowVolumeMin;
   float flowTemperatureScale;
+  unit flowRayMarchSteps;
   vec3 flowVolumeMax;
   float flowPad1;
 };
