@@ -103,6 +103,19 @@ namespace dxvk {
     uint32_t m_sbtHitGroupOffset = 0;
 
   private:
+    static constexpr uint32_t kFlowParamRingSize = 4;
+
+    struct FlowFrameParams {
+      NvFlowGridSimulateLayerParams simulate;
+      NvFlowGridOffscreenLayerParams offscreen;
+      NvFlowGridRenderLayerParams render;
+      std::vector<NvFlowGridEmitterSphereParams> emitters;
+      NvFlowArray<NvFlowUint8*> emitterPtrs;
+      NvFlowArray<NvFlowDatabaseTypeSnapshot> typeSnapshots;
+      NvFlowDatabaseSnapshot dbSnapshot;
+      NvFlowGridParamsDescSnapshot descSnapshot;
+    };
+
     void simulate(RtxContext* ctx, float deltaTime);
     bool initFlow();
     void shutdownFlow();
@@ -153,6 +166,8 @@ namespace dxvk {
     double m_simTime = 0.0;
     unsigned int m_activeBlockCount = 0;
     uint64_t m_frameCount = 0;
+    FlowFrameParams m_paramRing[kFlowParamRingSize];
+    uint32_t m_paramRingHead = 0;
 
     // RTX Options
     RTX_OPTION("rtx.flow", bool, enable, false, "Enables PhysX Flow volumetric fluid simulation for smoke and fire effects.");
