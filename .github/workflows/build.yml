@@ -1,15 +1,15 @@
 name: Build
-
 on:
-  push:
-    branches: [ main, 'release/**' ]
-  pull_request:
-    branches: [ main, 'release/**' ]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build'
+        required: true
+        default: 'main'
 
 jobs:
   build-windows:
     runs-on: windows-2022
-
     strategy:
       matrix:
         include:
@@ -19,31 +19,26 @@ jobs:
             output-subdir: _Comp64DebugOptimized
           - build-flavour: release
             output-subdir: _Comp64Release
-
     steps:
     - name: Setup variables
       uses: actions/github-script@v7
       with:
         script: core.exportVariable('GITHUB_SHA_SHORT', context.sha.substring(0, 7))
-
     - name: Checkout code
       uses: actions/checkout@v4
       with:
+        ref: ${{ github.event.inputs.branch }}
         submodules: recursive
-
     - name: Setup Meson
       run: pip install meson==1.1.0
-
     - name: Build
       shell: pwsh
       run: |
         Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
         . .\build_common.ps1
         PerformBuild -BuildFlavour ${{matrix.build-flavour}} -BuildSubDir ${{matrix.output-subdir}} -Backend ninja -EnableTracy false copy_output
-
     - name: Copy readme
       run: copy artifacts_readme.txt _output
-
     - name: Upload x64 binaries
       uses: actions/upload-artifact@v4
       with:
@@ -53,7 +48,6 @@ jobs:
           _output\*.pdb
           _output\*.txt
           _output\usd\*
-
     - name: Move DXVK
       shell: pwsh
       run: |
@@ -61,7 +55,6 @@ jobs:
         Move-Item -Path _output\*.dll -Destination _output\.trex\
         Move-Item -Path _output\*.pdb -Destination _output\.trex\
         Move-Item -Path _output\usd -Destination _output\.trex\usd
-
     - name: Build Bridge
       shell: pwsh
       run: |
@@ -69,12 +62,10 @@ jobs:
         pushd bridge
         . .\build_bridge_${{matrix.build-flavour}}.bat
         popd
-
     - name: Copy Bridge
       shell: pwsh
       run: |
         Copy-Item -Recurse -Path bridge\_output\* -Destination _output\ -Force
-
     - name: Upload x86 binaries
       uses: actions/upload-artifact@v4
       with:
