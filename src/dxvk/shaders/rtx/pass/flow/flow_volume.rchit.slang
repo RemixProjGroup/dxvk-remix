@@ -105,9 +105,11 @@ void FlowVolumeClosestHit(inout GeometryResolverState payload : SV_RayPayload, i
             float temperature = max(g_flowTempTex.SampleLevel(uvw, 0), 0.0f);
             float sigmaT = density * densityMult;
             float extinction = exp(-sigmaT * dt);
-            float3 emission = flowBlackbodyRamp(temperature * tempScale) * density;
+            const float kIgnitionTemp = 0.1f;
+            float fireTemp = max(0.0f, temperature - kIgnitionTemp);
+            float3 emission = flowBlackbodyRamp(fireTemp) * tempScale * density * dt;
 
-            accumRadiance += transmittance * emission * dt;
+            accumRadiance += transmittance * emission;
             transmittance *= extinction;
             if (transmittance < 0.01f) break;
         }
