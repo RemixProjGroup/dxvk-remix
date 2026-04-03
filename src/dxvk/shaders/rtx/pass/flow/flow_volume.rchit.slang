@@ -91,7 +91,7 @@ void FlowVolumeClosestHit(inout GeometryResolverState payload : SV_RayPayload, i
 
     if (pathLen > 0.0f) {
       // Fixed-step ray march through the volume
-      const int stepCount = 16;
+      const int stepCount = max(1, (int)cb.volumeArgs.flowRayMarchSteps);
       float dt = pathLen / float(stepCount);
       float t = tEnter + dt * 0.5f;
 
