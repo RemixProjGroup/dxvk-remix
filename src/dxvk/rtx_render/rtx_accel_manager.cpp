@@ -693,7 +693,7 @@ namespace dxvk {
         instance.transform.matrix[1][1] = 1.f;
         instance.transform.matrix[2][2] = 1.f;
         instance.instanceCustomIndex = FLOW_VOLUME_INSTANCE_INDEX;
-        instance.mask = OBJECT_MASK_VOLUME;
+        instance.mask = 0x02;
         instance.instanceShaderBindingTableRecordOffset = flowCtx.getSbtHitGroupOffset();
         instance.flags = 0;
         instance.accelerationStructureReference = flowBlas->accelerationStructureReference;
