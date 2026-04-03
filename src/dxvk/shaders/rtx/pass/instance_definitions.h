@@ -72,7 +72,6 @@
 #define OBJECT_MASK_PORTAL            (1 << 1)
 #define OBJECT_MASK_ALPHA_BLEND       (1 << 2)
 #define OBJECT_MASK_OPAQUE            (1 << 3)
-#define OBJECT_MASK_VOLUME            (1 << 8)
 
 // Instances to be drawn and visible in ViewModel pass only
 #define OBJECT_MASK_VIEWMODEL         (1 << 4)
@@ -93,7 +92,7 @@
 
 // Note: Sky excluded as often it should not be traced against when calculating visibility.
 //       ViewModel is excluded
-#define OBJECT_MASK_ALL_STANDARD    (OBJECT_MASK_TRANSLUCENT | OBJECT_MASK_PORTAL | OBJECT_MASK_OPAQUE | OBJECT_MASK_ALPHA_BLEND | OBJECT_MASK_VOLUME)
+#define OBJECT_MASK_ALL_STANDARD    (OBJECT_MASK_TRANSLUCENT | OBJECT_MASK_PORTAL | OBJECT_MASK_OPAQUE | OBJECT_MASK_ALPHA_BLEND)
 #define OBJECT_MASK_ALL             (OBJECT_MASK_ALL_STANDARD)
 
 /****************************** ~Instance Mask - Ordered TLAS ************************************************/
