@@ -503,8 +503,13 @@ namespace dxvk {
       }
     }
 
+    FlowFrameParams& fp = m_paramRing[m_paramRingHead % kFlowParamRingSize];
+    m_paramRingHead++;
+    fp.emitters.clear();
+    fp.emitterPtrs.size = 0;
+    fp.typeSnapshots.size = 0;
+
     // Build array of all active emitters (debug + API emitters, unified path)
-    NvFlowArray<NvFlowEmitterSphereParams> allEmitterParams;
     bool emitterMatched = false;
 
     {
@@ -513,7 +518,7 @@ namespace dxvk {
         auto it = m_externalEmitters.find(handle);
         if (it != m_externalEmitters.end()) {
           const auto& ed = it->second;
-          NvFlowEmitterSphereParams p = NvFlowEmitterSphereParams_default;
+          NvFlowGridEmitterSphereParams p = NvFlowGridEmitterSphereParams_default;
           p.enabled = NV_FLOW_TRUE;
           p.position = { ed.posX, ed.posY, ed.posZ };
           p.radius = ed.radius;
@@ -526,22 +531,22 @@ namespace dxvk {
           p.coupleRateTemperature = ed.coupleRateTemperature;
           p.coupleRateFuel = ed.coupleRateFuel;
           p.coupleRateVelocity = ed.coupleRateVelocity;
-          allEmitterParams.pushBack(p);
+          fp.emitters.push_back(p);
         }
       }
       m_activeEmitterInstances.clear();
     }
 
     // Build pointer array for NvFlow
-    NvFlowArray<NvFlowUint8*> emitterPtrs;
-    for (NvFlowUint64 i = 0; i < allEmitterParams.size; i++) {
-      emitterPtrs.pushBack(reinterpret_cast<NvFlowUint8*>(&allEmitterParams[i]));
+    fp.emitterPtrs.reserve(fp.emitters.size());
+    for (size_t i = 0; i < fp.emitters.size(); i++) {
+      fp.emitterPtrs.pushBack(reinterpret_cast<NvFlowUint8*>(&fp.emitters[i]));
     }
 
     if (logThisFrame) {
-      Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: totalEmitters=", allEmitterParams.size));
-      for (NvFlowUint64 i = 0; i < allEmitterParams.size; i++) {
-        const auto& ep = allEmitterParams[i];
+      Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: totalEmitters=", fp.emitters.size()));
+      for (size_t i = 0; i < fp.emitters.size(); i++) {
+        const auto& ep = fp.emitters[i];
         Logger::info(str::format("NvFlow   emitter[", i, "]: pos=(", ep.position.x, ",", ep.position.y, ",", ep.position.z, ")",
           " radius=", ep.radius, " temp=", ep.temperature, " fuel=", ep.fuel, " smoke=", ep.smoke));
       }
@@ -549,9 +554,9 @@ namespace dxvk {
 
     // Default layer params — the grid requires at least one instance of each
     // layer type to allocate blocks and run the simulation (matching StandaloneTest pattern)
-    NvFlowGridSimulateLayerParams simulateLayerParams = NvFlowGridSimulateLayerParams_default;
-    NvFlowGridOffscreenLayerParams offscreenLayerParams = NvFlowGridOffscreenLayerParams_default;
-    NvFlowGridRenderLayerParams renderLayerParams = NvFlowGridRenderLayerParams_default;
+    fp.simulate = NvFlowGridSimulateLayerParams_default;
+    fp.offscreen = NvFlowGridOffscreenLayerParams_default;
+    fp.render = NvFlowGridRenderLayerParams_default;
 
     // Enable NanoVDB export for smoke and temperature channels.
     // Disable readback and internal 2D rendering when not using the fallback 2D path.
@@ -565,26 +570,25 @@ namespace dxvk {
       const NvFlowFloat4x4 viewMatrix = toNvFlowMatrix(m_remixCamera.getWorldToView());
       (void)projectionMatrix;
       (void)viewMatrix;
-      renderLayerParams = renderParams;
-      renderLayerParams.renderSettings.pathTracingEnabled = NV_FLOW_FALSE;
-      renderLayerParams.renderSettings.compositeEnabled = NV_FLOW_TRUE;
+      fp.render = renderParams;
+      fp.render.renderSettings.pathTracingEnabled = NV_FLOW_FALSE;
+      fp.render.renderSettings.compositeEnabled = NV_FLOW_TRUE;
     } else {
-      offscreenLayerParams = {};
-      renderLayerParams = {};
+      fp.offscreen = {};
+      fp.render = {};
     }
 
-    simulateLayerParams.nanoVdbExport.enabled = NV_FLOW_TRUE;
-    simulateLayerParams.nanoVdbExport.readbackEnabled = m_useFallback2D ? NV_FLOW_TRUE : NV_FLOW_FALSE;
-    simulateLayerParams.nanoVdbExport.smokeEnabled = NV_FLOW_TRUE;
-    simulateLayerParams.nanoVdbExport.temperatureEnabled = NV_FLOW_TRUE;
-    NvFlowUint8* pSimulateLayer = reinterpret_cast<NvFlowUint8*>(&simulateLayerParams);
-    NvFlowUint8* pOffscreenLayer = reinterpret_cast<NvFlowUint8*>(&offscreenLayerParams);
-    NvFlowUint8* pRenderLayer = reinterpret_cast<NvFlowUint8*>(&renderLayerParams);
+    fp.simulate.nanoVdbExport.enabled = NV_FLOW_TRUE;
+    fp.simulate.nanoVdbExport.readbackEnabled = m_useFallback2D ? NV_FLOW_TRUE : NV_FLOW_FALSE;
+    fp.simulate.nanoVdbExport.smokeEnabled = NV_FLOW_TRUE;
+    fp.simulate.nanoVdbExport.temperatureEnabled = NV_FLOW_TRUE;
+    NvFlowUint8* pSimulateLayer = reinterpret_cast<NvFlowUint8*>(&fp.simulate);
+    NvFlowUint8* pOffscreenLayer = reinterpret_cast<NvFlowUint8*>(&fp.offscreen);
+    NvFlowUint8* pRenderLayer = reinterpret_cast<NvFlowUint8*>(&fp.render);
 
     // Build type snapshots manually using the DLL's dataType pointers
-    NvFlowArray<NvFlowDatabaseTypeSnapshot> typeSnapshots;
-    typeSnapshots.reserve(typeCount);
-    typeSnapshots.size = 0;
+    fp.typeSnapshots.reserve(typeCount);
+    fp.typeSnapshots.size = 0;
 
     for (NvFlowUint64 i = 0; i < typeCount; i++) {
       NvFlowDatabaseTypeSnapshot ts = {};
@@ -593,9 +597,9 @@ namespace dxvk {
       ts.instanceDatas = nullptr;
       ts.instanceCount = 0;
 
-      if (strcmp(typenames[i], "NvFlowGridEmitterSphereParams") == 0 && emitterPtrs.size > 0) {
-        ts.instanceDatas = emitterPtrs.data;
-        ts.instanceCount = emitterPtrs.size;
+      if (strcmp(typenames[i], "NvFlowGridEmitterSphereParams") == 0 && fp.emitterPtrs.size > 0) {
+        ts.instanceDatas = fp.emitterPtrs.data;
+        ts.instanceCount = fp.emitterPtrs.size;
         emitterMatched = true;
       } else if (strcmp(typenames[i], "NvFlowGridSimulateLayerParams") == 0) {
         ts.instanceDatas = &pSimulateLayer;
@@ -608,28 +612,28 @@ namespace dxvk {
         ts.instanceCount = 1;
       }
 
-      typeSnapshots.pushBack(ts);
+      fp.typeSnapshots.pushBack(ts);
     }
 
     if (logThisFrame) {
       Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: emitterMatched=", emitterMatched ? "YES" : "NO",
-        " typeSnapshotCount=", typeSnapshots.size));
+        " typeSnapshotCount=", fp.typeSnapshots.size));
     }
 
     // Build the snapshot
-    NvFlowDatabaseSnapshot dbSnapshot = {};
-    dbSnapshot.version = stagingVersion;
-    dbSnapshot.typeSnapshots = typeSnapshots.data;
-    dbSnapshot.typeSnapshotCount = typeSnapshots.size;
+    fp.dbSnapshot = {};
+    fp.dbSnapshot.version = stagingVersion;
+    fp.dbSnapshot.typeSnapshots = fp.typeSnapshots.data;
+    fp.dbSnapshot.typeSnapshotCount = fp.typeSnapshots.size;
 
-    NvFlowGridParamsDescSnapshot gridParamsDescSnapshot = {};
-    gridParamsDescSnapshot.snapshot = dbSnapshot;
-    gridParamsDescSnapshot.absoluteSimTime = m_simTime;
-    gridParamsDescSnapshot.deltaTime = deltaTime;
-    gridParamsDescSnapshot.globalForceClear = NV_FLOW_FALSE;
+    fp.descSnapshot = {};
+    fp.descSnapshot.snapshot = fp.dbSnapshot;
+    fp.descSnapshot.absoluteSimTime = m_simTime;
+    fp.descSnapshot.deltaTime = deltaTime;
+    fp.descSnapshot.globalForceClear = NV_FLOW_FALSE;
 
     // Commit params
-    m_loader->gridParamsInterface.commitParams(m_gridParams, &gridParamsDescSnapshot);
+    m_loader->gridParamsInterface.commitParams(m_gridParams, &fp.descSnapshot);
 
     // --- Simulate ---
 
@@ -729,7 +733,7 @@ namespace dxvk {
         m_volumeData.gridToWorld[3][0] = candidateMin.x;
         m_volumeData.gridToWorld[3][1] = candidateMin.y;
         m_volumeData.gridToWorld[3][2] = candidateMin.z;
-        m_volumeData.cellSize = simulateLayerParams.densityCellSize;
+        m_volumeData.cellSize = fp.simulate.densityCellSize;
 
         if (logThisFrame) {
           Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: AABB min=(", layer.worldMin.x, ",", layer.worldMin.y, ",", layer.worldMin.z,
