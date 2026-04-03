@@ -37,6 +37,29 @@ jobs:
         Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
         . .\build_common.ps1
         PerformBuild -BuildFlavour ${{matrix.build-flavour}} -BuildSubDir ${{matrix.output-subdir}} -Backend ninja -EnableTracy false copy_output
+    # --- ADD ONLY FLOW BUILD (NON-INTRUSIVE) ---
+    - name: Build NvFlow (PhysX Flow)
+      shell: cmd
+      run: |
+        if exist submodules\PhysX\flow\build.bat (
+          pushd submodules\PhysX\flow
+          call build.bat
+          popd
+        )
+
+    # --- COPY FLOW DLLS INTO OUTPUT ---
+    - name: Copy NvFlow DLLs
+      shell: cmd
+      run: |
+        if not exist _output mkdir _output
+
+        for %%C in (debug release) do (
+          if exist submodules\PhysX\flow\_build\windows-x86_64\%%C (
+            copy /Y submodules\PhysX\flow\_build\windows-x86_64\%%C\nvflow.dll _output\ >nul
+            copy /Y submodules\PhysX\flow\_build\windows-x86_64\%%C\nvflowext.dll _output\ >nul
+          )
+        )
+
     - name: Copy readme
       run: copy artifacts_readme.txt _output
     - name: Upload x64 binaries
