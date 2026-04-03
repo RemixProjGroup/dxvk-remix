@@ -694,7 +694,7 @@ namespace dxvk {
         instance.transform.matrix[2][2] = 1.f;
         instance.instanceCustomIndex = FLOW_VOLUME_INSTANCE_INDEX;
         instance.mask = 0x02;
-        instance.instanceShaderBindingTableRecordOffset = FLOW_HIT_GROUP_OFFSET;
+        instance.instanceShaderBindingTableRecordOffset = flowCtx.getSbtHitGroupOffset();
         instance.flags = 0;
         instance.accelerationStructureReference = flowBlas->accelerationStructureReference;
         m_mergedInstances[Tlas::Opaque].push_back(instance);

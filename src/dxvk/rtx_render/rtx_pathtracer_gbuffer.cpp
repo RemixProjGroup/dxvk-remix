@@ -104,6 +104,18 @@ namespace dxvk {
 
   // Defined within an unnamed namespace to ensure unique definition across binary
   namespace {
+    RtxFlowContext* g_pCurrentFlowContext = nullptr;
+
+    uint32_t getRaytracingHitGroupCount(const DxvkRaytracingPipelineShaders& shaders) {
+      uint32_t hitGroupCount = 0;
+      for (const auto& group : shaders.groups) {
+        if (group.closestHitShader != nullptr || group.anyHitShader != nullptr || group.intersectionShader != nullptr) {
+          ++hitGroupCount;
+        }
+      }
+      return hitGroupCount;
+    }
+
     class GbufferRayGenShader : public ManagedShader {
     public:
       BINDLESS_ENABLED()
@@ -415,6 +427,7 @@ namespace dxvk {
     const bool ommEnabled = RtxOptions::getEnableOpacityMicromap();
     const bool includePortals = RtxOptions::rayPortalModelTextureHashes().size() > 0 || rtOutput.m_raytraceArgs.numActiveRayPortals > 0;
     const bool wboitEnabled = RtxOptions::wboitEnabled();
+    g_pCurrentFlowContext = &ctx->getCommonObjects()->metaFlowContext();
 
     GbufferPushConstants pushArgs = {};
     pushArgs.isTransmissionPSR = 0;
@@ -502,6 +515,8 @@ namespace dxvk {
         assert(false && "Invalid RaytraceMode in DxvkPathtracerGbuffer::dispatch");
       break;
     }
+
+    g_pCurrentFlowContext = nullptr;
   }
 
   DxvkRaytracingPipelineShaders DxvkPathtracerGbuffer::getPipelineShaders(
@@ -707,6 +722,11 @@ namespace dxvk {
         }
 
         shaders.debugName = "GBuffer TraceRay (RGS)";
+      }
+
+      if (g_pCurrentFlowContext != nullptr) {
+        g_pCurrentFlowContext->m_sbtHitGroupOffset = getRaytracingHitGroupCount(shaders);
+        Logger::info("NvFlow: SBT hit group offset = %u", g_pCurrentFlowContext->m_sbtHitGroupOffset);
       }
 
       shaders.addHitGroup(

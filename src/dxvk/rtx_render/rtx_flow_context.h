@@ -85,6 +85,7 @@ namespace dxvk {
     // Public accessors for rendering options (needed by volumetrics integration)
     float getDensityMultiplier() const { return densityMultiplier(); }
     float getEmissionIntensity() const { return emissionIntensity(); }
+    uint32_t getSbtHitGroupOffset() const { return m_sbtHitGroupOffset; }
 
     bool isActive() const { return enable() && m_initialized; }
     VkSemaphore flowCompleteSemaphore() const { return m_flowCompleteSemaphore; }
@@ -99,6 +100,7 @@ namespace dxvk {
     bool hasExternalEmitter(uint64_t handle);
     void removeExternalEmitter(uint64_t handle);
     void markExternalEmitterActive(uint64_t handle);
+    uint32_t m_sbtHitGroupOffset = 0;
 
   private:
     void simulate(RtxContext* ctx, float deltaTime);

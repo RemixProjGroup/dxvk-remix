@@ -155,6 +155,5 @@
 #define CUSTOM_INDEX_FRONT_HIT         (1u << 24)
 
 #define FLOW_VOLUME_INSTANCE_INDEX     255u
-#define FLOW_HIT_GROUP_OFFSET          1u
 
 #include "common_binding_indices.h"
