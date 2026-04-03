@@ -43,7 +43,7 @@ RWTexture3D<float> FlowVoxelizeDensityOutput;
 layout(r16f, binding = FLOW_VOXELIZE_TEMPERATURE_OUTPUT)
 RWTexture3D<float> FlowVoxelizeTemperatureOutput;
 
-float sampleNanoVdbGrid(StructuredBuffer<uint> nanoVdbBuffer, float3 worldPos) {
+float sampleNanoVdbGrid(StructuredBuffer<uint> nanoVdbBuffer, pnanovdb_coord_t ijk) {
   pnanovdb_grid_handle_t grid = { pnanovdb_address_null() };
   if (pnanovdb_grid_get_grid_type(nanoVdbBuffer, grid) != PNANOVDB_GRID_TYPE_FLOAT) {
     return 0.f;
@@ -55,11 +55,7 @@ float sampleNanoVdbGrid(StructuredBuffer<uint> nanoVdbBuffer, float3 worldPos) {
   pnanovdb_readaccessor_t accessor;
   pnanovdb_readaccessor_init(PNANOVDB_REF(accessor), root);
 
-  pnanovdb_vec3_t worldPosPn = float3(worldPos.x, worldPos.y, worldPos.z);
-  pnanovdb_vec3_t indexPos = pnanovdb_grid_world_to_indexf(nanoVdbBuffer, grid, PNANOVDB_REF(worldPosPn));
-  pnanovdb_coord_t indexCoord = pnanovdb_hdda_pos_to_ijk(PNANOVDB_REF(indexPos));
-
-  if (!pnanovdb_readaccessor_is_active(PNANOVDB_GRID_TYPE_FLOAT, nanoVdbBuffer, PNANOVDB_REF(accessor), PNANOVDB_REF(indexCoord))) {
+  if (!pnanovdb_readaccessor_is_active(PNANOVDB_GRID_TYPE_FLOAT, nanoVdbBuffer, PNANOVDB_REF(accessor), PNANOVDB_REF(ijk))) {
     return 0.f;
   }
 
@@ -67,7 +63,7 @@ float sampleNanoVdbGrid(StructuredBuffer<uint> nanoVdbBuffer, float3 worldPos) {
     PNANOVDB_GRID_TYPE_FLOAT,
     nanoVdbBuffer,
     PNANOVDB_REF(accessor),
-    PNANOVDB_REF(indexCoord));
+    PNANOVDB_REF(ijk));
   return pnanovdb_read_float(nanoVdbBuffer, valueAddress);
 }
 
@@ -81,8 +77,24 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
   float3 uvw = float3(dispatchId) / float3(FlowVoxelizeConstants.resX, FlowVoxelizeConstants.resY, FlowVoxelizeConstants.resZ);
   float3 worldPos = FlowVoxelizeConstants.volumeMin + uvw * (FlowVoxelizeConstants.volumeMax - FlowVoxelizeConstants.volumeMin);
 
-  float density = sampleNanoVdbGrid(FlowVoxelizeSmokeNanoVdb, worldPos);
-  float temperature = sampleNanoVdbGrid(FlowVoxelizeTemperatureNanoVdb, worldPos);
+  float3 idx;
+  idx.x = FlowVoxelizeConstants.worldToIndex[0] * worldPos.x
+        + FlowVoxelizeConstants.worldToIndex[1] * worldPos.y
+        + FlowVoxelizeConstants.worldToIndex[2] * worldPos.z
+        + FlowVoxelizeConstants.worldToIndex[3];
+  idx.y = FlowVoxelizeConstants.worldToIndex[4] * worldPos.x
+        + FlowVoxelizeConstants.worldToIndex[5] * worldPos.y
+        + FlowVoxelizeConstants.worldToIndex[6] * worldPos.z
+        + FlowVoxelizeConstants.worldToIndex[7];
+  idx.z = FlowVoxelizeConstants.worldToIndex[8] * worldPos.x
+        + FlowVoxelizeConstants.worldToIndex[9] * worldPos.y
+        + FlowVoxelizeConstants.worldToIndex[10] * worldPos.z
+        + FlowVoxelizeConstants.worldToIndex[11];
+
+  pnanovdb_coord_t ijk = { (int)floor(idx.x), (int)floor(idx.y), (int)floor(idx.z) };
+
+  float density = sampleNanoVdbGrid(FlowVoxelizeSmokeNanoVdb, ijk);
+  float temperature = sampleNanoVdbGrid(FlowVoxelizeTemperatureNanoVdb, ijk);
 
   FlowVoxelizeDensityOutput[dispatchId] = float16_t(density);
   FlowVoxelizeTemperatureOutput[dispatchId] = float16_t(temperature);

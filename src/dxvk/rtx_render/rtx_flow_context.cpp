@@ -45,6 +45,8 @@
 #pragma warning(disable: 4550)
 #include <NvFlowLoader.h>
 #include <NvFlowDatabase.h>
+#define PNANOVDB_C
+#include <nanovdb/PNanoVDB.h>
 #pragma warning(pop)
 
 #include "../../util/log/log.h"
@@ -942,6 +944,33 @@ namespace dxvk {
       args.hasNanoVdbData = 1;
       args.smokeBufferSize = static_cast<uint32_t>(m_importedSmokeSize / sizeof(uint32_t));
       args.tempBufferSize = static_cast<uint32_t>(m_importedTempSize / sizeof(uint32_t));
+
+      NvFlowContextInterface* contextInterface = m_loader->deviceInterface.getContextInterface(m_deviceQueue);
+      NvFlowContext* flowContext = m_loader->deviceInterface.getContext(m_deviceQueue);
+      NvFlowGridRenderData renderData = {};
+      m_loader->gridInterface.getRenderData(flowContext, m_grid, &renderData);
+      if (renderData.nanoVdb.smokeNanoVdb != nullptr) {
+        NvFlowBuffer* smokeBuffer = nullptr;
+        NvFlowBufferAcquire* smokeAcquire = contextInterface->enqueueAcquireBuffer(flowContext, renderData.nanoVdb.smokeNanoVdb);
+        const NvFlowBool32 haveSmoke = smokeAcquire != nullptr
+          && contextInterface->getAcquiredBuffer(flowContext, smokeAcquire, &smokeBuffer)
+          && smokeBuffer != nullptr;
+        if (haveSmoke) {
+          uint32_t* pSmokeData = reinterpret_cast<uint32_t*>(contextInterface->mapBuffer(flowContext, smokeBuffer));
+          if (pSmokeData != nullptr) {
+            pnanovdb_buf_t buf = pnanovdb_make_buf(pSmokeData, static_cast<uint64_t>(m_importedSmokeSize / sizeof(uint32_t)));
+            pnanovdb_grid_handle_t gh = { 0u };
+            pnanovdb_map_handle_t map = pnanovdb_grid_get_map(buf, gh);
+            args.worldToIndex[0] = pnanovdb_map_get_matf(buf, map, 0); args.worldToIndex[1] = pnanovdb_map_get_matf(buf, map, 3);
+            args.worldToIndex[2] = pnanovdb_map_get_matf(buf, map, 6); args.worldToIndex[3] = pnanovdb_map_get_vecf(buf, map, 0);
+            args.worldToIndex[4] = pnanovdb_map_get_matf(buf, map, 1); args.worldToIndex[5] = pnanovdb_map_get_matf(buf, map, 4);
+            args.worldToIndex[6] = pnanovdb_map_get_matf(buf, map, 7); args.worldToIndex[7] = pnanovdb_map_get_vecf(buf, map, 1);
+            args.worldToIndex[8] = pnanovdb_map_get_matf(buf, map, 2); args.worldToIndex[9] = pnanovdb_map_get_matf(buf, map, 5);
+            args.worldToIndex[10] = pnanovdb_map_get_matf(buf, map, 8); args.worldToIndex[11] = pnanovdb_map_get_vecf(buf, map, 2);
+            contextInterface->unmapBuffer(flowContext, smokeBuffer);
+          }
+        }
+      }
 
       ctx->writeToBuffer(m_flowVoxelizeConstantsBuffer, 0, sizeof(args), &args);
       ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_flowVoxelizeConstantsBuffer);

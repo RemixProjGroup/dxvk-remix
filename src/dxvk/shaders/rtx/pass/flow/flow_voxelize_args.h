@@ -29,10 +29,13 @@ struct FlowVoxelizeArgs {
   uint resX;
   uint resY;
   uint resZ;
+  uint pad_align0;
+  uint pad_align1;
   vec3 volumeMax;
   uint hasNanoVdbData;  // 0 = generate procedural test data, 1 = sample NanoVDB
   uint smokeBufferSize; // in uint32s
   uint tempBufferSize;  // in uint32s
+  float worldToIndex[12];
   uint pad0;
   uint pad1;
 };
