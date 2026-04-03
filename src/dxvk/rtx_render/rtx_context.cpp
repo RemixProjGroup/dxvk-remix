@@ -1353,6 +1353,7 @@ namespace dxvk {
         constants.volumeArgs.flowVolumeMax = flowData.worldMax;
         constants.volumeArgs.flowDensityMultiplier = flowCtx.getDensityMultiplier();
         constants.volumeArgs.flowTemperatureScale = flowCtx.getEmissionIntensity();
+        constants.volumeArgs.flowRayMarchSteps = static_cast<uint32_t>(RtxFlowContext::rayMarchSteps());
       }
     }
 
