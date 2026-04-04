@@ -67,6 +67,19 @@ namespace dxvk {
     PREWARM_SHADER_PIPELINE(FlowVoxelizeShader);
   }
 
+  // FlowFrameParams ring buffer slot — full definition kept here because it
+  // requires NvFlow SDK types that are only available in this translation unit.
+  struct FlowFrameParams {
+    NvFlowGridSimulateLayerParams              simulate;
+    NvFlowGridOffscreenLayerParams             offscreen;
+    NvFlowGridRenderLayerParams                render;
+    std::vector<NvFlowGridEmitterSphereParams> emitters;
+    NvFlowArray<NvFlowUint8*>                  emitterPtrs;
+    NvFlowArray<NvFlowDatabaseTypeSnapshot>    typeSnapshots;
+    NvFlowDatabaseSnapshot                     dbSnapshot;
+    NvFlowGridParamsDescSnapshot               descSnapshot;
+  };
+
   static NvFlowFloat4x4 toNvFlowMatrix(const Matrix4d& m) {
     NvFlowFloat4x4 result = {};
     NvFlowFloat4* rows[4] = { &result.x, &result.y, &result.z, &result.w };
@@ -120,9 +133,11 @@ namespace dxvk {
 
   RtxFlowContext::RtxFlowContext(DxvkDevice* device)
     : m_device(device) {
+        m_paramRing = new FlowFrameParams[kFlowParamRingSize];
   }
 
   RtxFlowContext::~RtxFlowContext() {
+    delete[] m_paramRing;
     shutdownFlow();
     // Clean up loader even if init failed partway through
     if (m_loader) {
