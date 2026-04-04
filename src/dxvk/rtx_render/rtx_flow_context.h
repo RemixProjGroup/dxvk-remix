@@ -103,18 +103,8 @@ namespace dxvk {
     uint32_t m_sbtHitGroupOffset = 0;
 
   private:
+    struct FlowFrameParams; //defined in rtx_flow_context.cpp
     static constexpr uint32_t kFlowParamRingSize = 4;
-
-    struct FlowFrameParams {
-      NvFlowGridSimulateLayerParams simulate;
-      NvFlowGridOffscreenLayerParams offscreen;
-      NvFlowGridRenderLayerParams render;
-      std::vector<NvFlowGridEmitterSphereParams> emitters;
-      NvFlowArray<NvFlowUint8*> emitterPtrs;
-      NvFlowArray<NvFlowDatabaseTypeSnapshot> typeSnapshots;
-      NvFlowDatabaseSnapshot dbSnapshot;
-      NvFlowGridParamsDescSnapshot descSnapshot;
-    };
 
     void simulate(RtxContext* ctx, float deltaTime);
     bool initFlow();
@@ -166,7 +156,7 @@ namespace dxvk {
     double m_simTime = 0.0;
     unsigned int m_activeBlockCount = 0;
     uint64_t m_frameCount = 0;
-    FlowFrameParams m_paramRing[kFlowParamRingSize];
+    FlowFrameParams m_paramRing = nullptr;
     uint32_t m_paramRingHead = 0;
 
     // RTX Options
