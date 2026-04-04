@@ -8,47 +8,9 @@ on:
         default: 'main'
 
 jobs:
-  preflight-check:
-    runs-on: windows-2022
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.inputs.branch }}
-        submodules: recursive
-    - name: Setup Meson
-      run: pip install meson==1.1.0
-    - name: Configure (catch errors early)
-      shell: pwsh
-      run: |
-        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
-        . .\build_common.ps1
-        PerformBuild -BuildFlavour debugoptimized -BuildSubDir _Comp64DebugOptimized -Backend ninja -EnableTracy false -ConfigureOnly $true
-    - name: Quick compile check (first 2 minutes)
-      shell: pwsh
-      run: |
-        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
-        . .\build_common.ps1
-        Push-Location _Comp64DebugOptimized
-        $proc = Start-Process "ninja" -ArgumentList "-j$env:NUMBER_OF_PROCESSORS -k 1" -NoNewWindow -PassThru
-        $timeout = 120
-        if (-not $proc.WaitForExit($timeout * 1000)) {
-          Write-Host "Compile check passed first $timeout seconds without errors - proceeding to full build"
-          Stop-Process -Id $proc.Id -Force
-          exit 0
-        }
-        if ($proc.ExitCode -ne 0) {
-          Write-Error "Compilation failed during preflight check"
-          exit 1
-        }
-        Write-Host "Compile check passed"
-        Pop-Location
-
   build-windows:
-    needs: preflight-check
     runs-on: windows-2022
     strategy:
-      fail-fast: true
       matrix:
         include:
           - build-flavour: debug
