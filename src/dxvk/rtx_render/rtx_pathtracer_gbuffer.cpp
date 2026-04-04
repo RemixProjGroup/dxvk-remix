@@ -726,7 +726,7 @@ namespace dxvk {
 
       if (g_pCurrentFlowContext != nullptr) {
         g_pCurrentFlowContext->m_sbtHitGroupOffset = getRaytracingHitGroupCount(shaders);
-        Logger::info("NvFlow: SBT hit group offset = %u", g_pCurrentFlowContext->m_sbtHitGroupOffset);
+        Logger::info(str::format("NvFlow: SBT hit group offset = ", g_pCurrentFlowContext->m_sbtHitGroupOffset));
       }
 
       shaders.addHitGroup(
