@@ -74,6 +74,8 @@ namespace dxvk {
     VkExtent3D textureExtent = { 0, 0, 0 };
   };
 
+  struct FlowFrameParams;
+
   class RtxFlowContext {
   public:
     RtxFlowContext(DxvkDevice* device);
@@ -103,7 +105,6 @@ namespace dxvk {
     uint32_t m_sbtHitGroupOffset = 0;
 
   private:
-    struct FlowFrameParams; //defined in rtx_flow_context.cpp
     static constexpr uint32_t kFlowParamRingSize = 4;
 
     void simulate(RtxContext* ctx, float deltaTime);
