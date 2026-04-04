@@ -157,7 +157,7 @@ namespace dxvk {
     double m_simTime = 0.0;
     unsigned int m_activeBlockCount = 0;
     uint64_t m_frameCount = 0;
-    FlowFrameParams* m_paramRing = nullptr;
+    FlowFrameParams* m_paramRing;
     uint32_t m_paramRingHead = 0;
 
     // RTX Options

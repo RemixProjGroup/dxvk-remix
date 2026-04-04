@@ -132,8 +132,8 @@ namespace dxvk {
   };
 
   RtxFlowContext::RtxFlowContext(DxvkDevice* device)
-    : m_device(device) {
-        m_paramRing = new FlowFrameParams[kFlowParamRingSize];
+    : m_device(device)
+    , m_paramRing(new FlowFrameParams[kFlowParamRingSize]) {
   }
 
   RtxFlowContext::~RtxFlowContext() {
