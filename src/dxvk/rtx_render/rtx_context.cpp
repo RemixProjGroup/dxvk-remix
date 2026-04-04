@@ -1343,9 +1343,8 @@ namespace dxvk {
       if (!constants.volumeArgs.flowEnabled) {
         static uint32_t s_warnCount = 0;
         if (s_warnCount < 10 || (s_warnCount % 300) == 0)
-          Logger::warn("NvFlow: flowEnabled=false frame=%u — check densityView, "
-                       "activeBlockCount, and volumeData.valid",
-                       m_device->getCurrentFrameId());
+          Logger::warn(str::format("NvFlow: flowEnabled=false frame=", m_device->getCurrentFrameId(),
+                       " — check densityView, activeBlockCount, and volumeData.valid"));
         ++s_warnCount;
       }
       if (flowActive) {
