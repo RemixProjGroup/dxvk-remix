@@ -535,7 +535,7 @@ namespace dxvk {
         auto it = m_externalEmitters.find(handle);
         if (it != m_externalEmitters.end()) {
           const auto& ed = it->second;
-          NvFlowGridEmitterSphereParams p = NvFlowGridEmitterSphereParams_default;
+          NvFlowGridEmitterSphereParams p = NvFlowEmitterSphereParams_default;
           p.enabled = NV_FLOW_TRUE;
           p.position = { ed.posX, ed.posY, ed.posZ };
           p.radius = ed.radius;
