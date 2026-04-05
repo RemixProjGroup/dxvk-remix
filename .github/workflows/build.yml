@@ -38,19 +38,77 @@ jobs:
         . .\build_common.ps1
         PerformBuild -BuildFlavour ${{matrix.build-flavour}} -BuildSubDir ${{matrix.output-subdir}} -Backend ninja -EnableTracy false copy_output
 
-    # --- COPY FLOW DLLS INTO OUTPUT ---
-    - name: Copy NvFlow DLLs
-      shell: cmd
+    - name: Build NvFlow (PhysX Flow)
+      shell: powershell
       run: |
-        if not exist _output mkdir _output
+        Push-Location submodules\PhysX\flow
 
-        for %%C in (debug release) do (
-          if exist submodules\PhysX\flow\_build\windows-x86_64\%%C (
-            copy /Y submodules\PhysX\flow\_build\windows-x86_64\%%C\nvflow.dll _output\ >nul
-            copy /Y submodules\PhysX\flow\_build\windows-x86_64\%%C\nvflowext.dll _output\ >nul
-          )
-        )
+        # Step 1: Run build.bat so Premake generates the vcxproj files.
+        # The first MSBuild pass inside build.bat will fail on C4756/WX —
+        # that is expected. We only need the generated project files.
+        Write-Host "Running build.bat to generate project files..."
+        cmd /c "build.bat" | Out-Host
 
+        # Step 2: Patch all generated vcxproj files to disable TreatWarningAsError.
+        # C4756 (overflow in constant arithmetic) in EmitterMesh.cpp line 465 is
+        # caused by NvFlowFloat4{ INFINITY, INFINITY, INFINITY, INFINITY } which
+        # MSVC treats as overflow. With /WX this becomes a fatal error.
+        Write-Host "Patching vcxproj files to disable TreatWarningAsError..."
+        $patched = 0
+        Get-ChildItem -Path "_compiler\vs2022" -Recurse -Filter "*.vcxproj" |
+          ForEach-Object {
+            $content = Get-Content $_.FullName -Raw
+            $new = $content `
+              -replace '<TreatWarningAsError>true</TreatWarningAsError>',
+                       '<TreatWarningAsError>false</TreatWarningAsError>'
+            if ($content -ne $new) {
+              Set-Content -Path $_.FullName -Value $new -NoNewline
+              Write-Host "  Patched: $($_.Name)"
+              $patched++
+            }
+          }
+        Write-Host "$patched file(s) patched."
+
+        # Step 3: Rebuild with the patched projects. Release config, x64.
+        Write-Host "Building nvflow.sln (release|x64)..."
+        $msbuild = & "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe" `
+          "_compiler\vs2022\nvflow.sln" `
+          /p:Configuration=release `
+          /p:Platform=x64 `
+          /m `
+          /nologo
+        $exitCode = $LASTEXITCODE
+
+        Pop-Location
+
+        if ($exitCode -ne 0) {
+          Write-Error "!!! Failure while building nvflow !!!"
+          exit $exitCode
+        }
+        Write-Host "nvflow build succeeded."
+
+    - name: Copy NvFlow DLLs
+      shell: powershell
+      run: |
+        $flowBuildDir = "submodules\PhysX\flow\_build\windows-x86_64\release"
+        $outputDir    = "_output"
+
+        if (-not (Test-Path $outputDir)) {
+          New-Item -ItemType Directory -Path $outputDir | Out-Null
+        }
+
+        $dlls = @("nvflow.dll", "nvflowext.dll")
+        foreach ($dll in $dlls) {
+          $src = Join-Path $flowBuildDir $dll
+          if (Test-Path $src) {
+            Copy-Item -Path $src -Destination $outputDir -Force
+            Write-Host "Copied: $dll -> $outputDir"
+          } else {
+            Write-Error "Expected DLL not found after build: $src"
+            exit 1
+          }
+        }
+        Write-Host "NvFlow DLLs copied successfully."
     - name: Copy readme
       run: copy artifacts_readme.txt _output
     - name: Upload x64 binaries
