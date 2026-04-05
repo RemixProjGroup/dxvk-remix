@@ -144,6 +144,7 @@ namespace dxvk {
     VkDeviceSize m_importedSmokeSize = 0;
     VkDeviceSize m_importedTempSize = 0;
     bool m_nanoVdbImported = false;
+    bool m_nvflowFlushedThisFrame = false;
     bool m_useFallback2D = false;
     RtCamera m_remixCamera;
     VkExtent3D m_renderResolution = { 0, 0, 1 };
