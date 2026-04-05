@@ -707,6 +707,7 @@ namespace dxvk {
       ? m_nvflowSignalSemaphore
       : nullptr;
     m_loader->deviceInterface.flush(m_deviceQueue, &flushedFrame, nullptr, pSignalSemaphore);
+    m_nvflowFlushedThisFrame = true;
 
     if (logThisFrame) {
       Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: flushedFrame=", flushedFrame, " — frame complete"));
@@ -876,7 +877,9 @@ namespace dxvk {
   }
 
   void RtxFlowContext::prepare(RtxContext* ctx, float deltaTime) {
+    m_nvflowFlushedThisFrame = false;
     if (!isActive() && !enable()) return;
+    
 
     ScopedCpuProfileZone();
 
