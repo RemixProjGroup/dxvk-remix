@@ -841,7 +841,7 @@ namespace dxvk {
     auto& flow = m_common->metaFlowContext();
     if (!flow.isActive() && !RtxFlowContext::enable()) return;
     flow.prepare(this, deltaTime);
-    if (!flow.getVolumeData().valid) return;
+    if (!flow.getVolumeData().valid || !flow.didFlushThisFrame()) return;
 
     if (VkSemaphore flowWaitSemaphore = flow.flowCompleteSemaphore()) {
       m_cmd->addWaitSemaphore(flowWaitSemaphore, uint64_t(-1), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
