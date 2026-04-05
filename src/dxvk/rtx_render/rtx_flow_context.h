@@ -88,6 +88,7 @@ namespace dxvk {
     float getDensityMultiplier() const { return densityMultiplier(); }
     float getEmissionIntensity() const { return emissionIntensity(); }
     uint32_t getSbtHitGroupOffset() const { return m_sbtHitGroupOffset; }
+    bool didFlushThisFrame() const { return m_nvflowFlushedThisFrame; }
 
     bool isActive() const { return enable() && m_initialized; }
     VkSemaphore flowCompleteSemaphore() const { return m_flowCompleteSemaphore; }
