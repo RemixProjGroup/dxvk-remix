@@ -592,7 +592,9 @@ namespace dxvk {
       fp.render.renderSettings.compositeEnabled = NV_FLOW_TRUE;
     } else {
       fp.offscreen = {};
-      fp.render = {};
+      fp.render = NvFlowGridRenderLayerParams_default;
+      fp.render.renderSettings.compositeEnabled  = NV_FLOW_FALSE;
+      fp.render.renderSettings.pathTracingEnabled = NV_FLOW_FALSE;
     }
 
     fp.simulate.nanoVdbExport.enabled = NV_FLOW_TRUE;
