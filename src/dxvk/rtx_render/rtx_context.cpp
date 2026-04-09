@@ -841,11 +841,6 @@ namespace dxvk {
     auto& flow = m_common->metaFlowContext();
     if (!flow.isActive() && !RtxFlowContext::enable()) return;
     flow.prepare(this, deltaTime);
-    if (!flow.getVolumeData().valid || !flow.didFlushThisFrame()) return;
-
-    if (VkSemaphore flowWaitSemaphore = flow.flowCompleteSemaphore()) {
-      m_cmd->addWaitSemaphore(flowWaitSemaphore, uint64_t(-1), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-    }
   }
 
   void RtxContext::dispatchFlowFallbackComposite(Resources::RaytracingOutput& rtOutput) {
@@ -854,7 +849,8 @@ namespace dxvk {
     if (!flowCtx.isActive()
       || !RtxFlowContext::useFallback2D()
       || !flowData.valid
-      || flowData.densityView == nullptr) {
+      || flowData.densityView == nullptr
+      || flowData.temperatureView == nullptr) {
       return;
     }
 
@@ -1338,7 +1334,12 @@ namespace dxvk {
     {
       auto& flowCtx = getCommonObjects()->metaFlowContext();
       const auto& flowData = flowCtx.getVolumeData();
-      const bool flowActive = flowCtx.isActive() && flowData.valid && flowData.densityView != nullptr;
+      const bool flowActive =
+        flowCtx.isActive()
+        && !RtxFlowContext::useFallback2D()
+        && flowData.valid
+        && flowData.densityView != nullptr
+        && flowData.temperatureView != nullptr;
       constants.volumeArgs.flowEnabled = flowActive ? 1 : 0;
       if (!constants.volumeArgs.flowEnabled) {
         static uint32_t s_warnCount = 0;
