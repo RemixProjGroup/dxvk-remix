@@ -576,20 +576,19 @@ namespace dxvk {
     fp.render = NvFlowGridRenderLayerParams_default;
 
     // Enable NanoVDB export for smoke and temperature channels.
-    // Disable readback and internal 2D rendering when not using the fallback 2D path.
     m_useFallback2D = useFallback2D();
     if (m_useFallback2D) {
       NvFlowGridRenderLayerParams renderParams = NvFlowGridRenderLayerParams_default;
       renderParams.renderSettings.flowEnabled = NV_FLOW_TRUE;
       renderParams.renderSettings.pathTracingEnabled = NV_FLOW_FALSE;
-      renderParams.renderSettings.compositeEnabled = NV_FLOW_TRUE;
+      renderParams.renderSettings.compositeEnabled = NV_FLOW_FALSE;
       const NvFlowFloat4x4 projectionMatrix = toNvFlowMatrix(m_remixCamera.getViewToProjection());
       const NvFlowFloat4x4 viewMatrix = toNvFlowMatrix(m_remixCamera.getWorldToView());
       (void)projectionMatrix;
       (void)viewMatrix;
       fp.render = renderParams;
       fp.render.renderSettings.pathTracingEnabled = NV_FLOW_FALSE;
-      fp.render.renderSettings.compositeEnabled = NV_FLOW_TRUE;
+      fp.render.renderSettings.compositeEnabled = NV_FLOW_FALSE;
     } else {
       // Keep offscreen defaults in non-fallback mode.
       // Flow internals may still consume offscreen layer metadata even when
@@ -601,6 +600,7 @@ namespace dxvk {
 
     fp.simulate.nanoVdbExport.enabled = NV_FLOW_TRUE;
     fp.simulate.nanoVdbExport.readbackEnabled = m_useFallback2D ? NV_FLOW_TRUE : NV_FLOW_FALSE;
+    fp.simulate.nanoVdbExport.interopEnabled = NV_FLOW_TRUE;
     fp.simulate.nanoVdbExport.smokeEnabled = NV_FLOW_TRUE;
     fp.simulate.nanoVdbExport.temperatureEnabled = NV_FLOW_TRUE;
     NvFlowUint8* pSimulateLayer = reinterpret_cast<NvFlowUint8*>(&fp.simulate);
@@ -915,131 +915,129 @@ namespace dxvk {
     if (m_volumeData.densityView == nullptr || m_volumeData.temperatureView == nullptr)
       return;
 
-    if (!m_useFallback2D) {
-      if (m_flowCompleteSemaphore != VK_NULL_HANDLE) {
-        ctx->getCommandList()->addWaitSemaphore(m_flowCompleteSemaphore, uint64_t(-1), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
-      }
+    if (m_flowCompleteSemaphore != VK_NULL_HANDLE) {
+      ctx->getCommandList()->addWaitSemaphore(m_flowCompleteSemaphore, uint64_t(-1), VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    }
 
-      if (!m_nanoVdbImported
-        || m_importedSmokeBuffer == VK_NULL_HANDLE
-        || m_importedTempBuffer == VK_NULL_HANDLE) {
+    if (!m_nanoVdbImported
+      || m_importedSmokeBuffer == VK_NULL_HANDLE
+      || m_importedTempBuffer == VK_NULL_HANDLE) {
+      return;
+    }
+
+    auto createNanoVdbBuffer = [this](Rc<DxvkBuffer>& buffer, VkDeviceSize size, const char* pDebugName) {
+      if (buffer != nullptr && buffer->info().size >= size) {
         return;
       }
 
-      auto createNanoVdbBuffer = [this](Rc<DxvkBuffer>& buffer, VkDeviceSize size, const char* pDebugName) {
-        if (buffer != nullptr && buffer->info().size >= size) {
-          return;
-        }
+      DxvkBufferCreateInfo info = {};
+      info.size = size;
+      info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+                 | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+      info.stages = VK_PIPELINE_STAGE_TRANSFER_BIT
+                  | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+      info.access = VK_ACCESS_TRANSFER_WRITE_BIT
+                  | VK_ACCESS_SHADER_READ_BIT;
+      buffer = m_device->createBuffer(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, pDebugName);
+    };
 
-        DxvkBufferCreateInfo info = {};
-        info.size = size;
-        info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
-                   | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        info.stages = VK_PIPELINE_STAGE_TRANSFER_BIT
-                    | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-        info.access = VK_ACCESS_TRANSFER_WRITE_BIT
-                    | VK_ACCESS_SHADER_READ_BIT;
-        buffer = m_device->createBuffer(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, pDebugName);
-      };
+    createNanoVdbBuffer(m_importedSmokeDxvkBuffer, m_importedSmokeSize, "flow imported smoke nanovdb");
+    createNanoVdbBuffer(m_importedTempDxvkBuffer, m_importedTempSize, "flow imported temperature nanovdb");
 
-      createNanoVdbBuffer(m_importedSmokeDxvkBuffer, m_importedSmokeSize, "flow imported smoke nanovdb");
-      createNanoVdbBuffer(m_importedTempDxvkBuffer, m_importedTempSize, "flow imported temperature nanovdb");
+    VkBufferCopy smokeCopy = { 0, 0, m_importedSmokeSize };
+    VkBufferCopy tempCopy = { 0, 0, m_importedTempSize };
+    const auto smokeDst = m_importedSmokeDxvkBuffer->getSliceHandle();
+    const auto tempDst = m_importedTempDxvkBuffer->getSliceHandle();
 
-      VkBufferCopy smokeCopy = { 0, 0, m_importedSmokeSize };
-      VkBufferCopy tempCopy = { 0, 0, m_importedTempSize };
-      const auto smokeDst = m_importedSmokeDxvkBuffer->getSliceHandle();
-      const auto tempDst = m_importedTempDxvkBuffer->getSliceHandle();
+    ctx->getCommandList()->cmdCopyBuffer(DxvkCmdBuffer::ExecBuffer, m_importedSmokeBuffer, smokeDst.handle, 1, &smokeCopy);
+    ctx->getCommandList()->cmdCopyBuffer(DxvkCmdBuffer::ExecBuffer, m_importedTempBuffer, tempDst.handle, 1, &tempCopy);
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_ACCESS_TRANSFER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
 
-      ctx->getCommandList()->cmdCopyBuffer(DxvkCmdBuffer::ExecBuffer, m_importedSmokeBuffer, smokeDst.handle, 1, &smokeCopy);
-      ctx->getCommandList()->cmdCopyBuffer(DxvkCmdBuffer::ExecBuffer, m_importedTempBuffer, tempDst.handle, 1, &tempCopy);
-      ctx->emitMemoryBarrier(0,
-        VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_ACCESS_TRANSFER_WRITE_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_ACCESS_SHADER_READ_BIT);
-
-      if (m_flowVoxelizeConstantsBuffer == nullptr) {
-        DxvkBufferCreateInfo info = {};
-        info.size = sizeof(FlowVoxelizeArgs);
-        info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-        info.stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-        info.access = VK_ACCESS_SHADER_READ_BIT;
-        m_flowVoxelizeConstantsBuffer = m_device->createBuffer(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, "flow voxelize constants");
-      }
-
-      FlowVoxelizeArgs args = {};
-      args.volumeMin = { m_volumeData.worldMin.x, m_volumeData.worldMin.y, m_volumeData.worldMin.z };
-      args.volumeMax = { m_volumeData.worldMax.x, m_volumeData.worldMax.y, m_volumeData.worldMax.z };
-      args.gridToWorld = m_volumeData.gridToWorld;
-      args.resX = m_volumeData.textureExtent.width;
-      args.resY = m_volumeData.textureExtent.height;
-      args.resZ = m_volumeData.textureExtent.depth;
-      args.hasNanoVdbData = 1;
-      args.smokeBufferSize = static_cast<uint32_t>(m_importedSmokeSize / sizeof(uint32_t));
-      args.tempBufferSize = static_cast<uint32_t>(m_importedTempSize / sizeof(uint32_t));
-      // Fallback world->index transform from Flow AABB and cell size.
-      // This is used when NanoVDB CPU mapping is unavailable for the frame.
-      {
-        const float safeCellSize = std::max(m_volumeData.cellSize, 1e-5f);
-        const float invCellSize = 1.0f / safeCellSize;
-        args.worldToIndex[0] = invCellSize; args.worldToIndex[1] = 0.0f;        args.worldToIndex[2] = 0.0f;        args.worldToIndex[3] = -m_volumeData.worldMin.x * invCellSize;
-        args.worldToIndex[4] = 0.0f;        args.worldToIndex[5] = invCellSize; args.worldToIndex[6] = 0.0f;        args.worldToIndex[7] = -m_volumeData.worldMin.y * invCellSize;
-        args.worldToIndex[8] = 0.0f;        args.worldToIndex[9] = 0.0f;        args.worldToIndex[10] = invCellSize; args.worldToIndex[11] = -m_volumeData.worldMin.z * invCellSize;
-      }
-
-      NvFlowContextInterface* contextInterface = m_loader->deviceInterface.getContextInterface(m_deviceQueue);
-      NvFlowContext* flowContext = m_loader->deviceInterface.getContext(m_deviceQueue);
-      NvFlowGridRenderData renderData = {};
-      m_loader->gridInterface.getRenderData(flowContext, m_grid, &renderData);
-      if (renderData.nanoVdb.smokeNanoVdb != nullptr) {
-        NvFlowBuffer* smokeBuffer = nullptr;
-        NvFlowBufferAcquire* smokeAcquire = contextInterface->enqueueAcquireBuffer(flowContext, renderData.nanoVdb.smokeNanoVdb);
-        const NvFlowBool32 haveSmoke = smokeAcquire != nullptr
-          && contextInterface->getAcquiredBuffer(flowContext, smokeAcquire, &smokeBuffer)
-          && smokeBuffer != nullptr;
-        if (haveSmoke) {
-          uint32_t* pSmokeData = reinterpret_cast<uint32_t*>(contextInterface->mapBuffer(flowContext, smokeBuffer));
-          if (pSmokeData != nullptr) {
-            pnanovdb_buf_t buf = pnanovdb_make_buf(pSmokeData, static_cast<uint64_t>(m_importedSmokeSize / sizeof(uint32_t)));
-            pnanovdb_grid_handle_t gh = { 0u };
-            pnanovdb_map_handle_t map = pnanovdb_grid_get_map(buf, gh);
-            args.worldToIndex[0] = pnanovdb_map_get_matf(buf, map, 0); args.worldToIndex[1] = pnanovdb_map_get_matf(buf, map, 3);
-            args.worldToIndex[2] = pnanovdb_map_get_matf(buf, map, 6); args.worldToIndex[3] = pnanovdb_map_get_vecf(buf, map, 0);
-            args.worldToIndex[4] = pnanovdb_map_get_matf(buf, map, 1); args.worldToIndex[5] = pnanovdb_map_get_matf(buf, map, 4);
-            args.worldToIndex[6] = pnanovdb_map_get_matf(buf, map, 7); args.worldToIndex[7] = pnanovdb_map_get_vecf(buf, map, 1);
-            args.worldToIndex[8] = pnanovdb_map_get_matf(buf, map, 2); args.worldToIndex[9] = pnanovdb_map_get_matf(buf, map, 5);
-            args.worldToIndex[10] = pnanovdb_map_get_matf(buf, map, 8); args.worldToIndex[11] = pnanovdb_map_get_vecf(buf, map, 2);
-            contextInterface->unmapBuffer(flowContext, smokeBuffer);
-          } else {
-            ONCE(Logger::warn("NvFlow: mapBuffer(smokeNanoVdb) returned null - using fallback worldToIndex transform"));
-          }
-        }
-      }
-
-      ctx->writeToBuffer(m_flowVoxelizeConstantsBuffer, 0, sizeof(args), &args);
-      ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_flowVoxelizeConstantsBuffer);
-      ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_importedSmokeDxvkBuffer);
-      ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_importedTempDxvkBuffer);
-
-      ctx->changeImageLayout(m_volumeData.densityTexture3D, VK_IMAGE_LAYOUT_GENERAL);
-      ctx->changeImageLayout(m_volumeData.temperatureTexture3D, VK_IMAGE_LAYOUT_GENERAL);
-
-      ctx->bindResourceBuffer(FLOW_VOXELIZE_CONSTANTS, DxvkBufferSlice(m_flowVoxelizeConstantsBuffer, 0, sizeof(FlowVoxelizeArgs)));
-      ctx->bindResourceBuffer(FLOW_VOXELIZE_SMOKE_NANOVDB, DxvkBufferSlice(m_importedSmokeDxvkBuffer, 0, m_importedSmokeSize));
-      ctx->bindResourceBuffer(FLOW_VOXELIZE_TEMPERATURE_NANOVDB, DxvkBufferSlice(m_importedTempDxvkBuffer, 0, m_importedTempSize));
-      ctx->bindResourceView(FLOW_VOXELIZE_DENSITY_OUTPUT, m_volumeData.densityView, nullptr);
-      ctx->bindResourceView(FLOW_VOXELIZE_TEMPERATURE_OUTPUT, m_volumeData.temperatureView, nullptr);
-
-      ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, FlowVoxelizeShader::getShader());
-
-      uint32_t gx = (m_volumeData.textureExtent.width + 3) / 4;
-      uint32_t gy = (m_volumeData.textureExtent.height + 3) / 4;
-      uint32_t gz = (m_volumeData.textureExtent.depth + 3) / 4;
-      ctx->dispatch(gx, gy, gz);
-
-      ctx->changeImageLayout(m_volumeData.densityTexture3D, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-      ctx->changeImageLayout(m_volumeData.temperatureTexture3D, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    if (m_flowVoxelizeConstantsBuffer == nullptr) {
+      DxvkBufferCreateInfo info = {};
+      info.size = sizeof(FlowVoxelizeArgs);
+      info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+      info.stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+      info.access = VK_ACCESS_SHADER_READ_BIT;
+      m_flowVoxelizeConstantsBuffer = m_device->createBuffer(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, "flow voxelize constants");
     }
+
+    FlowVoxelizeArgs args = {};
+    args.volumeMin = { m_volumeData.worldMin.x, m_volumeData.worldMin.y, m_volumeData.worldMin.z };
+    args.volumeMax = { m_volumeData.worldMax.x, m_volumeData.worldMax.y, m_volumeData.worldMax.z };
+    args.gridToWorld = m_volumeData.gridToWorld;
+    args.resX = m_volumeData.textureExtent.width;
+    args.resY = m_volumeData.textureExtent.height;
+    args.resZ = m_volumeData.textureExtent.depth;
+    args.hasNanoVdbData = 1;
+    args.smokeBufferSize = static_cast<uint32_t>(m_importedSmokeSize / sizeof(uint32_t));
+    args.tempBufferSize = static_cast<uint32_t>(m_importedTempSize / sizeof(uint32_t));
+    // Fallback world->index transform from Flow AABB and cell size.
+    // This is used when NanoVDB CPU mapping is unavailable for the frame.
+    {
+      const float safeCellSize = std::max(m_volumeData.cellSize, 1e-5f);
+      const float invCellSize = 1.0f / safeCellSize;
+      args.worldToIndex[0] = invCellSize; args.worldToIndex[1] = 0.0f;        args.worldToIndex[2] = 0.0f;        args.worldToIndex[3] = -m_volumeData.worldMin.x * invCellSize;
+      args.worldToIndex[4] = 0.0f;        args.worldToIndex[5] = invCellSize; args.worldToIndex[6] = 0.0f;        args.worldToIndex[7] = -m_volumeData.worldMin.y * invCellSize;
+      args.worldToIndex[8] = 0.0f;        args.worldToIndex[9] = 0.0f;        args.worldToIndex[10] = invCellSize; args.worldToIndex[11] = -m_volumeData.worldMin.z * invCellSize;
+    }
+
+    NvFlowContextInterface* contextInterface = m_loader->deviceInterface.getContextInterface(m_deviceQueue);
+    NvFlowContext* flowContext = m_loader->deviceInterface.getContext(m_deviceQueue);
+    NvFlowGridRenderData renderData = {};
+    m_loader->gridInterface.getRenderData(flowContext, m_grid, &renderData);
+    if (renderData.nanoVdb.smokeNanoVdb != nullptr) {
+      NvFlowBuffer* smokeBuffer = nullptr;
+      NvFlowBufferAcquire* smokeAcquire = contextInterface->enqueueAcquireBuffer(flowContext, renderData.nanoVdb.smokeNanoVdb);
+      const NvFlowBool32 haveSmoke = smokeAcquire != nullptr
+        && contextInterface->getAcquiredBuffer(flowContext, smokeAcquire, &smokeBuffer)
+        && smokeBuffer != nullptr;
+      if (haveSmoke) {
+        uint32_t* pSmokeData = reinterpret_cast<uint32_t*>(contextInterface->mapBuffer(flowContext, smokeBuffer));
+        if (pSmokeData != nullptr) {
+          pnanovdb_buf_t buf = pnanovdb_make_buf(pSmokeData, static_cast<uint64_t>(m_importedSmokeSize / sizeof(uint32_t)));
+          pnanovdb_grid_handle_t gh = { 0u };
+          pnanovdb_map_handle_t map = pnanovdb_grid_get_map(buf, gh);
+          args.worldToIndex[0] = pnanovdb_map_get_matf(buf, map, 0); args.worldToIndex[1] = pnanovdb_map_get_matf(buf, map, 3);
+          args.worldToIndex[2] = pnanovdb_map_get_matf(buf, map, 6); args.worldToIndex[3] = pnanovdb_map_get_vecf(buf, map, 0);
+          args.worldToIndex[4] = pnanovdb_map_get_matf(buf, map, 1); args.worldToIndex[5] = pnanovdb_map_get_matf(buf, map, 4);
+          args.worldToIndex[6] = pnanovdb_map_get_matf(buf, map, 7); args.worldToIndex[7] = pnanovdb_map_get_vecf(buf, map, 1);
+          args.worldToIndex[8] = pnanovdb_map_get_matf(buf, map, 2); args.worldToIndex[9] = pnanovdb_map_get_matf(buf, map, 5);
+          args.worldToIndex[10] = pnanovdb_map_get_matf(buf, map, 8); args.worldToIndex[11] = pnanovdb_map_get_vecf(buf, map, 2);
+          contextInterface->unmapBuffer(flowContext, smokeBuffer);
+        } else {
+          ONCE(Logger::warn("NvFlow: mapBuffer(smokeNanoVdb) returned null - using fallback worldToIndex transform"));
+        }
+      }
+    }
+
+    ctx->writeToBuffer(m_flowVoxelizeConstantsBuffer, 0, sizeof(args), &args);
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_flowVoxelizeConstantsBuffer);
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_importedSmokeDxvkBuffer);
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_importedTempDxvkBuffer);
+
+    ctx->changeImageLayout(m_volumeData.densityTexture3D, VK_IMAGE_LAYOUT_GENERAL);
+    ctx->changeImageLayout(m_volumeData.temperatureTexture3D, VK_IMAGE_LAYOUT_GENERAL);
+
+    ctx->bindResourceBuffer(FLOW_VOXELIZE_CONSTANTS, DxvkBufferSlice(m_flowVoxelizeConstantsBuffer, 0, sizeof(FlowVoxelizeArgs)));
+    ctx->bindResourceBuffer(FLOW_VOXELIZE_SMOKE_NANOVDB, DxvkBufferSlice(m_importedSmokeDxvkBuffer, 0, m_importedSmokeSize));
+    ctx->bindResourceBuffer(FLOW_VOXELIZE_TEMPERATURE_NANOVDB, DxvkBufferSlice(m_importedTempDxvkBuffer, 0, m_importedTempSize));
+    ctx->bindResourceView(FLOW_VOXELIZE_DENSITY_OUTPUT, m_volumeData.densityView, nullptr);
+    ctx->bindResourceView(FLOW_VOXELIZE_TEMPERATURE_OUTPUT, m_volumeData.temperatureView, nullptr);
+
+    ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, FlowVoxelizeShader::getShader());
+
+    uint32_t gx = (m_volumeData.textureExtent.width + 3) / 4;
+    uint32_t gy = (m_volumeData.textureExtent.height + 3) / 4;
+    uint32_t gz = (m_volumeData.textureExtent.depth + 3) / 4;
+    ctx->dispatch(gx, gy, gz);
+
+    ctx->changeImageLayout(m_volumeData.densityTexture3D, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    ctx->changeImageLayout(m_volumeData.temperatureTexture3D, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     buildVolumeBlas(ctx);
   }
