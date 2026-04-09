@@ -591,7 +591,9 @@ namespace dxvk {
       fp.render.renderSettings.pathTracingEnabled = NV_FLOW_FALSE;
       fp.render.renderSettings.compositeEnabled = NV_FLOW_TRUE;
     } else {
-      fp.offscreen = {};
+      // Keep offscreen defaults in non-fallback mode.
+      // Flow internals may still consume offscreen layer metadata even when
+      // internal 2D compositing is disabled.
       fp.render = NvFlowGridRenderLayerParams_default;
       fp.render.renderSettings.compositeEnabled  = NV_FLOW_FALSE;
       fp.render.renderSettings.pathTracingEnabled = NV_FLOW_FALSE;
@@ -722,7 +724,7 @@ namespace dxvk {
       m_loader->gridInterface.getRenderData(ctx, m_grid, &renderData);
 
       // Extract and validate candidate world-space AABB from sparse params
-      m_volumeData.valid = false;
+      bool hasValidAabb = false;
       if (renderData.sparseParams.layerCount > 0 && renderData.sparseParams.layers != nullptr) {
         const auto& layer = renderData.sparseParams.layers[0];
         Vector3 candidateMin(
@@ -754,6 +756,7 @@ namespace dxvk {
         m_volumeData.gridToWorld[3][1] = candidateMin.y;
         m_volumeData.gridToWorld[3][2] = candidateMin.z;
         m_volumeData.cellSize = fp.simulate.densityCellSize;
+        hasValidAabb = true;
 
         if (logThisFrame) {
           Logger::info(str::format("NvFlow [frame ", m_frameCount, "]: AABB min=(", layer.worldMin.x, ",", layer.worldMin.y, ",", layer.worldMin.z,
@@ -771,6 +774,9 @@ namespace dxvk {
         NvFlowBufferAcquire* tempAcquire = contextInterface->enqueueAcquireBuffer(ctx, renderData.nanoVdb.temperatureNanoVdb);
         const NvFlowBool32 haveSmoke = smokeAcquire != nullptr && contextInterface->getAcquiredBuffer(ctx, smokeAcquire, &smokeBuffer) && smokeBuffer != nullptr;
         const NvFlowBool32 haveTemp = tempAcquire != nullptr && contextInterface->getAcquiredBuffer(ctx, tempAcquire, &tempBuffer) && tempBuffer != nullptr;
+        if (logThisFrame && (!haveSmoke || !haveTemp)) {
+          Logger::warn(str::format("NvFlow [frame ", m_frameCount, "]: failed to acquire NanoVDB buffers smoke=", haveSmoke ? "true" : "false", " temp=", haveTemp ? "true" : "false"));
+        }
 
         HANDLE smokeHandle = nullptr;
         HANDLE tempHandle = nullptr;
@@ -810,12 +816,19 @@ namespace dxvk {
         if (tempHandle != nullptr && tempBuffer != nullptr) {
           m_loader->deviceInterface.closeBufferExternalHandle(ctx, tempBuffer, &tempHandle, sizeof(tempHandle));
         }
-
-        m_volumeData.valid = m_nanoVdbImported;
 #else
         m_volumeData.valid = false;
 #endif
+      } else if (logThisFrame) {
+        Logger::warn(str::format("NvFlow [frame ", m_frameCount, "]: NanoVDB pointers unavailable smoke=",
+          renderData.nanoVdb.smokeNanoVdb != nullptr ? "true" : "false",
+          " temp=",
+          renderData.nanoVdb.temperatureNanoVdb != nullptr ? "true" : "false"));
       }
+
+      // Keep the Flow volume renderable as long as we have a valid sparse AABB.
+      // NanoVDB import readiness is checked later in prepare() before voxelization.
+      m_volumeData.valid = hasValidAabb;
     }
   }
 
@@ -964,6 +977,15 @@ namespace dxvk {
       args.hasNanoVdbData = 1;
       args.smokeBufferSize = static_cast<uint32_t>(m_importedSmokeSize / sizeof(uint32_t));
       args.tempBufferSize = static_cast<uint32_t>(m_importedTempSize / sizeof(uint32_t));
+      // Fallback world->index transform from Flow AABB and cell size.
+      // This is used when NanoVDB CPU mapping is unavailable for the frame.
+      {
+        const float safeCellSize = std::max(m_volumeData.cellSize, 1e-5f);
+        const float invCellSize = 1.0f / safeCellSize;
+        args.worldToIndex[0] = invCellSize; args.worldToIndex[1] = 0.0f;        args.worldToIndex[2] = 0.0f;        args.worldToIndex[3] = -m_volumeData.worldMin.x * invCellSize;
+        args.worldToIndex[4] = 0.0f;        args.worldToIndex[5] = invCellSize; args.worldToIndex[6] = 0.0f;        args.worldToIndex[7] = -m_volumeData.worldMin.y * invCellSize;
+        args.worldToIndex[8] = 0.0f;        args.worldToIndex[9] = 0.0f;        args.worldToIndex[10] = invCellSize; args.worldToIndex[11] = -m_volumeData.worldMin.z * invCellSize;
+      }
 
       NvFlowContextInterface* contextInterface = m_loader->deviceInterface.getContextInterface(m_deviceQueue);
       NvFlowContext* flowContext = m_loader->deviceInterface.getContext(m_deviceQueue);
@@ -988,6 +1010,8 @@ namespace dxvk {
             args.worldToIndex[8] = pnanovdb_map_get_matf(buf, map, 2); args.worldToIndex[9] = pnanovdb_map_get_matf(buf, map, 5);
             args.worldToIndex[10] = pnanovdb_map_get_matf(buf, map, 8); args.worldToIndex[11] = pnanovdb_map_get_vecf(buf, map, 2);
             contextInterface->unmapBuffer(flowContext, smokeBuffer);
+          } else {
+            ONCE(Logger::warn("NvFlow: mapBuffer(smokeNanoVdb) returned null - using fallback worldToIndex transform"));
           }
         }
       }

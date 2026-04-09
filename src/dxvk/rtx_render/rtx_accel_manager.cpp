@@ -693,7 +693,9 @@ namespace dxvk {
         instance.transform.matrix[1][1] = 1.f;
         instance.transform.matrix[2][2] = 1.f;
         instance.instanceCustomIndex = FLOW_VOLUME_INSTANCE_INDEX;
-        instance.mask = 0x02;
+        // Use the standard opaque visibility mask so Flow procedural AABBs
+        // participate in the same ray mask paths as primary scene geometry.
+        instance.mask = 0x08;
         instance.instanceShaderBindingTableRecordOffset = flowCtx.getSbtHitGroupOffset();
         instance.flags = 0;
         instance.accelerationStructureReference = flowBlas->accelerationStructureReference;
