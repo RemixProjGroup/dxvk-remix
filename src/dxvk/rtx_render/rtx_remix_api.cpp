@@ -2329,14 +2329,8 @@ namespace {
   }
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_Present(const remixapi_PresentInfo* info) {
-    dxvk::Logger::warn(dxvk::str::format(
-      "[RTX-Diag] remixapi_Present ENTER (info=", static_cast<const void*>(info),
-      " hwndOverride=", static_cast<void*>(info ? info->hwndOverride : nullptr),
-      " sType=", info ? static_cast<int>(info->sType) : -1,
-      ")"));
     dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
     if (!remixDevice) {
-      dxvk::Logger::warn("[RTX-Diag] remixapi_Present EARLY-RETURN: remixDevice is null (REMIX_DEVICE_WAS_NOT_REGISTERED)");
       return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
     }
     // Apply pending creates, updates and auto-instance persistent lights once per frame
@@ -2468,26 +2462,13 @@ namespace {
     }
 
     // endScene right before present if a frame was started
-    {
-      const bool inFrame = s_inFrame.load();
-      dxvk::Logger::warn(dxvk::str::format(
-        "[RTX-Diag] remixapi_Present s_inFrame=", inFrame ? 1 : 0));
-      if (inFrame) {
-        auto cb = s_endCallback;
-        dxvk::Logger::warn(dxvk::str::format(
-          "[RTX-Diag] remixapi_Present calling s_endCallback (callback=",
-          reinterpret_cast<const void*>(cb), ")"));
-        if (cb) {
-          cb();
-        }
-        dxvk::Logger::warn("[RTX-Diag] remixapi_Present s_endCallback returned");
+    if (s_inFrame.load()) {
+      auto cb = s_endCallback;
+      if (cb) {
+        cb();
       }
     }
-    dxvk::Logger::warn("[RTX-Diag] remixapi_Present about to call remixDevice->Present");
     HRESULT hr = remixDevice->Present(NULL, NULL, info ? info->hwndOverride : NULL, NULL);
-    dxvk::Logger::warn(dxvk::str::format(
-      "[RTX-Diag] remixapi_Present returned from remixDevice->Present (hr=",
-      static_cast<int32_t>(hr), " failed=", FAILED(hr) ? 1 : 0, ")"));
     if (FAILED(hr)) {
       return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
     }
