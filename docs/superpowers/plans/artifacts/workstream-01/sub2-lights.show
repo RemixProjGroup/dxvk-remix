@@ -1,0 +1,1608 @@
+commit be4ccfc3b9b90d9a336866a224c8528c4e25518e
+Author: CattaRappa <sambow23@gmail.com>
+Date:   Sat Oct 11 11:13:50 2025 -0500
+
+    gmod api light stuff
+
+diff --git a/src/dxvk/rtx_render/rtx_light_manager.cpp b/src/dxvk/rtx_render/rtx_light_manager.cpp
+index 94e1450b..8f5702f1 100644
+--- a/src/dxvk/rtx_render/rtx_light_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_light_manager.cpp
+@@ -767,10 +767,31 @@ namespace dxvk {
+       m_lightDebugUILock.lock();
+     }
+     assert(light->getExternallyTrackedLightId() != kInvalidExternallyTrackedLightId && " light passed to updateExternallyTrackedLight is not actually externally tracked.");
++    
+     uint16_t bufferIdx = light->getBufferIdx();
+-    *light = newLight;
++    uint64_t externalId = light->getExternallyTrackedLightId();
++    
++    // For static lights, preserve temporal data by only updating when needed
++    if (!newLight.isDynamic && !suppressLightKeeping()) {
++      const uint32_t isStaticCount = light->isStaticCount;
++      
++      // If this light hasn't moved for N frames, put it to sleep to preserve temporal data
++      if (isStaticCount < RtxOptions::getNumFramesToPutLightsToSleep()) {
++        *light = newLight;
++        light->setBufferIdx(bufferIdx);
++        light->setExternallyTrackedLightId(externalId);
++      }
++      
++      // Increment static counter to allow temporal accumulation
++      light->isStaticCount = isStaticCount + 1;
++    } else {
++      // Dynamic lights always update
++      *light = newLight;
++      light->setBufferIdx(bufferIdx);
++      light->setExternallyTrackedLightId(externalId);
++    }
++    
+     light->setFrameLastTouched(m_device->getCurrentFrameId());
+-    light->setBufferIdx(bufferIdx);
+   }
+ 
+   // Marks an externally tracked light for garbage collection. The light's lifecycle is managed by external systems
+@@ -780,8 +801,35 @@ namespace dxvk {
+   }
+ 
+   void LightManager::addExternalLight(remixapi_LightHandle handle, const RtLight& rtlight) {
+-    // Queue update to be applied at frame start
+-    m_pendingExternalLightUpdates.emplace_back(handle, rtlight);
++    auto found = m_externalLights.find(handle);
++    if (found != m_externalLights.end()) {
++      // Existing light - preserve temporal data for static lights
++      RtLight& existingLight = found->second;
++      uint16_t bufferIdx = existingLight.getBufferIdx();
++      
++      // For static lights, preserve temporal data by only updating when needed
++      if (!rtlight.isDynamic && !suppressLightKeeping()) {
++        const uint32_t isStaticCount = existingLight.isStaticCount;
++        
++        // If this light hasn't moved for N frames, put it to sleep to preserve temporal data
++        if (isStaticCount < RtxOptions::getNumFramesToPutLightsToSleep()) {
++          existingLight = rtlight;
++          existingLight.setBufferIdx(bufferIdx);
++        }
++        
++        // Increment static counter to allow temporal accumulation
++        existingLight.isStaticCount = isStaticCount + 1;
++      } else {
++        // Dynamic lights always update
++        existingLight = rtlight;
++        existingLight.setBufferIdx(bufferIdx);
++      }
++      
++      existingLight.setFrameLastTouched(m_device->getCurrentFrameId());
++    } else {
++      // New light
++      m_externalLights.emplace(handle, rtlight);
++    }
+   }
+ 
+   void LightManager::removeExternalLight(remixapi_LightHandle handle) {
+diff --git a/src/dxvk/rtx_render/rtx_remix_api.cpp b/src/dxvk/rtx_render/rtx_remix_api.cpp
+index 274a54bf..ed80b6c0 100644
+--- a/src/dxvk/rtx_render/rtx_remix_api.cpp
++++ b/src/dxvk/rtx_render/rtx_remix_api.cpp
+@@ -1128,7 +1128,7 @@ namespace {
+       });
+     } else {
+       // Regular analytical light handling
+-      const auto rtLight = convert::toRtLight(*info);
++      auto rtLight = convert::toRtLight(*info);
+ 
+       // Note: If the toRtLight conversion process returns an empty optional, the specified LightInfo did
+       // not contain the proper arguments to create a light with.
+@@ -1136,6 +1136,9 @@ namespace {
+         return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+       }
+ 
++      // Set the isDynamic flag from the LightInfo
++      rtLight->isDynamic = info->isDynamic;
++
+       remixDevice->EmitCs([cHandle = handle, cRtLight = *rtLight](dxvk::DxvkContext* ctx) {
+         auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
+         lightMgr.addExternalLight(cHandle, cRtLight);
+
+commit 65d8849a98fc493179537c439e402da431026093
+Author: CattaRappa <sambow23@gmail.com>
+Date:   Fri Sep 19 12:37:25 2025 -0500
+
+    fix broken api light tracking
+
+diff --git a/src/dxvk/rtx_render/rtx_light_manager.cpp b/src/dxvk/rtx_render/rtx_light_manager.cpp
+index 67d94632..94e1450b 100644
+--- a/src/dxvk/rtx_render/rtx_light_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_light_manager.cpp
+@@ -275,7 +275,8 @@ namespace dxvk {
+           it->second.getPrimInstanceOwner().setReplacementInstance(nullptr, ReplacementInstance::kInvalidReplacementIndex, &it->second, PrimInstance::Type::Light);
+           m_externalLights.erase(it);
+         }
+-        m_externalLights.emplace(upd.first, upd.second);
++        auto [it_new, success] = m_externalLights.emplace(upd.first, upd.second);
++        it_new->second.setFrameLastTouched(m_device->getCurrentFrameId());
+       }
+       m_pendingExternalLightUpdates.clear();
+ 
+
+commit d7dc9361f5e958d95283565439c7611e3f3c27e1
+Author: CattaRappa <sambow23@gmail.com>
+Date:   Fri Aug 29 08:03:39 2025 -0500
+
+    make remix api lights play nice with gmod
+    
+    absolutely cursed please dont sue me nvidia
+
+diff --git a/build_dxvk_debug.ps1 b/build_dxvk_debug.ps1
+new file mode 100644
+index 00000000..b11cc417
+--- /dev/null
++++ b/build_dxvk_debug.ps1
+@@ -0,0 +1,34 @@
++<#
++  Copyright (c) 2021-2023, NVIDIA CORPORATION. All rights reserved.
++ 
++  Permission is hereby granted, free of charge, to any person obtaining a
++  copy of this software and associated documentation files (the "Software"),
++  to deal in the Software without restriction, including without limitation
++  the rights to use, copy, modify, merge, publish, distribute, sublicense,
++  and/or sell copies of the Software, and to permit persons to whom the
++  Software is furnished to do so, subject to the following conditions:
++ 
++  The above copyright notice and this permission notice shall be included in
++  all copies or substantial portions of the Software.
++ 
++  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++  THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++  FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++  DEALINGS IN THE SOFTWARE.
++#>
++
++Remove-Item -Path .\nv-private -Recurse -Force -Confirm:$false
++Remove-Item -Path .\tests\rtx\dxvk_rt_testing -Recurse -Force -Confirm:$false
++
++
++.   ".\build_common.ps1"
++
++$BuildFlavours = @("debugoptimized")
++$BuildSubDirs = @("_Comp64DebugOptimized")
++
++For ($i=0; $i -lt $BuildFlavours.Length; $i++) {
++  PerformBuild -BuildFlavour $BuildFlavours[$i] -BuildSubDir $BuildSubDirs[$i] -Backend ninja -EnableTracy false
++}
+\ No newline at end of file
+diff --git a/public/include/remix/remix.h b/public/include/remix/remix.h
+index c6a9b2d0..0742a0aa 100644
+--- a/public/include/remix/remix.h
++++ b/public/include/remix/remix.h
+@@ -174,10 +174,13 @@ namespace remix {
+     Result< remixapi_MeshHandle >     CreateMesh(const remixapi_MeshInfo& info);
+     Result< void >                    DestroyMesh(remixapi_MeshHandle handle);
+     Result< void >                    SetupCamera(const remixapi_CameraInfo& info);
+-    Result< void >                    DrawInstance(const remixapi_InstanceInfo& info);
+-    Result< remixapi_LightHandle >    CreateLight(const remixapi_LightInfo& info);
+-    Result< void >                    DestroyLight(remixapi_LightHandle handle);
++         Result< void >                    DrawInstance(const remixapi_InstanceInfo& info);
++     Result< remixapi_LightHandle >    CreateLight(const remixapi_LightInfo& info);
++     Result< remixapi_LightHandle >    CreateLightBatched(const remixapi_LightInfo& info);
++     Result< void >                    DestroyLight(remixapi_LightHandle handle);
+     Result< void >                    DrawLightInstance(remixapi_LightHandle handle);
++    // Deferred update of an analytical light definition. Applied on render thread.
++    Result< void >                    UpdateLightDefinition(remixapi_LightHandle handle, const remixapi_LightInfo& info);
+     Result< void >                    SetConfigVariable(const char* key, const char* value);
+ 
+     // DXVK interoperability
+@@ -216,7 +219,7 @@ namespace remix {
+         return status;
+       }
+ 
+-      static_assert(sizeof(remixapi_Interface) == 184,
++      static_assert(sizeof(remixapi_Interface) == 216,
+                     "Change version, update C++ wrapper when adding new functions");
+ 
+       remix::Interface interfaceInCpp = {};
+@@ -967,14 +970,23 @@ namespace remix {
+     }
+   };
+ 
+-  inline Result< remixapi_LightHandle > Interface::CreateLight(const remixapi_LightInfo& info) {
+-    remixapi_LightHandle handle = nullptr;
+-    remixapi_ErrorCode status = m_CInterface.CreateLight(&info, &handle);
+-    if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
+-      return status;
+-    }
+-    return handle;
+-  }
++     inline Result< remixapi_LightHandle > Interface::CreateLight(const remixapi_LightInfo& info) {
++     remixapi_LightHandle handle = nullptr;
++     remixapi_ErrorCode status = m_CInterface.CreateLight(&info, &handle);
++     if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
++       return status;
++     }
++     return handle;
++   }
++
++   inline Result< remixapi_LightHandle > Interface::CreateLightBatched(const remixapi_LightInfo& info) {
++     remixapi_LightHandle handle = nullptr;
++     remixapi_ErrorCode status = m_CInterface.CreateLightBatched(&info, &handle);
++     if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
++       return status;
++     }
++     return handle;
++   }
+ 
+   inline Result< void > Interface::DestroyLight(remixapi_LightHandle handle) {
+     return m_CInterface.DestroyLight(handle);
+@@ -984,6 +996,13 @@ namespace remix {
+     return m_CInterface.DrawLightInstance(handle);
+   }
+ 
++  inline Result< void > Interface::UpdateLightDefinition(remixapi_LightHandle handle, const remixapi_LightInfo& info) {
++    if (m_CInterface.UpdateLightDefinition) {
++      return m_CInterface.UpdateLightDefinition(handle, &info);
++    }
++    return REMIXAPI_ERROR_CODE_GET_PROC_ADDRESS_FAILURE;
++  }
++
+   namespace detail {
+     struct dxvk_ExternalSwapchain {
+       uint64_t vkImage;
+diff --git a/public/include/remix/remix_c.h b/public/include/remix/remix_c.h
+index c06826c3..f79a887e 100644
+--- a/public/include/remix/remix_c.h
++++ b/public/include/remix/remix_c.h
+@@ -591,6 +591,10 @@ extern "C" {
+   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateLight)(
+     const remixapi_LightInfo* info,
+     remixapi_LightHandle*     out_handle);
++    
++  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateLightBatched)(
++    const remixapi_LightInfo* info,
++    remixapi_LightHandle*     out_handle);
+ 
+   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_DestroyLight)(
+     remixapi_LightHandle      handle);
+@@ -612,6 +616,29 @@ extern "C" {
+ 
+   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_Present)(const remixapi_PresentInfo* info);
+ 
++  // Optional frame-boundary callbacks (mirrors bridge API semantics)
++  typedef void (REMIXAPI_PTR* PFN_remixapi_BridgeCallback)(void);
++  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_RegisterCallbacks)(
++    PFN_remixapi_BridgeCallback beginSceneCallback,
++    PFN_remixapi_BridgeCallback endSceneCallback,
++    PFN_remixapi_BridgeCallback presentCallback);
++  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_RegisterCallbacks(
++    PFN_remixapi_BridgeCallback beginSceneCallback,
++    PFN_remixapi_BridgeCallback endSceneCallback,
++    PFN_remixapi_BridgeCallback presentCallback);
++
++  // Internal helper to auto-instance persistent external API lights once per frame
++  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_AutoInstancePersistentLights)(void);
++  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_AutoInstancePersistentLights(void);
++
++  // Queue a definition update for an existing analytical light. Applied safely each frame.
++  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_UpdateLightDefinition)(
++    remixapi_LightHandle handle,
++    const remixapi_LightInfo* info);
++  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_UpdateLightDefinition(
++    remixapi_LightHandle handle,
++    const remixapi_LightInfo* info);
++
+   typedef void (REMIXAPI_PTR* PFN_remixapi_pick_RequestObjectPickingUserCallback)(
+     const uint32_t*           objectPickingValues_values,
+     uint32_t                  objectPickingValues_count,
+@@ -681,6 +708,7 @@ extern "C" {
+     PFN_remixapi_SetupCamera        SetupCamera;
+     PFN_remixapi_DrawInstance       DrawInstance;
+     PFN_remixapi_CreateLight        CreateLight;
++    PFN_remixapi_CreateLightBatched CreateLightBatched;
+     PFN_remixapi_DestroyLight       DestroyLight;
+     PFN_remixapi_DrawLightInstance  DrawLightInstance;
+     PFN_remixapi_SetConfigVariable  SetConfigVariable;
+@@ -700,6 +728,11 @@ extern "C" {
+     PFN_remixapi_Present            Present;
+     remixapi_UIState                (*GetUIState)(void);
+     remixapi_ErrorCode              (*SetUIState)(remixapi_UIState state);
++
++    // Optional extension functions (present starting in v0.5.1+)
++    PFN_remixapi_RegisterCallbacks          RegisterCallbacks;
++    PFN_remixapi_AutoInstancePersistentLights AutoInstancePersistentLights;
++    PFN_remixapi_UpdateLightDefinition      UpdateLightDefinition;
+   } remixapi_Interface;
+ 
+   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(
+@@ -841,7 +874,7 @@ extern "C" {
+       return REMIXAPI_ERROR_CODE_GET_PROC_ADDRESS_FAILURE;
+     }
+ 
+-    remixapi_InitializeLibraryInfo info = { 0 };
++    remixapi_InitializeLibraryInfo info = { REMIXAPI_STRUCT_TYPE_NONE, NULL, 0 };
+     {
+       info.sType = REMIXAPI_STRUCT_TYPE_INITIALIZE_LIBRARY_INFO;
+       info.version = REMIXAPI_VERSION_MAKE(REMIXAPI_VERSION_MAJOR,
+diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
+index 86666332..ecca37a6 100644
+--- a/src/d3d9/d3d9_swapchain.cpp
++++ b/src/d3d9/d3d9_swapchain.cpp
+@@ -32,6 +32,7 @@
+ #include "../dxvk/rtx_render/rtx_bridge_message_channel.h"
+ #include "../dxvk/dxvk_scoped_annotation.h"
+ #include "../dxvk/rtx_render/rtx_context.h"
++#include <remix/remix_c.h>
+ 
+ // NV-DXVK start: DLFG integration
+ #include "../dxvk/rtx_render/rtx_dlfg.h"
+@@ -460,6 +461,9 @@ namespace dxvk {
+     // NV-DXVK end
+ 
+     D3D9DeviceLock lock = m_parent->LockDevice();
++    // NV-DXVK: Flush pending Remix API light updates safely once per frame.
++    // This only enqueues into LightManager; actual mutations apply at frame start.
++    (void)remixapi_AutoInstancePersistentLights();
+ 
+     uint32_t presentInterval = m_presentParams.PresentationInterval;
+ 
+diff --git a/src/dxvk/rtx_render/rtx_light_manager.cpp b/src/dxvk/rtx_render/rtx_light_manager.cpp
+index 0de495d3..31efdc7a 100644
+--- a/src/dxvk/rtx_render/rtx_light_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_light_manager.cpp
+@@ -242,6 +242,57 @@ namespace dxvk {
+ 
+   void LightManager::prepareSceneData(Rc<DxvkContext> ctx, CameraManager const& cameraManager) {
+     ScopedCpuProfileZone();
++    // Ensure external light updates/removals are applied before we linearize and draw UI
++    {
++      // Erase first
++      for (auto h : m_pendingExternalLightErases) {
++        auto it = m_externalLights.find(h);
++        if (it != m_externalLights.end()) {
++          // Ensure any replacement ownership is cleared before destruction
++          it->second.getPrimInstanceOwner().setReplacementInstance(nullptr, ReplacementInstance::kInvalidReplacementIndex, &it->second, PrimInstance::Type::Light);
++          m_externalLights.erase(it);
++        }
++        m_externalDomeLights.erase(h);
++        m_externalActiveLightList.erase(h);
++        if (m_externalActiveDomeLight == h) {
++          m_externalActiveDomeLight = nullptr;
++        }
++      }
++      m_pendingExternalLightErases.clear();
++
++      // Apply updates/creates; erase then emplace to safely handle union types
++      for (auto& upd : m_pendingExternalLightUpdates) {
++        auto it = m_externalLights.find(upd.first);
++        if (it != m_externalLights.end()) {
++          // Clear replacement links on the old light before replacing
++          it->second.getPrimInstanceOwner().setReplacementInstance(nullptr, ReplacementInstance::kInvalidReplacementIndex, &it->second, PrimInstance::Type::Light);
++          m_externalLights.erase(it);
++        }
++        m_externalLights.emplace(upd.first, upd.second);
++      }
++      m_pendingExternalLightUpdates.clear();
++
++      // Apply active instances registration
++      for (auto h : m_pendingExternalActiveLights) {
++        if (m_externalLights.find(h) != m_externalLights.end()) {
++          m_externalActiveLightList.insert(h);
++        } else if (m_externalDomeLights.find(h) != m_externalDomeLights.end() && m_externalActiveDomeLight == nullptr) {
++          m_externalActiveDomeLight = h;
++        }
++      }
++      m_pendingExternalActiveLights.clear();
++
++      // Auto-instance any persistent external lights (idempotent within frame)
++      for (auto h : m_persistentExternalLights) {
++        if (m_externalLights.find(h) != m_externalLights.end()) {
++          m_externalActiveLightList.insert(h);
++        } else if (m_externalDomeLights.find(h) != m_externalDomeLights.end() && m_externalActiveDomeLight == nullptr) {
++          m_externalActiveDomeLight = h;
++        }
++      }
++
++      // Note: Do not auto-instance all external lights here; activation is driven by API per-frame
++    }
+     // Note: Early outing in this function (via returns) should be done carefully (or not at all ideally) as it may skip important
+     // logic such as swapping the current/previous frame light buffer, updating light count information or allocating/updating the
+     // light buffer which may cause issues in some cases (or rather already has, which is why this warning exists).
+@@ -699,19 +750,13 @@ namespace dxvk {
+   }
+ 
+   void LightManager::addExternalLight(remixapi_LightHandle handle, const RtLight& rtlight) {
+-    auto found = m_externalLights.find(handle);
+-    if (found != m_externalLights.end()) {
+-      // TODO: warn the user about id collision,
+-      //       or just overwriting existing one is fine?
+-      found->second = rtlight;
+-    } else {
+-      m_externalLights.emplace(handle, rtlight);
+-    }
++    // Queue update to be applied at frame start
++    m_pendingExternalLightUpdates.emplace_back(handle, rtlight);
+   }
+ 
+   void LightManager::removeExternalLight(remixapi_LightHandle handle) {
+-    m_externalLights.erase(handle);
+-    m_externalDomeLights.erase(handle);
++    // Queue erase to be applied at frame start
++    m_pendingExternalLightErases.push_back(handle);
+   }
+ 
+   bool LightManager::getActiveDomeLight(DomeLight& domeLightOut) {
+@@ -743,10 +788,25 @@ namespace dxvk {
+   }
+ 
+   void LightManager::addExternalLightInstance(remixapi_LightHandle enabledLight) {
+-    if (m_externalLights.find(enabledLight) != m_externalLights.end()) {
+-      m_externalActiveLightList.insert(enabledLight);
+-    } else if (m_externalDomeLights.find(enabledLight) != m_externalDomeLights.end() && m_externalActiveDomeLight == nullptr) {
+-      m_externalActiveDomeLight = enabledLight;
++    // Queue activation to be applied at frame start
++    m_pendingExternalActiveLights.insert(enabledLight);
++  }
++
++  void LightManager::registerPersistentExternalLight(remixapi_LightHandle handle) {
++    if (handle) {
++      m_persistentExternalLights.insert(handle);
++    }
++  }
++
++  void LightManager::unregisterPersistentExternalLight(remixapi_LightHandle handle) {
++    if (handle) {
++      m_persistentExternalLights.erase(handle);
++    }
++  }
++
++  void LightManager::queueAutoInstancePersistent() {
++    for (auto h : m_persistentExternalLights) {
++      m_pendingExternalActiveLights.insert(h);
+     }
+   }
+ 
+diff --git a/src/dxvk/rtx_render/rtx_light_manager.h b/src/dxvk/rtx_render/rtx_light_manager.h
+index f61ef890..aae6a721 100644
+--- a/src/dxvk/rtx_render/rtx_light_manager.h
++++ b/src/dxvk/rtx_render/rtx_light_manager.h
+@@ -94,6 +94,10 @@ public:
+   void addExternalDomeLight(remixapi_LightHandle handle, const DomeLight& domeLight);
+   void removeExternalLight(remixapi_LightHandle handle);
+   void addExternalLightInstance(remixapi_LightHandle enabledLight);
++  // Remix API integration helpers
++  void registerPersistentExternalLight(remixapi_LightHandle handle);
++  void unregisterPersistentExternalLight(remixapi_LightHandle handle);
++  void queueAutoInstancePersistent();
+ 
+   void setRaytraceArgs(RaytraceArgs& raytraceArgs, uint32_t rtxdiInitialLightSamples, uint32_t volumeRISInitialLightSamples, uint32_t risLightSamples) const;
+   
+@@ -111,6 +115,12 @@ private:
+   remixapi_LightHandle m_externalActiveDomeLight = nullptr;
+   DomeLightArgs m_gpuDomeLightArgs;
+ 
++  // Pending external light mutations to be applied at the start of the frame
++  std::vector<remixapi_LightHandle> m_pendingExternalLightErases{};
++  std::vector<std::pair<remixapi_LightHandle, RtLight>> m_pendingExternalLightUpdates{};
++  std::unordered_set<remixapi_LightHandle> m_pendingExternalActiveLights{};
++  std::unordered_set<remixapi_LightHandle> m_persistentExternalLights{};
++
+   Rc<DxvkBuffer> m_lightBuffer;
+   Rc<DxvkBuffer> m_previousLightBuffer;
+   Rc<DxvkBuffer> m_lightMappingBuffer;
+diff --git a/src/dxvk/rtx_render/rtx_remix_api.cpp b/src/dxvk/rtx_render/rtx_remix_api.cpp
+index fc579e40..931128cb 100644
+--- a/src/dxvk/rtx_render/rtx_remix_api.cpp
++++ b/src/dxvk/rtx_render/rtx_remix_api.cpp
+@@ -25,6 +25,7 @@
+ #include "rtx_asset_data_manager.h"
+ #include "rtx_asset_replacer.h"
+ #include "rtx_light_manager.h"
++#include "rtx_lights.h"
+ #include "rtx_objectpicking.h"
+ #include "rtx_option.h"
+ #include "rtx_globals.h"
+@@ -48,6 +49,9 @@
+ #include <windows.h>
+ 
+ #include <optional>
++#include <unordered_set>
++#include <unordered_map>
++#include <atomic>
+ 
+ namespace dxvk {
+   HRESULT CreateD3D9(
+@@ -76,6 +80,35 @@ namespace {
+   dxvk::D3D9DeviceEx* s_dxvkDevice { nullptr };
+   dxvk::mutex s_mutex {};
+ 
++  // Frame-boundary callbacks (native Remix API)
++  std::atomic<bool> s_inFrame { false };
++  PFN_remixapi_BridgeCallback s_beginCallback { nullptr };
++  PFN_remixapi_BridgeCallback s_endCallback { nullptr };
++  PFN_remixapi_BridgeCallback s_presentCallback { nullptr };
++
++  // Global pending queues; applied to the device at safe points (frame/present)
++  struct PendingLightUpdate { remixapi_LightHandle handle; std::optional<dxvk::RtLight> rtLight; };
++  struct PendingDomeUpdate {
++    remixapi_LightHandle handle;
++    dxvk::Matrix4        transform;
++    std::filesystem::path texturePath;
++    dxvk::Vector3        radiance;
++  };
++  struct PendingLightCreate { 
++    remixapi_LightHandle handle; 
++    std::optional<dxvk::RtLight> rtLight;
++    bool isDome;
++    dxvk::Vector3 radiance; 
++    dxvk::Matrix4 transform; 
++    std::filesystem::path texturePath;
++  };
++  std::vector<PendingLightCreate> s_pendingLightCreates;
++  std::vector<PendingLightUpdate> s_pendingLightUpdates;
++  std::vector<PendingDomeUpdate>  s_pendingDomeUpdates;
++  std::vector<remixapi_LightHandle> s_pendingLightDestroys;
++  // Track handles that were updated or created this frame to prevent re-adding after deletion in the same frame
++  std::unordered_set<remixapi_LightHandle> s_handlesDeletedThisFrame;
++
+ 
+   dxvk::D3D9DeviceEx* tryAsDxvk() {
+     return s_dxvkDevice;
+@@ -1006,6 +1039,13 @@ namespace {
+     if (!remixDevice) {
+       return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+     }
++    // beginScene on first draw per frame
++    if (!s_inFrame.exchange(true)) {
++      auto cb = s_beginCallback;
++      if (cb) {
++        cb();
++      }
++    }
+     std::lock_guard lock { s_mutex };
+     remixDevice->EmitCs([cRtDrawState = convert::toRtDrawState(*info)](dxvk::DxvkContext* dxvkCtx) mutable {
+       auto* ctx = static_cast<dxvk::RtxContext*>(dxvkCtx);
+@@ -1081,6 +1121,52 @@ namespace {
+     }
+ 
+     *out_handle = handle;
++    // Auto-register for persistent instancing on device
++    remixDevice->EmitCs([cHandle = handle](dxvk::DxvkContext* ctx) {
++      auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
++      lightMgr.registerPersistentExternalLight(cHandle);
++    });
++    return REMIXAPI_ERROR_CODE_SUCCESS;
++  }
++  
++  remixapi_ErrorCode REMIXAPI_CALL remixapi_CreateLightBatched(
++    const remixapi_LightInfo* info,
++    remixapi_LightHandle* out_handle) {
++    // Validate inputs
++    if (!out_handle || !info || info->sType != REMIXAPI_STRUCT_TYPE_LIGHT_INFO) {
++      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
++    }
++    static_assert(sizeof(remixapi_LightHandle) == sizeof(info->hash));
++    auto handle = reinterpret_cast<remixapi_LightHandle>(info->hash);
++    if (!handle) {
++      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
++    }
++
++    // Queue the light creation for batched processing at Present time
++    std::lock_guard lock { s_mutex };
++    
++    PendingLightCreate pending;
++    pending.handle = handle;
++    
++    if (auto src = pnext::find<remixapi_LightInfoDomeEXT>(info)) {
++      // Dome light
++      pending.isDome = true;
++      pending.radiance = convert::tovec3(info->radiance);
++      pending.transform = convert::tomat4(src->transform);
++      pending.texturePath = convert::topath(src->colorTexture);
++    } else {
++      // Analytical light
++      pending.isDome = false;
++      pending.rtLight = convert::toRtLight(*info);
++      
++      if (!pending.rtLight.has_value()) {
++        return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
++      }
++    }
++    
++    s_pendingLightCreates.push_back(std::move(pending));
++    *out_handle = handle;
++    
+     return REMIXAPI_ERROR_CODE_SUCCESS;
+   }
+ 
+@@ -1090,11 +1176,10 @@ namespace {
+     if (!remixDevice) {
+       return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+     }
+-    std::lock_guard lock { s_mutex };
+-    remixDevice->EmitCs([cHandle = handle](dxvk::DxvkContext* ctx) {
+-      auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
+-      lightMgr.removeExternalLight(cHandle);
+-    });
++    {
++      std::lock_guard lock { s_mutex };
++      s_pendingLightDestroys.push_back(handle);
++    }
+     return REMIXAPI_ERROR_CODE_SUCCESS;
+   }
+ 
+@@ -1109,6 +1194,14 @@ namespace {
+       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+     }
+ 
++    // beginScene on first API submission per frame (lights-only frames)
++    if (!s_inFrame.exchange(true)) {
++      auto cb = s_beginCallback;
++      if (cb) {
++        cb();
++      }
++    }
++
+     // async load
+     std::lock_guard lock { s_mutex };
+     remixDevice->EmitCs([lightHandle](dxvk::DxvkContext* ctx) {
+@@ -1502,6 +1595,11 @@ namespace {
+   }
+ 
+   remixapi_ErrorCode REMIXAPI_CALL remixapi_Shutdown(void) {
++    // Clear callbacks and frame state
++    s_beginCallback = nullptr;
++    s_endCallback = nullptr;
++    s_presentCallback = nullptr;
++    s_inFrame.store(false);
+     if (s_dxvkDevice) {
+       while (true) {
+         ULONG left = s_dxvkDevice->Release();
+@@ -1528,10 +1626,130 @@ namespace {
+     if (!remixDevice) {
+       return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+     }
++    // Apply pending creates, updates and auto-instance persistent lights once per frame
++    std::vector<PendingLightCreate> creates;
++    std::vector<PendingLightUpdate> updates;
++    std::vector<PendingDomeUpdate> dune;
++    std::vector<remixapi_LightHandle> destroys;
++    {
++      std::lock_guard lock { s_mutex };
++      creates.swap(s_pendingLightCreates);
++      updates.swap(s_pendingLightUpdates);
++      dune.swap(s_pendingDomeUpdates);
++      destroys.swap(s_pendingLightDestroys);
++    }
++    // Build tombstone set for this frame to avoid re-adding deleted lights
++    std::unordered_set<remixapi_LightHandle> tombstones;
++    tombstones.insert(destroys.begin(), destroys.end());
++
++    remixDevice->EmitCs([creates = std::move(creates), updates = std::move(updates), dune = std::move(dune), destroys = std::move(destroys), tombstones = std::move(tombstones)](dxvk::DxvkContext* ctx) mutable {
++      auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
++      // Apply destroys first
++      for (auto h : destroys) {
++        if (h) {
++          lightMgr.unregisterPersistentExternalLight(h);
++          lightMgr.removeExternalLight(h);
++        }
++      }
++      // Apply creates (skip if in tombstone set - deleted in same frame)
++      for (auto& create : creates) {
++        if (tombstones.find(create.handle) != tombstones.end()) {
++          continue; // Skip if deleted in same frame
++        }
++        
++        if (create.isDome) {
++          // Build dome light on the render thread
++          auto preloadTexture = [ctx](const std::filesystem::path& path) {
++            if (path.empty()) {
++              return dxvk::TextureRef{};
++            }
++            auto assetData = dxvk::AssetDataManager::get().findAsset(path.string().c_str());
++            if (assetData == nullptr) {
++              return dxvk::TextureRef{};
++            }
++            auto uploadedTexture = ctx->getCommonObjects()->getTextureManager()
++              .preloadTextureAsset(assetData, dxvk::ColorSpace::AUTO, true);
++            return dxvk::TextureRef{ uploadedTexture };
++          };
++
++          dxvk::DomeLight domeLight;
++          domeLight.radiance = create.radiance;
++          domeLight.worldToLight = inverse(create.transform);
++          domeLight.texture = preloadTexture(create.texturePath);
++
++          uint32_t unused;
++          ctx->getCommonObjects()->getSceneManager().trackTexture(domeLight.texture, unused, true, true);
++
++          lightMgr.addExternalDomeLight(create.handle, domeLight);
++        } else if (create.rtLight.has_value()) {
++          // Analytical light
++          lightMgr.addExternalLight(create.handle, *create.rtLight);
++        }
++        // Register all created lights as persistent
++        lightMgr.registerPersistentExternalLight(create.handle);
++        lightMgr.addExternalLightInstance(create.handle);
++      }
++      // Apply updates (skip if in tombstone set)
++      for (auto& upd : updates) {
++        if (upd.rtLight.has_value() && tombstones.find(upd.handle) == tombstones.end()) {
++          lightMgr.registerPersistentExternalLight(upd.handle);
++          lightMgr.addExternalLight(upd.handle, *upd.rtLight);
++          lightMgr.addExternalLightInstance(upd.handle);
++        }
++      }
++      for (auto& du : dune) {
++        if (tombstones.find(du.handle) != tombstones.end()) {
++          continue;
++        }
++        // Build dome light on the render thread to safely access managers
++        auto preloadTexture = [ctx](const std::filesystem::path& path) {
++          if (path.empty()) {
++            return dxvk::TextureRef{};
++          }
++          auto assetData = dxvk::AssetDataManager::get().findAsset(path.string().c_str());
++          if (assetData == nullptr) {
++            return dxvk::TextureRef{};
++          }
++          auto uploadedTexture = ctx->getCommonObjects()->getTextureManager()
++            .preloadTextureAsset(assetData, dxvk::ColorSpace::AUTO, true);
++          return dxvk::TextureRef{ uploadedTexture };
++        };
++
++        dxvk::DomeLight domeLight;
++        domeLight.radiance = du.radiance;
++        domeLight.worldToLight = inverse(du.transform);
++        domeLight.texture = preloadTexture(du.texturePath);
++
++        uint32_t unused;
++        ctx->getCommonObjects()->getSceneManager().trackTexture(domeLight.texture, unused, true, true);
++
++        lightMgr.registerPersistentExternalLight(du.handle);
++        lightMgr.addExternalDomeLight(du.handle, domeLight);
++        lightMgr.addExternalLightInstance(du.handle);
++      }
++      lightMgr.queueAutoInstancePersistent();
++    });
++    // endScene right before present if a frame was started
++    if (s_inFrame.load()) {
++      auto cb = s_endCallback;
++      if (cb) {
++        cb();
++      }
++    }
+     HRESULT hr = remixDevice->Present(NULL, NULL, info ? info->hwndOverride : NULL, NULL);
+     if (FAILED(hr)) {
+       return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+     }
++    // present callback after successful present
++    {
++      auto cb = s_presentCallback;
++      if (cb) {
++        cb();
++      }
++    }
++
++    // reset frame state
++    s_inFrame.store(false);
+ 
+     UINT windowWidth = 0, windowHeight = 0;
+     {
+@@ -1594,6 +1812,153 @@ namespace {
+ 
+ extern "C"
+ {
++  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_AutoInstancePersistentLights(void) {
++    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
++    if (!remixDevice) {
++      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
++    }
++    // Drain pending work and apply on render thread at a safe point
++    std::vector<PendingLightCreate> creates;
++    std::vector<PendingLightUpdate> updates;
++    std::vector<PendingDomeUpdate> dune;
++    std::vector<remixapi_LightHandle> destroys;
++    {
++      std::lock_guard lock { s_mutex };
++      s_handlesDeletedThisFrame.clear();
++      creates.swap(s_pendingLightCreates);
++      updates.swap(s_pendingLightUpdates);
++      dune.swap(s_pendingDomeUpdates);
++      destroys.swap(s_pendingLightDestroys);
++    }
++    remixDevice->EmitCs([creates = std::move(creates), updates = std::move(updates), dune = std::move(dune), destroys = std::move(destroys)](dxvk::DxvkContext* ctx) mutable {
++      auto& lightMgr = ctx->getCommonObjects()->getSceneManager().getLightManager();
++      // Apply destroys first
++      for (auto h : destroys) {
++        if (h) {
++          lightMgr.unregisterPersistentExternalLight(h);
++          lightMgr.removeExternalLight(h);
++        }
++      }
++      // Apply creates
++      for (auto& create : creates) {
++        if (create.isDome) {
++          // Build dome light on the render thread
++          auto preloadTexture = [ctx](const std::filesystem::path& path) {
++            if (path.empty()) {
++              return dxvk::TextureRef{};
++            }
++            auto assetData = dxvk::AssetDataManager::get().findAsset(path.string().c_str());
++            if (assetData == nullptr) {
++              return dxvk::TextureRef{};
++            }
++            auto uploadedTexture = ctx->getCommonObjects()->getTextureManager()
++              .preloadTextureAsset(assetData, dxvk::ColorSpace::AUTO, true);
++            return dxvk::TextureRef{ uploadedTexture };
++          };
++
++          dxvk::DomeLight domeLight;
++          domeLight.radiance = create.radiance;
++          domeLight.worldToLight = inverse(create.transform);
++          domeLight.texture = preloadTexture(create.texturePath);
++
++          uint32_t unused;
++          ctx->getCommonObjects()->getSceneManager().trackTexture(domeLight.texture, unused, true, true);
++
++          lightMgr.addExternalDomeLight(create.handle, domeLight);
++        } else if (create.rtLight.has_value()) {
++          // Analytical light
++          lightMgr.addExternalLight(create.handle, *create.rtLight);
++        }
++        // Register all created lights as persistent
++        lightMgr.registerPersistentExternalLight(create.handle);
++        lightMgr.addExternalLightInstance(create.handle);
++      }
++      // Apply analytical updates
++      for (auto& upd : updates) {
++        if (upd.rtLight.has_value()) {
++          lightMgr.registerPersistentExternalLight(upd.handle);
++          lightMgr.addExternalLight(upd.handle, *upd.rtLight);
++          lightMgr.addExternalLightInstance(upd.handle);
++        }
++      }
++      // Apply dome updates
++      for (auto& du : dune) {
++        auto preloadTexture = [ctx](const std::filesystem::path& path) {
++          if (path.empty()) {
++            return dxvk::TextureRef{};
++          }
++          auto assetData = dxvk::AssetDataManager::get().findAsset(path.string().c_str());
++          if (assetData == nullptr) {
++            return dxvk::TextureRef{};
++          }
++          auto uploadedTexture = ctx->getCommonObjects()->getTextureManager()
++            .preloadTextureAsset(assetData, dxvk::ColorSpace::AUTO, true);
++          return dxvk::TextureRef{ uploadedTexture };
++        };
++
++        dxvk::DomeLight domeLight;
++        domeLight.radiance = du.radiance;
++        domeLight.worldToLight = inverse(du.transform);
++        domeLight.texture = preloadTexture(du.texturePath);
++
++        uint32_t unused;
++        ctx->getCommonObjects()->getSceneManager().trackTexture(domeLight.texture, unused, true, true);
++
++        lightMgr.registerPersistentExternalLight(du.handle);
++        lightMgr.addExternalDomeLight(du.handle, domeLight);
++        lightMgr.addExternalLightInstance(du.handle);
++      }
++      // Ensure persistent auto-instancing happens every frame
++      lightMgr.queueAutoInstancePersistent();
++    });
++    return REMIXAPI_ERROR_CODE_SUCCESS;
++  }
++  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_UpdateLightDefinition(
++    remixapi_LightHandle handle,
++    const remixapi_LightInfo* info) {
++    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
++    if (!remixDevice) {
++      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
++    }
++    if (!handle || !info) {
++      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
++    }
++    // Handle dome light update if present in pNext chain
++    if (auto extDome = pnext::find<remixapi_LightInfoDomeEXT>(info)) {
++      auto cTransform = convert::tomat4(extDome->transform);
++      auto cTexturePath = convert::topath(extDome->colorTexture);
++      auto cRadiance = convert::tovec3(info->radiance);
++      {
++        std::lock_guard lock { s_mutex };
++        s_pendingDomeUpdates.push_back(PendingDomeUpdate{ handle, cTransform, cTexturePath, cRadiance });
++      }
++      return REMIXAPI_ERROR_CODE_SUCCESS;
++    }
++
++    // For analytical lights require base LightInfo; convert immediately
++    if (info->sType != REMIXAPI_STRUCT_TYPE_LIGHT_INFO) {
++      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
++    }
++    auto rt = convert::toRtLight(*info);
++    if (!rt.has_value()) {
++      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
++    }
++    {
++      std::lock_guard lock { s_mutex };
++      s_pendingLightUpdates.push_back(PendingLightUpdate{ handle, std::move(rt) });
++    }
++    return REMIXAPI_ERROR_CODE_SUCCESS;
++  }
++  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_RegisterCallbacks(
++    PFN_remixapi_BridgeCallback beginSceneCallback,
++    PFN_remixapi_BridgeCallback endSceneCallback,
++    PFN_remixapi_BridgeCallback presentCallback) {
++    s_beginCallback = beginSceneCallback;
++    s_endCallback = endSceneCallback;
++    s_presentCallback = presentCallback;
++    return REMIXAPI_ERROR_CODE_SUCCESS;
++  }
++
+   REMIXAPI remixapi_UIState REMIXAPI_CALL remixapi_GetUIState(void) {
+     return impl_GetUIState();
+   }
+@@ -1627,6 +1992,7 @@ extern "C"
+       interf.SetupCamera = remixapi_SetupCamera;
+       interf.DrawInstance = remixapi_DrawInstance;
+       interf.CreateLight = remixapi_CreateLight;
++      interf.CreateLightBatched = remixapi_CreateLightBatched;
+       interf.DestroyLight = remixapi_DestroyLight;
+       interf.DrawLightInstance = remixapi_DrawLightInstance;
+       interf.SetConfigVariable = remixapi_SetConfigVariable;
+@@ -1640,8 +2006,12 @@ extern "C"
+       interf.pick_HighlightObjects = remixapi_pick_HighlightObjects;
+       interf.GetUIState = remixapi_GetUIState;
+       interf.SetUIState = remixapi_SetUIState;
++      // Optional extensions introduced alongside v0.5.1 changes
++      interf.RegisterCallbacks = remixapi_RegisterCallbacks;
++      interf.AutoInstancePersistentLights = remixapi_AutoInstancePersistentLights;
++      interf.UpdateLightDefinition = remixapi_UpdateLightDefinition;
+     }
+-    static_assert(sizeof(interf) == 184, "Add/remove function registration");
++    static_assert(sizeof(interf) == 216, "Add/remove function registration");
+ 
+     *out_result = interf;
+     return REMIXAPI_ERROR_CODE_SUCCESS;
+
+commit f1a86eff4874c65c4e05e67241f6e09858646b98
+Author: CattaRappa <sambow23@gmail.com>
+Date:   Mon Oct 13 19:44:04 2025 -0500
+
+    sleep light if not active
+
+diff --git a/src/dxvk/rtx_render/rtx_light_manager.cpp b/src/dxvk/rtx_render/rtx_light_manager.cpp
+index 8f5702f1..85d07857 100644
+--- a/src/dxvk/rtx_render/rtx_light_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_light_manager.cpp
+@@ -780,10 +780,11 @@ namespace dxvk {
+         *light = newLight;
+         light->setBufferIdx(bufferIdx);
+         light->setExternallyTrackedLightId(externalId);
++        light->isStaticCount = isStaticCount + 1;  // Preserve and increment counter
++      } else {
++        // Light is asleep - don't update, just increment counter
++        light->isStaticCount = isStaticCount + 1;
+       }
+-      
+-      // Increment static counter to allow temporal accumulation
+-      light->isStaticCount = isStaticCount + 1;
+     } else {
+       // Dynamic lights always update
+       *light = newLight;
+@@ -815,10 +816,11 @@ namespace dxvk {
+         if (isStaticCount < RtxOptions::getNumFramesToPutLightsToSleep()) {
+           existingLight = rtlight;
+           existingLight.setBufferIdx(bufferIdx);
++          existingLight.isStaticCount = isStaticCount + 1;  // Preserve and increment counter
++        } else {
++          // Light is asleep - don't update, just increment counter
++          existingLight.isStaticCount = isStaticCount + 1;
+         }
+-        
+-        // Increment static counter to allow temporal accumulation
+-        existingLight.isStaticCount = isStaticCount + 1;
+       } else {
+         // Dynamic lights always update
+         existingLight = rtlight;
+@@ -827,8 +829,11 @@ namespace dxvk {
+       
+       existingLight.setFrameLastTouched(m_device->getCurrentFrameId());
+     } else {
+-      // New light
+-      m_externalLights.emplace(handle, rtlight);
++      // New light - copy it and set initial frame
++      auto [it, inserted] = m_externalLights.emplace(handle, rtlight);
++      if (inserted) {
++        it->second.setFrameLastTouched(m_device->getCurrentFrameId());
++      }
+     }
+   }
+ 
+
+commit 602c62033ab8849338aabf8f77123108bd2ca76d
+Author: CattaRappa <sambow23@gmail.com>
+Date:   Sun Nov 23 16:14:44 2025 -0600
+
+    add ignoreViewModel flag to light structures and update related methods
+    
+    we need a way to ignore lights on viewmodels
+
+diff --git a/public/include/remix/remix.h b/public/include/remix/remix.h
+index 3034ba28..93d04a3d 100644
+--- a/public/include/remix/remix.h
++++ b/public/include/remix/remix.h
+@@ -1007,7 +1007,8 @@ namespace remix {
+       hash = 0;
+       radiance = { 1.0f, 1.0f, 1.0f };
+       isDynamic = false;  // Default to static for temporal accumulation
+-      static_assert(sizeof remixapi_LightInfo == 40);
++      ignoreViewModel = false;  // Default to affecting all geometry including view models
++      static_assert(sizeof remixapi_LightInfo == 48);
+     }
+   };
+ 
+diff --git a/public/include/remix/remix_c.h b/public/include/remix/remix_c.h
+index 35781862..a2cbaa03 100644
+--- a/public/include/remix/remix_c.h
++++ b/public/include/remix/remix_c.h
+@@ -606,6 +606,7 @@ extern "C" {
+     uint64_t                        hash;
+     remixapi_Float3D                radiance;
+     remixapi_Bool                   isDynamic;
++    remixapi_Bool                   ignoreViewModel;
+   } remixapi_LightInfo;
+ 
+   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateLight)(
+diff --git a/src/d3d9/meson.build b/src/d3d9/meson.build
+index b67a217b..beb1b8ff 100644
+--- a/src/d3d9/meson.build
++++ b/src/d3d9/meson.build
+@@ -77,7 +77,6 @@ d3d9_src = [
+   'd3d9_swvp_emu.h',
+   'd3d9_texture.cpp',
+   'd3d9_texture.h',
+-  'd3d9_rtx_texture_categories.h',
+   'd3d9_util.cpp',
+   'd3d9_util.h',
+   'd3d9_vertex_declaration.cpp',
+diff --git a/src/dxvk/rtx_render/rtx_lights.cpp b/src/dxvk/rtx_render/rtx_lights.cpp
+index 2dfe9753..c3420f21 100644
+--- a/src/dxvk/rtx_render/rtx_lights.cpp
++++ b/src/dxvk/rtx_render/rtx_lights.cpp
+@@ -238,7 +238,7 @@ void RtSphereLight::applyTransform(const Matrix4& lightToWorld) {
+   updateCachedHash();
+ }
+ 
+-void RtSphereLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
++void RtSphereLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
+   [[maybe_unused]] const std::size_t oldOffset = offset;
+ 
+   writeGPUHelper(data, offset, m_position.x);
+@@ -256,9 +256,10 @@ void RtSphereLight::writeGPUData(unsigned char* data, std::size_t& offset) const
+ 
+   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
+ 
+-  // Note: Sphere light type (0) + shaping enabled flag
++  // Note: Sphere light type (0) + shaping enabled flag + ignoreViewModel flag
+   uint32_t flags = lightTypeSphere << 29; // Light Type at bits 29,30,31.
+-  flags |= m_shaping.getEnabled() ? 1 << 0 : 0 << 0; // Shaping enabled flag at bit 0
++  if (m_shaping.getEnabled()) flags |= 1 << 0; // Shaping enabled flag at bit 0
++  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+   writeGPUHelper(data, offset, flags);
+ 
+   assert(offset - oldOffset == kLightGPUSize);
+@@ -371,7 +372,7 @@ void RtRectLight::applyTransform(const Matrix4& lightToWorld) {
+   updateCachedHash();
+ }
+ 
+-void RtRectLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
++void RtRectLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
+   [[maybe_unused]] const std::size_t oldOffset = offset;
+ 
+   writeGPUHelper(data, offset, m_position.x);
+@@ -409,9 +410,10 @@ void RtRectLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
+ 
+   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
+ 
+-  // Note: Rect light type (1) + shaping enabled flag
++  // Note: Rect light type (1) + shaping enabled flag + ignoreViewModel flag
+   uint32_t flags = lightTypeRect << 29; // Light Type at bits 29,30,31.
+-  flags |= m_shaping.getEnabled() ? 1 << 0 : 0 << 0; // Shaping enabled flag at bit 0
++  if (m_shaping.getEnabled()) flags |= 1 << 0; // Shaping enabled flag at bit 0
++  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+   writeGPUHelper(data, offset, flags);
+ 
+   assert(offset - oldOffset == kLightGPUSize);
+@@ -553,7 +555,7 @@ void RtDiskLight::applyTransform(const Matrix4& lightToWorld) {
+   updateCachedHash();
+ }
+ 
+-void RtDiskLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
++void RtDiskLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
+   [[maybe_unused]] const std::size_t oldOffset = offset;
+ 
+   writeGPUHelper(data, offset, m_position.x);
+@@ -591,9 +593,10 @@ void RtDiskLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
+ 
+   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
+ 
+-  // Note: Disk light type (2) + shaping enabled flag
++  // Note: Disk light type (2) + shaping enabled flag + ignoreViewModel flag
+   uint32_t flags = lightTypeDisk << 29; // Light Type at bits 29,30,31.
+-  flags |= m_shaping.getEnabled() ? 1 << 0 : 0 << 0; // Shaping enabled flag at bit 0
++  if (m_shaping.getEnabled()) flags |= 1 << 0; // Shaping enabled flag at bit 0
++  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+   writeGPUHelper(data, offset, flags);
+ 
+   assert(offset - oldOffset == kLightGPUSize);
+@@ -716,7 +719,7 @@ void RtCylinderLight::applyTransform(const Matrix4& lightToWorld) {
+   updateCachedHash();
+ }
+ 
+-void RtCylinderLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
++void RtCylinderLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
+   [[maybe_unused]] const std::size_t oldOffset = offset;
+ 
+   writeGPUHelper(data, offset, m_position.x);
+@@ -742,8 +745,10 @@ void RtCylinderLight::writeGPUData(unsigned char* data, std::size_t& offset) con
+ 
+   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
+ 
+-  // Note: Cylinder light type (3)
+-  writeGPUHelper(data, offset, static_cast<uint32_t>(lightTypeCylinder << 29));
++  // Note: Cylinder light type (3) + ignoreViewModel flag
++  uint32_t flags = lightTypeCylinder << 29; // Light Type at bits 29,30,31.
++  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
++  writeGPUHelper(data, offset, flags);
+ 
+   assert(offset - oldOffset == kLightGPUSize);
+ }
+@@ -847,7 +852,7 @@ void RtDistantLight::applyTransform(const Matrix4& lightToWorld) {
+   updateCachedHash();
+ }
+ 
+-void RtDistantLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
++void RtDistantLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
+   [[maybe_unused]] const std::size_t oldOffset = offset;
+ 
+   assert(m_direction < Vector3(FLOAT16_MAX));
+@@ -878,9 +883,11 @@ void RtDistantLight::writeGPUData(unsigned char* data, std::size_t& offset) cons
+ 
+   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
+ 
+-  // Note: Distant light type (4)
++  // Note: Distant light type (4) + ignoreViewModel flag
+   // Todo: Ideally match this with GPU light type constants
+-  writeGPUHelper(data, offset, static_cast<uint32_t>(lightTypeDistant << 29));
++  uint32_t flags = lightTypeDistant << 29; // Light Type at bits 29,30,31.
++  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
++  writeGPUHelper(data, offset, flags);
+ 
+   assert(offset - oldOffset == kLightGPUSize);
+ }
+@@ -977,6 +984,7 @@ RtLight::RtLight(const RtLight& light) {
+ void RtLight::copyFrom(const RtLight& light) {
+   isStaticCount = light.isStaticCount;
+   isDynamic = light.isDynamic;
++  ignoreViewModel = light.ignoreViewModel;
+   m_type = light.m_type;
+   
+   // Copy only the active union member based on the light type
+@@ -1104,19 +1112,19 @@ void RtLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
+ 
+     [[fallthrough]];
+   case RtLightType::Sphere:
+-    m_sphereLight.writeGPUData(data, offset);
++    m_sphereLight.writeGPUData(data, offset, this->ignoreViewModel);
+     break;
+   case RtLightType::Rect:
+-    m_rectLight.writeGPUData(data, offset);
++    m_rectLight.writeGPUData(data, offset, this->ignoreViewModel);
+     break;
+   case RtLightType::Disk:
+-    m_diskLight.writeGPUData(data, offset);
++    m_diskLight.writeGPUData(data, offset, this->ignoreViewModel);
+     break;
+   case RtLightType::Cylinder:
+-    m_cylinderLight.writeGPUData(data, offset);
++    m_cylinderLight.writeGPUData(data, offset, this->ignoreViewModel);
+     break;
+   case RtLightType::Distant:
+-    m_distantLight.writeGPUData(data, offset);
++    m_distantLight.writeGPUData(data, offset, this->ignoreViewModel);
+     break;
+   }
+ }
+diff --git a/src/dxvk/rtx_render/rtx_lights.h b/src/dxvk/rtx_render/rtx_lights.h
+index 37a7e38f..ee090d43 100644
+--- a/src/dxvk/rtx_render/rtx_lights.h
++++ b/src/dxvk/rtx_render/rtx_lights.h
+@@ -133,7 +133,7 @@ struct RtSphereLight {
+ 
+   void applyTransform(const Matrix4& lightToWorld);
+ 
+-  void writeGPUData(unsigned char* data, std::size_t& offset) const;
++  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const;
+ 
+   bool operator==(const RtSphereLight& rhs) const = delete;
+ 
+@@ -197,7 +197,7 @@ struct RtRectLight {
+ 
+   void applyTransform(const Matrix4& lightToWorld);
+ 
+-  void writeGPUData(unsigned char* data, std::size_t& offset) const;
++  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const;
+ 
+   bool operator==(const RtRectLight& rhs) const = delete;
+ 
+@@ -275,7 +275,7 @@ struct RtDiskLight {
+ 
+   void applyTransform(const Matrix4& lightToWorld);
+ 
+-  void writeGPUData(unsigned char* data, std::size_t& offset) const;
++  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const;
+ 
+   bool operator==(const RtDiskLight& rhs) const = delete;
+ 
+@@ -350,7 +350,7 @@ struct RtCylinderLight {
+ 
+   void applyTransform(const Matrix4& lightToWorld);
+ 
+-  void writeGPUData(unsigned char* data, std::size_t& offset) const;
++  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const;
+ 
+   bool operator==(const RtCylinderLight& rhs) const = delete;
+ 
+@@ -412,7 +412,7 @@ struct RtDistantLight {
+ 
+   void applyTransform(const Matrix4& lightToWorld);
+ 
+-  void writeGPUData(unsigned char* data, std::size_t& offset) const;
++  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const;
+ 
+   bool operator==(const RtDistantLight& rhs) const = delete;
+ 
+@@ -645,6 +645,7 @@ struct RtLight {
+ 
+   uint32_t isStaticCount = 0;
+   bool isDynamic = false;
++  bool ignoreViewModel = false;
+ 
+ private:
+   // Type-specific Light Information
+diff --git a/src/dxvk/rtx_render/rtx_remix_api.cpp b/src/dxvk/rtx_render/rtx_remix_api.cpp
+index 8c45f05c..60c136f3 100644
+--- a/src/dxvk/rtx_render/rtx_remix_api.cpp
++++ b/src/dxvk/rtx_render/rtx_remix_api.cpp
+@@ -1324,6 +1324,9 @@ namespace {
+ 
+       // Set the isDynamic flag from the LightInfo
+       rtLight->isDynamic = info->isDynamic;
++      
++      // Set the ignoreViewModel flag from the LightInfo
++      rtLight->ignoreViewModel = info->ignoreViewModel;
+ 
+       auto devLock = remixDevice->LockDevice();
+       remixDevice->EmitCs([cHandle = handle, cRtLight = *rtLight](dxvk::DxvkContext* ctx) {
+@@ -2613,6 +2616,13 @@ extern "C"
+     if (!rt.has_value()) {
+       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+     }
++    
++    // Set the isDynamic flag from the LightInfo
++    rt->isDynamic = info->isDynamic;
++    
++    // Set the ignoreViewModel flag from the LightInfo
++    rt->ignoreViewModel = info->ignoreViewModel;
++    
+     {
+       std::lock_guard lock { s_mutex };
+       s_pendingLightUpdates.push_back(PendingLightUpdate{ handle, std::move(rt) });
+diff --git a/src/dxvk/shaders/rtx/algorithm/integrator_direct.slangh b/src/dxvk/shaders/rtx/algorithm/integrator_direct.slangh
+index bb8e85df..533bd502 100644
+--- a/src/dxvk/shaders/rtx/algorithm/integrator_direct.slangh
++++ b/src/dxvk/shaders/rtx/algorithm/integrator_direct.slangh
+@@ -381,6 +381,9 @@ void integrateDirectPath(
+     // running RTXDI on secondary surfaces will attempt to use lights from the primary surface which results
+     // in poor quality lighting if the surface is in a significantly different spatial location.
+     uint16_t lightIdx = kInvalidLightIdx;
++    // Note: Create a synthetic customIndex based on geometry flags to pass view model status
++    uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
++    
+     if (
+       cb.enableRtxdi &&
+       geometryFlags.primarySelectedIntegrationSurface)
+@@ -389,7 +392,7 @@ void integrateDirectPath(
+       rtxdiLightSampleValid = sampleLightRTXDI(
+         pixelCoordinate,
+         primarySurfaceInteraction,
+-        lightSample, inverseSelectionPdf, sampledTransportPortalIndex, lightIdx);
++        lightSample, inverseSelectionPdf, sampledTransportPortalIndex, lightIdx, customIndex);
+     }
+     else
+     {
+@@ -397,7 +400,7 @@ void integrateDirectPath(
+       risLightSampleValid = sampleLightRIS(
+         randomState,
+         primarySurfaceInteraction, opaqueSurfaceMaterialInteraction, primaryMinimalRayInteraction.viewDirection,
+-        lightSample, inverseSelectionPdf, lightIdx);
++        lightSample, inverseSelectionPdf, lightIdx, customIndex);
+     }
+ 
+     const bool isDiffusionProfileSss = (cb.sssArgs.enableDiffusionProfile && isSubsurfaceDiffusionProfileMaterial(opaqueSurfaceMaterialInteraction));
+diff --git a/src/dxvk/shaders/rtx/algorithm/integrator_indirect.slangh b/src/dxvk/shaders/rtx/algorithm/integrator_indirect.slangh
+index dec5e763..c378a13d 100644
+--- a/src/dxvk/shaders/rtx/algorithm/integrator_indirect.slangh
++++ b/src/dxvk/shaders/rtx/algorithm/integrator_indirect.slangh
+@@ -637,7 +637,7 @@ void integratePathVertex(
+           lightSampleValid = sampleLightRIS(
+             randomState,
+             surfaceInteraction, opaqueSurfaceMaterialInteraction, rayInteraction.viewDirection,
+-            lightSample, invSelectionPdf, lightIdx);
++            lightSample, invSelectionPdf, lightIdx, rayInteraction.customIndex);
+         }
+       }
+ 
+diff --git a/src/dxvk/shaders/rtx/algorithm/lighting.slangh b/src/dxvk/shaders/rtx/algorithm/lighting.slangh
+index 9b2ad323..86fa4afc 100644
+--- a/src/dxvk/shaders/rtx/algorithm/lighting.slangh
++++ b/src/dxvk/shaders/rtx/algorithm/lighting.slangh
+@@ -43,7 +43,8 @@ static const uint16_t kInvalidLightIdx = 0xffff;
+ bool sampleLightRTXDI(
+   ivec2 pixelCoordinate,
+   MinimalSurfaceInteraction primarySurfaceInteraction,
+-  inout LightSample lightSample, inout float inverseSelectionPdf, inout uint8_t portalID, inout uint16_t lightIdx)
++  inout LightSample lightSample, inout float inverseSelectionPdf, inout uint8_t portalID, inout uint16_t lightIdx,
++  uint customIndex = 0)
+ {
+   // Load the reservoir for this pixel from RTXDI
+ 
+@@ -55,6 +56,19 @@ bool sampleLightRTXDI(
+     return false;
+   }
+ 
++  // Check if this light should be skipped for view models
++  if ((customIndex & CUSTOM_INDEX_IS_VIEW_MODEL) != 0)
++  {
++    // Decode the light to check its ignoreViewModel flag
++    MemoryPolymorphicLight memoryPolymorphicLight = lights[reservoir.lightIdx];
++    DecodedPolymorphicLight decodedLight = decodePolymorphicLight(memoryPolymorphicLight);
++    
++    if (decodedLight.ignoreViewModel)
++    {
++      return false; // Skip this light for view models
++    }
++  }
++
+   // Get a light sample in portal space
+ 
+   lightSample = RAB_GetPortalSpaceLightSample(reservoir.lightIdx, f16vec2(reservoir.uv),
+@@ -184,7 +198,8 @@ bool sampleLightAdvancedRIS(
+   MinimalSurfaceInteraction surfaceInteraction,
+   OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction,
+   f16vec3 viewDirection,
+-  inout LightSample lightSample, inout float inverseSelectionPdf, inout uint16_t outLightIndex)
++  inout LightSample lightSample, inout float inverseSelectionPdf, inout uint16_t outLightIndex,
++  uint customIndex = 0)
+ {
+   if (cb.risTotalSampleCount == 0) {
+     return false;
+@@ -222,6 +237,13 @@ bool sampleLightAdvancedRIS(
+       // can effectively unroll the loop and remove the switch from decodedPolymorphicLightCalcWeight
+       DecodedPolymorphicLight decodedPolymorphicLight = decodePolymorphicLight(memoryPolymorphicLight);
+       decodedPolymorphicLight.polymorphicType = lightType;
++      
++      // Skip lights with ignoreViewModel flag when rendering view model geometry
++      if (decodedPolymorphicLight.ignoreViewModel && (customIndex & CUSTOM_INDEX_IS_VIEW_MODEL))
++      {
++        continue;
++      }
++      
+       LightSample candidateSample = decodedPolymorphicLightSampleArea(decodedPolymorphicLight, sampleCoordinates, surfaceInteraction);
+ 
+       // Calculate the weight (targetPdf)
+@@ -306,14 +328,15 @@ bool sampleLightRIS(
+   MinimalSurfaceInteraction surfaceInteraction,
+   OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction,
+   f16vec3 viewDirection,
+-  inout LightSample lightSample, inout float inverseSelectionPdf, inout uint16_t lightIndex)
++  inout LightSample lightSample, inout float inverseSelectionPdf, inout uint16_t lightIndex,
++  uint customIndex = 0)
+ {
+   switch(kSurfaceRISType)
+   {
+   case 0:
+     return sampleLightBasicRIS(randomState, surfaceInteraction, opaqueSurfaceMaterialInteraction, lightSample, inverseSelectionPdf);
+   case 1:    
+-    return sampleLightAdvancedRIS(randomState, surfaceInteraction, opaqueSurfaceMaterialInteraction, viewDirection, lightSample, inverseSelectionPdf, lightIndex);
++    return sampleLightAdvancedRIS(randomState, surfaceInteraction, opaqueSurfaceMaterialInteraction, viewDirection, lightSample, inverseSelectionPdf, lightIndex, customIndex);
+   case 2:
+     return sampleLightNaive(randomState, surfaceInteraction, lightSample, inverseSelectionPdf, lightIndex);
+   default:
+diff --git a/src/dxvk/shaders/rtx/concept/light/light.h b/src/dxvk/shaders/rtx/concept/light/light.h
+index 5d318ff7..c1d430cb 100644
+--- a/src/dxvk/shaders/rtx/concept/light/light.h
++++ b/src/dxvk/shaders/rtx/concept/light/light.h
+@@ -56,6 +56,7 @@ struct DecodedPolymorphicLight
+   uint8_t polymorphicType;
+   vec3 radiance;
+   LightShaping shaping;
++  bool ignoreViewModel;
+   uvec4 data0;
+   uvec4 data2;
+   uvec4 data3;
+diff --git a/src/dxvk/shaders/rtx/concept/light/polymorphic_light.slangh b/src/dxvk/shaders/rtx/concept/light/polymorphic_light.slangh
+index 595fbda5..8e3f2dc2 100644
+--- a/src/dxvk/shaders/rtx/concept/light/polymorphic_light.slangh
++++ b/src/dxvk/shaders/rtx/concept/light/polymorphic_light.slangh
+@@ -59,6 +59,8 @@ DecodedPolymorphicLight decodePolymorphicLight(MemoryPolymorphicLight memoryPoly
+   decodedPolymorphicLight.shaping = lightShapingCreate(
+     (flagData & (1u << 0)) != 0u,
+     data11, data12, data13);
++  
++  decodedPolymorphicLight.ignoreViewModel = (flagData & (1u << 1)) != 0u;
+ 
+   decodedPolymorphicLight.radiance = logLuv32ToRadiance(data10);
+ 
+
+commit 2a7f01879091a296ec0e781914e44eba9c000291
+Author: CattaRappa <sambow23@gmail.com>
+Date:   Fri Nov 21 11:27:42 2025 -0600
+
+    more fancy remix api stuff
+
+diff --git a/public/include/remix/remix.h b/public/include/remix/remix.h
+index 38689047..ea303f5f 100644
+--- a/public/include/remix/remix.h
++++ b/public/include/remix/remix.h
+@@ -222,7 +222,7 @@ namespace remix {
+         return status;
+       }
+ 
+-      static_assert(sizeof(remixapi_Interface) == 224,
++      static_assert(sizeof(remixapi_Interface) == 240,
+                     "Change version, update C++ wrapper when adding new functions");
+ 
+       remix::Interface interfaceInCpp = {};
+diff --git a/src/d3d9/meson.build b/src/d3d9/meson.build
+index beb1b8ff..b67a217b 100644
+--- a/src/d3d9/meson.build
++++ b/src/d3d9/meson.build
+@@ -77,6 +77,7 @@ d3d9_src = [
+   'd3d9_swvp_emu.h',
+   'd3d9_texture.cpp',
+   'd3d9_texture.h',
++  'd3d9_rtx_texture_categories.h',
+   'd3d9_util.cpp',
+   'd3d9_util.h',
+   'd3d9_vertex_declaration.cpp',
+diff --git a/src/dxvk/rtx_render/rtx_remix_api.cpp b/src/dxvk/rtx_render/rtx_remix_api.cpp
+index f9530fb6..a99102a9 100644
+--- a/src/dxvk/rtx_render/rtx_remix_api.cpp
++++ b/src/dxvk/rtx_render/rtx_remix_api.cpp
+@@ -1286,99 +1286,48 @@ namespace {
+     std::lock_guard lock { s_mutex };
+ 
+     if (!textureCategory || textureCategory[0] == '\0' || !textureHash) {
++      dxvk::Logger::err(dxvk::str::format("[RemixAPI] AddTextureHash: Invalid arguments"));
+       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+     }
+ 
+-    std::string strCategory = std::string { textureCategory };
+-    const auto& globalRtxOptions = dxvk::RtxOptionImpl::getGlobalRtxOptionMap();
+-    const XXH64_hash_t optionHash = dxvk::StringToXXH64(strCategory, 0);
+-    auto found = globalRtxOptions.find(optionHash);
+-    if (found == globalRtxOptions.end()) {
+-      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+-    }
+-
+-    if (found->second->type != dxvk::OptionType::HashSet) {
+-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+-    }
+-
+-    auto& textureSet = *found->second->valueList[(int) dxvk::RtxOptionImpl::ValueType::Value].hashSet;
+-
+-    const XXH64_hash_t h = std::stoull(textureHash, nullptr, 16);
+-    const auto textureIterator = textureSet.find(h);
+-
+-    if (textureIterator == textureSet.end()) {
+-      textureSet.insert(h);
+-    } else {
+-      return REMIXAPI_ERROR_CODE_SUCCESS; // already exists
+-    }
+-
+-    return REMIXAPI_ERROR_CODE_SUCCESS;
+-  }
+-
+-  remixapi_ErrorCode REMIXAPI_CALL remixapi_RemoveTextureHash(
+-    const char* textureCategory,
+-    const char* textureHash) {
+-    std::lock_guard lock { s_mutex };
+-
+-    if (!textureCategory || textureCategory[0] == '\0' || !textureHash) {
+-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+-    }
++    dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: category='", textureCategory, "', hash='", textureHash, "'"));
+ 
+     std::string strCategory = std::string { textureCategory };
+     const auto& globalRtxOptions = dxvk::RtxOptionImpl::getGlobalRtxOptionMap();
+     const XXH64_hash_t optionHash = dxvk::StringToXXH64(strCategory, 0);
+     auto found = globalRtxOptions.find(optionHash);
+     if (found == globalRtxOptions.end()) {
++      dxvk::Logger::err(dxvk::str::format("[RemixAPI] AddTextureHash: Option '", textureCategory, "' not found in global options map"));
+       return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+     }
+ 
+     if (found->second->type != dxvk::OptionType::HashSet) {
++      dxvk::Logger::err(dxvk::str::format("[RemixAPI] AddTextureHash: Option '", textureCategory, "' is not a HashSet type"));
+       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+     }
+ 
+-    auto& textureSet = *found->second->valueList[(int) dxvk::RtxOptionImpl::ValueType::Value].hashSet;
++    dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Option found and is HashSet type"));
+ 
+-    const XXH64_hash_t h = std::stoull(textureHash, nullptr, 16);
+-    const auto textureIterator = textureSet.find(h);
+-
+-    if (textureIterator != textureSet.end()) {
+-       textureSet.erase(textureIterator);
+-    } else {
+-      return REMIXAPI_ERROR_CODE_SUCCESS; // does not exist
+-    }
+-
+-    return REMIXAPI_ERROR_CODE_SUCCESS;
+-  }
+-
+-  remixapi_ErrorCode REMIXAPI_CALL remixapi_AddTextureHash(
+-    const char* textureCategory,
+-    const char* textureHash) {
+-    std::lock_guard lock { s_mutex };
++    auto& textureSet = *found->second->valueList[(int) dxvk::RtxOptionImpl::ValueType::Value].hashSet;
+ 
+-    if (!textureCategory || textureCategory[0] == '\0' || !textureHash) {
+-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+-    }
++    dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Parsing hash string"));
+ 
+-    std::string strCategory = std::string { textureCategory };
+-    const auto& globalRtxOptions = dxvk::RtxOptionImpl::getGlobalRtxOptionMap();
+-    const XXH64_hash_t optionHash = dxvk::StringToXXH64(strCategory, 0);
+-    auto found = globalRtxOptions.find(optionHash);
+-    if (found == globalRtxOptions.end()) {
++    XXH64_hash_t h = 0;
++    try {
++      h = std::stoull(textureHash, nullptr, 16);
++      dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Parsed hash: 0x", std::hex, h));
++    } catch (const std::exception& e) {
++      dxvk::Logger::err(dxvk::str::format("[RemixAPI] AddTextureHash: Failed to parse hash '", textureHash, "': ", e.what()));
+       return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+     }
+ 
+-    if (found->second->type != dxvk::OptionType::HashSet) {
+-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+-    }
+-
+-    auto& textureSet = *found->second->valueList[(int) dxvk::RtxOptionImpl::ValueType::Value].hashSet;
+-
+-    const XXH64_hash_t h = std::stoull(textureHash, nullptr, 16);
+     const auto textureIterator = textureSet.find(h);
+ 
+     if (textureIterator == textureSet.end()) {
+       textureSet.insert(h);
++      dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Successfully added hash 0x", std::hex, h));
+     } else {
++      dxvk::Logger::info(dxvk::str::format("[RemixAPI] AddTextureHash: Hash already exists"));
+       return REMIXAPI_ERROR_CODE_SUCCESS; // already exists
+     }
+ 
+@@ -2223,7 +2172,7 @@ extern "C"
+       interf.AutoInstancePersistentLights = remixapi_AutoInstancePersistentLights;
+       interf.UpdateLightDefinition = remixapi_UpdateLightDefinition;
+     }
+-    static_assert(sizeof(interf) == 224, "Add/remove function registration");
++    static_assert(sizeof(interf) == 240, "Add/remove function registration");
+ 
+     *out_result = interf;
+     return REMIXAPI_ERROR_CODE_SUCCESS;
