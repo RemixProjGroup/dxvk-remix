@@ -361,9 +361,9 @@ extern "C" {
     const remixapi_MeshInfo*  info,
     remixapi_MeshHandle*      out_handle);
 
-  // TODO Sub-feature 3: implement CreateMeshBatched. Declared here so the
-  // remixapi_Interface vtable layout matches the fork exactly; the slot is
-  // currently nullptr in the init function.
+  // Batched variant of CreateMesh: deep-copies the provided info and defers
+  // DXVK buffer allocation / asset-replacer registration to the next render
+  // thread flush point (DrawInstance, Present, AutoInstancePersistentLights).
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateMeshBatched)(
     const remixapi_MeshInfo*  info,
     remixapi_MeshHandle*      out_handle);

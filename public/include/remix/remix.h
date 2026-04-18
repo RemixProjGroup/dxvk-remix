@@ -187,9 +187,9 @@ namespace remix {
     Result< remixapi_MaterialHandle > CreateMaterial(const remixapi_MaterialInfo& info);
     Result< void >                    DestroyMaterial(remixapi_MaterialHandle handle);
     Result< remixapi_MeshHandle >     CreateMesh(const remixapi_MeshInfo& info);
-    // TODO Sub-feature 3: real impl. Matches fork's C++ wrapper shape so the
-    // binary layout is stable; the C-interface slot is currently nullptr and
-    // calling this will dereference nullptr in m_CInterface.CreateMeshBatched.
+    // Batched variant: buffers the mesh data and materializes it on the render
+    // thread at the next DrawInstance / Present / AutoInstancePersistentLights
+    // flush. Useful for callers submitting meshes outside a frame boundary.
     Result< remixapi_MeshHandle >     CreateMeshBatched(const remixapi_MeshInfo& info);
     Result< void >                    DestroyMesh(remixapi_MeshHandle handle);
     Result< void >                    SetupCamera(const remixapi_CameraInfo& info);
