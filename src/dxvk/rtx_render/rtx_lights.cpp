@@ -977,6 +977,7 @@ RtLight::RtLight(const RtLight& light) {
 void RtLight::copyFrom(const RtLight& light) {
   isStaticCount = light.isStaticCount;
   isDynamic = light.isDynamic;
+  ignoreViewModel = light.ignoreViewModel;
   m_type = light.m_type;
   
   // Copy only the active union member based on the light type

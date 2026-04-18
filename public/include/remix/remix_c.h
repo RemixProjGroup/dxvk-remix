@@ -668,9 +668,14 @@ extern "C" {
     uint64_t                        hash;
     remixapi_Float3D                radiance;
     remixapi_Bool                   isDynamic;
+    remixapi_Bool                   ignoreViewModel;
   } remixapi_LightInfo;
 
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateLight)(
+    const remixapi_LightInfo* info,
+    remixapi_LightHandle*     out_handle);
+
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateLightBatched)(
     const remixapi_LightInfo* info,
     remixapi_LightHandle*     out_handle);
 
@@ -701,6 +706,29 @@ extern "C" {
   } remixapi_PresentInfo;
 
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_Present)(const remixapi_PresentInfo* info);
+
+  // Optional frame-boundary callbacks (mirrors bridge API semantics)
+  typedef void (REMIXAPI_PTR* PFN_remixapi_BridgeCallback)(void);
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_RegisterCallbacks)(
+    PFN_remixapi_BridgeCallback beginSceneCallback,
+    PFN_remixapi_BridgeCallback endSceneCallback,
+    PFN_remixapi_BridgeCallback presentCallback);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_RegisterCallbacks(
+    PFN_remixapi_BridgeCallback beginSceneCallback,
+    PFN_remixapi_BridgeCallback endSceneCallback,
+    PFN_remixapi_BridgeCallback presentCallback);
+
+  // Internal helper to auto-instance persistent external API lights once per frame
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_AutoInstancePersistentLights)(void);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_AutoInstancePersistentLights(void);
+
+  // Queue a definition update for an existing analytical light. Applied safely each frame.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_UpdateLightDefinition)(
+    remixapi_LightHandle handle,
+    const remixapi_LightInfo* info);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_UpdateLightDefinition(
+    remixapi_LightHandle handle,
+    const remixapi_LightInfo* info);
 
   typedef void (REMIXAPI_PTR* PFN_remixapi_pick_RequestObjectPickingUserCallback)(
     const uint32_t*           objectPickingValues_values,
@@ -811,6 +839,7 @@ extern "C" {
     PFN_remixapi_SetupCamera        SetupCamera;
     PFN_remixapi_DrawInstance       DrawInstance;
     PFN_remixapi_CreateLight        CreateLight;
+    PFN_remixapi_CreateLightBatched CreateLightBatched;
     PFN_remixapi_DestroyLight       DestroyLight;
     PFN_remixapi_DrawLightInstance  DrawLightInstance;
     PFN_remixapi_SetConfigVariable  SetConfigVariable;
@@ -833,6 +862,11 @@ extern "C" {
 
     PFN_remixapi_Startup            Startup;
     PFN_remixapi_Present            Present;
+
+    // Optional extension functions (present starting in v0.5.1+)
+    PFN_remixapi_RegisterCallbacks          RegisterCallbacks;
+    PFN_remixapi_AutoInstancePersistentLights AutoInstancePersistentLights;
+    PFN_remixapi_UpdateLightDefinition      UpdateLightDefinition;
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(

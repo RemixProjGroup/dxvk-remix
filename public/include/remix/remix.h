@@ -185,8 +185,11 @@ namespace remix {
     Result< void >                    SetupCamera(const remixapi_CameraInfo& info);
     Result< void >                    DrawInstance(const remixapi_InstanceInfo& info);
     Result< remixapi_LightHandle >    CreateLight(const remixapi_LightInfo& info);
+    Result< remixapi_LightHandle >    CreateLightBatched(const remixapi_LightInfo& info);
     Result< void >                    DestroyLight(remixapi_LightHandle handle);
     Result< void >                    DrawLightInstance(remixapi_LightHandle handle);
+    // Deferred update of an analytical light definition. Applied on render thread.
+    Result< void >                    UpdateLightDefinition(remixapi_LightHandle handle, const remixapi_LightInfo& info);
     Result< void >                    SetConfigVariable(const char* key, const char* value);
     Result< void >                    AddTextureHash(const char* textureCategory, const char* textureHash);
     Result< void >                    RemoveTextureHash(const char* textureCategory, const char* textureHash);
@@ -227,7 +230,7 @@ namespace remix {
         return status;
       }
 
-      static_assert(sizeof(remixapi_Interface) == 208,
+      static_assert(sizeof(remixapi_Interface) == 240,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};
@@ -1003,7 +1006,8 @@ namespace remix {
       hash = 0;
       radiance = { 1.0f, 1.0f, 1.0f };
       isDynamic = false;  // Default to static for temporal accumulation
-      STATIC_ASSERT_SIZEOF(remixapi_LightInfo, 40);
+      ignoreViewModel = false;  // Default to affecting all geometry including view models
+      STATIC_ASSERT_SIZEOF(remixapi_LightInfo, 48);
     }
   };
 
@@ -1016,12 +1020,28 @@ namespace remix {
     return handle;
   }
 
+  inline Result< remixapi_LightHandle > Interface::CreateLightBatched(const remixapi_LightInfo& info) {
+    remixapi_LightHandle handle = nullptr;
+    remixapi_ErrorCode status = m_CInterface.CreateLightBatched(&info, &handle);
+    if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
+      return status;
+    }
+    return handle;
+  }
+
   inline Result< void > Interface::DestroyLight(remixapi_LightHandle handle) {
     return m_CInterface.DestroyLight(handle);
   }
 
   inline Result< void > Interface::DrawLightInstance(remixapi_LightHandle handle) {
     return m_CInterface.DrawLightInstance(handle);
+  }
+
+  inline Result< void > Interface::UpdateLightDefinition(remixapi_LightHandle handle, const remixapi_LightInfo& info) {
+    if (m_CInterface.UpdateLightDefinition) {
+      return m_CInterface.UpdateLightDefinition(handle, &info);
+    }
+    return REMIXAPI_ERROR_CODE_GET_PROC_ADDRESS_FAILURE;
   }
 
   namespace detail {

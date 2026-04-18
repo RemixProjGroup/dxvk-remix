@@ -645,6 +645,7 @@ struct RtLight {
 
   uint32_t isStaticCount = 0;
   bool isDynamic = false;
+  bool ignoreViewModel = false;
 
 private:
   // Type-specific Light Information

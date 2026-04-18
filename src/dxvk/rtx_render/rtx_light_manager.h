@@ -101,6 +101,10 @@ public:
   void addExternalDomeLight(remixapi_LightHandle handle, const DomeLight& domeLight);
   void removeExternalLight(remixapi_LightHandle handle);
   void addExternalLightInstance(remixapi_LightHandle enabledLight);
+  // Remix API integration helpers
+  void registerPersistentExternalLight(remixapi_LightHandle handle);
+  void unregisterPersistentExternalLight(remixapi_LightHandle handle);
+  void queueAutoInstancePersistent();
 
   void setRaytraceArgs(RaytraceArgs& raytraceArgs, uint32_t rtxdiInitialLightSamples, uint32_t volumeRISInitialLightSamples, uint32_t risLightSamples) const;
   
@@ -124,6 +128,12 @@ private:
   std::unordered_set<remixapi_LightHandle> m_externalActiveLightList;
   remixapi_LightHandle m_externalActiveDomeLight = nullptr;
   DomeLightArgs m_gpuDomeLightArgs;
+
+  // Pending external light mutations to be applied at the start of the frame
+  std::vector<remixapi_LightHandle> m_pendingExternalLightErases{};
+  std::vector<std::pair<remixapi_LightHandle, RtLight>> m_pendingExternalLightUpdates{};
+  std::unordered_set<remixapi_LightHandle> m_pendingExternalActiveLights{};
+  std::unordered_set<remixapi_LightHandle> m_persistentExternalLights{};
 
   Rc<DxvkBuffer> m_lightBuffer;
   Rc<DxvkBuffer> m_previousLightBuffer;
