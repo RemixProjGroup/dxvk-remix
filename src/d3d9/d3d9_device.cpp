@@ -3748,6 +3748,11 @@ namespace dxvk {
           DWORD dwFlags) {
     ScopedCpuProfileZone();
 
+    Logger::warn(str::format(
+      "[RTX-Diag] D3D9DeviceEx::PresentEx ENTER (hDestWindowOverride=",
+      static_cast<void*>(hDestWindowOverride),
+      " swapchain=", static_cast<void*>(m_implicitSwapchain.ptr()), ")"));
+
     HRESULT result = m_implicitSwapchain->Present(
       pSourceRect,
       pDestRect,

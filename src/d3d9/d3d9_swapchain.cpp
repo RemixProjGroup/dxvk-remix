@@ -441,6 +441,10 @@ namespace dxvk {
           DWORD    dwFlags) {
     ScopedCpuProfileZone();
 
+    Logger::warn(str::format(
+      "[RTX-Diag] D3D9SwapChainEx::Present ENTER (hDestWindowOverride=",
+      static_cast<void*>(hDestWindowOverride), ")"));
+
     // NV-DXVK start: Restart RTX capture on the new frame
     m_parent->m_rtx.EndFrame(m_backBuffers[0]->GetCommonTexture()->GetImage());
     // NV-DXVK end

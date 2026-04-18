@@ -797,6 +797,11 @@ namespace dxvk {
   }
 
   void RtxContext::endFrame(std::uint64_t cachedReflexFrameId, Rc<DxvkImage> targetImage, bool callInjectRtx) {
+    Logger::warn(str::format(
+      "[RTX-Diag] RtxContext::endFrame ENTER (reflexFrameId=", cachedReflexFrameId,
+      " frame=", m_device->getCurrentFrameId(),
+      " callInjectRtx=", callInjectRtx ? 1 : 0,
+      " targetImage=", static_cast<void*>(targetImage.ptr()), ")"));
 
     if (callInjectRtx) {
       // Fallback inject (is a no-op if already injected this frame, or no valid RT scene)

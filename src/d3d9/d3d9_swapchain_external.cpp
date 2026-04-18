@@ -44,6 +44,11 @@ namespace dxvk {
 
     auto& imageInfo = targetImage->info();
 
+    Logger::warn(str::format(
+      "[RTX-Diag] D3D9SwapchainExternal::Present ENTER (vkImage=",
+      static_cast<void*>(targetImage.ptr()),
+      " extent=", imageInfo.extent.width, "x", imageInfo.extent.height, ")"));
+
     m_parent->m_rtx.EndFrame(targetImage);
 
     m_parent->Flush();
