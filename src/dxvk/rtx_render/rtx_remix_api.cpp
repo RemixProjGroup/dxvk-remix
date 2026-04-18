@@ -1378,6 +1378,7 @@ namespace {
     dxvk::Logger::warn(dxvk::str::format(
       "[RTX-Diag] SetupCamera called, will EmitCs (current frame=",
       remixDevice->GetDXVKDevice()->getCurrentFrameId(), ")"));
+    auto devLock = remixDevice->LockDevice();
     remixDevice->EmitCs([cRtCamera = convert::toRtCamera(*info)](dxvk::DxvkContext* ctx) {
       dxvk::Logger::warn(dxvk::str::format(
         "[RTX-Diag] SetupCamera lambda fired on CS thread, frame=",
@@ -1406,12 +1407,13 @@ namespace {
     // with the asset replacer before this draw references them.
     flushPendingMeshes(remixDevice);
 
-    std::lock_guard lock { s_mutex };
-    auto devLock = remixDevice->LockDevice();
-    remixDevice->EmitCs([cRtDrawState = convert::toRtDrawState(*info)](dxvk::DxvkContext* dxvkCtx) mutable {
-      auto* ctx = static_cast<dxvk::RtxContext*>(dxvkCtx);
-      ctx->commitExternalGeometryToRT(std::move(cRtDrawState));
-    });
+    {
+      auto devLock = remixDevice->LockDevice();
+      remixDevice->EmitCs([cRtDrawState = convert::toRtDrawState(*info)](dxvk::DxvkContext* dxvkCtx) mutable {
+        auto* ctx = static_cast<dxvk::RtxContext*>(dxvkCtx);
+        ctx->commitExternalGeometryToRT(std::move(cRtDrawState));
+      });
+    }
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
