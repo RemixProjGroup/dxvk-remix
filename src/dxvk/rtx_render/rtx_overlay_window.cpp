@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <algorithm>
+#include <cstdio>
 #include "rtx_overlay_window.h"
 #include "../imgui/dxvk_imgui.h"
 #include "imgui/imgui_impl_win32.h"
@@ -151,6 +152,19 @@ void GameOverlay::hide() {
 }
 
 void GameOverlay::gameWndProcHandler(HWND gameHwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  // [RTX-Diag] Filter to input messages
+  const bool isInputMsg = (msg == WM_KEYDOWN || msg == WM_KEYUP ||
+                           msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP ||
+                           msg == WM_SYSCHAR || msg == WM_INPUT);
+  if (isInputMsg) {
+    char hexBuf[32];
+    std::snprintf(hexBuf, sizeof(hexBuf), "0x%X", static_cast<unsigned int>(msg));
+    Logger::warn(str::format(
+      "[RTX-Diag] GameOverlay::gameWndProcHandler ENTER msg=", hexBuf,
+      " gameHwnd=", static_cast<void*>(gameHwnd),
+      " m_gameHwnd=", static_cast<void*>(m_gameHwnd),
+      " match=", (gameHwnd == m_gameHwnd ? 1 : 0)));
+  }
   if (gameHwnd != m_gameHwnd) {
     return;
   }
@@ -233,12 +247,17 @@ void GameOverlay::gameWndProcHandler(HWND gameHwnd, UINT msg, WPARAM wParam, LPA
 
 void GameOverlay::update(HWND gameHwnd) {
   if (m_gameHwnd == 0) {
+    Logger::warn(str::format(
+      "[RTX-Diag] GameOverlay::update FIRST-CALL gameHwnd=", static_cast<void*>(gameHwnd),
+      " — spawning overlay window thread"));
     m_gameHwnd = gameHwnd;
     // Spawn UI thread
     m_thread = std::thread([this] { windowThreadMain(); });
     while(!m_hwnd && m_running) {
       Sleep(0);
     }
+    Logger::warn(str::format(
+      "[RTX-Diag] GameOverlay::update overlay window spawned, m_hwnd=", static_cast<void*>(m_hwnd)));
     // update returns with a valid overlay window HWND
   }
 }
@@ -263,6 +282,22 @@ bool GameOverlay::isOurForeground() const {
 }
 
 LRESULT GameOverlay::overlayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  // [RTX-Diag] Filter to input messages on the dedicated overlay-thread WndProc.
+  // WM_INPUT (0xFF) is the raw-input path that delivers keyboard while the
+  // overlay window is foreground.
+  {
+    const bool isInputMsg = (msg == WM_KEYDOWN || msg == WM_KEYUP ||
+                             msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP ||
+                             msg == WM_SYSCHAR || msg == WM_INPUT);
+    if (isInputMsg) {
+      char hexBuf[32];
+      std::snprintf(hexBuf, sizeof(hexBuf), "0x%X", static_cast<unsigned int>(msg));
+      Logger::warn(str::format(
+        "[RTX-Diag] GameOverlay::overlayWndProc ENTER msg=", hexBuf,
+        " hWnd=", static_cast<void*>(hWnd),
+        " isOurForeground=", (isOurForeground() ? 1 : 0)));
+    }
+  }
   switch (msg) {
   case WM_PAINT:
   {

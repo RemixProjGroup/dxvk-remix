@@ -21,6 +21,7 @@
 */
 
 #include <cassert>
+#include <cstdio>
 #include <tuple>
 #include <string>
 #include <sstream>
@@ -670,13 +671,43 @@ namespace dxvk {
   }
 
   void ImGUI::wndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    // [RTX-Diag] Filter spam — only log key/raw-input messages
+    const bool isInputMsg = (msg == WM_KEYDOWN || msg == WM_KEYUP ||
+                             msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP ||
+                             msg == WM_SYSCHAR || msg == WM_INPUT);
+    ImGuiContext* ctxBefore = ImGui::GetCurrentContext();
+    if (isInputMsg) {
+      // Format msg/wParam as hex via snprintf (str::format streaming + manipulators is awkward)
+      char hexBuf[64];
+      std::snprintf(hexBuf, sizeof(hexBuf), "msg=0x%X wParam=0x%llX",
+                    static_cast<unsigned int>(msg),
+                    static_cast<unsigned long long>(wParam));
+      Logger::warn(str::format(
+        "[RTX-Diag] wndProcHandler ENTER hwnd=", static_cast<void*>(hWnd),
+        " ", hexBuf,
+        " hasOverlayWin=", (m_overlayWin.ptr() != nullptr ? 1 : 0),
+        " ctxBefore=", static_cast<const void*>(ctxBefore),
+        " m_context=", static_cast<const void*>(m_context)));
+    }
     ImGui::SetCurrentContext(m_context);
     ImPlot::SetCurrentContext(m_plotContext);
+    if (isInputMsg) {
+      ImGuiContext* ctxAfter = ImGui::GetCurrentContext();
+      Logger::warn(str::format(
+        "[RTX-Diag] wndProcHandler AFTER-PIN ctxAfter=", static_cast<const void*>(ctxAfter),
+        " match=", (ctxAfter == m_context ? 1 : 0)));
+    }
     if (m_overlayWin.ptr() != nullptr) {
+      if (isInputMsg) {
+        Logger::warn("[RTX-Diag] wndProcHandler dispatching to GameOverlay::gameWndProcHandler");
+      }
       m_overlayWin->gameWndProcHandler(hWnd, msg, wParam, lParam);
     } else {
+      if (isInputMsg) {
+        Logger::warn("[RTX-Diag] wndProcHandler dispatching to ImGui_ImplWin32_WndProcHandler (legacy path)");
+      }
       // Note this is the old method for grabbing keyboard/mouse inputs which relies on hooking
-      //  the wndproc from the original game, and sending that data across the x86 -> x64 bridge.  
+      //  the wndproc from the original game, and sending that data across the x86 -> x64 bridge.
       //  We see compatibilities in older applications with this approach that are tricky to resolve.
       //  Favour the new approach `useNewGuiInputMethod` when possible.
       ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
@@ -862,6 +893,19 @@ namespace dxvk {
 
   void ImGUI::processHotkeys() {
     auto& io = ImGui::GetIO();
+
+    // [RTX-Diag] Track current ImGui context vs our pinned context. Logged once
+    // per frame (processHotkeys runs once in update()).
+    {
+      ImGuiContext* ctxCurrent = ImGui::GetCurrentContext();
+      Logger::warn(str::format(
+        "[RTX-Diag] processHotkeys ctxCurrent=", static_cast<const void*>(ctxCurrent),
+        " m_context=", static_cast<const void*>(m_context),
+        " match=", (ctxCurrent == m_context ? 1 : 0),
+        " keyAlt=", (io.KeyAlt ? 1 : 0),
+        " keyCtrl=", (io.KeyCtrl ? 1 : 0),
+        " keyShift=", (io.KeyShift ? 1 : 0)));
+    }
 
     if (checkHotkeyState(RtxOptions::remixMenuKeyBinds())) {
       if(RtxOptions::defaultToAdvancedUI()) {
@@ -4493,6 +4537,10 @@ namespace dxvk {
     if(virtKeys.size() > 0) {
       auto& io = ImGui::GetIO();
       result = true;
+      // [RTX-Diag] Identify whether this is the Alt+<key> dev menu chord shape so we
+      // can log diagnostics without spamming every per-frame freecam check.
+      const bool isAltChord = virtKeys.size() == 2 &&
+                              (virtKeys[0].val == VK_MENU || virtKeys[1].val == VK_MENU);
       for(const auto& vk : virtKeys) {
         if(vk.val == VK_SHIFT) {
           result = result && io.KeyShift;
@@ -4508,6 +4556,26 @@ namespace dxvk {
             result = result && ImGui::IsKeyPressed(key, false);
           }
         }
+      }
+      // [RTX-Diag] Log Alt-chord state when Alt is currently held OR result fired.
+      // This lets us see whether ImGui sees Alt+X at all when the user presses it.
+      if (isAltChord && (io.KeyAlt || result)) {
+        unsigned int otherKey = 0;
+        for (const auto& vk : virtKeys) {
+          if (vk.val != VK_MENU && vk.val != VK_SHIFT && vk.val != VK_CONTROL) {
+            otherKey = vk.val;
+            break;
+          }
+        }
+        ImGuiKey imkey = ImGui::GetKeyIndex(ImGui_ImplWin32_VirtualKeyToImGuiKey(otherKey));
+        ImGuiContext* ctxCurrent = ImGui::GetCurrentContext();
+        Logger::warn(str::format(
+          "[RTX-Diag] checkHotkeyState alt-chord vk=", otherKey,
+          " keyAlt=", (io.KeyAlt ? 1 : 0),
+          " isKeyDown=", (ImGui::IsKeyDown(imkey) ? 1 : 0),
+          " isKeyPressed=", (ImGui::IsKeyPressed(imkey, false) ? 1 : 0),
+          " result=", (result ? 1 : 0),
+          " ctx=", static_cast<const void*>(ctxCurrent)));
       }
     }
     return result;

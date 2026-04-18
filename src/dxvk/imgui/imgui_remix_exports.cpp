@@ -25,6 +25,10 @@
 #include "implot.h"
 #include <atomic>
 
+// [RTX-Diag] Pull in dxvk Logger + str::format to mark first plugin-imgui activity.
+#include "../../util/log/log.h"
+#include "../../util/util_string.h"
+
 // Static callback storage - only one wrapper can register at a time.
 static std::atomic<PFN_remixapi_imgui_DrawCallback> s_drawCallback{ nullptr };
 static std::atomic<void*> s_drawCallbackUserData{ nullptr };
@@ -33,6 +37,12 @@ static std::atomic<void*> s_drawCallbackUserData{ nullptr };
 
 RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_RegisterDrawCallback(
     PFN_remixapi_imgui_DrawCallback callback, void* userData) {
+  // [RTX-Diag] Plugin is registering its own ImGui draw callback — track when.
+  dxvk::Logger::warn(dxvk::str::format(
+    "[RTX-Diag] remixapi_imgui_RegisterDrawCallback called, callback=",
+    reinterpret_cast<const void*>(callback),
+    " userData=", userData,
+    " imguiCtx=", static_cast<const void*>(ImGui::GetCurrentContext())));
   s_drawCallbackUserData.store(userData, std::memory_order_release);
   s_drawCallback.store(callback, std::memory_order_release);
 }
@@ -45,6 +55,15 @@ RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_UnregisterDrawCallback() {
 void remixapi_imgui_InvokeDrawCallback() {
   auto cb = s_drawCallback.load(std::memory_order_acquire);
   if (cb) {
+    // [RTX-Diag] Mark first invocation to timestamp when the plugin's ImGui draw
+    // callback actually starts firing each frame.
+    static std::atomic<bool> s_firstInvokeSeen { false };
+    bool expected = false;
+    if (s_firstInvokeSeen.compare_exchange_strong(expected, true)) {
+      dxvk::Logger::warn(dxvk::str::format(
+        "[RTX-Diag] remixapi_imgui_InvokeDrawCallback FIRST-INVOKE — plugin draw callback running"
+        " (ctx=", static_cast<const void*>(ImGui::GetCurrentContext()), ")"));
+    }
     cb(s_drawCallbackUserData.load(std::memory_order_acquire));
   }
 }

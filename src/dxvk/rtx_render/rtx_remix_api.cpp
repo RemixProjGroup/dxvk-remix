@@ -2763,6 +2763,18 @@ extern "C"
     remixapi_Format format,
     float           opacity) {
 
+    // [RTX-Diag] Mark first call so we can timestamp when the plugin's HUD
+    // passthrough begins (correlates with Alt+X failing).
+    {
+      static std::atomic<bool> s_firstHudCallSeen { false };
+      bool expected = false;
+      if (s_firstHudCallSeen.compare_exchange_strong(expected, true)) {
+        dxvk::Logger::warn(dxvk::str::format(
+          "[RTX-Diag] remixapi_DrawScreenOverlay FIRST-CALL — plugin HUD passthrough started"
+          " (width=", width, " height=", height, " hasPixels=", (pPixelData != nullptr ? 1 : 0), ")"));
+      }
+    }
+
     dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
     if (!remixDevice) {
       return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
