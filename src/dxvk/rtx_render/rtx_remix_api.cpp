@@ -1375,14 +1375,8 @@ namespace {
       assert(0);
       const_cast<bool&>(dxvk::RtxOptions::enableNearPlaneOverride()) = false;
     }
-    dxvk::Logger::warn(dxvk::str::format(
-      "[RTX-Diag] SetupCamera called, will EmitCs (current frame=",
-      remixDevice->GetDXVKDevice()->getCurrentFrameId(), ")"));
     auto devLock = remixDevice->LockDevice();
     remixDevice->EmitCs([cRtCamera = convert::toRtCamera(*info)](dxvk::DxvkContext* ctx) {
-      dxvk::Logger::warn(dxvk::str::format(
-        "[RTX-Diag] SetupCamera lambda fired on CS thread, frame=",
-        ctx->getDevice()->getCurrentFrameId()));
       ctx->getCommonObjects()->getSceneManager().getCameraManager()
         .processExternalCamera(cRtCamera.type, cRtCamera.worldToView, cRtCamera.viewToProjection);
     });

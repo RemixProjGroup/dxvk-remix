@@ -22,8 +22,6 @@
 #include "rtx_camera_manager.h"
 
 #include "dxvk_device.h"
-#include "../../util/util_string.h"
-#include "../../util/log/log.h"
 
 namespace {
   constexpr float kFovToleranceRadians = 0.001f;
@@ -181,14 +179,8 @@ namespace dxvk {
                                             const Matrix4& viewToProjection) {
     DecomposeProjectionParams decomposeProjectionParams = getOrDecomposeProjection(viewToProjection);
 
-    const uint32_t newFrame = m_device->getCurrentFrameId();
-    const uint32_t oldFrame = getCamera(type).getLastUpdateFrame();
-    Logger::warn(str::format(
-      "[RTX-Diag] processExternalCamera setting m_frameLastTouched=", newFrame,
-      " (was=", oldFrame, ") type=", (int)type));
-
     getCamera(type).update(
-      newFrame,
+      m_device->getCurrentFrameId(),
       worldToView,
       viewToProjection,
       decomposeProjectionParams.fov,

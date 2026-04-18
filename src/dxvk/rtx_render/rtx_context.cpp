@@ -508,16 +508,8 @@ namespace dxvk {
 
     const bool isCameraValid = getSceneManager().getCamera().isValid(m_device->getCurrentFrameId());
     if (!isCameraValid) {
-      Logger::warn(str::format("[RTX-Compatibility-Info] Trying to raytrace but not detecting a valid camera."));
+      ONCE(Logger::info(str::format("[RTX-Compatibility-Info] Trying to raytrace but not detecting a valid camera.")));
     }
-
-    // [RTX-Diag] Per-frame visibility into whether the RT block runs and why it might skip.
-    Logger::warn(str::format(
-      "[RTX-Diag] injectRTX frame=", m_device->getCurrentFrameId(),
-      " isRtxEnabled=", (int)isRaytracingEnabled,
-      " isCamValid=", (int)isCameraValid,
-      " asyncShaderCompile=", (int)asyncShaderCompilationActive,
-      " cameraFrameLastTouched=", getSceneManager().getCamera().getLastUpdateFrame()));
 
     // Update frame counter only after actual rendering
     if (isCameraValid) {
@@ -547,9 +539,8 @@ namespace dxvk {
     // Note: Only engage ray tracing when it is enabled, the camera is valid and when no shaders are currently being compiled asynchronously (as
     // trying to render before shaders are done compiling will cause Remix to block).
     if (isRaytracingEnabled && isCameraValid && !asyncShaderCompilationActive) {
-      Logger::warn(str::format("[RTX-Diag] injectRTX entering RT block, frame=", m_device->getCurrentFrameId()));
       if (targetImage == nullptr) {
-        targetImage = m_state.om.renderTargets.color[0].view->image();
+        targetImage = m_state.om.renderTargets.color[0].view->image();  
       }
 
       const bool captureTestScreenshot = (m_screenshotFrameEnabled && m_device->getCurrentFrameId() == m_screenshotFrameNum);
@@ -744,7 +735,6 @@ namespace dxvk {
           // Note: the resolution between srcImage and dstImage always matches
           // so we can use the same blit with nearest neighbor filtering
           assert(srcImage->info().extent == targetImage->info().extent);
-          Logger::warn(str::format("[RTX-Diag] blit-to-backbuffer running, frame=", m_device->getCurrentFrameId()));
           blitImageHelper(this, srcImage, targetImage, VkFilter::VK_FILTER_NEAREST);
         }
 
@@ -761,11 +751,6 @@ namespace dxvk {
 
       m_framesWithoutValidScene = 0;
     } else {
-      Logger::warn(str::format(
-        "[RTX-Diag] injectRTX SKIPPED RT block, frame=", m_device->getCurrentFrameId(),
-        " (rtxEnabled=", (int)isRaytracingEnabled,
-        " camValid=", (int)isCameraValid,
-        " asyncCompile=", (int)asyncShaderCompilationActive, ")"));
       // If raytracing is only disabled because we don't have shaders available, we don't want to clear the scene.
       // This frequently happens for a single frame when a cached shader is being fetched, and causes the Logic 
       // graph state to be reset - which is problematic since Logic graphs often trigger shader fetches.
@@ -1797,8 +1782,6 @@ namespace dxvk {
   }
 
   void RtxContext::dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput) {
-    Logger::warn(str::format("[RTX-Diag] dispatchScreenOverlay running, frame=", m_device->getCurrentFrameId(),
-                             " hasPending=", (int)m_pendingScreenOverlay.has_value()));
     if (!m_pendingScreenOverlay.has_value()) {
       return;
     }
