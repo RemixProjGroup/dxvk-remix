@@ -145,6 +145,12 @@ namespace remix {
     }
   }
 
+  enum class UIState {
+      None = REMIXAPI_UI_STATE_NONE,
+      Basic = REMIXAPI_UI_STATE_BASIC,
+      Advanced = REMIXAPI_UI_STATE_ADVANCED
+  };
+
   template< typename T >
   using Result = detail::Result< T >;
 
@@ -181,6 +187,10 @@ namespace remix {
     Result< remixapi_MaterialHandle > CreateMaterial(const remixapi_MaterialInfo& info);
     Result< void >                    DestroyMaterial(remixapi_MaterialHandle handle);
     Result< remixapi_MeshHandle >     CreateMesh(const remixapi_MeshInfo& info);
+    // TODO Sub-feature 3: real impl. Matches fork's C++ wrapper shape so the
+    // binary layout is stable; the C-interface slot is currently nullptr and
+    // calling this will dereference nullptr in m_CInterface.CreateMeshBatched.
+    Result< remixapi_MeshHandle >     CreateMeshBatched(const remixapi_MeshInfo& info);
     Result< void >                    DestroyMesh(remixapi_MeshHandle handle);
     Result< void >                    SetupCamera(const remixapi_CameraInfo& info);
     Result< void >                    DrawInstance(const remixapi_InstanceInfo& info);
@@ -210,6 +220,12 @@ namespace remix {
     Result< void >                           pick_HighlightObjects(const uint32_t* objectPickingValues_values,
                                                                    uint32_t objectPickingValues_count,
                                                                    uint8_t colorR, uint8_t colorG, uint8_t colorB);
+    // TODO Sub-feature 4: real impls. Match fork's C++ wrapper shape so the
+    // binary layout is stable; the C-interface slots are currently nullptr
+    // and calling these will guard on the nullptr pointer and return
+    // REMIXAPI_ERROR_CODE_NOT_INITIALIZED.
+    Result<UIState> GetUIState();
+    Result<void> SetUIState(UIState state);
   };
 
 #ifndef REMIX_WINAPI_NO_LIBRARY_LOADER
@@ -230,7 +246,7 @@ namespace remix {
         return status;
       }
 
-      static_assert(sizeof(remixapi_Interface) == 240,
+      static_assert(sizeof(remixapi_Interface) == 272,
                     "Change version, update C++ wrapper when adding new functions");
 
       remix::Interface interfaceInCpp = {};
@@ -293,6 +309,23 @@ namespace remix {
       return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
     }
     return m_CInterface.Present(info);
+  }
+
+  inline Result<UIState> Interface::GetUIState() {
+    if (!m_CInterface.GetUIState) {
+        return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+    }
+
+    remixapi_UIState state = m_CInterface.GetUIState();
+    return static_cast<UIState>(state);
+  }
+
+  inline Result<void> Interface::SetUIState(UIState state) {
+      if (!m_CInterface.SetUIState) {
+          return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
+      }
+
+      return m_CInterface.SetUIState(static_cast<remixapi_UIState>(state));
   }
 
 
@@ -677,6 +710,15 @@ namespace remix {
   inline Result< remixapi_MeshHandle > Interface::CreateMesh(const remixapi_MeshInfo& info) {
     remixapi_MeshHandle handle = nullptr;
     remixapi_ErrorCode status = m_CInterface.CreateMesh(&info, &handle);
+    if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
+      return status;
+    }
+    return handle;
+  }
+
+  inline Result< remixapi_MeshHandle > Interface::CreateMeshBatched(const remixapi_MeshInfo& info) {
+    remixapi_MeshHandle handle = nullptr;
+    remixapi_ErrorCode status = m_CInterface.CreateMeshBatched(&info, &handle);
     if (status != REMIXAPI_ERROR_CODE_SUCCESS) {
       return status;
     }
