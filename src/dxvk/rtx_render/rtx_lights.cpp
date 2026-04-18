@@ -238,7 +238,7 @@ void RtSphereLight::applyTransform(const Matrix4& lightToWorld) {
   updateCachedHash();
 }
 
-void RtSphereLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
+void RtSphereLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
   [[maybe_unused]] const std::size_t oldOffset = offset;
 
   writeGPUHelper(data, offset, m_position.x);
@@ -256,9 +256,10 @@ void RtSphereLight::writeGPUData(unsigned char* data, std::size_t& offset) const
 
   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
 
-  // Note: Sphere light type (0) + shaping enabled flag
+  // Note: Sphere light type (0) + shaping enabled flag + ignoreViewModel flag
   uint32_t flags = lightTypeSphere << 29; // Light Type at bits 29,30,31.
   flags |= m_shaping.getEnabled() ? 1 << 0 : 0 << 0; // Shaping enabled flag at bit 0
+  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
@@ -371,7 +372,7 @@ void RtRectLight::applyTransform(const Matrix4& lightToWorld) {
   updateCachedHash();
 }
 
-void RtRectLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
+void RtRectLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
   [[maybe_unused]] const std::size_t oldOffset = offset;
 
   writeGPUHelper(data, offset, m_position.x);
@@ -409,9 +410,10 @@ void RtRectLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
 
   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
 
-  // Note: Rect light type (1) + shaping enabled flag
+  // Note: Rect light type (1) + shaping enabled flag + ignoreViewModel flag
   uint32_t flags = lightTypeRect << 29; // Light Type at bits 29,30,31.
   flags |= m_shaping.getEnabled() ? 1 << 0 : 0 << 0; // Shaping enabled flag at bit 0
+  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
@@ -553,7 +555,7 @@ void RtDiskLight::applyTransform(const Matrix4& lightToWorld) {
   updateCachedHash();
 }
 
-void RtDiskLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
+void RtDiskLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
   [[maybe_unused]] const std::size_t oldOffset = offset;
 
   writeGPUHelper(data, offset, m_position.x);
@@ -591,9 +593,10 @@ void RtDiskLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
 
   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
 
-  // Note: Disk light type (2) + shaping enabled flag
+  // Note: Disk light type (2) + shaping enabled flag + ignoreViewModel flag
   uint32_t flags = lightTypeDisk << 29; // Light Type at bits 29,30,31.
   flags |= m_shaping.getEnabled() ? 1 << 0 : 0 << 0; // Shaping enabled flag at bit 0
+  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
@@ -716,7 +719,7 @@ void RtCylinderLight::applyTransform(const Matrix4& lightToWorld) {
   updateCachedHash();
 }
 
-void RtCylinderLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
+void RtCylinderLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
   [[maybe_unused]] const std::size_t oldOffset = offset;
 
   writeGPUHelper(data, offset, m_position.x);
@@ -742,8 +745,10 @@ void RtCylinderLight::writeGPUData(unsigned char* data, std::size_t& offset) con
 
   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
 
-  // Note: Cylinder light type (3)
-  writeGPUHelper(data, offset, static_cast<uint32_t>(lightTypeCylinder << 29));
+  // Note: Cylinder light type (3) + ignoreViewModel flag
+  uint32_t flags = lightTypeCylinder << 29;
+  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
 }
@@ -847,7 +852,7 @@ void RtDistantLight::applyTransform(const Matrix4& lightToWorld) {
   updateCachedHash();
 }
 
-void RtDistantLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
+void RtDistantLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
   [[maybe_unused]] const std::size_t oldOffset = offset;
 
   assert(m_direction < Vector3(FLOAT16_MAX));
@@ -878,9 +883,11 @@ void RtDistantLight::writeGPUData(unsigned char* data, std::size_t& offset) cons
 
   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
 
-  // Note: Distant light type (4)
+  // Note: Distant light type (4) + ignoreViewModel flag
   // Todo: Ideally match this with GPU light type constants
-  writeGPUHelper(data, offset, static_cast<uint32_t>(lightTypeDistant << 29));
+  uint32_t flags = lightTypeDistant << 29;
+  if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
 }
@@ -1105,19 +1112,19 @@ void RtLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
 
     [[fallthrough]];
   case RtLightType::Sphere:
-    m_sphereLight.writeGPUData(data, offset);
+    m_sphereLight.writeGPUData(data, offset, this->ignoreViewModel);
     break;
   case RtLightType::Rect:
-    m_rectLight.writeGPUData(data, offset);
+    m_rectLight.writeGPUData(data, offset, this->ignoreViewModel);
     break;
   case RtLightType::Disk:
-    m_diskLight.writeGPUData(data, offset);
+    m_diskLight.writeGPUData(data, offset, this->ignoreViewModel);
     break;
   case RtLightType::Cylinder:
-    m_cylinderLight.writeGPUData(data, offset);
+    m_cylinderLight.writeGPUData(data, offset, this->ignoreViewModel);
     break;
   case RtLightType::Distant:
-    m_distantLight.writeGPUData(data, offset);
+    m_distantLight.writeGPUData(data, offset, this->ignoreViewModel);
     break;
   }
 }

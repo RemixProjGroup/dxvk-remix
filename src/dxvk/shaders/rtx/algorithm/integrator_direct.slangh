@@ -381,6 +381,9 @@ void integrateDirectPath(
     // running RTXDI on secondary surfaces will attempt to use lights from the primary surface which results
     // in poor quality lighting if the surface is in a significantly different spatial location.
     uint16_t lightIdx = kInvalidLightIdx;
+    // Create synthetic customIndex based on geometry flags to forward view model status to light sampling.
+    uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
+
     if (
       cb.enableRtxdi &&
       geometryFlags.primarySelectedIntegrationSurface)
@@ -389,7 +392,7 @@ void integrateDirectPath(
       rtxdiLightSampleValid = sampleLightRTXDI(
         pixelCoordinate,
         primarySurfaceInteraction,
-        lightSample, inverseSelectionPdf, sampledTransportPortalIndex, lightIdx);
+        lightSample, inverseSelectionPdf, sampledTransportPortalIndex, lightIdx, customIndex);
     }
     else
     {
@@ -397,7 +400,7 @@ void integrateDirectPath(
       risLightSampleValid = sampleLightRIS(
         randomState,
         primarySurfaceInteraction, opaqueSurfaceMaterialInteraction, primaryMinimalRayInteraction.viewDirection,
-        lightSample, inverseSelectionPdf, lightIdx);
+        lightSample, inverseSelectionPdf, lightIdx, customIndex);
     }
 
     const bool isDiffusionProfileSss = (cb.sssArgs.enableDiffusionProfile && isSubsurfaceDiffusionProfileMaterial(opaqueSurfaceMaterialInteraction));

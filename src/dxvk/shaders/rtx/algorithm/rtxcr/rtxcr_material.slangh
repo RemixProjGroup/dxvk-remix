@@ -167,13 +167,16 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
     bool risLightSampleValid = false;
     uint8_t sampledTransportPortalIndex = invalidRayPortalIndex;
     uint16_t lightIdx = kInvalidLightIdx;
+    // Create synthetic customIndex for view model filtering.
+    uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
+
     if (cb.enableRtxdi && geometryFlags.primarySelectedIntegrationSurface)
     {
       // Select and sample a light for NEE via RTXDI
       rtxdiLightSampleValid = sampleLightRTXDI(
         samplePixelCoordinate,
         sssTracingResult.sssMinimalSurfaceInteraction,
-        sssLightSample, inverseSelectionPdf, sampledTransportPortalIndex, lightIdx);
+        sssLightSample, inverseSelectionPdf, sampledTransportPortalIndex, lightIdx, customIndex);
     }
     else
     {
@@ -181,7 +184,7 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
       risLightSampleValid = sampleLightRIS(
         randomState,
         sssTracingResult.sssMinimalSurfaceInteraction, opaqueSurfaceMaterialInteraction, minimalRayInteraction.viewDirection,
-        sssLightSample, inverseSelectionPdf, lightIdx);
+        sssLightSample, inverseSelectionPdf, lightIdx, customIndex);
     }
 
     if ((!rtxdiLightSampleValid && !risLightSampleValid) || all(sssLightSample.radiance == 0.0f))
@@ -320,13 +323,15 @@ float3 evalSingleScatteringTransmission(
       LightSample transmissionLightSample;
       float inverseSelectionPdf = 0.0f;
       uint16_t lightIdx = kInvalidLightIdx;
+      // Create synthetic customIndex for view model filtering.
+      uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
       // Select and sample a light for NEE via RIS
       // SST TODO: NEE
       const bool risLightSampleValid = sampleLightRIS(
         randomState,
         transmissionTracingResult.sssMinimalSurfaceInteraction, opaqueSurfaceMaterialInteraction,
         minimalRayInteraction.viewDirection,
-        transmissionLightSample, inverseSelectionPdf, lightIdx);
+        transmissionLightSample, inverseSelectionPdf, lightIdx, customIndex);
 
       if (!risLightSampleValid)
       {
@@ -418,12 +423,14 @@ float3 evalSingleScatteringTransmission(
       LightSample singleScatteringLightSample;
       float singleScatteringInverseSelectionPdf = 0.0f;
       uint16_t singleScatteringLightIdx = kInvalidLightIdx;
+      // Create synthetic customIndex for view model filtering.
+      uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
       // SST TODO: NEE
       const bool risLightSampleValid = sampleLightRIS(
         randomState,
         singleScatteringTracingResult.sssMinimalSurfaceInteraction, opaqueSurfaceMaterialInteraction,
         minimalRayInteraction.viewDirection,
-        singleScatteringLightSample, singleScatteringInverseSelectionPdf, singleScatteringLightIdx);
+        singleScatteringLightSample, singleScatteringInverseSelectionPdf, singleScatteringLightIdx, customIndex);
 
       if (!risLightSampleValid)
       {
