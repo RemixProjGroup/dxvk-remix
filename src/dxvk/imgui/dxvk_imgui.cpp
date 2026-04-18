@@ -670,6 +670,8 @@ namespace dxvk {
   }
 
   void ImGUI::wndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    ImGui::SetCurrentContext(m_context);
+    ImPlot::SetCurrentContext(m_plotContext);
     if (m_overlayWin.ptr() != nullptr) {
       m_overlayWin->gameWndProcHandler(hWnd, msg, wParam, lParam);
     } else {
