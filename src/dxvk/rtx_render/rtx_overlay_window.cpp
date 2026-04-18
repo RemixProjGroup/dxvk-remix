@@ -169,6 +169,28 @@ void GameOverlay::gameWndProcHandler(HWND gameHwnd, UINT msg, WPARAM wParam, LPA
     return;
   }
 
+  // Forward keyboard and character messages to ImGui's Win32 backend so its
+  // io.KeyAlt / io.KeysDown state stays in sync when the legacy WndProc path
+  // is the only delivery path (e.g. when a game menu captures raw input).
+  // overlayWndProc handles these on the raw-input path; this mirrors that for
+  // the legacy fallback. Mouse messages are intentionally not forwarded here:
+  // the overlay's WM_INPUT path already synthesizes scaled mouse events.
+  switch (msg) {
+  case WM_KEYDOWN:
+  case WM_KEYUP:
+  case WM_SYSKEYDOWN:
+  case WM_SYSKEYUP:
+  case WM_CHAR:
+  case WM_SYSCHAR:
+  {
+    HWND overlayHwnd = m_hwnd.load();
+    ImGui_ImplWin32_WndProcHandler(overlayHwnd ? overlayHwnd : gameHwnd, msg, wParam, lParam);
+    break;
+  }
+  default:
+    break;
+  }
+
   auto postShowMsg = [this] { PostMessage(hwnd(), WM_REMIX_SHOW_OVERLAY, 0, 0); };
   auto postHideMsg = [this] { PostMessage(hwnd(), WM_REMIX_HIDE_OVERLAY, 0, 0); };
 
