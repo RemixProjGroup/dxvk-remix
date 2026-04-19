@@ -82,79 +82,73 @@ namespace dxvk {
 
     // Shared slider rendering for per-operator parameter panels.
     static void showHableFilmicSliders() {
-      if (ImGui::TreeNodeEx("Hable Filmic Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
-        // Presets shape the A-F+W curve only; exposureBias is a fork-added control
-        // that gmod's reference presets don't cover, so it is deliberately untouched.
-        if (ImGui::Button("Preset: Uncharted 2")) {
-          RtxForkHableFilmic::shoulderStrengthObject().setDeferred(0.15f);
-          RtxForkHableFilmic::linearStrengthObject()  .setDeferred(0.50f);
-          RtxForkHableFilmic::linearAngleObject()     .setDeferred(0.10f);
-          RtxForkHableFilmic::toeStrengthObject()     .setDeferred(0.20f);
-          RtxForkHableFilmic::toeNumeratorObject()    .setDeferred(0.02f);
-          RtxForkHableFilmic::toeDenominatorObject()  .setDeferred(0.30f);
-          RtxForkHableFilmic::whitePointObject()      .setDeferred(11.2f);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Preset: Half-Life: Alyx")) {
-          RtxForkHableFilmic::shoulderStrengthObject().setDeferred(0.319f);
-          RtxForkHableFilmic::linearStrengthObject()  .setDeferred(0.5047f);
-          RtxForkHableFilmic::linearAngleObject()     .setDeferred(0.1619f);
-          RtxForkHableFilmic::toeStrengthObject()     .setDeferred(0.4667f);
-          RtxForkHableFilmic::toeNumeratorObject()    .setDeferred(0.0f);
-          RtxForkHableFilmic::toeDenominatorObject()  .setDeferred(0.7475f);
-          RtxForkHableFilmic::whitePointObject()      .setDeferred(3.9996f);
-        }
-        RemixGui::DragFloat("Exposure Bias",     &RtxForkHableFilmic::exposureBiasObject(),     0.05f,  0.0f,  8.0f, "%.2f");
-        RemixGui::DragFloat("Shoulder Strength", &RtxForkHableFilmic::shoulderStrengthObject(), 0.005f, 0.0f,  1.0f, "%.4f");
-        RemixGui::DragFloat("Linear Strength",   &RtxForkHableFilmic::linearStrengthObject(),   0.005f, 0.0f,  1.0f, "%.4f");
-        RemixGui::DragFloat("Linear Angle",      &RtxForkHableFilmic::linearAngleObject(),      0.005f, 0.0f,  1.0f, "%.4f");
-        RemixGui::DragFloat("Toe Strength",      &RtxForkHableFilmic::toeStrengthObject(),      0.005f, 0.0f,  1.0f, "%.4f");
-        RemixGui::DragFloat("Toe Numerator",     &RtxForkHableFilmic::toeNumeratorObject(),     0.001f, 0.0f,  0.5f, "%.4f");
-        RemixGui::DragFloat("Toe Denominator",   &RtxForkHableFilmic::toeDenominatorObject(),   0.005f, 0.0f,  1.0f, "%.4f");
-        RemixGui::DragFloat("White Point",       &RtxForkHableFilmic::whitePointObject(),       0.1f,   0.1f, 20.0f, "%.4f");
-        ImGui::TreePop();
+      ImGui::Indent();
+      ImGui::Text("Hable Filmic Parameters:");
+      // Presets shape the A-F+W curve only; exposureBias is a fork-added control
+      // that gmod's reference presets don't cover, so it is deliberately untouched.
+      if (ImGui::Button("Preset: Uncharted 2")) {
+        RtxForkHableFilmic::shoulderStrengthObject().setDeferred(0.15f);
+        RtxForkHableFilmic::linearStrengthObject()  .setDeferred(0.50f);
+        RtxForkHableFilmic::linearAngleObject()     .setDeferred(0.10f);
+        RtxForkHableFilmic::toeStrengthObject()     .setDeferred(0.20f);
+        RtxForkHableFilmic::toeNumeratorObject()    .setDeferred(0.02f);
+        RtxForkHableFilmic::toeDenominatorObject()  .setDeferred(0.30f);
+        RtxForkHableFilmic::whitePointObject()      .setDeferred(11.2f);
       }
+      ImGui::SameLine();
+      if (ImGui::Button("Preset: Half-Life: Alyx")) {
+        RtxForkHableFilmic::shoulderStrengthObject().setDeferred(0.319f);
+        RtxForkHableFilmic::linearStrengthObject()  .setDeferred(0.5047f);
+        RtxForkHableFilmic::linearAngleObject()     .setDeferred(0.1619f);
+        RtxForkHableFilmic::toeStrengthObject()     .setDeferred(0.4667f);
+        RtxForkHableFilmic::toeNumeratorObject()    .setDeferred(0.0f);
+        RtxForkHableFilmic::toeDenominatorObject()  .setDeferred(0.7475f);
+        RtxForkHableFilmic::whitePointObject()      .setDeferred(3.9996f);
+      }
+      RemixGui::DragFloat("Exposure Bias",     &RtxForkHableFilmic::exposureBiasObject(),     0.05f,  0.0f,  8.0f, "%.2f");
+      RemixGui::DragFloat("Shoulder Strength", &RtxForkHableFilmic::shoulderStrengthObject(), 0.005f, 0.0f,  1.0f, "%.4f");
+      RemixGui::DragFloat("Linear Strength",   &RtxForkHableFilmic::linearStrengthObject(),   0.005f, 0.0f,  1.0f, "%.4f");
+      RemixGui::DragFloat("Linear Angle",      &RtxForkHableFilmic::linearAngleObject(),      0.005f, 0.0f,  1.0f, "%.4f");
+      RemixGui::DragFloat("Toe Strength",      &RtxForkHableFilmic::toeStrengthObject(),      0.005f, 0.0f,  1.0f, "%.4f");
+      RemixGui::DragFloat("Toe Numerator",     &RtxForkHableFilmic::toeNumeratorObject(),     0.001f, 0.0f,  0.5f, "%.4f");
+      RemixGui::DragFloat("Toe Denominator",   &RtxForkHableFilmic::toeDenominatorObject(),   0.005f, 0.0f,  1.0f, "%.4f");
+      RemixGui::DragFloat("White Point",       &RtxForkHableFilmic::whitePointObject(),       0.1f,   0.1f, 20.0f, "%.4f");
+      ImGui::Unindent();
     }
 
     static void showAgXSliders() {
-      if (ImGui::TreeNodeEx("AgX Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
-        RemixGui::DragFloat("Gamma",           &RtxForkAgX::gammaObject(),          0.01f,  0.5f,  3.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Saturation",      &RtxForkAgX::saturationObject(),     0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Exposure Offset", &RtxForkAgX::exposureOffsetObject(), 0.01f, -2.0f,  2.0f, "%.3f EV", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::Combo(    "Look",            &RtxForkAgX::lookObject(),           "None\0Punchy\0Golden\0Greyscale\0\0");
-        RemixGui::DragFloat("Contrast",        &RtxForkAgX::contrastObject(),       0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Slope",           &RtxForkAgX::slopeObject(),          0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Power",           &RtxForkAgX::powerObject(),          0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
-        ImGui::TreePop();
-      }
+      ImGui::Indent();
+      ImGui::Text("AgX Controls:");
+      ImGui::Separator();
+      RemixGui::DragFloat("AgX Gamma",           &RtxForkAgX::gammaObject(),          0.01f,  0.5f,  3.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("AgX Saturation",      &RtxForkAgX::saturationObject(),     0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("AgX Exposure Offset", &RtxForkAgX::exposureOffsetObject(), 0.01f, -2.0f,  2.0f, "%.3f EV", ImGuiSliderFlags_AlwaysClamp);
+      ImGui::Separator();
+      RemixGui::Combo(    "AgX Look",            &RtxForkAgX::lookObject(),           "None\0Punchy\0Golden\0Greyscale\0\0");
+      ImGui::Separator();
+      ImGui::Text("Advanced:");
+      RemixGui::DragFloat("AgX Contrast",        &RtxForkAgX::contrastObject(),       0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("AgX Slope",           &RtxForkAgX::slopeObject(),          0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("AgX Power",           &RtxForkAgX::powerObject(),          0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+      ImGui::Unindent();
     }
 
     static void showLottesSliders() {
-      if (ImGui::TreeNodeEx("Lottes 2016 Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
-        RemixGui::DragFloat("HDR Max",         &RtxForkLottes::hdrMaxObject(),   0.5f,   1.0f,  64.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Lottes Contrast", &RtxForkLottes::contrastObject(), 0.01f,  1.0f,   3.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Shoulder",        &RtxForkLottes::shoulderObject(), 0.01f,  0.5f,   2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Mid In",          &RtxForkLottes::midInObject(),    0.005f, 0.01f,  1.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Mid Out",         &RtxForkLottes::midOutObject(),   0.005f, 0.01f,  1.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
-        ImGui::TreePop();
-      }
+      ImGui::Indent();
+      ImGui::Text("Lottes 2016 Parameters:");
+      ImGui::Separator();
+      RemixGui::DragFloat("HDR Max",         &RtxForkLottes::hdrMaxObject(),   0.5f,   1.0f,  64.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Lottes Contrast", &RtxForkLottes::contrastObject(), 0.01f,  1.0f,   3.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Shoulder",        &RtxForkLottes::shoulderObject(), 0.01f,  0.5f,   2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Mid In",          &RtxForkLottes::midInObject(),    0.005f, 0.01f,  1.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Mid Out",         &RtxForkLottes::midOutObject(),   0.005f, 0.01f,  1.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
+      ImGui::Unindent();
     }
 
     void showTonemapOperatorUI() {
       RemixGui::Combo("Tonemapping Operator",
                       &RtxForkGlobalTonemap::tonemapOperatorObject(),
                       k_operatorItems);
-
-      // Direct-mode toggle: applies regardless of selected operator. Reuses
-      // the existing rtx.tonemappingMode RtxOption (extended with a Direct
-      // value in rtx_options.h as part of this commit).
-      bool directMode = (RtxOptions::tonemappingMode() == TonemappingMode::Direct);
-      if (RemixGui::Checkbox("Direct Mode (skip dynamic curve)", &directMode)) {
-        // When toggled OFF, fall back to Global. The Global/Local selector
-        // in the same panel above is the canonical switch between those two.
-        RtxOptions::tonemappingModeObject().setDeferred(
-          directMode ? TonemappingMode::Direct : TonemappingMode::Global);
-      }
 
       if (RtxForkGlobalTonemap::tonemapOperator() == TonemapOperator::HableFilmic) {
         showHableFilmicSliders();

@@ -207,7 +207,9 @@ check will enforce it if discipline slips.
   *The `kTab_Wrapper` guard (`remixapi_imgui_HasDrawCallback()` check + `continue`) remains as an inline tweak in the tab loop (structural control flow, not extractable). The case body (`remixapi_imgui_InvokeDrawCallback()`) is wrapped as `fork_hooks::wrapperTabDraw()`. No friend declaration needed.*
 
 - **Hook** at tonemapper ImGui settings → `fork_hooks::showTonemapOperatorUI` / `fork_hooks::showLocalTonemapOperatorUI` in `rtx_fork_tonemap.cpp`. Also remove the standalone `RemixGui::Checkbox("Use Legacy ACES", ...)` at ~line 3888 — its RtxOption `rtx.useLegacyACES` is being deleted.
-  *Operator combo + per-operator sliders + Direct-mode toggle replace the old ACES checkbox. "Use Legacy ACES" reachable via TonemapOperator::ACESLegacy enum value.*
+  *Operator combo + per-operator sliders replace the old ACES checkbox. "Use Legacy ACES" reachable via TonemapOperator::ACESLegacy enum value.*
+
+- **Inline tweak** at `ImGUI::showRenderingSettings` "Tonemapping" header (~line 3880) — 2-line change: extend the `Tonemapping Mode` combo string from `"Global\0Local\0"` to `"Global\0Local\0Direct\0"` and invert the `if/else` branch so both Global and Direct route to `metaToneMapping().showImguiSettings()`. Required because `TonemappingMode::Direct` (added to the enum in commit 3 of workstream 2) must be selectable from the primary top-level combo, and Direct shares the global tonemapper's UI panel — only the dynamic tone curve is bypassed at dispatch time.
 
 ---
 
