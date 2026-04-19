@@ -105,11 +105,13 @@ namespace {
   // must not re-enter s_mutex.
   dxvk::mutex s_mutex {};
 
-  // Frame-boundary callbacks (native Remix API)
-  std::atomic<bool> s_inFrame { false };
-  PFN_remixapi_BridgeCallback s_beginCallback { nullptr };
-  PFN_remixapi_BridgeCallback s_endCallback { nullptr };
-  PFN_remixapi_BridgeCallback s_presentCallback { nullptr };
+  // Frame-boundary callback state removed in migration #7c.
+  // s_inFrame, s_beginCallback, s_endCallback, s_presentCallback now live in
+  // rtx_fork_api_entry.cpp (anonymous namespace). Access via fork_hooks:
+  //   notifyBeginScene()        — DrawInstance / DrawLightInstance call sites
+  //   registerCallbacks()       — remixapi_RegisterCallbacks body
+  //   shutdownCallbacks()       — remixapi_Shutdown
+  //   presentCallbackDispatch() — remixapi_Present after native Present call
 
   // Global pending queues; applied to the device at safe points (frame/present)
   struct PendingLightUpdate { remixapi_LightHandle handle; std::optional<dxvk::RtLight> rtLight; };
@@ -1377,13 +1379,8 @@ namespace {
     if (!remixDevice) {
       return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
     }
-    // beginScene on first draw per frame
-    if (!s_inFrame.exchange(true)) {
-      auto cb = s_beginCallback;
-      if (cb) {
-        cb();
-      }
-    }
+    // beginScene on first draw per frame (callback state lives in fork file)
+    dxvk::fork_hooks::notifyBeginScene();
 
     // Ensure any meshes queued via remixapi_CreateMeshBatched are registered
     // with the asset replacer before this draw references them.
@@ -1559,12 +1556,7 @@ namespace {
     }
 
     // beginScene on first API submission per frame (lights-only frames)
-    if (!s_inFrame.exchange(true)) {
-      auto cb = s_beginCallback;
-      if (cb) {
-        cb();
-      }
-    }
+    dxvk::fork_hooks::notifyBeginScene();
 
     // async load
     std::lock_guard lock { s_mutex };
@@ -2005,11 +1997,8 @@ namespace {
   }
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_Shutdown(void) {
-    // Clear callbacks and frame state
-    s_beginCallback = nullptr;
-    s_endCallback = nullptr;
-    s_presentCallback = nullptr;
-    s_inFrame.store(false);
+    // Clear fork-owned callback state (lives in rtx_fork_api_entry.cpp)
+    dxvk::fork_hooks::shutdownCallbacks();
     if (s_dxvkDevice) {
       while (true) {
         ULONG left = s_dxvkDevice->Release();
@@ -2150,27 +2139,16 @@ namespace {
     // Forward any pending screen overlay to the render thread for this frame.
     dxvk::fork_hooks::presentScreenOverlayFlush(remixDevice);
 
-    // endScene right before present if a frame was started
-    if (s_inFrame.load()) {
-      auto cb = s_endCallback;
-      if (cb) {
-        cb();
-      }
-    }
+    // endScene callback before native present (fork-owned state)
+    dxvk::fork_hooks::presentEndSceneDispatch();
+
     HRESULT hr = remixDevice->Present(NULL, NULL, info ? info->hwndOverride : NULL, NULL);
     if (FAILED(hr)) {
       return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
     }
-    // present callback after successful present
-    {
-      auto cb = s_presentCallback;
-      if (cb) {
-        cb();
-      }
-    }
 
-    // reset frame state
-    s_inFrame.store(false);
+    // present callback + s_inFrame reset after successful native present
+    dxvk::fork_hooks::presentCallbackDispatch();
 
     UINT windowWidth = 0, windowHeight = 0;
     {
@@ -2394,9 +2372,7 @@ extern "C"
     PFN_remixapi_BridgeCallback beginSceneCallback,
     PFN_remixapi_BridgeCallback endSceneCallback,
     PFN_remixapi_BridgeCallback presentCallback) {
-    s_beginCallback = beginSceneCallback;
-    s_endCallback = endSceneCallback;
-    s_presentCallback = presentCallback;
+    dxvk::fork_hooks::registerCallbacks(beginSceneCallback, endSceneCallback, presentCallback);
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
@@ -2437,42 +2413,42 @@ extern "C"
 
     auto interf = remixapi_Interface {};
     {
+      // Upstream vtable slots
       interf.Startup = remixapi_Startup;
       interf.Shutdown = remixapi_Shutdown;
       interf.Present = remixapi_Present;
       interf.CreateMaterial = remixapi_CreateMaterial;
       interf.DestroyMaterial = remixapi_DestroyMaterial;
       interf.CreateMesh = remixapi_CreateMesh;
-      interf.CreateMeshBatched = remixapi_CreateMeshBatched;
       interf.DestroyMesh = remixapi_DestroyMesh;
       interf.SetupCamera = remixapi_SetupCamera;
       interf.DrawInstance = remixapi_DrawInstance;
       interf.CreateLight = remixapi_CreateLight;
-      interf.CreateLightBatched = remixapi_CreateLightBatched;
       interf.DestroyLight = remixapi_DestroyLight;
       interf.DrawLightInstance = remixapi_DrawLightInstance;
       interf.SetConfigVariable = remixapi_SetConfigVariable;
-      interf.AddTextureHash = remixapi_AddTextureHash;
-      interf.RemoveTextureHash = remixapi_RemoveTextureHash;
-      interf.CreateTexture = remixapi_CreateTexture;
-      interf.DestroyTexture = remixapi_DestroyTexture;
       interf.dxvk_CreateD3D9 = remixapi_dxvk_CreateD3D9_legacy;
       interf.dxvk_RegisterD3D9Device = remixapi_dxvk_RegisterD3D9Device;
       interf.dxvk_GetExternalSwapchain = remixapi_dxvk_GetExternalSwapchain;
       interf.dxvk_GetVkImage = remixapi_dxvk_GetVkImage;
       interf.dxvk_CopyRenderingOutput = remixapi_dxvk_CopyRenderingOutput;
       interf.dxvk_SetDefaultOutput = remixapi_dxvk_SetDefaultOutput;
-      interf.dxvk_GetTextureHash = remixapi_dxvk_GetTextureHash;
-      interf.dxvk_GetSharedD3D11TextureHandle = remixapi_dxvk_GetSharedD3D11TextureHandle;
       interf.pick_RequestObjectPicking = remixapi_pick_RequestObjectPicking;
       interf.pick_HighlightObjects = remixapi_pick_HighlightObjects;
+      // Fork-added vtable slots (anonymous-namespace; must be assigned here where they're visible)
+      interf.CreateMeshBatched = remixapi_CreateMeshBatched;
+      interf.AddTextureHash = remixapi_AddTextureHash;
+      interf.RemoveTextureHash = remixapi_RemoveTextureHash;
+      interf.CreateTexture = remixapi_CreateTexture;
+      interf.DestroyTexture = remixapi_DestroyTexture;
+      interf.dxvk_GetTextureHash = remixapi_dxvk_GetTextureHash;
+      interf.dxvk_GetSharedD3D11TextureHandle = remixapi_dxvk_GetSharedD3D11TextureHandle;
       interf.GetUIState = remixapi_GetUIState;
       interf.SetUIState = remixapi_SetUIState;
-      // Optional extensions introduced alongside v0.5.1 changes
-      interf.RegisterCallbacks = remixapi_RegisterCallbacks;
-      interf.AutoInstancePersistentLights = remixapi_AutoInstancePersistentLights;
-      interf.UpdateLightDefinition = remixapi_UpdateLightDefinition;
       interf.DrawScreenOverlay = remixapi_DrawScreenOverlay;
+      interf.CreateLightBatched = remixapi_CreateLightBatched;
+      // Fork-added vtable slots (extern-C exported; delegated to fork hook)
+      dxvk::fork_hooks::remixApiVtableInit(interf);
     }
     static_assert(sizeof(interf) == 280, "Add/remove function registration");
 

@@ -364,6 +364,58 @@ namespace dxvk {
       D3D9DeviceEx*        remixDevice,
       remixapi_TextureHandle handle);
 
+    // Fires the beginScene callback on the first submission of the frame
+    // (whichever API call establishes s_inFrame first). Atomically exchanges
+    // s_inFrame to true; calls s_beginCallback once per frame when it was false.
+    // Called from remixapi_DrawInstance and remixapi_DrawLightInstance.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    void notifyBeginScene();
+
+    // Stores the three per-frame bridge callbacks. Called from the
+    // remixapi_RegisterCallbacks one-liner delegate in rtx_remix_api.cpp.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    void registerCallbacks(
+      PFN_remixapi_BridgeCallback beginSceneCallback,
+      PFN_remixapi_BridgeCallback endSceneCallback,
+      PFN_remixapi_BridgeCallback presentCallback);
+
+    // Clears all four frame-boundary state vars (s_inFrame, s_beginCallback,
+    // s_endCallback, s_presentCallback) to their null/false defaults. Called
+    // from remixapi_Shutdown.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    void shutdownCallbacks();
+
+    // Fires the endScene callback if s_inFrame is set (i.e. the frame was
+    // started via DrawInstance or DrawLightInstance). Called from
+    // remixapi_Present immediately before the native remixDevice->Present()
+    // so the endScene callback fires before GPU presentation.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    void presentEndSceneDispatch();
+
+    // Fires the present callback and resets s_inFrame to false. Called from
+    // remixapi_Present immediately after the native remixDevice->Present()
+    // returns successfully. Separated from presentEndSceneDispatch because the
+    // native Present call sits between the two callback fires.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    void presentCallbackDispatch();
+
+    // Populates the three fork-added extern-C-linked vtable slots
+    // (RegisterCallbacks, AutoInstancePersistentLights, UpdateLightDefinition)
+    // in the remixapi_Interface vtable. Called from remixapi_InitializeLibrary
+    // after the upstream and anonymous-namespace fork slots are filled inline.
+    // Anonymous-namespace fork additions (AddTextureHash, CreateTexture,
+    // GetUIState, CreateLightBatched, etc.) are assigned inline in upstream
+    // where their symbols are visible — only externally linked symbols can be
+    // named from this translation unit.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    void remixApiVtableInit(remixapi_Interface& interf);
+
   } // namespace fork_hooks
 
 } // namespace dxvk

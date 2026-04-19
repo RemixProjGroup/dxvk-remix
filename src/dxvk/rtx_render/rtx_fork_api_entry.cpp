@@ -10,14 +10,19 @@
 //   #7a  — infrastructure / foundation blocks:
 //           * textureHashPathLookup
 //           * mutateTextureHashOption
-//   #7b  — API function implementations (this pass):
+//   #7b  — API function implementations:
 //           * drawScreenOverlay   — stages pixel data into s_pendingScreenOverlay
 //           * presentScreenOverlayFlush — drains s_pendingScreenOverlay each frame
 //           * getUiState / setUiState
 //           * getSharedD3D11TextureHandle (stub)
 //           * dxvkGetTextureHash
 //           * createTexture / destroyTexture
-//   #7c  — interception + vtable init + frame-boundary callback infrastructure
+//   #7c  — interception + vtable init + frame-boundary callback infrastructure (this pass):
+//           * notifyBeginScene    — fires s_beginCallback on first frame submission
+//           * registerCallbacks   — stores begin/end/present callbacks
+//           * shutdownCallbacks   — clears all four callback-state vars
+//           * presentCallbackDispatch — fires end/present callbacks + resets s_inFrame
+//           * remixApiVtableInit  — populates all fork-added vtable slots
 //
 // PendingScreenOverlay state (struct + s_pendingScreenOverlay) lives in the
 // anonymous namespace of THIS translation unit so both the writer
@@ -48,7 +53,27 @@
 
 #include <remix/remix_c.h>                // remixapi_ErrorCode, REMIXAPI_ERROR_CODE_*
 
+// Forward declarations for the three extern-"C" fork-exported functions that
+// remixApiVtableInit registers into the vtable. These have external linkage
+// (REMIXAPI = __declspec(dllexport)) so they are visible across translation
+// units; all anonymous-namespace functions in rtx_remix_api.cpp are NOT.
+//
+// NOTE: remixapi_CreateLightBatched is in the anonymous namespace (no REMIXAPI
+// prefix) so it has internal linkage and cannot be named here. It is assigned
+// inline in the vtable init block in rtx_remix_api.cpp.
+extern "C" {
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_RegisterCallbacks(
+    PFN_remixapi_BridgeCallback beginSceneCallback,
+    PFN_remixapi_BridgeCallback endSceneCallback,
+    PFN_remixapi_BridgeCallback presentCallback);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_AutoInstancePersistentLights(void);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_UpdateLightDefinition(
+    remixapi_LightHandle handle,
+    const remixapi_LightInfo* info);
+}
+
 #include <algorithm>                      // std::clamp
+#include <atomic>
 #include <cstdint>
 #include <cstring>                        // memcpy
 #include <optional>
@@ -79,6 +104,23 @@ namespace {
   };
 
   std::optional<PendingScreenOverlay> s_pendingScreenOverlay;
+
+  // -------------------------------------------------------------------------
+  // Frame-boundary callback state (migration #7c)
+  //
+  // Lifted from rtx_remix_api.cpp anonymous namespace. Written by
+  // registerCallbacks (remixapi_RegisterCallbacks delegate) and shutdownCallbacks
+  // (remixapi_Shutdown). Read by notifyBeginScene (DrawInstance /
+  // DrawLightInstance call sites), presentCallbackDispatch (remixapi_Present),
+  // and shutdownCallbacks (remixapi_Shutdown).
+  //
+  // s_inFrame is atomic because remixapi_DrawInstance and remixapi_Present can
+  // race on the exchange/load under multi-threaded plugin usage.
+  // -------------------------------------------------------------------------
+  std::atomic<bool>              s_inFrame       { false };
+  PFN_remixapi_BridgeCallback    s_beginCallback  { nullptr };
+  PFN_remixapi_BridgeCallback    s_endCallback    { nullptr };
+  PFN_remixapi_BridgeCallback    s_presentCallback { nullptr };
 
 } // anonymous namespace
 
@@ -617,6 +659,109 @@ namespace fork_hooks {
     });
 
     return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  // ---------------------------------------------------------------------------
+  // notifyBeginScene (migration #7c)
+  //
+  // Fires s_beginCallback on the first API submission of the frame.
+  // Uses an atomic exchange so only the first caller per frame triggers the
+  // callback regardless of which API path (DrawInstance / DrawLightInstance)
+  // reaches it first. Called while the remix-api s_mutex is NOT held (the
+  // exchange itself is atomic; callback must be re-read after the exchange to
+  // avoid a null race).
+  // ---------------------------------------------------------------------------
+  void notifyBeginScene() {
+    if (!s_inFrame.exchange(true)) {
+      auto cb = s_beginCallback;
+      if (cb) {
+        cb();
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // registerCallbacks (migration #7c)
+  //
+  // Stores the three per-frame bridge callbacks into fork-owned state.
+  // Called from the one-liner remixapi_RegisterCallbacks delegate in upstream.
+  // ---------------------------------------------------------------------------
+  void registerCallbacks(
+      PFN_remixapi_BridgeCallback beginSceneCallback,
+      PFN_remixapi_BridgeCallback endSceneCallback,
+      PFN_remixapi_BridgeCallback presentCallback) {
+    s_beginCallback   = beginSceneCallback;
+    s_endCallback     = endSceneCallback;
+    s_presentCallback = presentCallback;
+  }
+
+  // ---------------------------------------------------------------------------
+  // shutdownCallbacks (migration #7c)
+  //
+  // Resets all four frame-boundary state variables to null/false. Called from
+  // remixapi_Shutdown before the device is released.
+  // ---------------------------------------------------------------------------
+  void shutdownCallbacks() {
+    s_beginCallback   = nullptr;
+    s_endCallback     = nullptr;
+    s_presentCallback = nullptr;
+    s_inFrame.store(false);
+  }
+
+  // ---------------------------------------------------------------------------
+  // presentEndSceneDispatch (migration #7c)
+  //
+  // Fires the endScene callback if s_inFrame indicates a frame was started.
+  // Called from remixapi_Present immediately BEFORE the native Present so the
+  // endScene callback fires before the GPU flip.
+  // ---------------------------------------------------------------------------
+  void presentEndSceneDispatch() {
+    if (s_inFrame.load()) {
+      auto cb = s_endCallback;
+      if (cb) {
+        cb();
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // presentCallbackDispatch (migration #7c)
+  //
+  // Fires the present callback and resets s_inFrame to false. Called from
+  // remixapi_Present immediately AFTER the native Present call returns
+  // successfully. The present callback fires post-flip; s_inFrame is reset
+  // here rather than in presentEndSceneDispatch so that any code between the
+  // two hooks can still query the in-frame state if needed.
+  // ---------------------------------------------------------------------------
+  void presentCallbackDispatch() {
+    {
+      auto cb = s_presentCallback;
+      if (cb) {
+        cb();
+      }
+    }
+    s_inFrame.store(false);
+  }
+
+  // ---------------------------------------------------------------------------
+  // remixApiVtableInit (migration #7c)
+  //
+  // Populates the three fork-added extern-"C"-linked function-pointer slots
+  // in the remixapi_Interface vtable. Called from remixapi_InitializeLibrary
+  // after the upstream and anonymous-namespace fork slots are assigned inline.
+  //
+  // Only extern-"C" REMIXAPI-exported functions can be named from this TU.
+  // Anonymous-namespace additions (AddTextureHash, CreateTexture, GetUIState,
+  // CreateLightBatched, etc.) are assigned inline in rtx_remix_api.cpp where
+  // their symbols are visible.
+  //
+  // The static_assert(sizeof(interf) == 280) sentinel is retained inline in
+  // upstream; it is not repeated here.
+  // ---------------------------------------------------------------------------
+  void remixApiVtableInit(remixapi_Interface& interf) {
+    interf.RegisterCallbacks              = remixapi_RegisterCallbacks;
+    interf.AutoInstancePersistentLights   = remixapi_AutoInstancePersistentLights;
+    interf.UpdateLightDefinition          = remixapi_UpdateLightDefinition;
   }
 
 } // namespace fork_hooks
