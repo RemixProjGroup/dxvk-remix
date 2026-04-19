@@ -1,8 +1,14 @@
-# CLAUDE.md — agent entry point for dxvk-unity-new/dxvk-remix
+# CLAUDE.md — agent entry point for this dxvk-remix port
 
-This repo is a Unity-targeted port of NVIDIA's `dxvk-remix`, derived from
-the gmod-rtx community fork. Agent-facing docs live in **`agent_docs/`**.
-Start there: **[`agent_docs/README.md`](agent_docs/README.md)**.
+This repo is a port of NVIDIA's `dxvk-remix` focused on enabling
+**modern games to run through the Remix SDK API** — derived from the
+gmod-rtx community fork, carrying API surface, capture/replacement,
+hw-skinning, tonemap, and atmosphere work needed for API-driven
+game integrations. Unity is one such integration path among others;
+the port itself is not Unity-specific.
+
+Agent-facing docs live in **`agent_docs/`**. Start there:
+**[`agent_docs/README.md`](agent_docs/README.md)**.
 
 ## Fork discipline — read before editing upstream files
 
@@ -27,9 +33,11 @@ Short version:
 ## Branch conventions
 
 - `main` — upstream NVIDIA mirror. Never commit port work here.
-- `unity-workstream/NN-<name>` — one branch per workstream
-  (W1 = API + skinning, W2 = tonemap, W5 = Hillaire atmosphere,
-  W4 = unity-native fixes, W6 = agent-docs refactor; W3 HDR shelved).
+- `unity-workstream/NN-<name>` — one branch per workstream. Branch prefix
+  is historical — it tracks gmod's `origin/unity` baseline, not an
+  engine-specific intent. (W1 = Remix API + HW skinning,
+  W2 = tonemap operators, W4 = Remix API correctness fixes,
+  W5 = Hillaire atmosphere, W6 = agent-docs refactor; W3 HDR shelved.)
 - `unity-port-planning` — specs/plans-only working branch
   (being consolidated into `agent_docs/` as of W6).
 - `modern-games-sdk-api` on `kim2091` remote — the **shipping** branch.
@@ -64,9 +72,11 @@ community fork:
 c:/Users/mystery/Projects/dx11_remix/dxvk-remix-gmod
 ```
 
-Branches of note: `origin/unity` (Unity-targeted, the port's baseline),
-`origin/gmod-ex` (Garry's Mod game-specific — usually out-of-scope for
-this port). Never commit or push to this repo.
+Branches of note: `origin/unity` (the port's baseline — named after the
+gmod branch, carries the Remix API / capture / hw-skinning / atmosphere
+work that matters for modern-game integrations), `origin/gmod-ex`
+(Garry's Mod game-specific — usually out-of-scope). Never commit or
+push to this repo.
 
 See [`agent_docs/audits/`](agent_docs/audits/) for the most recent
 divergence audits.

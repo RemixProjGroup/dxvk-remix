@@ -1,9 +1,10 @@
 # agent_docs/
 
 This directory is the single home for all agent-facing documentation on
-this port. Any agent (Claude, Gemini, Copilot, Codex, or a human reading
-with their brain) should be able to find the full fork-port story by
-reading files here.
+this port — a fork of NVIDIA's `dxvk-remix` focused on running modern
+games through the Remix SDK API. Any agent (Claude, Gemini, Copilot,
+Codex, or a human reading with their brain) should be able to find the
+full fork-port story by reading files here.
 
 ## Layout
 
@@ -64,7 +65,7 @@ on *why* it was shelved.
 | W1 | Remix API + HW skinning | shipped | `unity-workstream/01-api-skinning` |
 | W2 | Tonemap operators | shipped | `unity-workstream/02-tonemap` |
 | W3 | HDR | **shelved** (upstream gmod impl broken per author 2026-04-19) | `unity-workstream/03-hdr` (local) |
-| W4 | Unity-native fixes (externalMesh + capture guards + log silence) | shipped | `unity-workstream/04-unity-native-fixes` |
+| W4 | Remix API correctness fixes (externalMesh + capture guards + log silence) | shipped | `unity-workstream/04-unity-native-fixes` |
 | W5 | Hillaire atmosphere | shipped | `unity-workstream/05-hillaire-atmosphere` |
 | W6 | Agent docs consolidation | in-flight | `unity-workstream/06-agent-docs-refactor` |
 
@@ -73,9 +74,14 @@ Shipping branch (downstream users pull this):
 
 ## Workstream numbering note
 
-The port was previously using an ad-hoc numbering where new workstreams
-picked the next free number. W3 is shelved, so numbers aren't necessarily
-monotonic in shipping order.
+The port uses an ad-hoc numbering where new workstreams pick the next
+free number. W3 is shelved, so numbers aren't necessarily monotonic
+in shipping order.
+
+Branch prefix `unity-workstream/...` is historical — it tracks gmod's
+`origin/unity` baseline rather than indicating an engine-specific
+focus. The port itself is engine-agnostic as far as Remix API
+integrations go.
 
 ## When you're new to this repo
 
