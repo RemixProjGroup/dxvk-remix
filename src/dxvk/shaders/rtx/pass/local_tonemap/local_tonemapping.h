@@ -105,13 +105,25 @@ struct FinalCombineArgs
 
   uint ditherMode;
   uint frameIndex;
-  uint directOperatorMode;    // 1 = operator-only (skip the local-pyramid weighting). Commit 3 wires the actual Direct mode; until then always 0.
+  uint directOperatorMode;    // 1 = operator-only (skip the local-pyramid weighting). Wired to TonemappingMode::Direct in Commit 3.
   uint pad2;
+
+  // Hable Filmic parameters (op == tonemapOperatorHableFilmic). Commit 5
+  // overlays Lottes 2016 params on these same slots.
+  float hableExposureBias;
+  float hableShoulderStrength;   // A
+  float hableLinearStrength;     // B
+  float hableLinearAngle;        // C
+
+  float hableToeStrength;        // D
+  float hableToeNumerator;       // E
+  float hableToeDenominator;     // F
+  float hableWhitePoint;         // W
 };
 
 #ifdef __cplusplus
 static_assert(sizeof(LuminanceArgs)    == 32, "LuminanceArgs size preserved by the operator-enum refactor.");
-static_assert(sizeof(FinalCombineArgs) == 64, "FinalCombineArgs size preserved by the operator-enum refactor.");
+static_assert(sizeof(FinalCombineArgs) == 96, "FinalCombineArgs size: commit 3 added 32 bytes for Hable params.");
 #endif
 
 

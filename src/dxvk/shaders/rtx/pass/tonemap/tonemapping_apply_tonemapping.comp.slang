@@ -129,9 +129,21 @@ float3 applyToneMapping(float3 color, uint2 pixelPosition)
   {
     if (cb.debugMode == 0) 
     {
-      // Normal tone mapping
-      color = dynamicToneMapper(color);
-      color = applyTonemapOperator(cb.tonemapOperator, color, /*suppressBlackLevelClamp=*/false);
+      // Normal tone mapping. Direct mode (cb.directOperatorMode == 1) skips
+      // the dynamic curve and applies only the selected operator.
+      if (cb.directOperatorMode == 0)
+      {
+        color = dynamicToneMapper(color);
+      }
+      color = applyTonemapOperator(cb.tonemapOperator, color, /*suppressBlackLevelClamp=*/false,
+                                   cb.hableExposureBias,
+                                   cb.hableShoulderStrength,
+                                   cb.hableLinearStrength,
+                                   cb.hableLinearAngle,
+                                   cb.hableToeStrength,
+                                   cb.hableToeNumerator,
+                                   cb.hableToeDenominator,
+                                   cb.hableWhitePoint);
     } 
     else
     {

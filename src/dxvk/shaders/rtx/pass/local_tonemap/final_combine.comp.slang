@@ -108,7 +108,15 @@ void main(uint2 threadId : SV_DispatchThreadID)
     mix(1.0, finalMultiplier, (luminance / lerpToUnityThreshold) * (luminance / lerpToUnityThreshold));
 
   vec3 texelFinal = originalColor.xyz * finalMultiplier;
-  texelFinal = applyTonemapOperator(cb.tonemapOperator, texelFinal, /*suppressBlackLevelClamp=*/false);
+  texelFinal = applyTonemapOperator(cb.tonemapOperator, texelFinal, /*suppressBlackLevelClamp=*/false,
+                                    cb.hableExposureBias,
+                                    cb.hableShoulderStrength,
+                                    cb.hableLinearStrength,
+                                    cb.hableLinearAngle,
+                                    cb.hableToeStrength,
+                                    cb.hableToeNumerator,
+                                    cb.hableToeDenominator,
+                                    cb.hableWhitePoint);
   if (cb.performSRGBConversion)
   {
     texelFinal = linearToGamma(texelFinal);

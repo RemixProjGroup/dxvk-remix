@@ -55,12 +55,11 @@ static const uint32_t ditherModeSpatialTemporal = 2;
 
 // Tonemap operator constants. Mirror the TonemapOperator enum in
 // rtx_fork_tonemap.h; the populateTonemapOperatorArgs hook is the single
-// place that casts the C++ enum into this uint. Commit 2 (this commit)
-// defines None / ACES / ACESLegacy; commits 3-5 extend with HableFilmic,
-// AgX, and Lottes.
+// place that casts the C++ enum into this uint.
 static const uint32_t tonemapOperatorNone        = 0;
 static const uint32_t tonemapOperatorACES        = 1;
 static const uint32_t tonemapOperatorACESLegacy  = 2;
+static const uint32_t tonemapOperatorHableFilmic = 3;  // Commit 3.
 
 // Constant buffers
 
@@ -129,16 +128,29 @@ struct ToneMappingApplyToneMappingArgs {
 
   uint ditherMode;
   uint frameIndex;
-  uint directOperatorMode;    // 1 = operator-only (skip dynamic curve). Commit 3 wires the actual Direct mode; until then always 0.
-  uint pad1;                  // Reserved for Hable Filmic params (commit 3) / Lottes params (commit 5, shared slots).
+  uint directOperatorMode;    // 1 = operator-only (skip dynamic curve). Wired to TonemappingMode::Direct in Commit 3.
+  uint pad1;                  // Unused; kept for 16-byte alignment of the Hable block below.
+
+  // Hable Filmic parameters (op == tonemapOperatorHableFilmic). Commit 5
+  // will overlay Lottes 2016 params on these same slots since the operators
+  // are mutually exclusive.
+  float hableExposureBias;
+  float hableShoulderStrength;   // A
+  float hableLinearStrength;     // B
+  float hableLinearAngle;        // C
+
+  float hableToeStrength;        // D
+  float hableToeNumerator;       // E
+  float hableToeDenominator;     // F
+  float hableWhitePoint;         // W
 };
 
 #ifdef __cplusplus
-// Workstream 2 commit 2 pins the struct size. Commits 3-5 grow it (Hable/AgX
-// params), each with its own updated static_assert. Commit 5 confirms Lottes
-// shares Hable's slots without further growth.
-static_assert(sizeof(ToneMappingApplyToneMappingArgs) == 80,
-              "ToneMappingApplyToneMappingArgs size preserved by the operator-enum refactor.");
+// Workstream 2 commit 3 grows the struct with 8 Hable params (32 bytes).
+// Commit 4 appends 32 bytes of AgX params; commit 5 confirms Lottes
+// overlays Hable's slots without further growth.
+static_assert(sizeof(ToneMappingApplyToneMappingArgs) == 112,
+              "ToneMappingApplyToneMappingArgs size: commit 3 added 32 bytes for Hable params.");
 #endif
 
 

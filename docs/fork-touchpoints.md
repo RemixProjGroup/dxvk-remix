@@ -285,8 +285,8 @@ check will enforce it if discipline slips.
 - **Hook** at `RtxContext::dispatchScreenOverlay` (method body + ScreenOverlayShader class) → `fork_hooks::dispatchScreenOverlay` in `rtx_fork_overlay.cpp`
   *`ScreenOverlayShader` lifted to `rtx_fork_overlay.cpp`; `dispatchScreenOverlay` is now a one-line delegate. The hook alpha-composites a plugin-uploaded RGBA buffer over the final tone-mapped image using the compute shader.*
 
-- **[pending commit 3]** Inline tweak at tonemap dispatch point — Direct-mode branch via `fork_hooks::shouldSkipToneCurve`.
-  *Skips histogram + tone-curve + local-pyramid passes when Direct mode is selected.*
+- **Inline tweak** at `RtxContext::dispatchTonemapping` (~line 1727) — global-tonemap dispatch gate widened to include `TonemappingMode::Direct` (`if (mode == Global || mode == Direct)`). In Direct mode, the global tonemapper runs but the apply shader's `cb.directOperatorMode` gate skips the dynamic curve and applies only the selected operator.
+  *Direct tonemapping mode (operator-only, no curve) dispatches through the global path.*
 
 ---
 
@@ -487,6 +487,9 @@ check will enforce it if discipline slips.
 
 - **Inline tweak** — remove `rtx.useLegacyACES` + `rtx.showLegacyACESOption` RtxOptions (superseded by `TonemapOperator::ACESLegacy` enum value).
   *Both options live at the `rtx` namespace (not `rtx.tonemap`); removed in the enum refactor.*
+
+- **Inline tweak** at `TonemappingMode` enum (Workstream 2 commit 3) — add third value `Direct` (operator-only dispatch, skips dynamic curve + local pyramid). Consumed by `fork_hooks::shouldSkipToneCurve` and by the widened tonemap dispatch gate in `rtx_context.cpp`.
+  *Extends the upstream two-value `TonemappingMode` enum with the fork-introduced `Direct` value (gmod baad5e79).*
 
 ---
 

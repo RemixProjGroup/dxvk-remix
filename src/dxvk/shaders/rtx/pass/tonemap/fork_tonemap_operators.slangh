@@ -22,15 +22,41 @@
 // include guards and is already pulled in via tonemapping.slangh.
 #include "rtx/pass/tonemap/tonemapping.h"
 
+// Hable Filmic (Uncharted 2) tonemapper core.
+// Reference: http://filmicworlds.com/blog/filmic-tonemapping-operators/
+// A..F are the shoulder/linear/toe parameters; W is the linear-scene white point.
+float3 hablePartial(float3 x, float A, float B, float C, float D, float E, float F)
+{
+  return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
+}
+
+float3 hableFilmicToneMapper(float3 color,
+                             float exposureBias,
+                             float A, float B, float C, float D, float E, float F,
+                             float W)
+{
+  float3 curr = hablePartial(exposureBias * color, A, B, C, D, E, F);
+  float3 whiteScale = float3(1.0f) / hablePartial(float3(W, W, W), A, B, C, D, E, F);
+  return curr * whiteScale;
+}
+
 // applyTonemapOperator — dispatches to the operator implementation selected
-// by `op`. Returns the operator-adjusted color. When op == None, returns
-// `color` unchanged. The selection matches the TonemapOperator enum in
-// rtx_fork_tonemap.h.
+// by `op`. Returns the operator-adjusted color. When op == None (or an
+// unrecognised value), returns `color` unchanged. The selection matches the
+// TonemapOperator enum in rtx_fork_tonemap.h.
 //
-// `suppressBlackLevelClamp` is forwarded to the ACES path (matches the
-// upstream ACESFilm signature). Operators that don't have an equivalent
-// parameter ignore it.
-float3 applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp)
+// `suppressBlackLevelClamp` forwards to the ACES path (matches the upstream
+// ACESFilm signature). Operators without an equivalent parameter ignore it.
+//
+// Hable parameters are passed explicitly (rather than read from a struct)
+// so this function works for both the global ToneMappingApplyToneMappingArgs
+// and the local FinalCombineArgs — the call site unpacks its cb.hable*
+// fields into these positional parameters.
+float3 applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp,
+                            float hableExposureBias,
+                            float hableA, float hableB, float hableC,
+                            float hableD, float hableE, float hableF,
+                            float hableW)
 {
   if (op == tonemapOperatorACES)
   {
@@ -39,6 +65,12 @@ float3 applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp)
   if (op == tonemapOperatorACESLegacy)
   {
     return ACESFilm(color, /*useLegacyACES=*/true, suppressBlackLevelClamp);
+  }
+  if (op == tonemapOperatorHableFilmic)
+  {
+    return hableFilmicToneMapper(color, hableExposureBias,
+                                 hableA, hableB, hableC,
+                                 hableD, hableE, hableF, hableW);
   }
   // tonemapOperatorNone (0) or unrecognised — identity.
   return color;

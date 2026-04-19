@@ -131,7 +131,12 @@ namespace dxvk {
 
   enum class TonemappingMode : int {
     Global = 0,
-    Local
+    Local,
+    // Fork addition (Workstream 2 commit 3 / gmod baad5e79): operator-only
+    // dispatch that skips the dynamic tone curve + local pyramid entirely.
+    // Used by fork_hooks::shouldSkipToneCurve (called from the tonemap
+    // dispatch gate in rtx_context.cpp / DxvkToneMapping).
+    Direct
   };
 
   enum class UIType : int {
