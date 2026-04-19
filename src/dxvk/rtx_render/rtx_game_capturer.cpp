@@ -31,6 +31,7 @@
 #include "rtx_scene_manager.h"
 #include "rtx_materials.h"
 #include "rtx_texture_manager.h"
+#include "rtx_fork_hooks.h"
 
 #include "../dxvk_device.h"
 
@@ -506,81 +507,7 @@ namespace dxvk {
   }
 
   void GameCapturer::captureMaterial(const Rc<DxvkContext> ctx, const RtInstance& rtInstance, const XXH64_hash_t runtimeMaterialHash, const LegacyMaterialData& materialData, const bool bEnableOpacity) {
-    lss::Material lssMat; // to be populated
-
-    // Use runtime material hash so replacements resolve to the same material at runtime.
-    const std::string matName = dxvk::hashToString(runtimeMaterialHash);
-    lssMat.matName = matName;
-
-    const auto& colorTexture = materialData.getColorTexture();
-    XXH64_hash_t textureHash = colorTexture.getImageHash();
-
-    // For API-submitted materials the LegacyMaterialData has no direct color texture; look
-    // up the albedo texture via the instance's surface-material texture index instead.
-    if (textureHash == 0 || textureHash == kEmptyHash) {
-      const uint32_t albedoTexIndex = rtInstance.getAlbedoOpacityTextureIndex();
-      if (albedoTexIndex != kSurfaceMaterialInvalidTextureIndex) {
-        const RtxTextureManager& textureManager = ctx->getCommonObjects()->getTextureManager();
-        const auto& textureTable = textureManager.getTextureTable();
-        if (albedoTexIndex < textureTable.size() && textureTable[albedoTexIndex].isValid()) {
-          textureHash = textureTable[albedoTexIndex].getImageHash();
-        }
-      }
-    }
-
-    if (colorTexture.isValid() && colorTexture.getImageView()) {
-      // Standard D3D9 material path: export the color texture directly.
-      const std::string albedoTexFilename(matName + lss::ext::dds);
-      m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
-                                 albedoTexFilename,
-                                 colorTexture.getImageView()->image());
-      const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
-      lssMat.albedoTexPath = albedoTexPath;
-    } else if (textureHash != 0 && textureHash != kEmptyHash) {
-      // API-submitted material: locate the image via the texture-manager table by hash and export it.
-      RtxTextureManager& textureManager = ctx->getCommonObjects()->getTextureManager();
-      const auto& textureTable = textureManager.getTextureTable();
-
-      const TextureRef* pFoundTexture = nullptr;
-      for (const auto& textureRef : textureTable) {
-        if (textureRef.isValid() && textureRef.getImageHash() == textureHash) {
-          pFoundTexture = &textureRef;
-          break;
-        }
-      }
-
-      if (pFoundTexture && pFoundTexture->getImageView()) {
-        const std::string albedoTexFilename(matName + lss::ext::dds);
-        try {
-          m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
-                                     albedoTexFilename,
-                                     pFoundTexture->getImageView()->image());
-          const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
-          lssMat.albedoTexPath = albedoTexPath;
-        } catch (const std::exception& e) {
-          Logger::warn(str::format("[GameCapturer] Failed to export API texture for material ", matName, ": ", e.what()));
-        }
-      } else {
-        Logger::warn(str::format("[GameCapturer] Could not resolve API texture hash for material: ", matName,
-                                 " (hash: 0x", std::hex, textureHash, std::dec, ")"));
-      }
-    }
-
-    lssMat.enableOpacity = bEnableOpacity;
-
-    // Sampler info is only available on the D3D9 path; API-submitted materials may have no sampler.
-    const auto& sampler = materialData.getSampler();
-    if (sampler != nullptr) {
-      const auto& samplerCreateInfo = sampler->info();
-      lssMat.sampler.addrModeU = samplerCreateInfo.addressModeU;
-      lssMat.sampler.addrModeV = samplerCreateInfo.addressModeV;
-      lssMat.sampler.filter = samplerCreateInfo.magFilter;
-      lssMat.sampler.borderColor = samplerCreateInfo.borderColor;
-    }
-
-    // Cache by runtime hash for proper replacement lookup.
-    m_pCap->materials[runtimeMaterialHash].lssData = lssMat;
-    Logger::debug("[GameCapturer][" + m_pCap->idStr + "][Mat:" + matName + "] New");
+    fork_hooks::captureMaterialApiPath(*this, ctx, rtInstance, runtimeMaterialHash, materialData, bEnableOpacity);
   }
 
   void GameCapturer::captureMesh(const Rc<DxvkContext> ctx,
@@ -1085,16 +1012,7 @@ namespace dxvk {
     }
     // Prep global transform
     exportPrep.globalXform = pxr::GfMatrix4d{1.0};
-
-    // For external API content with explicit left-handed coordinate system setting,
-    // skip the coordinate transformation - it's already in consistent Y-up space.
-    // External API cameras are always LHS, so if the game is configured as LHS, assume external content.
-    if (!RtxOptions::leftHandedCoordinateSystem()) {
-      const bool bInvX = (!exportPrep.camera.view.bInv) && (exportPrep.camera.proj.bInv || exportPrep.camera.isLHS());
-      const bool bInvY = (!exportPrep.camera.view.bInv) && exportPrep.camera.proj.bInv;
-      const pxr::GfVec3d scale{ bInvX ? -1.0 : 1.0, bInvY ? -1.0 : 1.0, 1.0 };
-      exportPrep.globalXform.SetScale(scale);
-    }
+    fork_hooks::captureCoordSystemSkip(exportPrep);
     if(exportPrep.meta.bCorrectBakedTransforms) {
       exportPrep.globalXform.SetTranslateOnly(-exportPrep.stageOrigin);
     }

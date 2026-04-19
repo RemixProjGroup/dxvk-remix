@@ -303,28 +303,32 @@ check will enforce it if discipline slips.
 ## src/dxvk/rtx_render/rtx_game_capturer.cpp
 
 **Pre-refactor fork footprint:** +94 / -28 LOC (audit 2026-04-18)
+**Post-refactor footprint:** 2 hook call sites + inline tweaks + `#include "rtx_fork_hooks.h"` (migrated 2026-04-18)
 
-**Category:** migrate
+**Note on Block 1 (materialLookupHash selection):** The material-lookup-hash block is pervasive inline tweaks throughout `GameCapturer::newInstance` (computing `materialLookupHash`, keying `bIsNewMat`, the `captureMaterial` call, `meshes[meshHash]->matHash`, and `instance.matHash`). Lifting this into a hook would require threading too many in/out parameters. Kept as inline tweaks; tracked below.
 
-- **Block** at `GameCapturer::processCaptureForInstance` (material hash selection) — ~7 LOC, planned target `fork_hooks::captureMaterialHashSelect` in `rtx_fork_capture.cpp`.
-  *Switches the capture-side material lookup key to `materialLookupHash` (the MaterialData hash used by the runtime replacer) so USD capture references align with runtime replacement lookup for API-submitted materials.*
+- **Inline tweak** at `GameCapturer::newInstance` (materialLookupHash computation and usage) — ~7 LOC distributed through the function.
+  *Computes `materialLookupHash = material.getHash()` and substitutes it for the raw BLAS `matHash` in the `bIsNewMat` guard, the `captureMaterial` call, `meshes[meshHash]->matHash`, and `instance.matHash`, so USD capture references align with runtime replacement lookup for API-submitted materials.*
 
-- **Block** at `GameCapturer::captureMaterial` (entire new overload) — ~65 LOC, planned target `fork_hooks::captureMaterialApiPath` in `rtx_fork_capture.cpp`.
-  *New `captureMaterial` overload that exports the albedo texture for both D3D9 materials (standard path) and API-submitted materials (fallback: resolves texture hash via the texture-manager table and exports the image by hash).*
+- **Hook** at `GameCapturer::captureMaterial` (method body) → `fork_hooks::captureMaterialApiPath` in `rtx_fork_capture.cpp`
+  *`GameCapturer::captureMaterial` is now a one-line delegate; all logic lives in the hook. Exports the albedo texture for both D3D9 materials (color texture valid — direct export) and API-submitted materials (fallback: resolves texture hash via the texture-manager table and exports by hash). Access to private `m_exporter` and `m_pCap` is granted via a `friend` declaration — see the `rtx_game_capturer.h` entry below.*
 
-- **Block** at `GameCapturer::exportInstanceToUSD` (LHS coordinate-system skip) — ~8 LOC, planned target `fork_hooks::captureCoordSystemSkip` in `rtx_fork_capture.cpp`.
-  *Skips the coordinate inversion transform for external API content when the game is configured as a left-handed system, since API-submitted geometry is already in consistent Y-up space.*
+- **Hook** at `GameCapturer::prepExport` (coord-system transform block) → `fork_hooks::captureCoordSystemSkip` in `rtx_fork_capture.cpp`
+  *Skips the view/proj handedness inversion for the global USD export transform when the game is configured as a left-handed coordinate system, since API-submitted geometry is already in consistent Y-up space.*
 
 ---
 
 ## src/dxvk/rtx_render/rtx_game_capturer.h
 
-**Pre-refactor fork footprint:** +1 / -1 LOC (audit 2026-04-18)
+**Post-refactor fork footprint:** forward decl + `friend` declaration (added 2026-04-18)
 
 **Category:** index-only
 
-- **Inline tweak** at `GameCapturer` class declaration (~line 209) — 1-line modification to declare new `captureMaterial` overload.
-  *Adds the declaration of the new `captureMaterial(ctx, rtInstance, runtimeMaterialHash, materialData, bEnableOpacity)` overload that supports API-submitted material capture.*
+- **Inline tweak** at file scope (just before `class GameCapturer`) — 13-line forward declaration of `fork_hooks::captureMaterialApiPath` so the friend declaration inside `GameCapturer` can name the fork-owned hook.
+  *Companion to the `rtx_fork_capture.cpp` hook that needs private-member access to `m_exporter` and `m_pCap`.*
+
+- **Inline tweak** at `GameCapturer` class body (top of class, before `public:`) — 4-line `friend` declaration granting `fork_hooks::captureMaterialApiPath` access to private members.
+  *Canonical pattern for hooks that must read/write private upstream state — one inline tweak per such hook, tracked here.*
 
 ---
 
