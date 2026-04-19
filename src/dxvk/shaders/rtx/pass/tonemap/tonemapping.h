@@ -61,6 +61,7 @@ static const uint32_t tonemapOperatorACES        = 1;
 static const uint32_t tonemapOperatorACESLegacy  = 2;
 static const uint32_t tonemapOperatorHableFilmic = 3;  // Commit 3.
 static const uint32_t tonemapOperatorAgX         = 4;  // Commit 4.
+static const uint32_t tonemapOperatorLottes      = 5;  // Commit 5 (shares Hable's param slots).
 
 // Constant buffers
 
@@ -132,9 +133,19 @@ struct ToneMappingApplyToneMappingArgs {
   uint directOperatorMode;    // 1 = operator-only (skip dynamic curve). Wired to TonemappingMode::Direct in Commit 3.
   uint pad1;                  // Unused; kept for 16-byte alignment of the Hable block below.
 
-  // Hable Filmic parameters (op == tonemapOperatorHableFilmic). Commit 5
-  // will overlay Lottes 2016 params on these same slots since the operators
-  // are mutually exclusive.
+  // Hable Filmic parameters (op == tonemapOperatorHableFilmic) and Lottes
+  // 2016 parameters (op == tonemapOperatorLottes) share these slots — the
+  // two operators are mutually exclusive, so overlaying preserves the
+  // struct size. Populate hooks branch on the selected operator to write
+  // the correct parameter set.
+  //
+  // Lottes parameter mapping (op == tonemapOperatorLottes):
+  //   hableExposureBias     -> lottesHdrMax
+  //   hableShoulderStrength -> lottesContrast
+  //   hableLinearStrength   -> lottesShoulder
+  //   hableLinearAngle      -> lottesMidIn
+  //   hableToeStrength      -> lottesMidOut
+  //   (hableToeNumerator / hableToeDenominator / hableWhitePoint unused)
   float hableExposureBias;
   float hableShoulderStrength;   // A
   float hableLinearStrength;     // B

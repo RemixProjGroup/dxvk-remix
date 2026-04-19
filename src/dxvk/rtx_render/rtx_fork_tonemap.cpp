@@ -24,20 +24,35 @@
 namespace dxvk {
   namespace fork_hooks {
 
-    // Shared helper: copies the Hable + AgX RtxOption values into whatever
-    // args struct exposes the same fields. Two translation paths (global +
-    // local) both call into this; the compiler inlines the struct layout.
+    // Shared helper: copies the Hable / AgX / Lottes RtxOption values into
+    // whatever args struct exposes the matching fields. The Hable slots are
+    // overwritten with Lottes values when Lottes is the selected operator
+    // (the two operators are mutually exclusive — see tonemapping.h for
+    // the documented slot mapping).
     template<typename ArgsT>
-    static void writeOperatorParams(ArgsT& args) {
-      // Hable (commit 3).
-      args.hableExposureBias     = RtxForkHableFilmic::exposureBias();
-      args.hableShoulderStrength = RtxForkHableFilmic::shoulderStrength();
-      args.hableLinearStrength   = RtxForkHableFilmic::linearStrength();
-      args.hableLinearAngle      = RtxForkHableFilmic::linearAngle();
-      args.hableToeStrength      = RtxForkHableFilmic::toeStrength();
-      args.hableToeNumerator     = RtxForkHableFilmic::toeNumerator();
-      args.hableToeDenominator   = RtxForkHableFilmic::toeDenominator();
-      args.hableWhitePoint       = RtxForkHableFilmic::whitePoint();
+    static void writeOperatorParams(ArgsT& args, TonemapOperator op) {
+      if (op == TonemapOperator::Lottes) {
+        // Lottes overlay (commit 5): map 5 Lottes params into Hable slots.
+        args.hableExposureBias     = RtxForkLottes::hdrMax();
+        args.hableShoulderStrength = RtxForkLottes::contrast();
+        args.hableLinearStrength   = RtxForkLottes::shoulder();
+        args.hableLinearAngle      = RtxForkLottes::midIn();
+        args.hableToeStrength      = RtxForkLottes::midOut();
+        args.hableToeNumerator     = 0.0f;
+        args.hableToeDenominator   = 0.0f;
+        args.hableWhitePoint       = 0.0f;
+      } else {
+        // Hable (commit 3) — also the default when other operators selected;
+        // shader only reads these when op == HableFilmic.
+        args.hableExposureBias     = RtxForkHableFilmic::exposureBias();
+        args.hableShoulderStrength = RtxForkHableFilmic::shoulderStrength();
+        args.hableLinearStrength   = RtxForkHableFilmic::linearStrength();
+        args.hableLinearAngle      = RtxForkHableFilmic::linearAngle();
+        args.hableToeStrength      = RtxForkHableFilmic::toeStrength();
+        args.hableToeNumerator     = RtxForkHableFilmic::toeNumerator();
+        args.hableToeDenominator   = RtxForkHableFilmic::toeDenominator();
+        args.hableWhitePoint       = RtxForkHableFilmic::whitePoint();
+      }
       // AgX (commit 4).
       args.agxGamma          = RtxForkAgX::gamma();
       args.agxSaturation     = RtxForkAgX::saturation();
@@ -49,19 +64,21 @@ namespace dxvk {
     }
 
     void populateTonemapOperatorArgs(ToneMappingApplyToneMappingArgs& args) {
-      args.tonemapOperator    = static_cast<uint32_t>(RtxForkGlobalTonemap::tonemapOperator());
+      const TonemapOperator op = RtxForkGlobalTonemap::tonemapOperator();
+      args.tonemapOperator    = static_cast<uint32_t>(op);
       args.directOperatorMode = (RtxOptions::tonemappingMode() == TonemappingMode::Direct) ? 1u : 0u;
-      writeOperatorParams(args);
+      writeOperatorParams(args, op);
     }
 
     void populateLocalTonemapOperatorArgs(FinalCombineArgs& args) {
-      args.tonemapOperator    = static_cast<uint32_t>(RtxForkLocalTonemap::tonemapOperator());
+      const TonemapOperator op = RtxForkLocalTonemap::tonemapOperator();
+      args.tonemapOperator    = static_cast<uint32_t>(op);
       args.directOperatorMode = (RtxOptions::tonemappingMode() == TonemappingMode::Direct) ? 1u : 0u;
-      writeOperatorParams(args);
+      writeOperatorParams(args, op);
     }
 
     // Combo items string uses ImGui's \0-separated format.
-    static const char* k_operatorItems = "None\0ACES\0ACES (Legacy)\0Hable Filmic\0AgX\0\0";
+    static const char* k_operatorItems = "None\0ACES\0ACES (Legacy)\0Hable Filmic\0AgX\0Lottes 2016\0\0";
 
     // Shared slider rendering for per-operator parameter panels.
     static void showHableFilmicSliders() {
@@ -91,6 +108,17 @@ namespace dxvk {
       }
     }
 
+    static void showLottesSliders() {
+      if (ImGui::TreeNodeEx("Lottes 2016 Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
+        RemixGui::DragFloat("hdrMax",   &RtxForkLottes::hdrMaxObject(),   0.10f, 1.0f,  64.0f);
+        RemixGui::DragFloat("contrast", &RtxForkLottes::contrastObject(), 0.01f, 1.0f,   3.0f);
+        RemixGui::DragFloat("shoulder", &RtxForkLottes::shoulderObject(), 0.01f, 0.5f,   2.0f);
+        RemixGui::DragFloat("midIn",    &RtxForkLottes::midInObject(),    0.01f, 0.01f,  1.0f);
+        RemixGui::DragFloat("midOut",   &RtxForkLottes::midOutObject(),   0.01f, 0.01f,  1.0f);
+        ImGui::TreePop();
+      }
+    }
+
     void showTonemapOperatorUI() {
       RemixGui::Combo("Tonemapping Operator",
                       &RtxForkGlobalTonemap::tonemapOperatorObject(),
@@ -113,6 +141,9 @@ namespace dxvk {
       if (RtxForkGlobalTonemap::tonemapOperator() == TonemapOperator::AgX) {
         showAgXSliders();
       }
+      if (RtxForkGlobalTonemap::tonemapOperator() == TonemapOperator::Lottes) {
+        showLottesSliders();
+      }
     }
 
     void showLocalTonemapOperatorUI() {
@@ -125,6 +156,9 @@ namespace dxvk {
       }
       if (RtxForkLocalTonemap::tonemapOperator() == TonemapOperator::AgX) {
         showAgXSliders();
+      }
+      if (RtxForkLocalTonemap::tonemapOperator() == TonemapOperator::Lottes) {
+        showLottesSliders();
       }
     }
 

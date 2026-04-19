@@ -25,6 +25,7 @@
 // so double-inclusion is not a concern here.
 #include "rtx/pass/tonemap/tonemapping.h"
 #include "rtx/pass/tonemap/AgX.hlsl"
+#include "rtx/pass/tonemap/Lottes.hlsl"
 
 // Hable Filmic (Uncharted 2) tonemapper core.
 // Reference: http://filmicworlds.com/blog/filmic-tonemapping-operators/
@@ -85,6 +86,17 @@ float3 applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp,
   {
     return AgXToneMapping(color, agxGamma, agxSaturation, agxExposureOffset,
                           (int)agxLook, agxContrast, agxSlope, agxPower);
+  }
+  if (op == tonemapOperatorLottes)
+  {
+    // Lottes shares Hable's 8 param slots (mutually exclusive operators).
+    // Slot mapping is documented at the struct definition in tonemapping.h.
+    return LottesToneMapping(color,
+                             /*hdrMax=*/   hableExposureBias,
+                             /*contrast=*/ hableA,
+                             /*shoulder=*/ hableB,
+                             /*midIn=*/    hableC,
+                             /*midOut=*/   hableD);
   }
   // tonemapOperatorNone (0) or unrecognised — identity.
   return color;

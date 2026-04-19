@@ -964,6 +964,13 @@ check will enforce it if discipline slips.
 
 ---
 
+## src/dxvk/shaders/rtx/pass/tonemap/Lottes.hlsl
+
+- **Fork-owned** — new file (commit 5, byte-for-byte port from gmod cdf2c723). Contains the Lottes 2016 tonemapper (`LottesToneMapping(color, hdrMax, contrast, shoulder, midIn, midOut)`). Included by `fork_tonemap_operators.slangh`. Lottes shares Hable Filmic's 8 param slots in the shader args struct (the two operators are mutually exclusive); slot mapping is documented at the struct definition in `tonemapping.h`.
+  *Fork-owned Lottes operator implementation.*
+
+---
+
 ## src/dxvk/shaders/rtx/pass/tonemap/fork_tonemap_operators.slangh
 
 - **Fork-owned** — new file. Hosts the `applyTonemapOperator(uint op, vec3 color, bool suppressBlackLevelClamp, ...)` dispatcher. Commits 3-5 extend the dispatcher with HableFilmic / AgX / Lottes branches and include their respective operator implementations (`AgX.hlsl` in commit 4, `Lottes.hlsl` in commit 5).

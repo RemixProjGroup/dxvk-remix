@@ -84,4 +84,16 @@ namespace dxvk {
     RTX_OPTION("rtx.tonemap.agx", float, power,          1.0f, "AgX power adjustment for midtone response. Range [0.5, 2.0].");
   };
 
+  // Lottes 2016 operator parameters. Defaults from gmod cdf2c723.
+  // The Lottes operator shares shader-args slots with Hable Filmic (see
+  // tonemapping.h); populate hooks branch on the selected operator to
+  // write the correct param set.
+  class RtxForkLottes {
+    RTX_OPTION("rtx.tonemap.lottes", float, hdrMax,   16.0f, "Lottes: peak HDR white value. Higher values preserve more highlight detail. Range [1.0, 64.0].");
+    RTX_OPTION("rtx.tonemap.lottes", float, contrast,  2.0f, "Lottes: contrast control (also drives saturation / crosstalk). Range [1.0, 3.0].");
+    RTX_OPTION("rtx.tonemap.lottes", float, shoulder,  1.0f, "Lottes: shoulder strength (highlight compression). Range [0.5, 2.0].");
+    RTX_OPTION("rtx.tonemap.lottes", float, midIn,    0.18f, "Lottes: mid-grey input (scene linear). Range [0.01, 1.0].");
+    RTX_OPTION("rtx.tonemap.lottes", float, midOut,   0.18f, "Lottes: mid-grey output. Range [0.01, 1.0].");
+  };
+
 } // namespace dxvk
