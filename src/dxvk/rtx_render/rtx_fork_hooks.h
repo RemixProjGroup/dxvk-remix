@@ -12,12 +12,20 @@
 // and XXH64_hash_t transitively via rtx_types.h.
 #include "rtx_asset_replacer.h"
 
+// Windows types required for the overlay hooks (HWND, UINT, WPARAM, LPARAM).
+// This project is Windows-only; WIN32_LEAN_AND_MEAN keeps the include small.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
 namespace dxvk {
 
   // Forward declarations for types whose full definitions the hook header does
   // not need, but whose names appear in signatures.
   class DxvkDevice;
   class SceneManager;
+  class GameOverlay;
 
   namespace fork_hooks {
 
@@ -54,6 +62,16 @@ namespace dxvk {
       DrawCallState& drawCall,
       XXH64_hash_t textureHash,
       SceneManager& scene);
+
+    // Forwards WM_KEYDOWN/UP, WM_SYSKEYDOWN/UP, WM_CHAR, WM_SYSCHAR messages
+    // to ImGui_ImplWin32_WndProcHandler so ImGui key state stays in sync on
+    // the legacy WndProc path (when a game menu captures raw input and the
+    // overlay window is not foreground).
+    // NOTE: requires GameOverlay to declare this as a friend for access to the
+    // private m_hwnd member. See rtx_overlay_window.h.
+    // Implementation in rtx_fork_overlay.cpp.
+    void overlayKeyboardForward(
+      GameOverlay& overlay, HWND gameHwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
   } // namespace fork_hooks
 

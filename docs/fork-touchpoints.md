@@ -437,20 +437,26 @@ check will enforce it if discipline slips.
 ## src/dxvk/rtx_render/rtx_overlay_window.cpp
 
 **Pre-refactor fork footprint:** +57 / -35 LOC (audit 2026-04-18)
+**Post-refactor footprint:** 1 hook call site + 1 `#include "rtx_fork_hooks.h"` (migrated 2026-04-18)
 
-**Category:** migrate
+**Note on diag blocks:** The fridge list originally listed 3 `[RTX-Diag]` blocks (blocks 2-4). These were introduced and then immediately reverted (commit `664a9ba4` reverted `0d590fb4`) before this migration ran. They are not present in the current file; no action was taken. Only block 1 (keyboard-forward) was active and required migration.
 
-- **Block** at `GameOverlay::gameWndProcHandler` (keyboard-forward block) — ~22 LOC, planned target `fork_hooks::overlayKeyboardForward` in `rtx_fork_overlay.cpp`.
-  *Forwards WM_KEYDOWN/UP, WM_SYSKEYDOWN/UP, WM_CHAR, WM_SYSCHAR messages to `ImGui_ImplWin32_WndProcHandler` on the legacy WndProc path so ImGui key state stays in sync when the overlay window is not foreground.*
+- **Hook** at `GameOverlay::gameWndProcHandler` (after hwnd guard) → `fork_hooks::overlayKeyboardForward` in `rtx_fork_overlay.cpp`
+  *Forwards WM_KEYDOWN/UP, WM_SYSKEYDOWN/UP, WM_CHAR, WM_SYSCHAR messages to `ImGui_ImplWin32_WndProcHandler` on the legacy WndProc path so ImGui key state stays in sync when a game menu captures raw input and the overlay window is not foreground. Access to private `m_hwnd` is granted via a `friend` declaration — see the `rtx_overlay_window.h` entry below.*
 
-- **Block** at `GameOverlay::gameWndProcHandler` (diag log block) — ~14 LOC, planned target `fork_hooks::overlayWndProcDiag` in `rtx_fork_overlay.cpp`.
-  *Adds [RTX-Diag] entry logging for WM_KEY*/WM_INPUT messages in `gameWndProcHandler`: logs message code, game hwnd, stored m_gameHwnd, and whether they match.*
+---
 
-- **Block** at `GameOverlay::update` (diag logs on first call) — ~5 LOC, planned target `fork_hooks::overlayUpdateDiag` in `rtx_fork_overlay.cpp`.
-  *Logs first-call and post-spawn state of `m_hwnd` in `GameOverlay::update` for the overlay-window startup diagnostic.*
+## src/dxvk/rtx_render/rtx_overlay_window.h
 
-- **Block** at `GameOverlay::overlayWndProc` (diag log block) — ~16 LOC, planned target `fork_hooks::overlayWndProcDiag` in `rtx_fork_overlay.cpp`.
-  *Adds [RTX-Diag] logging of message code and `isOurForeground()` state in the overlay thread's own WndProc for WM_KEY*/WM_INPUT messages.*
+**Post-refactor fork footprint:** forward decl + `friend` declaration (added 2026-04-18)
+
+**Category:** index-only
+
+- **Inline tweak** at file scope (just before `class GameOverlay`) — 6-line forward declaration of `fork_hooks::overlayKeyboardForward` so the friend declaration inside `GameOverlay` can name the fork-owned hook.
+  *Companion to the `rtx_fork_overlay.cpp` hook that needs private-member access to `m_hwnd`.*
+
+- **Inline tweak** at `GameOverlay` class body (top of class, before `public:`) — 3-line `friend` declaration granting `fork_hooks::overlayKeyboardForward` access to `m_hwnd`.
+  *Canonical pattern for hooks that must read/write private upstream state — one inline tweak per such hook, tracked here.*
 
 ---
 

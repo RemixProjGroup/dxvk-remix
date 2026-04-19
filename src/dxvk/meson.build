@@ -224,6 +224,7 @@ dxvk_src = files([
   'rtx_render/rtx_file_watch.cpp',
   'rtx_render/rtx_file_watch.h',
   'rtx_render/rtx_fork_hooks.h',
+  'rtx_render/rtx_fork_overlay.cpp',
   'rtx_render/rtx_fork_submit.cpp',
   'rtx_render/rtx_game_capturer.cpp',
   'rtx_render/rtx_game_capturer.h',
