@@ -484,25 +484,24 @@ check will enforce it if discipline slips.
 ## src/dxvk/rtx_render/rtx_remix_api.cpp
 
 **Pre-refactor fork footprint:** +1277 / -118 LOC (audit 2026-04-18)
+**Post-refactor footprint (partial, migration #7a done):** 2 hook call sites + 1 `#include "rtx_fork_hooks.h"` for the blocks migrated so far; ~14 pre-existing fork blocks still pending for migrations #7b (API function implementations) and #7c (interception + vtable).
 
-**Category:** migrate
+- **Inline tweak** at `(file scope)` (includes block) — ~7 LOC added. Not migrated: include lines don't get hooks — they either stay inline or the fork-owned file pulls them for its own code. Tracked here per the fridge-list invariant.
+  *Adds includes for `dxvk_objects.h`, `dxvk_imgui.h`, `rtx_context.h`, `rtx_option_layer.h`, `util_hash_set_layer.h`, `xxhash.h`, `algorithm`, and `d3d9_texture.h` to support fork-added API functions, plus `rtx_fork_hooks.h` added in migration #7a.*
 
-- **Block** at `(file scope)` (includes block) — ~7 LOC, planned target `fork_hooks::remixApiIncludes` in `rtx_fork_api_entry.cpp`.
-  *Adds includes for `dxvk_objects.h`, `dxvk_imgui.h`, `rtx_context.h`, `rtx_option_layer.h`, `util_hash_set_layer.h`, `xxhash.h`, `algorithm`, and `d3d9_texture.h` to support fork-added API functions.*
-
-- **Block** at `(file scope)` (`PendingScreenOverlay` struct + `s_pendingScreenOverlay`) — ~9 LOC, planned target `fork_hooks::screenOverlayState` in `rtx_fork_api_entry.cpp`.
+- **Inline tweak** at `(file scope)` (`PendingScreenOverlay` struct + `s_pendingScreenOverlay`) — ~9 LOC. Pending full migration in #7b / #7c. A mirror copy of the struct and optional lives in `rtx_fork_api_entry.cpp` (anonymous namespace) as scaffolding for those passes; the upstream copy will be removed once the call sites at the staging (`remixapi_DrawScreenOverlay`) and drain (`remixapi_Present`) paths migrate into the fork-owned file.
   *Declares the `PendingScreenOverlay` struct holding a staging buffer, dimensions, format, and opacity, and the `s_pendingScreenOverlay` optional used to hand screen overlay data from the API thread to the render thread.*
 
-- **Block** at `(anonymous namespace)` (texture-hash-path lookup inside material resolver) — ~14 LOC, planned target `fork_hooks::textureHashPathLookup` in `rtx_fork_api_entry.cpp`.
-  *Adds a "0x..." hex-path shortcut inside the upstream texture-path resolver so API-uploaded textures can be referenced by hash string in material JSON without creating a real file path.*
+- **Hook** at `convert::toRtMaterialFinalized::preloadTexture` lambda (inside the `MaterialDataType::Opaque` / `Translucent` / `Portal` texture preload path) → `fork_hooks::textureHashPathLookup` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7a).
+  *Adds a "0x..." hex-path shortcut inside the upstream texture-path resolver so API-uploaded textures can be referenced by hash string in material JSON without creating a real file path. Hook returns true and writes the resolved `TextureRef` when the path parses as hex and matches a registered texture; caller returns immediately. Falls through to the normal AssetDataManager lookup otherwise.*
 
-- **Block** at `(anonymous namespace)` (`mutateTextureHashOption` helper) — ~30 LOC, planned target `fork_hooks::mutateTextureHashOption` in `rtx_fork_api_entry.cpp`.
-  *Implements the `mutateTextureHashOption` helper that looks up an `RtxOption<fast_unordered_set>` by full option name and adds or removes a hash via the user config layer.*
+- **Hook** at `(anonymous namespace)` `remixapi_AddTextureHash` / `remixapi_RemoveTextureHash` → `fork_hooks::mutateTextureHashOption` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7a).
+  *Looks up an `RtxOption<fast_unordered_set>` by full option name and adds or removes a hash via the user config layer. Call sites acquire `s_mutex` then delegate to the hook (which internally takes the RtxOption update mutex — lock order documented alongside `s_mutex`). The call-site signature replaced the local `TextureHashMutation` enum with a plain `bool add` parameter.*
 
-- **Block** at `convert::toRtDrawState` (skinning hash computation) — ~1 LOC, planned target `fork_hooks::skinningHashCompute` in `rtx_fork_api_entry.cpp`.
+- **Inline tweak** at `convert::toRtDrawState` (skinning hash computation) — 1 LOC, not worth a hook. Not migrated.
   *Calls `skinningData.computeHash()` on the prototype after building skinning data so the skinning hash participates in geometry deduplication.*
 
-- **Block** at `convert::toRtDrawState` (blend-weight/index buffer stride fix) — ~2 LOC (two call sites), planned target `fork_hooks::skinningBufferStride` in `rtx_fork_api_entry.cpp`.
+- **Inline tweak** at `convert::toRtDrawState` (blend-weight/index buffer stride fix) — 2 LOC across two call sites, not worth a hook. Not migrated.
   *Fixes `blendWeightBuffer` and `blendIndicesBuffer` strides to use `bonesPerVertex`-based byte widths rather than fixed-width placeholders.*
 
 - **Block** at `remixapi_SetupCamera` (devLock addition + diag log) — ~6 LOC, planned target `fork_hooks::setupCameraDevLock` in `rtx_fork_api_entry.cpp`.

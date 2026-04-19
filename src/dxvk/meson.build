@@ -223,6 +223,7 @@ dxvk_src = files([
   'rtx_render/rtx_env.h',
   'rtx_render/rtx_file_watch.cpp',
   'rtx_render/rtx_file_watch.h',
+  'rtx_render/rtx_fork_api_entry.cpp',
   'rtx_render/rtx_fork_atmosphere.cpp',
   'rtx_render/rtx_fork_capture.cpp',
   'rtx_render/rtx_fork_hooks.h',

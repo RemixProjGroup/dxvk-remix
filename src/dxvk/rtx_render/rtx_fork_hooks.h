@@ -15,6 +15,12 @@
 // util/rc for Rc<DxvkContext> in capture hook signatures.
 #include "../../util/rc/util_rc_ptr.h"
 
+// std::filesystem::path for textureHashPathLookup's input parameter.
+#include <filesystem>
+
+// remixapi_ErrorCode for mutateTextureHashOption return type.
+#include <remix/remix_c.h>
+
 // Windows types required for the overlay hooks (HWND, UINT, WPARAM, LPARAM).
 // This project is Windows-only; WIN32_LEAN_AND_MEAN keeps the include small.
 #ifndef WIN32_LEAN_AND_MEAN
@@ -56,6 +62,7 @@ namespace dxvk {
   class SceneManager;
   struct LegacyMaterialData;
   struct RtLight;
+  struct TextureRef;
 
   namespace fork_hooks {
 
@@ -250,6 +257,35 @@ namespace dxvk {
     // No friend declaration needed.
     // Implementation in rtx_fork_overlay.cpp.
     void wrapperTabDraw();
+
+    // Attempts to resolve a material texture path of the form "0x<hex>" against
+    // the texture manager's hash table (populated by API-uploaded textures via
+    // remixapi_CreateTexture). If the path matches the hex-hash pattern and a
+    // registered texture with that image hash exists, writes the resolved
+    // TextureRef into outRef and returns true. Returns false in all other
+    // cases (path is not a hex string, hash not found, parse failure), in
+    // which case the caller must fall back to the normal asset-path lookup.
+    // No private-member access — uses public TextureManager::getTextureTable().
+    // No friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    bool textureHashPathLookup(
+      DxvkContext& ctx,
+      const std::filesystem::path& path,
+      TextureRef& outRef);
+
+    // Looks up an RtxOption<fast_unordered_set> by full option name and adds
+    // (add == true) or removes (add == false) the parsed hash in the user
+    // config layer. Used by remixapi_AddTextureHash / remixapi_RemoveTextureHash
+    // to mutate per-category texture hash sets at runtime.
+    // NOTE: the caller is responsible for holding the remix-api static mutex
+    // (s_mutex in rtx_remix_api.cpp) across this call, per the lock ordering
+    // rule documented alongside s_mutex.
+    // No private-member access — uses only public RtxOption / RtxOptionLayer APIs.
+    // Implementation in rtx_fork_api_entry.cpp.
+    remixapi_ErrorCode mutateTextureHashOption(
+      const char* textureCategory,
+      const char* textureHash,
+      bool add);
 
   } // namespace fork_hooks
 

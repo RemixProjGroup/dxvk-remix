@@ -55,6 +55,8 @@
 #include "../../util/util_hash_set_layer.h"
 #include "../../util/xxHash/xxhash.h"
 
+#include "rtx_fork_hooks.h"
+
 #include "../../lssusd/usd_include_begin.h"
 #include <src/usd-plugins/RemixParticleSystem/ParticleSystemAPI.h>
 #include "../../lssusd/usd_include_end.h"
@@ -357,21 +359,11 @@ namespace {
           return {};
         }
 
-        // Check for texture hash override (path in the form "0x<hex>") — refers to a
-        // texture already uploaded via the CreateTexture API.
-        const std::string pathStr = path.string();
-        if (pathStr.size() > 2 && pathStr[0] == '0' && (pathStr[1] == 'x' || pathStr[1] == 'X')) {
-          try {
-            const uint64_t hash = std::stoull(pathStr, nullptr, 16);
-            if (hash != 0) {
-              const auto& textureTable = ctx.getCommonObjects()->getTextureManager().getTextureTable();
-              for (const auto& ref : textureTable) {
-                if (ref.isValid() && ref.getImageHash() == hash) {
-                  return ref;
-                }
-              }
-            }
-          } catch (...) { }
+        // Fork hook: support "0x<hex>" pseudo-paths that refer to API-uploaded
+        // textures (remixapi_CreateTexture) by image hash.
+        TextureRef hashRef;
+        if (dxvk::fork_hooks::textureHashPathLookup(ctx, path, hashRef)) {
+          return hashRef;
         }
 
         auto assetData = AssetDataManager::get().findAsset(path.string());
@@ -1611,62 +1603,23 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
-  enum class TextureHashMutation { Add, Remove };
-
-  // Look up a HashSet option by category name and mutate its value in the user layer.
-  remixapi_ErrorCode mutateTextureHashOption(const char* textureCategory,
-                                             const char* textureHash,
-                                             TextureHashMutation mutation) {
-    if (!textureCategory || textureCategory[0] == '\0' || !textureHash) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-
-    dxvk::RtxOptionImpl* option = dxvk::RtxOptionImpl::getOptionByFullName(std::string { textureCategory });
-    if (!option) {
-      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
-    }
-    if (option->getType() != dxvk::OptionType::HashSet) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-
-    XXH64_hash_t h = 0;
-    try {
-      h = std::stoull(textureHash, nullptr, 16);
-    } catch (...) {
-      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
-    }
-
-    const dxvk::RtxOptionLayer* layer = dxvk::RtxOptionLayer::getUserLayer();
-    if (!layer) {
-      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
-    }
-
-    // Safe because getType() == HashSet implies T = fast_unordered_set.
-    auto* hashSetOption = static_cast<dxvk::RtxOption<dxvk::fast_unordered_set>*>(option);
-    if (mutation == TextureHashMutation::Add) {
-      hashSetOption->addHash(h, layer);
-    } else {
-      // removeHash (not clearHash): record a negative opinion on the user
-      // layer so lower-priority layers (config files, rtx.conf defaults)
-      // cannot re-contribute the hash. Matches fork's hard-delete semantic;
-      // clearHash would only drop the user layer's opinion.
-      hashSetOption->removeHash(h, layer);
-    }
-    return REMIXAPI_ERROR_CODE_SUCCESS;
-  }
+  // Fork-owned helper body lives in rtx_fork_api_entry.cpp as
+  // fork_hooks::mutateTextureHashOption (add flag replaces the local
+  // TextureHashMutation enum). Both call sites hold s_mutex across the call
+  // per the lock-ordering rule documented alongside s_mutex.
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_AddTextureHash(
     const char* textureCategory,
     const char* textureHash) {
     std::lock_guard lock { s_mutex };
-    return mutateTextureHashOption(textureCategory, textureHash, TextureHashMutation::Add);
+    return dxvk::fork_hooks::mutateTextureHashOption(textureCategory, textureHash, /*add*/ true);
   }
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_RemoveTextureHash(
     const char* textureCategory,
     const char* textureHash) {
     std::lock_guard lock { s_mutex };
-    return mutateTextureHashOption(textureCategory, textureHash, TextureHashMutation::Remove);
+    return dxvk::fork_hooks::mutateTextureHashOption(textureCategory, textureHash, /*add*/ false);
   }
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_dxvk_GetTextureHash(
