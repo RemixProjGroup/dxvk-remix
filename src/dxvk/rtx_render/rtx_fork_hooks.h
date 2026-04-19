@@ -41,6 +41,10 @@ namespace lss {
 using remixapi_LightHandle = struct remixapi_LightHandle_T*;
 #endif
 
+// d3d9_device.h provides D3D9DeviceEx; avoid pulling it into every TU.
+// Only the implementation files that call device-path hooks include it directly.
+namespace dxvk { class D3D9DeviceEx; }
+
 // RaytraceArgs (for updateAtmosphereConstants) and Resources::RaytracingOutput
 // (for dispatchScreenOverlay) both require the full type to appear in a function
 // declaration. rtx_resources.h is the canonical header for both; it is already
@@ -286,6 +290,79 @@ namespace dxvk {
       const char* textureCategory,
       const char* textureHash,
       bool add);
+
+    // Copies pPixelData into a host-visible staging buffer and stores it in the
+    // fork-owned s_pendingScreenOverlay optional. A null pPixelData or zero dims
+    // clears the pending overlay. The overlay is flushed to the render thread by
+    // presentScreenOverlayFlush at the next present boundary.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    remixapi_ErrorCode drawScreenOverlay(
+      D3D9DeviceEx* remixDevice,
+      const void*   pPixelData,
+      uint32_t      width,
+      uint32_t      height,
+      remixapi_Format format,
+      float         opacity);
+
+    // Drains s_pendingScreenOverlay (if set) onto the render thread via EmitCs,
+    // forwarding the staging buffer to RtxContext::setScreenOverlayData. Called
+    // from both remixapi_Present paths (inner-namespace and extern-C) after the
+    // light/mesh flush EmitCs and before the endScene callback dispatch.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    void presentScreenOverlayFlush(D3D9DeviceEx* remixDevice);
+
+    // Reads RtxOptions::showUI() and maps the internal UIType to remixapi_UIState.
+    // Returns REMIXAPI_UI_STATE_NONE if the device is not registered.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    remixapi_UIState getUiState(D3D9DeviceEx* remixDevice);
+
+    // Acquires the device lock and calls getImgui().switchMenu(uiType) after
+    // mapping the remixapi_UIState to internal UIType. Returns GENERAL_FAILURE
+    // if the device or its common objects are null.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    remixapi_ErrorCode setUiState(D3D9DeviceEx* remixDevice, remixapi_UIState state);
+
+    // Stub: the DX11 shared-memory export backbuffer path is not ported to this
+    // fork. Validates arguments then returns GENERAL_FAILURE so callers fall back;
+    // the vtable slot is populated so the struct layout matches the plugin ABI.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    remixapi_ErrorCode getSharedD3D11TextureHandle(
+      D3D9DeviceEx* remixDevice,
+      void**       out_sharedHandle,
+      uint32_t*    out_width,
+      uint32_t*    out_height);
+
+    // Retrieves the D3D9CommonTexture from a D3D9 texture pointer, gets the
+    // underlying DxvkImage, and returns image->getHash() in out_hash.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    remixapi_ErrorCode dxvkGetTextureHash(
+      IDirect3DTexture9* texture,
+      uint64_t*          out_hash);
+
+    // Creates a DxvkImage + view + staging buffer for the supplied pixel data,
+    // copies data into staging, schedules an EmitCs lambda that transitions the
+    // image, uploads all mip levels, transitions to shader-read, and registers
+    // the texture with the texture manager and ImGui catalog.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    remixapi_ErrorCode createTexture(
+      D3D9DeviceEx*            remixDevice,
+      const remixapi_TextureInfo* info,
+      remixapi_TextureHandle*  out_handle);
+
+    // Schedules an EmitCs lambda that searches the texture table by hash and
+    // releases the texture reference via RtxTextureManager::releaseTexture.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    remixapi_ErrorCode destroyTexture(
+      D3D9DeviceEx*        remixDevice,
+      remixapi_TextureHandle handle);
 
   } // namespace fork_hooks
 

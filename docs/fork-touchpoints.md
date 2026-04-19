@@ -484,13 +484,13 @@ check will enforce it if discipline slips.
 ## src/dxvk/rtx_render/rtx_remix_api.cpp
 
 **Pre-refactor fork footprint:** +1277 / -118 LOC (audit 2026-04-18)
-**Post-refactor footprint (partial, migration #7a done):** 2 hook call sites + 1 `#include "rtx_fork_hooks.h"` for the blocks migrated so far; ~14 pre-existing fork blocks still pending for migrations #7b (API function implementations) and #7c (interception + vtable).
+**Post-refactor footprint (partial, migrations #7a + #7b done):** 10 hook call sites + 1 `#include "rtx_fork_hooks.h"`; remaining blocks pending for migration #7c (devLock interceptions + vtable init + frame-boundary callback infrastructure).
 
 - **Inline tweak** at `(file scope)` (includes block) — ~7 LOC added. Not migrated: include lines don't get hooks — they either stay inline or the fork-owned file pulls them for its own code. Tracked here per the fridge-list invariant.
   *Adds includes for `dxvk_objects.h`, `dxvk_imgui.h`, `rtx_context.h`, `rtx_option_layer.h`, `util_hash_set_layer.h`, `xxhash.h`, `algorithm`, and `d3d9_texture.h` to support fork-added API functions, plus `rtx_fork_hooks.h` added in migration #7a.*
 
-- **Inline tweak** at `(file scope)` (`PendingScreenOverlay` struct + `s_pendingScreenOverlay`) — ~9 LOC. Pending full migration in #7b / #7c. A mirror copy of the struct and optional lives in `rtx_fork_api_entry.cpp` (anonymous namespace) as scaffolding for those passes; the upstream copy will be removed once the call sites at the staging (`remixapi_DrawScreenOverlay`) and drain (`remixapi_Present`) paths migrate into the fork-owned file.
-  *Declares the `PendingScreenOverlay` struct holding a staging buffer, dimensions, format, and opacity, and the `s_pendingScreenOverlay` optional used to hand screen overlay data from the API thread to the render thread.*
+- **Inline tweak** at `(file scope)` (`PendingScreenOverlay` struct + `s_pendingScreenOverlay`) — **Removed in migration #7b**. Both the struct and the optional are now defined exclusively in `rtx_fork_api_entry.cpp` (anonymous namespace). A comment marking the removal remains in the upstream file for auditability.
+  *The struct held staging buffer, dimensions, format, and opacity; the optional was the hand-off point between the API thread (writer: `drawScreenOverlay`) and the render thread (reader: `presentScreenOverlayFlush`). Both now live in the fork-owned TU.*
 
 - **Hook** at `convert::toRtMaterialFinalized::preloadTexture` lambda (inside the `MaterialDataType::Opaque` / `Translucent` / `Portal` texture preload path) → `fork_hooks::textureHashPathLookup` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7a).
   *Adds a "0x..." hex-path shortcut inside the upstream texture-path resolver so API-uploaded textures can be referenced by hash string in material JSON without creating a real file path. Hook returns true and writes the resolved `TextureRef` when the path parses as hex and matches a registered texture; caller returns immediately. Falls through to the normal AssetDataManager lookup otherwise.*
@@ -504,55 +504,52 @@ check will enforce it if discipline slips.
 - **Inline tweak** at `convert::toRtDrawState` (blend-weight/index buffer stride fix) — 2 LOC across two call sites, not worth a hook. Not migrated.
   *Fixes `blendWeightBuffer` and `blendIndicesBuffer` strides to use `bonesPerVertex`-based byte widths rather than fixed-width placeholders.*
 
-- **Block** at `remixapi_SetupCamera` (devLock addition + diag log) — ~6 LOC, planned target `fork_hooks::setupCameraDevLock` in `rtx_fork_api_entry.cpp`.
-  *Adds a `LockDevice()` RAII guard to `remixapi_SetupCamera` and [RTX-Diag] logs tracing when the CS lambda fires on the command-stream thread.*
+- **Block** at `remixapi_SetupCamera` (devLock addition) — ~2 LOC, planned target `fork_hooks::setupCameraDevLock` in `rtx_fork_api_entry.cpp`. Pending #7c.
+  *Adds a `LockDevice()` RAII guard to `remixapi_SetupCamera` so the EmitCs call that submits external camera data is race-safe when the Skyrim Remix plugin drives the API.*
 
-- **Block** at `remixapi_DrawInstance` (devLock + commitExternalGeometryToRT block) — ~8 LOC, planned target `fork_hooks::drawInstanceDevLock` in `rtx_fork_api_entry.cpp`.
+- **Block** at `remixapi_DrawInstance` (devLock + commitExternalGeometryToRT block) — ~8 LOC, planned target `fork_hooks::drawInstanceDevLock` in `rtx_fork_api_entry.cpp`. Pending #7c.
   *Wraps the `EmitCs` call that submits external geometry in a `LockDevice()` guard and ensures `commitExternalGeometryToRT` is reached through the proper context cast.*
 
-- **Block** at `remixapi_Present` / `remixapi_Present` (internal namespace) (s_inFrame + s_endCallback block + diag logs) — ~30 LOC, planned target `fork_hooks::presentCallbackDispatch` in `rtx_fork_api_entry.cpp`.
-  *Adds the `s_endCallback` dispatch block (calls the registered end-of-frame callback when `s_inFrame` is set) and [RTX-Diag] logs tracing `s_inFrame` state, callback pointer, and `remixDevice->Present` return value.*
+- **Block** at `remixapi_Present` (s_inFrame + s_endCallback block) — ~8 LOC, planned target `fork_hooks::presentCallbackDispatch` in `rtx_fork_api_entry.cpp`. Pending #7c.
+  *Adds the `s_endCallback` dispatch block (calls the registered end-of-frame callback when `s_inFrame` is set). Reads anonymous-namespace statics `s_inFrame`, `s_endCallback`, `s_presentCallback` — cannot be lifted until those are moved in #7c.*
 
-- **Block** at `remixapi_Present` (screen overlay flush — inner namespace path) — ~18 LOC, planned target `fork_hooks::presentScreenOverlayFlush` in `rtx_fork_api_entry.cpp`.
-  *Flushes `s_pendingScreenOverlay` to the render thread via `EmitCs` / `setScreenOverlayData` during the inner-namespace `remixapi_Present` path.*
+- **Hook** at `remixapi_Present` (screen overlay flush — inner namespace path) → `fork_hooks::presentScreenOverlayFlush` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7b).
+  *One-liner call to the fork-owned flush hook. State (PendingScreenOverlay + s_pendingScreenOverlay) was unified in the same migration.*
 
-- **Block** at `extern "C"` `remixapi_Present` (screen overlay flush — C-export path) — ~18 LOC, planned target `fork_hooks::presentScreenOverlayFlush` in `rtx_fork_api_entry.cpp`.
-  *Same screen overlay flush on the C-export `remixapi_Present` path (duplicate for the two present entry points).*
+- **Hook** at `extern "C"` `remixapi_AutoInstancePersistentLights` (screen overlay flush path) → `fork_hooks::presentScreenOverlayFlush` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7b).
+  *Same flush hook called on the C-export AutoInstancePersistentLights path, which also drains the pending overlay once per frame.*
 
-- **Block** at `remixapi_DrawScreenOverlay` FIRST-CALL diag + function body — ~25 LOC, planned target `fork_hooks::drawScreenOverlay` in `rtx_fork_api_entry.cpp`.
-  *Implements `remixapi_DrawScreenOverlay`: copies pixel data into a staging buffer, stores it in `s_pendingScreenOverlay`, and logs the first-call event for diagnostics.*
+- **Hook** at `remixapi_DrawScreenOverlay` (function body) → `fork_hooks::drawScreenOverlay` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7b).
+  *Upstream wrapper acquires device + mutex, then delegates to the hook. The reverted [RTX-Diag] FIRST-CALL log block is absent (never present in current HEAD).*
 
-- **Block** at `remixapi_GetUIState` (full function) — ~14 LOC, planned target `fork_hooks::getUiState` in `rtx_fork_api_entry.cpp`.
-  *Implements `remixapi_GetUIState` by reading `RtxOptions::showUI()` and mapping the internal `UIType` enum to `remixapi_UIState`.*
+- **Hook** at `remixapi_GetUIState` (function body) → `fork_hooks::getUiState` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7b).
+  *One-liner delegate passing `tryAsDxvk()` to the hook.*
 
-- **Block** at `remixapi_SetUIState` (full function) — ~22 LOC, planned target `fork_hooks::setUiState` in `rtx_fork_api_entry.cpp`.
-  *Implements `remixapi_SetUIState` by acquiring the device lock and calling `getImgui().switchMenu(uiType)` after validating the state argument.*
+- **Hook** at `remixapi_SetUIState` (function body) → `fork_hooks::setUiState` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7b).
+  *One-liner delegate.*
 
-- **Block** at `remixapi_dxvk_GetSharedD3D11TextureHandle` (full function) — ~20 LOC, planned target `fork_hooks::getSharedD3D11TextureHandle` in `rtx_fork_api_entry.cpp`.
-  *Implements the stub for `remixapi_dxvk_GetSharedD3D11TextureHandle`: validates arguments then returns `REMIXAPI_ERROR_CODE_GENERAL_FAILURE` because the DX11 shared-texture export path is not ported; vtable slot is populated for ABI layout compatibility.*
+- **Hook** at `remixapi_dxvk_GetSharedD3D11TextureHandle` (function body) → `fork_hooks::getSharedD3D11TextureHandle` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7b).
+  *Stub returning GENERAL_FAILURE. One-liner delegate.*
 
-- **Block** at `remixapi_dxvk_GetTextureHash` (full function) — ~20 LOC, planned target `fork_hooks::dxvkGetTextureHash` in `rtx_fork_api_entry.cpp`.
-  *Implements `remixapi_dxvk_GetTextureHash`: retrieves the `D3D9CommonTexture` from a D3D9 texture pointer, gets the underlying `DxvkImage`, and returns `image->getHash()`.*
+- **Hook** at `remixapi_dxvk_GetTextureHash` (function body) → `fork_hooks::dxvkGetTextureHash` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7b).
+  *One-liner delegate.*
 
-- **Block** at `remixapi_CreateTexture` (full function) — ~100 LOC, planned target `fork_hooks::createTexture` in `rtx_fork_api_entry.cpp`.
-  *Implements `remixapi_CreateTexture`: creates a `DxvkImage` + view + staging buffer on the GPU, copies pixel data into staging, schedules an `EmitCs` lambda that transitions the image, copies all mip levels, transitions to shader-read, registers the image hash in the texture manager, and adds it to the ImGui texture catalog.*
+- **Hook** at `remixapi_CreateTexture` (function body) → `fork_hooks::createTexture` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7b).
+  *Upstream wrapper acquires s_mutex, then delegates. Full GPU resource creation lives in the hook.*
 
-- **Block** at `remixapi_DestroyTexture` (full function) — ~20 LOC, planned target `fork_hooks::destroyTexture` in `rtx_fork_api_entry.cpp`.
-  *Implements `remixapi_DestroyTexture`: schedules an `EmitCs` lambda that searches the texture table by hash to release the texture reference.*
+- **Hook** at `remixapi_DestroyTexture` (function body) → `fork_hooks::destroyTexture` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7b).
+  *Upstream wrapper acquires s_mutex, then delegates.*
 
-- **Block** at `(anonymous namespace)` (`AddTextureHash` / `RemoveTextureHash` dispatch + `remixapi_AddTextureHash` / `remixapi_RemoveTextureHash` functions) — ~30 LOC, planned target `fork_hooks::textureHashMutation` in `rtx_fork_api_entry.cpp`.
-  *Implements `remixapi_AddTextureHash` and `remixapi_RemoveTextureHash` by calling `mutateTextureHashOption` with the appropriate mutation enum value.*
+- **Block** at `(anonymous namespace)` frame-boundary callback infrastructure (`RegisterCallbacks`, `AutoInstancePersistentLights` body, `UpdateLightDefinition`) — pending #7c.
+  *These functions read/write anonymous-namespace pending queues (`s_pendingLightCreates`, `s_pendingLightUpdates`, etc.) and callback vars (`s_beginCallback`, `s_endCallback`, `s_presentCallback`) that must move together. Deferring to #7c.*
 
-- **Block** at `(anonymous namespace)` frame-boundary callback infrastructure (`RegisterCallbacks`, `AutoInstancePersistentLights`, `UpdateLightDefinition`) — ~60 LOC across several functions, planned target `fork_hooks::frameCallbackInfra` in `rtx_fork_api_entry.cpp`.
-  *Implements `remixapi_RegisterCallbacks` (stores begin/end/present callbacks), `remixapi_AutoInstancePersistentLights` (calls `LightManager::queueAutoInstancePersistent`), and `remixapi_UpdateLightDefinition` (queues a deferred light definition update via `LightManager`).*
-
-- **Block** at `REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE` routing (in category conversion) — ~1 LOC, planned target `fork_hooks::legacyEmissiveCategory` in `rtx_fork_api_entry.cpp`.
+- **Block** at `REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE` routing (in category conversion) — ~1 LOC, planned target `fork_hooks::legacyEmissiveCategory` in `rtx_fork_api_entry.cpp`. Pending #7c.
   *Routes `REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE` (bit 24) to `InstanceCategories::SmoothNormals` in the category-bit conversion function.*
 
-- **Block** at `extern "C"` vtable init block (function registrations) — ~14 LOC, planned target `fork_hooks::remixApiVtableInit` in `rtx_fork_api_entry.cpp`.
+- **Block** at `extern "C"` vtable init block (function registrations) — ~14 LOC, planned target `fork_hooks::remixApiVtableInit` in `rtx_fork_api_entry.cpp`. Pending #7c.
   *Registers all fork-added API functions into the `remixapi_Interface` vtable: `AddTextureHash`, `RemoveTextureHash`, `CreateTexture`, `DestroyTexture`, `dxvk_GetTextureHash`, `CreateMeshBatched` (nullptr stub), `GetUIState`, `SetUIState`, `DrawScreenOverlay`, `RegisterCallbacks`, `AutoInstancePersistentLights`, `UpdateLightDefinition`, `CreateLightBatched`, `dxvk_GetSharedD3D11TextureHandle`.*
 
-- **Block** at `extern "C"` vtable size static_assert updates — ~2 LOC (multiple assert values), planned target `fork_hooks::remixApiVtableInit` in `rtx_fork_api_entry.cpp`.
+- **Block** at `extern "C"` vtable size static_assert updates — ~2 LOC (multiple assert values), planned target `fork_hooks::remixApiVtableInit` in `rtx_fork_api_entry.cpp`. Pending #7c.
   *Updates the `sizeof(interf)` static_assert chain (208 → 240 → 272 → 280) as each workstream extends the vtable.*
 
 ---
