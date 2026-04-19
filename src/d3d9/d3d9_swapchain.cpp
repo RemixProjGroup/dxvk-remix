@@ -1332,8 +1332,9 @@ namespace dxvk {
     presenterDesc.numPresentModes = PickPresentModes(Vsync, presenterDesc.presentModes);
     presenterDesc.fullScreenExclusive = PickFullscreenMode();
 
-    if (GetPresenter()->recreateSwapChain(presenterDesc) != VK_SUCCESS)
-      throw DxvkError("D3D9SwapChainEx: Failed to recreate swap chain");
+    if (GetPresenter()->recreateSwapChain(presenterDesc) != VK_SUCCESS) {
+      //throw DxvkError("D3D9SwapChainEx: Failed to recreate swap chain");
+    }
     // NV-DXVK end
     
 
