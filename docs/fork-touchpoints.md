@@ -389,29 +389,32 @@ check will enforce it if discipline slips.
 ## src/dxvk/rtx_render/rtx_lights.cpp
 
 **Pre-refactor fork footprint:** +25 / -17 LOC (audit 2026-04-18)
+**Post-refactor fork footprint:** +25 / -17 LOC inline tweaks (reclassified 2026-04-18)
 
-**Category:** migrate
+**Category:** index-only
 
-- **Block** at `RtSphereLight::writeGPUData` (ignoreViewModel flag) — ~4 LOC, planned target `fork_hooks::lightIgnoreViewModelGpu` in `rtx_fork_light.cpp`.
-  *Adds `ignoreViewModel` parameter to `RtSphereLight::writeGPUData` and sets bit 1 of the flags word when the flag is set.*
+**Rationale:** All fork changes are signature modifications and single-line flag-packing additions woven into the middle of existing `writeGPUData` function bodies, plus a one-line copy in the copy constructor. There is no standalone block to lift; the `ignoreViewModel` parameter is intrinsic to each function's signature and the flag-set line (`if (ignoreViewModel) flags |= 1 << 1;`) is inseparably interleaved with the upstream flags-assembly code. A hook would require passing the entire flags word in and out, making it structurally equivalent to rewriting each function — not a meaningful extraction.
 
-- **Block** at `RtRectLight::writeGPUData` (ignoreViewModel flag) — ~4 LOC, planned target `fork_hooks::lightIgnoreViewModelGpu` in `rtx_fork_light.cpp`.
-  *Same `ignoreViewModel` bit-packing for rect lights.*
+- **Inline tweak** at `RtSphereLight::writeGPUData` (ignoreViewModel parameter + bit 1 flag) — ~3 LOC.
+  *Adds `bool ignoreViewModel = false` parameter; sets bit 1 of the flags word when set. Companion signature change tracked in `rtx_lights.h`.*
 
-- **Block** at `RtDiskLight::writeGPUData` (ignoreViewModel flag) — ~4 LOC, planned target `fork_hooks::lightIgnoreViewModelGpu` in `rtx_fork_light.cpp`.
-  *Same `ignoreViewModel` bit-packing for disk lights.*
+- **Inline tweak** at `RtRectLight::writeGPUData` (ignoreViewModel parameter + bit 1 flag) — ~3 LOC.
+  *Same pattern for rect lights.*
 
-- **Block** at `RtCylinderLight::writeGPUData` (ignoreViewModel flag) — ~4 LOC, planned target `fork_hooks::lightIgnoreViewModelGpu` in `rtx_fork_light.cpp`.
-  *Same `ignoreViewModel` bit-packing for cylinder lights.*
+- **Inline tweak** at `RtDiskLight::writeGPUData` (ignoreViewModel parameter + bit 1 flag) — ~3 LOC.
+  *Same pattern for disk lights.*
 
-- **Block** at `RtDistantLight::writeGPUData` (ignoreViewModel flag) — ~4 LOC, planned target `fork_hooks::lightIgnoreViewModelGpu` in `rtx_fork_light.cpp`.
-  *Same `ignoreViewModel` bit-packing for distant lights.*
+- **Inline tweak** at `RtCylinderLight::writeGPUData` (ignoreViewModel parameter + bit 1 flag) — ~3 LOC.
+  *Same pattern for cylinder lights; refactors the previously direct `writeGPUHelper` call to use a local `flags` variable so the bit can be conditionally set.*
 
-- **Block** at `RtLight::writeGPUData` (dispatch to per-type with flag) — ~5 LOC, planned target `fork_hooks::lightIgnoreViewModelGpu` in `rtx_fork_light.cpp`.
-  *Updates the `RtLight::writeGPUData` dispatch to pass `this->ignoreViewModel` to each concrete light type's write function.*
+- **Inline tweak** at `RtDistantLight::writeGPUData` (ignoreViewModel parameter + bit 1 flag) — ~4 LOC.
+  *Same pattern for distant lights; same refactor of the direct helper call to a local flags variable.*
 
-- **Block** at `RtLight::RtLight(const RtLight&)` copy constructor — ~1 LOC, planned target `fork_hooks::lightIgnoreViewModelGpu` in `rtx_fork_light.cpp`.
-  *Copies `ignoreViewModel` in the `RtLight` copy constructor.*
+- **Inline tweak** at `RtLight::writeGPUData` (dispatch passes `this->ignoreViewModel`) — ~5 LOC (5 call-site updates).
+  *Each per-type `writeGPUData` call now forwards `this->ignoreViewModel` as the third argument.*
+
+- **Inline tweak** at `RtLight::copyFrom` (ignoreViewModel copy) — ~1 LOC.
+  *Copies `ignoreViewModel` in `copyFrom`, called by the copy constructor.*
 
 ---
 
@@ -444,14 +447,20 @@ check will enforce it if discipline slips.
 ## src/dxvk/rtx_render/rtx_options.h
 
 **Pre-refactor fork footprint:** +32 / -0 LOC (audit 2026-04-18)
+**Post-refactor fork footprint:** +32 / -0 LOC inline tweaks (reclassified 2026-04-18)
 
-**Category:** migrate
+**Category:** index-only
 
-- **Block** at `(file scope namespace dxvk)` (SkyMode enum + skyMode option) — ~16 LOC, planned target `fork_hooks::skyModeOption` in `rtx_fork_atmosphere.cpp`.
-  *Declares the `SkyMode` enum (`SkyboxRasterization`, `PhysicalAtmosphere`) and the `RTX_OPTION` for `rtx.skyMode`.*
+**Rationale:** All fork additions are an enum definition and `RTX_OPTION(...)` macro declarations inside the `RtxOptions` class body. `RTX_OPTION` expands to an inline static member declaration — it is structurally part of the class definition and cannot be lifted into a separate TU or wrapped in a hook. There is no function body to extract.
 
-- **Block** at `RtxOptions` (atmosphere RTX_OPTIONs block) — ~20 LOC, planned target `fork_hooks::atmosphereOptions` in `rtx_fork_atmosphere.cpp`.
-  *Declares all atmosphere tuning options under the `rtx.atmosphere` prefix: sun disc, size, intensity, elevation, rotation, altitude, air/aerosol/ozone densities, planet radius, atmosphere thickness, Mie anisotropy, base Rayleigh/Mie/ozone coefficients, ozone layer altitude/width, and base sun illuminance.*
+- **Inline tweak** at `(file scope namespace dxvk)` (SkyMode enum) — ~5 LOC.
+  *Declares the `SkyMode` enum class (`SkyboxRasterization = 0`, `PhysicalAtmosphere = 1`). Required by `RtxOptions::skyMode` below and by atmosphere hook code in `rtx_fork_atmosphere.cpp` (via the `rtx_options.h` include chain).*
+
+- **Inline tweak** at `RtxOptions` class body (skyMode RTX_OPTION) — ~2 LOC.
+  *Declares `RTX_OPTION("rtx", SkyMode, skyMode, SkyMode::SkyboxRasterization, ...)` immediately after the existing sky-related options block. Consumed by `fork_hooks::updateAtmosphereConstants` in `rtx_fork_atmosphere.cpp`.*
+
+- **Inline tweak** at `RtxOptions` class body (atmosphere RTX_OPTIONs block) — ~25 LOC.
+  *Declares all 17 atmosphere tuning options under the `rtx.atmosphere` prefix: `sunDisc`, `sunSize`, `sunIntensity`, `sunElevation`, `sunRotation`, `altitude`, `airDensity`, `aerosolDensity`, `ozoneDensity`, `planetRadius`, `atmosphereThickness`, `mieAnisotropy`, `rayleighScattering`, `mieScattering`, `ozoneAbsorption`, `ozoneLayerAltitude`, `ozoneLayerWidth`, and `sunIlluminance`. All consumed by `RtxAtmosphere` and the atmosphere hooks in `rtx_fork_atmosphere.cpp`.*
 
 ---
 
