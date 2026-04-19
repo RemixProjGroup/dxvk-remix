@@ -74,28 +74,12 @@
 #include "rtx_matrix_helpers.h"
 #include "../util/util_fastops.h"
 
-#include "rtx/pass/screen_overlay/screen_overlay.h"
-#include <rtx_shaders/screen_overlay.h>
+#include "rtx_fork_hooks.h"
 
 // Destructor requires the struct definitions
 #include "rtx_sky.h"
 
 namespace dxvk {
-
-  namespace {
-    class ScreenOverlayShader : public ManagedShader {
-      SHADER_SOURCE(ScreenOverlayShader, VK_SHADER_STAGE_COMPUTE_BIT, screen_overlay)
-
-      PUSH_CONSTANTS(ScreenOverlayArgs)
-
-      BEGIN_PARAMETER()
-        RW_TEXTURE2D(SCREEN_OVERLAY_INPUT_OUTPUT)
-        SAMPLER2D(SCREEN_OVERLAY_TEXTURE)
-      END_PARAMETER()
-    };
-
-    PREWARM_SHADER_PIPELINE(ScreenOverlayShader);
-  }
 
   Metrics Metrics::s_instance;
 
@@ -211,8 +195,7 @@ namespace dxvk {
 
     GlobalTime::get().init(RtxOptions::timeDeltaBetweenFrames());
 
-    // Initialize atmosphere system
-    m_atmosphere = std::make_unique<RtxAtmosphere>(m_device.ptr());
+    fork_hooks::initAtmosphere(*this);
   }
 
   RtxContext::~RtxContext() {
@@ -1312,42 +1295,8 @@ namespace dxvk {
     constants.resolveStochasticAlphaBlendThreshold = m_common->metaComposite().stochasticAlphaBlendOpacityThreshold();
 
     constants.skyBrightness = RtxOptions::skyBrightness();
-    constants.skyMode = static_cast<uint32_t>(RtxOptions::skyMode());
-    
-    // Detect sky mode change and clear sky buffers when switching to Physical Atmosphere
-    SkyMode currentSkyMode = RtxOptions::skyMode();
-    if (currentSkyMode != m_lastSkyMode) {
-      if (currentSkyMode == SkyMode::PhysicalAtmosphere) {
-        // Clear the rasterized skybox buffers when switching to physical atmosphere
-        auto skyProbe = getResourceManager().getSkyProbe(this, m_skyColorFormat);
-        auto skyMatte = getResourceManager().getSkyMatte(this, m_skyRtColorFormat);
-        
-        VkClearValue clearValue = {};
-        clearValue.color.float32[0] = 0.0f;
-        clearValue.color.float32[1] = 0.0f;
-        clearValue.color.float32[2] = 0.0f;
-        clearValue.color.float32[3] = 0.0f;
-        
-        if (skyProbe.view != nullptr) {
-          DxvkContext::clearRenderTarget(skyProbe.view, VK_IMAGE_ASPECT_COLOR_BIT, clearValue);
-        }
-        if (skyMatte.view != nullptr) {
-          DxvkContext::clearRenderTarget(skyMatte.view, VK_IMAGE_ASPECT_COLOR_BIT, clearValue);
-        }
-      }
-      m_lastSkyMode = currentSkyMode;
-    }
-    
-    // Update atmosphere parameters
-    if (RtxOptions::skyMode() == SkyMode::PhysicalAtmosphere) {
-      if (!m_atmosphere) {
-        m_atmosphere = std::make_unique<RtxAtmosphere>(m_device.ptr());
-      }
-      m_atmosphere->initialize(this);
-      m_atmosphere->computeLuts(this);
-      constants.atmosphereArgs = m_atmosphere->getAtmosphereArgs();
-    }
-    
+    fork_hooks::updateAtmosphereConstants(*this, constants);
+
     constants.isLastCompositeOutputValid = restirGI.isActive() && restirGI.getLastCompositeOutput().matchesWriteFrameIdx(frameIdx - 1);
     constants.isZUp = RtxOptions::zUp();
     constants.enableCullingSecondaryRays = RtxOptions::enableCullingInSecondaryRays();
@@ -1432,28 +1381,7 @@ namespace dxvk {
     bindResourceSampler(BINDING_VALUE_NOISE_SAMPLER, linearSampler);
     bindResourceBuffer(BINDING_SAMPLER_READBACK_BUFFER, DxvkBufferSlice(samplerFeedbackBuffer, 0, samplerFeedbackBuffer.ptr() ? samplerFeedbackBuffer->info().size : 0));
 
-    // Bind atmosphere LUTs - must always bind since they're declared in common_bindings.slangh
-    // Initialize atmosphere if not already done (needed for dummy resources)
-    if (!m_atmosphere) {
-      m_atmosphere = std::make_unique<RtxAtmosphere>(m_device.ptr());
-    }
-    // Always call initialize - it's idempotent (has internal m_initialized check)
-    m_atmosphere->initialize(this);
-    
-    auto transmittanceLut = m_atmosphere->getTransmittanceLut();
-    auto multiscatteringLut = m_atmosphere->getMultiscatteringLut();
-    auto skyViewLut = m_atmosphere->getSkyViewLut();
-    
-    // Always bind the LUTs (they're declared in shaders unconditionally)
-    if (transmittanceLut.isValid()) {
-      bindResourceView(BINDING_ATMOSPHERE_TRANSMITTANCE_LUT, transmittanceLut.view, nullptr);
-    }
-    if (multiscatteringLut.isValid()) {
-      bindResourceView(BINDING_ATMOSPHERE_MULTISCATTERING_LUT, multiscatteringLut.view, nullptr);
-    }
-    if (skyViewLut.isValid()) {
-      bindResourceView(BINDING_ATMOSPHERE_SKY_VIEW_LUT, skyViewLut.view, nullptr);
-    }
+    fork_hooks::bindAtmosphereLuts(*this);
   }
 
   void RtxContext::bindResourceView(const uint32_t slot, const Rc<DxvkImageView>& imageView, const Rc<DxvkBufferView>& bufferView)
@@ -1846,90 +1774,7 @@ namespace dxvk {
   }
 
   void RtxContext::dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput) {
-    if (!m_pendingScreenOverlay.has_value()) {
-      return;
-    }
-
-    ScopedGpuProfileZone(this, "Screen Overlay");
-    auto& overlay = *m_pendingScreenOverlay;
-
-    // Recreate overlay image if dimensions or format changed.
-    if (m_screenOverlayWidth != overlay.width || m_screenOverlayHeight != overlay.height
-        || m_screenOverlayFormat != overlay.format || !m_screenOverlayImage.ptr()) {
-      DxvkImageCreateInfo imageInfo = {};
-      imageInfo.type = VK_IMAGE_TYPE_2D;
-      imageInfo.format = overlay.format;
-      imageInfo.flags = 0;
-      imageInfo.sampleCount = VK_SAMPLE_COUNT_1_BIT;
-      imageInfo.extent = { overlay.width, overlay.height, 1 };
-      imageInfo.numLayers = 1;
-      imageInfo.mipLevels = 1;
-      imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-      imageInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-      imageInfo.access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-      imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-      imageInfo.layout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-      m_screenOverlayImage = m_device->createImage(
-        imageInfo,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-        DxvkMemoryStats::Category::RTXRenderTarget,
-        "Screen overlay image");
-
-      DxvkImageViewCreateInfo viewInfo = {};
-      viewInfo.type = VK_IMAGE_VIEW_TYPE_2D;
-      viewInfo.format = overlay.format;
-      viewInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
-      viewInfo.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-      viewInfo.minLevel = 0;
-      viewInfo.numLevels = 1;
-      viewInfo.minLayer = 0;
-      viewInfo.numLayers = 1;
-
-      m_screenOverlayView = m_device->createImageView(m_screenOverlayImage, viewInfo);
-
-      m_screenOverlayWidth = overlay.width;
-      m_screenOverlayHeight = overlay.height;
-      m_screenOverlayFormat = overlay.format;
-    }
-
-    // Copy staging buffer to overlay image
-    {
-      VkImageSubresourceLayers subresource = {};
-      subresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-      subresource.mipLevel = 0;
-      subresource.baseArrayLayer = 0;
-      subresource.layerCount = 1;
-
-      VkOffset3D offset = { 0, 0, 0 };
-      VkExtent3D extent = { overlay.width, overlay.height, 1 };
-
-      copyBufferToImage(m_screenOverlayImage, subresource, offset, extent,
-                        overlay.stagingBuffer, 0, 0, 0);
-    }
-
-    // Dispatch overlay blend compute shader
-    this->setPushConstantBank(DxvkPushConstantBank::RTX);
-
-    auto& finalOutput = rtOutput.m_finalOutput.resource(Resources::AccessType::ReadWrite);
-    const VkExtent3D outputSize = finalOutput.image->info().extent;
-    const VkExtent3D workgroups = util::computeBlockCount(outputSize, VkExtent3D { SCREEN_OVERLAY_TILE_SIZE, SCREEN_OVERLAY_TILE_SIZE, 1 });
-
-    ScreenOverlayArgs pushArgs = {};
-    pushArgs.imageSize = { outputSize.width, outputSize.height };
-    pushArgs.opacity = overlay.opacity;
-    this->pushConstants(0, sizeof(pushArgs), &pushArgs);
-
-    this->bindResourceView(SCREEN_OVERLAY_INPUT_OUTPUT, finalOutput.view, nullptr);
-    this->bindResourceView(SCREEN_OVERLAY_TEXTURE, m_screenOverlayView, nullptr);
-    this->bindResourceSampler(SCREEN_OVERLAY_TEXTURE,
-      getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
-
-    this->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, ScreenOverlayShader::getShader());
-    this->dispatch(workgroups.width, workgroups.height, workgroups.depth);
-
-    // Clear pending overlay after dispatch
-    m_pendingScreenOverlay.reset();
+    fork_hooks::dispatchScreenOverlay(*this, rtOutput);
   }
 
   void RtxContext::dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage)  {
@@ -2724,11 +2569,10 @@ namespace dxvk {
   }
 
   void RtxContext::rasterizeSky(const DrawParameters& params, const DrawCallState& drawCallState) {
-    // Skip rasterization when using physical atmosphere mode
-    if (RtxOptions::skyMode() == SkyMode::PhysicalAtmosphere) {
+    if (fork_hooks::injectRtxAtmosphereSkySkip()) {
       return;
     }
-    
+
     // Grab and apply replacement texture if any
     // NOTE: only the original color texture will be replaced with albedo-opacity texture
     MaterialData* replacementMaterial = getSceneManager().getAssetReplacer()->getReplacementMaterial(drawCallState.getMaterialData().getHash());

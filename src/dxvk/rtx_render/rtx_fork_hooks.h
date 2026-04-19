@@ -35,6 +35,13 @@ namespace lss {
 using remixapi_LightHandle = struct remixapi_LightHandle_T*;
 #endif
 
+// RaytraceArgs (for updateAtmosphereConstants) and Resources::RaytracingOutput
+// (for dispatchScreenOverlay) both require the full type to appear in a function
+// declaration. rtx_resources.h is the canonical header for both; it is already
+// pulled transitively by most translation units that include rtx_fork_hooks.h.
+#include "rtx_resources.h"
+#include "rtx/pass/raytrace_args.h"
+
 namespace dxvk {
 
   // Forward declarations for types whose full definitions the hook header does
@@ -45,11 +52,44 @@ namespace dxvk {
   class GameOverlay;
   class LightManager;
   class RtInstance;
+  class RtxContext;
   class SceneManager;
   struct LegacyMaterialData;
   struct RtLight;
 
   namespace fork_hooks {
+
+    // Constructs the RtxAtmosphere instance during RtxContext initialization.
+    // Must be called after GlobalTime::get().init() in the RtxContext constructor.
+    // NOTE: requires RtxContext to declare this as a friend for access to the
+    // private m_atmosphere and m_device members. See rtx_context.h.
+    // Implementation in rtx_fork_atmosphere.cpp.
+    void initAtmosphere(RtxContext& ctx);
+
+    // Sets constants.skyMode, detects sky mode transitions (clearing skybox
+    // buffers when switching to Physical Atmosphere), and when Physical
+    // Atmosphere is active ensures m_atmosphere exists, calls initialize /
+    // computeLuts, and writes atmosphereArgs into the constant block.
+    // NOTE: requires RtxContext to declare this as a friend for access to private
+    // members m_atmosphere, m_lastSkyMode, m_skyColorFormat, m_skyRtColorFormat,
+    // and m_device. See rtx_context.h.
+    // Implementation in rtx_fork_atmosphere.cpp.
+    void updateAtmosphereConstants(RtxContext& ctx, RaytraceArgs& constants);
+
+    // Ensures m_atmosphere is initialized (idempotent) and binds the three
+    // atmosphere LUT textures unconditionally, because they are declared in
+    // common_bindings.slangh for all shader passes.
+    // NOTE: requires RtxContext to declare this as a friend for access to private
+    // members m_atmosphere and m_device. See rtx_context.h.
+    // Implementation in rtx_fork_atmosphere.cpp.
+    void bindAtmosphereLuts(RtxContext& ctx);
+
+    // Returns true when the caller should skip rasterized sky rendering because
+    // Physical Atmosphere mode is active.
+    // No private-member access — uses only the public RtxOptions::skyMode() API.
+    // No friend declaration needed.
+    // Implementation in rtx_fork_atmosphere.cpp.
+    bool injectRtxAtmosphereSkySkip();
 
     // Checks for a USD mesh/light replacement keyed on the API mesh handle hash.
     // Returns the replacement vector if one exists, null otherwise.
@@ -94,6 +134,17 @@ namespace dxvk {
     // Implementation in rtx_fork_overlay.cpp.
     void overlayKeyboardForward(
       GameOverlay& overlay, HWND gameHwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+    // Alpha-composites a plugin-uploaded RGBA pixel buffer over the final
+    // tone-mapped output image using the ScreenOverlayShader compute shader.
+    // Called from RtxContext::dispatchScreenOverlay (one-line delegate) after
+    // tone mapping and before screenshot capture. No-ops when no overlay is
+    // pending this frame.
+    // NOTE: requires RtxContext to declare this as a friend for access to
+    // private members m_pendingScreenOverlay, m_screenOverlay*, and m_device.
+    // See rtx_context.h.
+    // Implementation in rtx_fork_overlay.cpp.
+    void dispatchScreenOverlay(RtxContext& ctx, Resources::RaytracingOutput& rtOutput);
 
     // Implements the full captureMaterial logic for both D3D9 and API-submitted
     // materials. For D3D9 materials, exports the color texture directly. For

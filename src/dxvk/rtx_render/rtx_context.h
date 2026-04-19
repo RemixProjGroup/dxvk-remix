@@ -53,9 +53,24 @@ namespace dxvk {
     uint32_t firstIndex = 0;
     uint32_t vertexOffset = 0;
   };
-  /** 
+
+  // Forward declarations of fork_hooks functions that require friend access to
+  // RtxContext private members, so the friend declarations inside the class body
+  // can name them. See rtx_fork_hooks.h for the full hook catalogue.
+  // Note: Resources::RaytracingOutput is fully defined via #include "rtx_resources.h"
+  // above; RtxContext is forward-declared here so the fork_hooks signatures compile
+  // before the class definition is encountered.
+  class RtxContext;
+  namespace fork_hooks {
+    void initAtmosphere(RtxContext&);
+    void updateAtmosphereConstants(RtxContext&, RaytraceArgs&);
+    void bindAtmosphereLuts(RtxContext&);
+    void dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
+  } // namespace fork_hooks
+
+  /**
    * \brief RTX context
-   * 
+   *
    * Tracks pipeline state and records command lists.
    * This is where the actual rendering commands are
    * recorded.
@@ -312,5 +327,14 @@ namespace dxvk {
 
     RtxFramePassStage m_currentPassStage = RtxFramePassStage::FrameBegin;
 #endif
+
+    // Grant fork_hooks functions access to private members they require.
+    // Each friend corresponds to a hook that was lifted out of this class's
+    // method bodies during the 2026-04-18 fork touchpoint-pattern refactor.
+    // See docs/fork-touchpoints.md and rtx_fork_hooks.h for the catalogue.
+    friend void fork_hooks::initAtmosphere(RtxContext&);
+    friend void fork_hooks::updateAtmosphereConstants(RtxContext&, RaytraceArgs&);
+    friend void fork_hooks::bindAtmosphereLuts(RtxContext&);
+    friend void fork_hooks::dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
   };
 } // namespace dxvk

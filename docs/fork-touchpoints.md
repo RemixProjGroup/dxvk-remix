@@ -257,46 +257,45 @@ check will enforce it if discipline slips.
 ## src/dxvk/rtx_render/rtx_context.cpp
 
 **Pre-refactor fork footprint:** +211 / -26 LOC (audit 2026-04-18)
+**Post-refactor footprint:** 5 hook call sites + `#include "rtx_fork_hooks.h"` (migrated 2026-04-18)
 
-**Category:** migrate
+**Note on Block 4:** The audit listed this as "physical atmosphere sky skip + diag logs" in `injectRTX`. The [RTX-Diag] portion was reverted before migration (commits ff61f77d and b0d2da33); what remains is only the 5-line early-return guard in `rasterizeSky`. Migrated as `fork_hooks::injectRtxAtmosphereSkySkip`. The audit's method name (`injectRTX`) was incorrect — the actual call site is `rasterizeSky`.
 
-- **Block** at `RtxContext::RtxContext` constructor (body) — ~3 LOC, planned target `fork_hooks::initAtmosphere` in `rtx_fork_atmosphere.cpp`.
+**Note on Block 6:** The `endFrame` [RTX-Diag] log block was reverted (commit b0d2da33) before this migration ran. `endFrameDiag` was not implemented; no hook call site exists in `endFrame`.
+
+- **Hook** at `RtxContext::RtxContext` constructor (atmosphere init) → `fork_hooks::initAtmosphere` in `rtx_fork_atmosphere.cpp`
   *Constructs the `RtxAtmosphere` instance during `RtxContext` initialization.*
 
-- **Block** at `RtxContext::updateCommonConstantBuffer` (sky mode + atmosphere section) — ~40 LOC, planned target `fork_hooks::updateAtmosphereConstants` in `rtx_fork_atmosphere.cpp`.
+- **Hook** at `RtxContext::updateRaytraceArgsConstantBuffer` (sky mode + atmosphere section) → `fork_hooks::updateAtmosphereConstants` in `rtx_fork_atmosphere.cpp`
   *Sets `constants.skyMode`, detects sky mode transitions (clearing skybox buffers on switch to Physical Atmosphere), and calls `m_atmosphere->initialize` / `computeLuts` / `getAtmosphereArgs` to populate the atmosphere constant block.*
 
-- **Block** at `RtxContext::bindCommonShaderResources` (atmosphere LUT bindings) — ~29 LOC, planned target `fork_hooks::bindAtmosphereLuts` in `rtx_fork_atmosphere.cpp`.
+- **Hook** at `RtxContext::bindCommonRayTracingResources` (atmosphere LUT bindings) → `fork_hooks::bindAtmosphereLuts` in `rtx_fork_atmosphere.cpp`
   *Ensures the atmosphere object is initialized and binds the three atmosphere LUT textures (`BINDING_ATMOSPHERE_TRANSMITTANCE_LUT`, `BINDING_ATMOSPHERE_MULTISCATTERING_LUT`, `BINDING_ATMOSPHERE_SKY_VIEW_LUT`) for all passes that declare them in common_bindings.*
 
-- **Block** at `RtxContext::injectRTX` (physical atmosphere sky skip + diag logs) — ~20 LOC, planned target `fork_hooks::injectRtxAtmosphereSkySkip` in `rtx_fork_atmosphere.cpp`.
-  *Returns early from rasterized sky rendering when Physical Atmosphere mode is active, and adds [RTX-Diag] logs tracing whether the RT block runs each frame.*
+- **Hook** at `RtxContext::rasterizeSky` (physical atmosphere sky skip) → `fork_hooks::injectRtxAtmosphereSkySkip` in `rtx_fork_atmosphere.cpp`
+  *Returns early from rasterized sky rendering when Physical Atmosphere mode is active. No private-member access; no friend declaration required.*
 
-- **Block** at `RtxContext::dispatchScreenOverlay` (screen overlay dispatch + ScreenOverlayShader) — ~70 LOC, planned target `fork_hooks::dispatchScreenOverlay` in `rtx_fork_overlay.cpp`.
-  *Adds the `ScreenOverlayShader` managed-shader class and the `dispatchScreenOverlay` method body that alpha-composites a plugin-uploaded RGBA buffer over the final tone-mapped image using a compute shader.*
-
-- **Block** at `RtxContext::endFrame` (diag log at frame end) — ~6 LOC, planned target `fork_hooks::endFrameDiag` in `rtx_fork_overlay.cpp`.
-  *Logs reflexFrameId, frameId, callInjectRtx, and targetImage pointer at the entry of `endFrame` for the camera-validity diagnostic campaign.*
+- **Hook** at `RtxContext::dispatchScreenOverlay` (method body + ScreenOverlayShader class) → `fork_hooks::dispatchScreenOverlay` in `rtx_fork_overlay.cpp`
+  *`ScreenOverlayShader` lifted to `rtx_fork_overlay.cpp`; `dispatchScreenOverlay` is now a one-line delegate. The hook alpha-composites a plugin-uploaded RGBA buffer over the final tone-mapped image using the compute shader.*
 
 ---
 
 ## src/dxvk/rtx_render/rtx_context.h
 
 **Pre-refactor fork footprint:** +26 / -0 LOC (audit 2026-04-18)
+**Post-refactor fork footprint:** +26 / -0 LOC inline tweaks + 4 friend declarations added (migrated 2026-04-18)
 
-**Category:** migrate
+- **Inline tweak** at `RtxContext` class (member declarations — atmosphere) — ~4 LOC.
+  *Adds `m_lastSkyMode` and `m_atmosphere` member fields to `RtxContext`. These remain as class members; the fork_hooks functions access them via friend declarations.*
 
-- **Block** at `RtxContext` class (member declarations — atmosphere) — ~4 LOC, planned target `fork_hooks::atmosphereMembers` in `rtx_fork_atmosphere.cpp`.
-  *Adds `m_lastSkyMode` and `m_atmosphere` member fields to `RtxContext` to hold the sky-mode change detector and the atmosphere subsystem object.*
+- **Inline tweak** at `RtxContext::setScreenOverlayData` and `dispatchScreenOverlay` declarations — ~5 LOC.
+  *Declares the two overlay-path methods. `setScreenOverlayData` remains a standalone public method; `dispatchScreenOverlay` is now a one-line delegate to `fork_hooks::dispatchScreenOverlay`.*
 
-- **Block** at `RtxContext::setScreenOverlayData` declaration — ~4 LOC, planned target `fork_hooks::screenOverlayDecl` in `rtx_fork_overlay.cpp`.
-  *Declares the `setScreenOverlayData` method that receives a staging buffer from the API thread and caches it for the render thread.*
+- **Inline tweak** at `RtxContext` class (member declarations — screen overlay state) — ~11 LOC.
+  *Adds `ScreenOverlayFrame` struct, `m_pendingScreenOverlay`, `m_screenOverlayImage`, `m_screenOverlayView`, `m_screenOverlayWidth`, `m_screenOverlayHeight`, and `m_screenOverlayFormat`. These remain as class members accessed via friend declarations.*
 
-- **Block** at `RtxContext::dispatchScreenOverlay` declaration — ~1 LOC, planned target `fork_hooks::screenOverlayDecl` in `rtx_fork_overlay.cpp`.
-  *Declares the `dispatchScreenOverlay` method called from the render path to composite the pending overlay.*
-
-- **Block** at `RtxContext` class (member declarations — screen overlay state) — ~11 LOC, planned target `fork_hooks::screenOverlayMembers` in `rtx_fork_overlay.cpp`.
-  *Adds `ScreenOverlayFrame` struct, `m_pendingScreenOverlay`, `m_screenOverlayImage`, `m_screenOverlayView`, `m_screenOverlayWidth`, `m_screenOverlayHeight`, and `m_screenOverlayFormat` to `RtxContext`.*
+- **Inline tweak** at `RtxContext` class body (just before closing `};`) — 4-line block of `friend` declarations plus a forward-declaration block above the class.
+  *Grants `fork_hooks::initAtmosphere`, `fork_hooks::updateAtmosphereConstants`, `fork_hooks::bindAtmosphereLuts`, and `fork_hooks::dispatchScreenOverlay` access to private members.*
 
 ---
 
