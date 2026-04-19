@@ -7,6 +7,26 @@ or removed.
 See `docs/superpowers/specs/2026-04-18-fork-touchpoint-pattern-design.md` for
 the design this index supports.
 
+## Conventions
+
+### Fork-owned file naming
+
+- Fork-owned files use the `rtx_fork_*` prefix with a subsystem suffix
+  (e.g. `rtx_fork_api_entry.cpp`, `rtx_fork_atmosphere.cpp`,
+  `rtx_fork_overlay.cpp`, `rtx_fork_light.cpp`). Single prefix keeps the
+  convention simple and `grep`-friendly.
+- All fork-owned files live under `src/dxvk/rtx_render/` (or the
+  subsystem-appropriate equivalent directory).
+- Hook functions are declared in the `fork_hooks::` namespace
+  (`src/dxvk/rtx_render/rtx_fork_hooks.h`) and implemented in their
+  respective fork-owned `.cpp` files.
+
+### Fridge-list invariant
+
+Every edit to an upstream file must have a fridge-list entry in the
+same commit. The PR-template bullet reminds contributors; a future CI
+check will enforce it if discipline slips.
+
 ## Entry types
 
 - **Hook** — upstream file contains a one-line call into fork-owned code. The
