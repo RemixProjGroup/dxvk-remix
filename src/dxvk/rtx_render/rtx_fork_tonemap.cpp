@@ -104,38 +104,38 @@ namespace dxvk {
           RtxForkHableFilmic::toeDenominatorObject()  .setDeferred(0.7475f);
           RtxForkHableFilmic::whitePointObject()      .setDeferred(3.9996f);
         }
-        RemixGui::DragFloat("Exposure Bias",     &RtxForkHableFilmic::exposureBiasObject(),     0.05f, 0.0f,  8.0f);
-        RemixGui::DragFloat("Shoulder Strength", &RtxForkHableFilmic::shoulderStrengthObject(), 0.01f, 0.0f,  1.0f);
-        RemixGui::DragFloat("Linear Strength",   &RtxForkHableFilmic::linearStrengthObject(),   0.01f, 0.0f,  1.0f);
-        RemixGui::DragFloat("Linear Angle",      &RtxForkHableFilmic::linearAngleObject(),      0.01f, 0.0f,  1.0f);
-        RemixGui::DragFloat("Toe Strength",      &RtxForkHableFilmic::toeStrengthObject(),      0.01f, 0.0f,  1.0f);
-        RemixGui::DragFloat("Toe Numerator",     &RtxForkHableFilmic::toeNumeratorObject(),     0.01f, 0.0f,  1.0f);
-        RemixGui::DragFloat("Toe Denominator",   &RtxForkHableFilmic::toeDenominatorObject(),   0.01f, 0.0f,  1.0f);
-        RemixGui::DragFloat("White Point",       &RtxForkHableFilmic::whitePointObject(),       0.10f, 0.1f, 32.0f);
+        RemixGui::DragFloat("Exposure Bias",     &RtxForkHableFilmic::exposureBiasObject(),     0.05f,  0.0f,  8.0f, "%.2f");
+        RemixGui::DragFloat("Shoulder Strength", &RtxForkHableFilmic::shoulderStrengthObject(), 0.005f, 0.0f,  1.0f, "%.4f");
+        RemixGui::DragFloat("Linear Strength",   &RtxForkHableFilmic::linearStrengthObject(),   0.005f, 0.0f,  1.0f, "%.4f");
+        RemixGui::DragFloat("Linear Angle",      &RtxForkHableFilmic::linearAngleObject(),      0.005f, 0.0f,  1.0f, "%.4f");
+        RemixGui::DragFloat("Toe Strength",      &RtxForkHableFilmic::toeStrengthObject(),      0.005f, 0.0f,  1.0f, "%.4f");
+        RemixGui::DragFloat("Toe Numerator",     &RtxForkHableFilmic::toeNumeratorObject(),     0.001f, 0.0f,  0.5f, "%.4f");
+        RemixGui::DragFloat("Toe Denominator",   &RtxForkHableFilmic::toeDenominatorObject(),   0.005f, 0.0f,  1.0f, "%.4f");
+        RemixGui::DragFloat("White Point",       &RtxForkHableFilmic::whitePointObject(),       0.1f,   0.1f, 20.0f, "%.4f");
         ImGui::TreePop();
       }
     }
 
     static void showAgXSliders() {
       if (ImGui::TreeNodeEx("AgX Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
-        RemixGui::DragFloat("Gamma",           &RtxForkAgX::gammaObject(),          0.01f,  0.5f,  3.0f);
-        RemixGui::DragFloat("Saturation",      &RtxForkAgX::saturationObject(),     0.01f,  0.5f,  2.0f);
-        RemixGui::DragFloat("Exposure Offset", &RtxForkAgX::exposureOffsetObject(), 0.05f, -2.0f,  2.0f);
+        RemixGui::DragFloat("Gamma",           &RtxForkAgX::gammaObject(),          0.01f,  0.5f,  3.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+        RemixGui::DragFloat("Saturation",      &RtxForkAgX::saturationObject(),     0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+        RemixGui::DragFloat("Exposure Offset", &RtxForkAgX::exposureOffsetObject(), 0.01f, -2.0f,  2.0f, "%.3f EV", ImGuiSliderFlags_AlwaysClamp);
         RemixGui::Combo(    "Look",            &RtxForkAgX::lookObject(),           "None\0Punchy\0Golden\0Greyscale\0\0");
-        RemixGui::DragFloat("Contrast",        &RtxForkAgX::contrastObject(),       0.01f,  0.5f,  2.0f);
-        RemixGui::DragFloat("Slope",           &RtxForkAgX::slopeObject(),          0.01f,  0.5f,  2.0f);
-        RemixGui::DragFloat("Power",           &RtxForkAgX::powerObject(),          0.01f,  0.5f,  2.0f);
+        RemixGui::DragFloat("Contrast",        &RtxForkAgX::contrastObject(),       0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+        RemixGui::DragFloat("Slope",           &RtxForkAgX::slopeObject(),          0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+        RemixGui::DragFloat("Power",           &RtxForkAgX::powerObject(),          0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
         ImGui::TreePop();
       }
     }
 
     static void showLottesSliders() {
       if (ImGui::TreeNodeEx("Lottes 2016 Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
-        RemixGui::DragFloat("HDR Max",         &RtxForkLottes::hdrMaxObject(),   0.10f, 1.0f,  64.0f);
-        RemixGui::DragFloat("Lottes Contrast", &RtxForkLottes::contrastObject(), 0.01f, 1.0f,   3.0f);
-        RemixGui::DragFloat("Shoulder",        &RtxForkLottes::shoulderObject(), 0.01f, 0.5f,   2.0f);
-        RemixGui::DragFloat("Mid In",          &RtxForkLottes::midInObject(),    0.01f, 0.01f,  1.0f);
-        RemixGui::DragFloat("Mid Out",         &RtxForkLottes::midOutObject(),   0.01f, 0.01f,  1.0f);
+        RemixGui::DragFloat("HDR Max",         &RtxForkLottes::hdrMaxObject(),   0.5f,   1.0f,  64.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+        RemixGui::DragFloat("Lottes Contrast", &RtxForkLottes::contrastObject(), 0.01f,  1.0f,   3.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+        RemixGui::DragFloat("Shoulder",        &RtxForkLottes::shoulderObject(), 0.01f,  0.5f,   2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+        RemixGui::DragFloat("Mid In",          &RtxForkLottes::midInObject(),    0.005f, 0.01f,  1.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
+        RemixGui::DragFloat("Mid Out",         &RtxForkLottes::midOutObject(),   0.005f, 0.01f,  1.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
         ImGui::TreePop();
       }
     }
