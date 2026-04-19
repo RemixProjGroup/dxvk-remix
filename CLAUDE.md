@@ -53,6 +53,16 @@ Short version:
 4. Commits authored as `Kim2091 <jpavatargirl@gmail.com>`. No AI
    co-author trailers unless explicitly requested.
 
+## Project-local skills
+
+Reusable skills for this codebase live in **`.claude/skills/`**. Invoke
+via the `Skill` tool by name:
+
+- **`rtx-build`** — wraps the proper meson/ninja build with the
+  required `nv-private/` + `tests/rtx/dxvk_rt_testing/` pre-cleanup,
+  runs in the background, reports exit code + error count. Use
+  whenever the user asks to build or compile-check.
+
 ## Don't
 
 - Don't push to `origin` (NVIDIA upstream) — only `kim2091` and `fork`
