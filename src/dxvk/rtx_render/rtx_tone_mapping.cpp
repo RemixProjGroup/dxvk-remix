@@ -25,6 +25,7 @@
 #include "rtx_render/rtx_shader_manager.h"
 #include "rtx.h"
 #include "rtx/pass/tonemap/tonemapping.h"
+#include "rtx_fork_hooks.h"
 
 #include <rtx_shaders/auto_exposure.h>
 #include <rtx_shaders/auto_exposure_histogram.h>
@@ -109,7 +110,7 @@ namespace dxvk {
     RemixGui::Checkbox("Tonemapping Enabled", &tonemappingEnabledObject());
     if (tonemappingEnabled()) {
       ImGui::Indent();
-      RemixGui::Checkbox("Finalize With ACES", &finalizeWithACESObject());
+      fork_hooks::showTonemapOperatorUI();
 
       RemixGui::Combo("Dither Mode", &ditherModeObject(), "Disabled\0Spatial\0Spatial + Temporal\0");
 
@@ -253,8 +254,7 @@ namespace dxvk {
     pushArgs.toneMappingEnabled = tonemappingEnabled();
     pushArgs.colorGradingEnabled = colorGradingEnabled();
     pushArgs.enableAutoExposure = autoExposureEnabled;
-    pushArgs.finalizeWithACES = finalizeWithACES();
-    pushArgs.useLegacyACES = RtxOptions::useLegacyACES();
+    fork_hooks::populateTonemapOperatorArgs(pushArgs);
 
     // Tonemap args
     pushArgs.performSRGBConversion = performSRGBConversion;

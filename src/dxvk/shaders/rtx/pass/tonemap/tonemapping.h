@@ -53,6 +53,15 @@ static const uint32_t ditherModeNone = 0;
 static const uint32_t ditherModeSpatialOnly = 1;
 static const uint32_t ditherModeSpatialTemporal = 2;
 
+// Tonemap operator constants. Mirror the TonemapOperator enum in
+// rtx_fork_tonemap.h; the populateTonemapOperatorArgs hook is the single
+// place that casts the C++ enum into this uint. Commit 2 (this commit)
+// defines None / ACES / ACESLegacy; commits 3-5 extend with HableFilmic,
+// AgX, and Lottes.
+static const uint32_t tonemapOperatorNone        = 0;
+static const uint32_t tonemapOperatorACES        = 1;
+static const uint32_t tonemapOperatorACESLegacy  = 2;
+
 // Constant buffers
 
 struct ToneMappingAutoExposureArgs {
@@ -116,13 +125,21 @@ struct ToneMappingApplyToneMappingArgs {
   float saturation;
   float toneCurveMinStops;
   float toneCurveMaxStops;
-  uint finalizeWithACES;
+  uint tonemapOperator;       // One of tonemapOperator* constants. Populated by fork_hooks::populateTonemapOperatorArgs.
 
   uint ditherMode;
   uint frameIndex;
-  uint useLegacyACES;
-  uint pad1;
+  uint directOperatorMode;    // 1 = operator-only (skip dynamic curve). Commit 3 wires the actual Direct mode; until then always 0.
+  uint pad1;                  // Reserved for Hable Filmic params (commit 3) / Lottes params (commit 5, shared slots).
 };
+
+#ifdef __cplusplus
+// Workstream 2 commit 2 pins the struct size. Commits 3-5 grow it (Hable/AgX
+// params), each with its own updated static_assert. Commit 5 confirms Lottes
+// shares Hable's slots without further growth.
+static_assert(sizeof(ToneMappingApplyToneMappingArgs) == 80,
+              "ToneMappingApplyToneMappingArgs size preserved by the operator-enum refactor.");
+#endif
 
 
 #endif  // TONEMAPPING_H

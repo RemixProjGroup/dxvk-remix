@@ -21,6 +21,7 @@
 */
 #include "rtx/pass/tonemap/tonemapping.slangh"
 #include "rtx/pass/tonemap/tonemapping_noise.slangh"
+#include "rtx/pass/tonemap/fork_tonemap_operators.slangh"
 #include "rtx/utility/math.slangh"
 #include "rtx/utility/color.slangh"
 
@@ -130,11 +131,7 @@ float3 applyToneMapping(float3 color, uint2 pixelPosition)
     {
       // Normal tone mapping
       color = dynamicToneMapper(color);
-      
-      if (cb.finalizeWithACES)
-      {
-        color = ACESFilm(color, cb.useLegacyACES);
-      }
+      color = applyTonemapOperator(cb.tonemapOperator, color, /*suppressBlackLevelClamp=*/false);
     } 
     else
     {

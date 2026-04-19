@@ -3883,15 +3883,10 @@ namespace dxvk {
         } else {
           common->metaLocalToneMapping().showImguiSettings();
         }
-        if (RtxOptions::showLegacyACESOption()) {
-          RemixGui::Separator();
-          RemixGui::Checkbox("Use Legacy ACES", &RtxOptions::useLegacyACESObject());
-          if (!RtxOptions::useLegacyACES()) {
-            ImGui::Indent();
-            ImGui::TextWrapped("WARNING: Non-legacy ACES is currently experimental and the implementation is a subject to change.");
-            ImGui::Unindent();
-          }
-        }
+        // The standalone "Use Legacy ACES" checkbox (and its showLegacyACESOption
+        // gating RtxOption) was removed in Workstream 2 commit 2 — Legacy ACES is
+        // now selectable per-path via the Tonemapping Operator combo rendered
+        // inside the global/local tonemapper panels above.
       }
 
       if (RemixGui::CollapsingHeader("Post FX", collapsingHeaderClosedFlags))

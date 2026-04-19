@@ -11,6 +11,8 @@
 
 #include <cstdint>
 
+#include "rtx_option.h"
+
 namespace dxvk {
 
   // Tonemapping operator applied after the dynamic tone curve.
@@ -32,5 +34,28 @@ namespace dxvk {
   // curve) in Commit 3 of this workstream. The extension is an inline tweak
   // to that enum, tracked in docs/fork-touchpoints.md. No separate enum is
   // defined here; the hooks read the existing RtxOptions::tonemappingMode().
+
+  // Global-tonemapper operator selection. Defaults to None to preserve the
+  // upstream port's pre-refactor `finalizeWithACES = false` behavior — the
+  // global tonemapper rendered the dynamic curve without a final ACES pass
+  // by default.
+  class RtxForkGlobalTonemap {
+    RTX_OPTION_ENV("rtx.tonemap", TonemapOperator, tonemapOperator, TonemapOperator::None, "DXVK_TONEMAP_OPERATOR",
+                   "Tonemapping operator applied after the dynamic tone curve.\n"
+                   "Supported values: 0 = None (dynamic curve only), 1 = ACES, 2 = ACES (Legacy), "
+                   "3 = Hable Filmic, 4 = AgX, 5 = Lottes 2016.");
+  };
+
+  // Local-tonemapper operator selection. Defaults to ACESLegacy because the
+  // port's pre-refactor local tonemapper had `finalizeWithACES = true` and
+  // `useLegacyACES = true` by default — preserving both flags under the enum
+  // refactor requires ACESLegacy as the default. Separate from the global
+  // option so tuning one path does not drift the other.
+  class RtxForkLocalTonemap {
+    RTX_OPTION("rtx.localtonemap", TonemapOperator, tonemapOperator, TonemapOperator::ACESLegacy,
+               "Tonemapping operator applied at the local tonemapper's final combine stage.\n"
+               "Defaults to ACES (Legacy) to preserve the port's pre-refactor behavior.\n"
+               "Supported values: 0 = None, 1 = ACES, 2 = ACES (Legacy), 3 = Hable Filmic, 4 = AgX, 5 = Lottes 2016.");
+  };
 
 } // namespace dxvk

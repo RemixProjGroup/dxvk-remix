@@ -63,7 +63,7 @@ struct LuminanceArgs
   float highlights;
   uint debugView;
 
-  uint useLegacyACES;
+  uint tonemapOperator;       // One of tonemapOperator* constants from tonemapping.h. Luminance pass only uses the enum to distinguish ACES from ACES Legacy for its weighting calculation.
   uint pad1;
   uint pad2;
   uint enableAutoExposure;
@@ -98,16 +98,21 @@ struct FinalCombineArgs
   float exposure;
   uint debugView;
 
-  uint finalizeWithACES;
+  uint tonemapOperator;       // One of tonemapOperator* constants from tonemapping.h. Populated by fork_hooks::populateLocalTonemapOperatorArgs.
   uint performSRGBConversion;
   uint enableAutoExposure;
   uint pad0;
 
   uint ditherMode;
   uint frameIndex;
-  uint useLegacyACES;
+  uint directOperatorMode;    // 1 = operator-only (skip the local-pyramid weighting). Commit 3 wires the actual Direct mode; until then always 0.
   uint pad2;
 };
+
+#ifdef __cplusplus
+static_assert(sizeof(LuminanceArgs)    == 32, "LuminanceArgs size preserved by the operator-enum refactor.");
+static_assert(sizeof(FinalCombineArgs) == 64, "FinalCombineArgs size preserved by the operator-enum refactor.");
+#endif
 
 
 #endif  // LOCAL_TONEMAPPING_H

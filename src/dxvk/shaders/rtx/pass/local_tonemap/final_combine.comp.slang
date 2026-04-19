@@ -22,6 +22,7 @@
 #include "rtx/pass/local_tonemap/local_tonemapping.slangh"
 #include "rtx/pass/tonemap/tonemapping.slangh"
 #include "rtx/pass/tonemap/tonemapping_noise.slangh"
+#include "rtx/pass/tonemap/fork_tonemap_operators.slangh"
 
 [[vk::binding(FINAL_COMBINE_BLUE_NOISE_TEXTURE_INPUT)]]
 Texture2DArray BlueNoise;
@@ -96,7 +97,9 @@ void main(uint2 threadId : SV_DispatchThreadID)
 
   // Apply local exposure adjustment as a crude multiplier on all RGB channels.
   // This is... generally pretty wrong, but enough for the demo purpose.
-  vec3 texelOriginal = linearToGamma(ACESFilm(originalColor.xyz, cb.useLegacyACES, true));
+  // Luminance weighting always uses ACES regardless of the user-selected operator;
+  // the legacy vs fitted ACES variant is derived from the operator enum.
+  vec3 texelOriginal = linearToGamma(ACESFilm(originalColor.xyz, cb.tonemapOperator == tonemapOperatorACESLegacy, true));
   float luminance = calcBt709Luminance(texelOriginal) + 0.00001;
   float finalMultiplier = max(A * luminance + B, 0.0) / luminance;
   // This is a hack to prevent super dark pixels getting boosted by a lot and showing compression artifacts.
@@ -105,10 +108,7 @@ void main(uint2 threadId : SV_DispatchThreadID)
     mix(1.0, finalMultiplier, (luminance / lerpToUnityThreshold) * (luminance / lerpToUnityThreshold));
 
   vec3 texelFinal = originalColor.xyz * finalMultiplier;
-  if (cb.finalizeWithACES)
-  {
-    texelFinal = ACESFilm(texelFinal, cb.useLegacyACES);
-  }
+  texelFinal = applyTonemapOperator(cb.tonemapOperator, texelFinal, /*suppressBlackLevelClamp=*/false);
   if (cb.performSRGBConversion)
   {
     texelFinal = linearToGamma(texelFinal);

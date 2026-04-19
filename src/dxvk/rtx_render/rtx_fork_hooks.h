@@ -52,6 +52,11 @@ namespace dxvk { class D3D9DeviceEx; }
 #include "rtx_resources.h"
 #include "rtx/pass/raytrace_args.h"
 
+// Tonemap shader args structs (ToneMappingApplyToneMappingArgs, FinalCombineArgs)
+// needed by fork_hooks::populateTonemapOperatorArgs / populateLocalTonemapOperatorArgs.
+#include "rtx/pass/tonemap/tonemapping.h"
+#include "rtx/pass/local_tonemap/local_tonemapping.h"
+
 namespace dxvk {
 
   // Forward declarations for types whose full definitions the hook header does
@@ -421,7 +426,7 @@ namespace dxvk {
     // AgX params, Lottes params). Called from DxvkToneMapping::dispatchApplyToneMapping.
     // No private-member access — uses public RtxOption accessors only.
     // Implementation in rtx_fork_tonemap.cpp.
-    void populateTonemapOperatorArgs(struct ToneMappingApplyToneMappingArgs& args);
+    void populateTonemapOperatorArgs(ToneMappingApplyToneMappingArgs& args);
 
     // Populates the tonemap-operator-related fields of the local tonemapper's
     // FinalCombineArgs constant-buffer struct. Called from
@@ -431,7 +436,7 @@ namespace dxvk {
     // no dedicated hook is warranted for that 1-field struct.
     // No private-member access.
     // Implementation in rtx_fork_tonemap.cpp.
-    void populateLocalTonemapOperatorArgs(struct FinalCombineArgs& args);
+    void populateLocalTonemapOperatorArgs(FinalCombineArgs& args);
 
     // Renders the Tonemapping Operator combo + per-operator parameter sliders +
     // Direct-mode toggle inside DxvkToneMapping::showImguiSettings. Called from

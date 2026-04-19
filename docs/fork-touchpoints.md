@@ -206,7 +206,7 @@ check will enforce it if discipline slips.
 - **Block** at `ImGUI::showMainMenu` (wrapper tab handling) — ~6 LOC. **Partially migrated** to `fork_hooks::wrapperTabDraw` in `rtx_fork_overlay.cpp`.
   *The `kTab_Wrapper` guard (`remixapi_imgui_HasDrawCallback()` check + `continue`) remains as an inline tweak in the tab loop (structural control flow, not extractable). The case body (`remixapi_imgui_InvokeDrawCallback()`) is wrapped as `fork_hooks::wrapperTabDraw()`. No friend declaration needed.*
 
-- **[pending commit 2]** Hook at tonemapper ImGui settings → `fork_hooks::showTonemapOperatorUI` / `fork_hooks::showLocalTonemapOperatorUI` in `rtx_fork_tonemap.cpp`. Also remove the standalone `RemixGui::Checkbox("Use Legacy ACES", ...)` at ~line 3888 — its RtxOption `rtx.useLegacyACES` is being deleted.
+- **Hook** at tonemapper ImGui settings → `fork_hooks::showTonemapOperatorUI` / `fork_hooks::showLocalTonemapOperatorUI` in `rtx_fork_tonemap.cpp`. Also remove the standalone `RemixGui::Checkbox("Use Legacy ACES", ...)` at ~line 3888 — its RtxOption `rtx.useLegacyACES` is being deleted.
   *Operator combo + per-operator sliders + Direct-mode toggle replace the old ACES checkbox. "Use Legacy ACES" reachable via TonemapOperator::ACESLegacy enum value.*
 
 ---
@@ -455,14 +455,14 @@ check will enforce it if discipline slips.
 
 ## src/dxvk/rtx_render/rtx_local_tone_mapping.cpp
 
-- **[pending commit 2]** Hook calls at `DxvkLocalToneMapping::dispatchFinalCombine` (args-population) and `DxvkLocalToneMapping::showImguiSettings` (ImGui panel) → `fork_hooks::populateLocalTonemapOperatorArgs` + `fork_hooks::showLocalTonemapOperatorUI` in `rtx_fork_tonemap.cpp`. Plus inline tweak: `LuminanceArgs::useLegacyACES` field assignment → write operator-derived uint (1-field struct, not worth its own hook).
+- **Hook calls** at `DxvkLocalToneMapping::dispatchFinalCombine` (args-population) and `DxvkLocalToneMapping::showImguiSettings` (ImGui panel) → `fork_hooks::populateLocalTonemapOperatorArgs` + `fork_hooks::showLocalTonemapOperatorUI` in `rtx_fork_tonemap.cpp`. Plus inline tweak: `LuminanceArgs::useLegacyACES` field assignment → write operator-derived uint (1-field struct, not worth its own hook).
   *Routes local tonemap through the fork operator dispatcher.*
 
 ---
 
 ## src/dxvk/rtx_render/rtx_local_tone_mapping.h
 
-- **[pending commit 2]** Inline tweak — remove `rtx.localtonemap.finalizeWithACES` RtxOption (default was `true`; superseded by `rtx.localtonemap.tonemapOperator` in `rtx_fork_tonemap.cpp` with default `ACESLegacy` to preserve behavior); add `#include "rtx_fork_tonemap.h"`.
+- **Inline tweak** — remove `rtx.localtonemap.finalizeWithACES` RtxOption (default was `true`; superseded by `rtx.localtonemap.tonemapOperator` in `rtx_fork_tonemap.cpp` with default `ACESLegacy` to preserve behavior); add `#include "rtx_fork_tonemap.h"`.
   *Adopts the fork operator enum; preserves the port's local ACES-Legacy default.*
 
 ---
@@ -485,7 +485,7 @@ check will enforce it if discipline slips.
 - **Inline tweak** at `RtxOptions` class body (atmosphere RTX_OPTIONs block) — ~25 LOC.
   *Declares all 17 atmosphere tuning options under the `rtx.atmosphere` prefix: `sunDisc`, `sunSize`, `sunIntensity`, `sunElevation`, `sunRotation`, `altitude`, `airDensity`, `aerosolDensity`, `ozoneDensity`, `planetRadius`, `atmosphereThickness`, `mieAnisotropy`, `rayleighScattering`, `mieScattering`, `ozoneAbsorption`, `ozoneLayerAltitude`, `ozoneLayerWidth`, and `sunIlluminance`. All consumed by `RtxAtmosphere` and the atmosphere hooks in `rtx_fork_atmosphere.cpp`.*
 
-- **[pending commit 2]** Inline tweak — remove `rtx.useLegacyACES` + `rtx.showLegacyACESOption` RtxOptions (superseded by `TonemapOperator::ACESLegacy` enum value).
+- **Inline tweak** — remove `rtx.useLegacyACES` + `rtx.showLegacyACESOption` RtxOptions (superseded by `TonemapOperator::ACESLegacy` enum value).
   *Both options live at the `rtx` namespace (not `rtx.tonemap`); removed in the enum refactor.*
 
 ---
@@ -699,14 +699,14 @@ check will enforce it if discipline slips.
 
 ## src/dxvk/rtx_render/rtx_tone_mapping.cpp
 
-- **[pending commit 2]** Hook calls at `DxvkToneMapping::dispatchApplyToneMapping` (args-population) and `DxvkToneMapping::showImguiSettings` (ImGui panel) → `fork_hooks::populateTonemapOperatorArgs` + `fork_hooks::showTonemapOperatorUI` in `rtx_fork_tonemap.cpp`.
+- **Hook calls** at `DxvkToneMapping::dispatchApplyToneMapping` (args-population) and `DxvkToneMapping::showImguiSettings` (ImGui panel) → `fork_hooks::populateTonemapOperatorArgs` + `fork_hooks::showTonemapOperatorUI` in `rtx_fork_tonemap.cpp`.
   *Routes global tonemap through the fork operator dispatcher.*
 
 ---
 
 ## src/dxvk/rtx_render/rtx_tone_mapping.h
 
-- **[pending commit 2]** Inline tweak — remove `rtx.tonemap.finalizeWithACES` RtxOption (superseded by `rtx.tonemap.tonemapOperator` in `rtx_fork_tonemap.cpp`); add `#include "rtx_fork_tonemap.h"`.
+- **Inline tweak** — remove `rtx.tonemap.finalizeWithACES` RtxOption (superseded by `rtx.tonemap.tonemapOperator` in `rtx_fork_tonemap.cpp`); add `#include "rtx_fork_tonemap.h"`.
   *Adopts the fork operator enum.*
 
 ---
@@ -930,5 +930,48 @@ check will enforce it if discipline slips.
 
 - **Block** at `(file scope)` (binding index renumbering) — ~20 LOC replacing 20 LOC, planned target `fork_hooks::restirGiBindingIndices` in `rtx_fork_atmosphere.slangh`.
   *Renumbers the ReSTIR GI reuse pass binding indices (WORLD_SHADING_NORMAL_INPUT through RESERVOIR_INPUT_OUTPUT) to make room for the three atmosphere LUT bindings at slots 200-202, avoiding conflicts introduced by the common-bindings expansion.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/local_tonemap/final_combine.comp.slang
+
+- **Inline tweak** at `main` (luminance weighting + final combine paths) — replace `cb.useLegacyACES` with `cb.tonemapOperator == tonemapOperatorACESLegacy`; replace `if (cb.finalizeWithACES) { ... ACESFilm(...) }` with `applyTonemapOperator(cb.tonemapOperator, ...)`. Add `#include "rtx/pass/tonemap/fork_tonemap_operators.slangh"`.
+  *Local-tonemap final combine routes through the fork dispatcher for operator selection.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/local_tonemap/local_tonemapping.h
+
+- **Inline tweak** at `LuminanceArgs` and `FinalCombineArgs` struct definitions — swap `useLegacyACES` (LuminanceArgs) and `finalizeWithACES`/`useLegacyACES` (FinalCombineArgs) uint fields for `tonemapOperator` + `directOperatorMode` uints; preserve struct sizes (32 / 64 bytes) via field renaming and `static_assert`s.
+  *Local args structs adopt the operator enum; shader-side reads via `cb.tonemapOperator`.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/local_tonemap/luminance.comp.slang
+
+- **Inline tweak** at `main` — replace `cb.useLegacyACES` reads with `cb.tonemapOperator == tonemapOperatorACESLegacy`. ACES is always used for luminance weighting regardless of the final operator.
+  *Legacy/fitted ACES variant is now derived from the operator enum.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/tonemap/fork_tonemap_operators.slangh
+
+- **Fork-owned** — new file. Hosts the `applyTonemapOperator(uint op, vec3 color, bool suppressBlackLevelClamp)` dispatcher and (in later commits) Hable / AgX / Lottes operator bodies. Upstream shader passes include this header and call the dispatcher in place of inline ACES branches.
+  *Fork-owned shader header: operator dispatch lives here so upstream passes shrink to one-line calls.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/tonemap/tonemapping.h
+
+- **Inline tweak** at `(file scope)` (operator constants) — add `tonemapOperatorNone` / `tonemapOperatorACES` / `tonemapOperatorACESLegacy` (commits 3-5 extend with HableFilmic / AgX / Lottes).
+- **Inline tweak** at `ToneMappingApplyToneMappingArgs` struct — swap `finalizeWithACES`/`useLegacyACES` uints for `tonemapOperator` + `directOperatorMode` + pad slots; `static_assert(sizeof(...) == 80)` pins the struct size (commits 3-5 grow the struct and update the assert).
+  *Global tonemap shader-shared header adopts the operator enum.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/tonemap/tonemapping_apply_tonemapping.comp.slang
+
+- **Inline tweak** at `applyToneMapping` — replace `if (cb.finalizeWithACES) { color = ACESFilm(color, cb.useLegacyACES); }` with `color = applyTonemapOperator(cb.tonemapOperator, color, false);`. Add `#include "rtx/pass/tonemap/fork_tonemap_operators.slangh"`.
+  *Global apply pass routes through the fork dispatcher for operator selection.*
 
 ---

@@ -45,11 +45,16 @@ void main(uint2 threadId : SV_DispatchThreadID)
 {
   float avgExposure = getExposure(AutoExposureTexture, cb.enableAutoExposure, cb.exposure);
 
-  // Tonemap three syntetic exposures and produce their luminances.
+  // Tonemap three synthetic exposures and produce their luminances.
+  // ACES is always used here for the luminance weighting calculation regardless of the
+  // user's selected operator (the weighting is the operator-independent input to the
+  // local pyramid, not the final output tonemap). The legacy vs fitted ACES variant is
+  // derived from the selected operator enum.
+  const bool useLegacy = (cb.tonemapOperator == tonemapOperatorACESLegacy);
   vec3 inpColor = OriginalTexture[threadId].xyz * avgExposure;
-  float highlights = calcBt709Luminance(linearToGamma(ACESFilm(inpColor * cb.highlights, cb.useLegacyACES)));
-  float midtones   = calcBt709Luminance(linearToGamma(ACESFilm(inpColor                , cb.useLegacyACES)));
-  float shadows    = calcBt709Luminance(linearToGamma(ACESFilm(inpColor * cb.shadows   , cb.useLegacyACES)));
+  float highlights = calcBt709Luminance(linearToGamma(ACESFilm(inpColor * cb.highlights, useLegacy)));
+  float midtones   = calcBt709Luminance(linearToGamma(ACESFilm(inpColor                , useLegacy)));
+  float shadows    = calcBt709Luminance(linearToGamma(ACESFilm(inpColor * cb.shadows   , useLegacy)));
   vec3 cols = vec3(highlights, midtones, shadows);
 
   OutLuminanceTexture[threadId] = vec4(cols, 1.0);

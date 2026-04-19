@@ -1,0 +1,47 @@
+/*
+* Fork-owned tonemap operator dispatcher and operator function bodies.
+*
+* Upstream shader passes (tonemapping_apply_tonemapping.comp.slang,
+* final_combine.comp.slang) call applyTonemapOperator() from here instead of
+* branching inline on ACES booleans. Each operator's implementation either
+* lives in its own fork-owned .hlsl (AgX.hlsl in commit 4, Lottes.hlsl in
+* commit 5) or directly in this header (hable() in commit 3).
+*
+* Commit 2: dispatcher handles None / ACES / ACESLegacy.
+* Commit 3: adds Hable Filmic (plus Direct-mode plumbing).
+* Commit 4: adds AgX (includes AgX.hlsl).
+* Commit 5: adds Lottes 2016 (includes Lottes.hlsl).
+*/
+
+#ifndef FORK_TONEMAP_OPERATORS_SLANGH
+#define FORK_TONEMAP_OPERATORS_SLANGH
+
+// `tonemapping.h` supplies the tonemapOperator* constants.
+// ACESFilm() is declared by tonemapping.slangh, which consumers always
+// include before this header. Do NOT include ACES.hlsl here — it lacks
+// include guards and is already pulled in via tonemapping.slangh.
+#include "rtx/pass/tonemap/tonemapping.h"
+
+// applyTonemapOperator — dispatches to the operator implementation selected
+// by `op`. Returns the operator-adjusted color. When op == None, returns
+// `color` unchanged. The selection matches the TonemapOperator enum in
+// rtx_fork_tonemap.h.
+//
+// `suppressBlackLevelClamp` is forwarded to the ACES path (matches the
+// upstream ACESFilm signature). Operators that don't have an equivalent
+// parameter ignore it.
+float3 applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp)
+{
+  if (op == tonemapOperatorACES)
+  {
+    return ACESFilm(color, /*useLegacyACES=*/false, suppressBlackLevelClamp);
+  }
+  if (op == tonemapOperatorACESLegacy)
+  {
+    return ACESFilm(color, /*useLegacyACES=*/true, suppressBlackLevelClamp);
+  }
+  // tonemapOperatorNone (0) or unrecognised — identity.
+  return color;
+}
+
+#endif // FORK_TONEMAP_OPERATORS_SLANGH

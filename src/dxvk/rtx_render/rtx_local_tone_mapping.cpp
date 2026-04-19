@@ -27,6 +27,8 @@
 #include "rtx/pass/tonemap/tonemapping.h"
 #include "rtx/pass/local_tonemap/local_tonemapping.h"
 #include "rtx_debug_view.h"
+#include "rtx_fork_hooks.h"
+#include "rtx_fork_tonemap.h"
 
 #include <rtx_shaders/luminance.h>
 #include <rtx_shaders/exposure_weight.h>
@@ -133,7 +135,7 @@ namespace dxvk {
     RemixGui::DragInt("Display Mip", &displayMipObject(), 0.06f, 0, 16);
     RemixGui::Checkbox("Boost Local Contrast", &boostLocalContrastObject());
     RemixGui::Checkbox("Use Gaussian Kernel", &useGaussianObject());
-    RemixGui::Checkbox("Finalize With ACES", &finalizeWithACESObject());
+    fork_hooks::showLocalTonemapOperatorUI();
     RemixGui::DragFloat("Exposure Level", &exposureObject(), 0.01f, 0.f, 1000.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     RemixGui::DragFloat("Shadow Level", &shadowsObject(), 0.01f, -10.f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     RemixGui::DragFloat("Highlight Level", &highlightsObject(), 0.01f, -10.f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
@@ -184,7 +186,10 @@ namespace dxvk {
       pushArgs.highlights = pow(2.f, -highlights());
       pushArgs.debugView = debugView.debugViewIdx();
       pushArgs.enableAutoExposure = enableAutoExposure;
-      pushArgs.useLegacyACES = RtxOptions::useLegacyACES();
+      // LuminanceArgs has only the operator field (no Direct-mode field); the
+      // luminance pass uses the enum only to pick ACES vs ACES Legacy for its
+      // weighting. Reads the same local RtxOption as the final-combine hook.
+      pushArgs.tonemapOperator = static_cast<uint32_t>(RtxForkLocalTonemap::tonemapOperator());
       ctx->pushConstants(0, sizeof(pushArgs), &pushArgs);
       ctx->bindResourceView(LUMINANCE_ORIGINAL, rtOutput.m_finalOutput.view(Resources::AccessType::Read), nullptr);
       ctx->bindResourceView(LUMINANCE_OUTPUT, m_mips.views[0], nullptr);
@@ -276,8 +281,7 @@ namespace dxvk {
       pushArgs.debugView = debugView.debugViewIdx();
       pushArgs.enableAutoExposure = enableAutoExposure;
       pushArgs.performSRGBConversion = performSRGBConversion;
-      pushArgs.finalizeWithACES = finalizeWithACES();
-      pushArgs.useLegacyACES = RtxOptions::useLegacyACES();
+      fork_hooks::populateLocalTonemapOperatorArgs(pushArgs);
       switch (ditherMode()) {
       case DitherMode::None: pushArgs.ditherMode = ditherModeNone; break;
       case DitherMode::Spatial: pushArgs.ditherMode = ditherModeSpatialOnly; break;

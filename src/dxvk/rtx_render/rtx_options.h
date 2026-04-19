@@ -1129,10 +1129,11 @@ namespace dxvk {
                "Global tonemapping tonemaps the image with respect to global parameters, usually based on statistics about the rendered image as a whole.\n"
                "Local tonemapping on the other hand uses more spatially-local parameters determined by regions of the rendered image rather than the whole image.\n"
                "Local tonemapping can result in better preservation of highlights and shadows in scenes with high amounts of dynamic range whereas global tonemapping may have to comprimise between over or underexposure.");
-    RTX_OPTION("rtx", bool, useLegacyACES, true,
-               "Use a luminance-only approximation of ACES that over-saturates the highlights. If false, use a refined ACES transform that converts between color spaces with more precision.");
-    RTX_OPTION("rtx", bool, showLegacyACESOption, false,
-               "Show \'rtx.useLegacyACES\' in the developer menu. Default is OFF, as the non-legacy ACES is currently experimental and the implementation is a subject to change.");
+    // `rtx.useLegacyACES` and `rtx.showLegacyACESOption` were removed in
+    // Workstream 2 commit 2 under the TonemapOperator enum refactor. Legacy
+    // ACES is now reachable via TonemapOperator::ACESLegacy in the per-path
+    // rtx.tonemap.tonemapOperator / rtx.localtonemap.tonemapOperator options
+    // declared in RtxForkGlobalTonemap / RtxForkLocalTonemap (rtx_fork_tonemap.h).
 
     // Capture Options
     //   General
