@@ -67,10 +67,13 @@ on *why* it was shelved.
 | W3 | HDR | **shelved** (upstream gmod impl broken per author 2026-04-19) | `unity-workstream/03-hdr` (local) |
 | W4 | Remix API correctness fixes (externalMesh + capture guards + log silence) | shipped | `unity-workstream/04-unity-native-fixes` |
 | W5 | Hillaire atmosphere | shipped | `unity-workstream/05-hillaire-atmosphere` |
-| W6 | Agent docs consolidation | in-flight | `unity-workstream/06-agent-docs-refactor` |
+| W6 | Agent docs consolidation | shipped | `unity-workstream/06-agent-docs-refactor` |
+| W7 | Contributing / repo-model docs | in-flight | `unity-workstream/07-contributing-model` |
 
-Shipping branch (downstream users pull this):
-`kim2091/modern-games-sdk-api`.
+**Canonical repo** (PR target): [`RemixProjGroup/dxvk-remix`](https://github.com/RemixProjGroup/dxvk-remix),
+default branch `modern-games-sdk-api`. W-branches are contributor-local;
+they do not live on the canonical repo. See root `CLAUDE.md` for the
+full contribution flow.
 
 ## Workstream numbering note
 

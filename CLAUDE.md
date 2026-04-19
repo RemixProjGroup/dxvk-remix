@@ -10,6 +10,46 @@ the port itself is not Unity-specific.
 Agent-facing docs live in **`agent_docs/`**. Start there:
 **[`agent_docs/README.md`](agent_docs/README.md)**.
 
+## Repo structure — fork + PR model
+
+This project uses a classic GitHub **fork + PR** workflow, with two
+kinds of repo hosting the same codebase:
+
+**Canonical repo** — [`github.com/RemixProjGroup/dxvk-remix`](https://github.com/RemixProjGroup/dxvk-remix).
+The PR target. Default branch is `modern-games-sdk-api`.
+**Hosts only `modern-games-sdk-api` (+ its history, +`CLAUDE.md`,
++`agent_docs/`, +`.claude/skills/`). No W-branches are created here.**
+
+**Personal forks** — anyone contributing forks the canonical repo.
+Each contributor's fork holds their own W-branches, scratch work,
+and a personal tracking copy of `modern-games-sdk-api`. The canonical
+maintainer (Kim2091) also works from a personal fork
+(`github.com/Kim2091/dxvk-remix`) for their own W-branches, then
+syncs the canonical separately.
+
+### How contributing works
+
+1. **Fork** `RemixProjGroup/dxvk-remix` on GitHub.
+2. **Clone** your fork locally. Optionally add the canonical repo as
+   a remote: `git remote add canonical https://github.com/RemixProjGroup/dxvk-remix.git`.
+3. **Branch** for each piece of work using the `unity-workstream/NN-<name>`
+   pattern. Pick the next free N — numbering is ad-hoc, W3 is shelved.
+4. **Commit** in small pieces with clear messages. No AI co-author
+   trailers unless explicitly requested.
+5. **Compile-check** via the `rtx-build` skill (or the equivalent
+   PowerShell command) before declaring a branch done. Exit 0 + zero
+   compile errors is the bar.
+6. **Fast-forward** your fork's `modern-games-sdk-api` to your
+   W-branch tip when the branch is ready to ship.
+7. **Push** both your W-branch and your updated `modern-games-sdk-api`
+   to your fork. Fast-forward only — never `--force` on
+   `modern-games-sdk-api`.
+8. **Open a PR** from your fork's `modern-games-sdk-api` →
+   canonical's `modern-games-sdk-api`.
+
+W-branches are contributor-local. They do NOT live on the canonical
+repo.
+
 ## Fork discipline — read before editing upstream files
 
 The port uses a **fork-touchpoint pattern** to minimize rebase cost against
@@ -30,28 +70,43 @@ Short version:
 - **Audit script.** Run `scripts/audit-fork-touchpoints.sh` before
   committing upstream edits.
 
-## Branch conventions
+## Branch conventions (personal fork)
 
-- `main` — upstream NVIDIA mirror. Never commit port work here.
-- `unity-workstream/NN-<name>` — one branch per workstream. Branch prefix
-  is historical — it tracks gmod's `origin/unity` baseline, not an
-  engine-specific intent. (W1 = Remix API + HW skinning,
-  W2 = tonemap operators, W4 = Remix API correctness fixes,
-  W5 = Hillaire atmosphere, W6 = agent-docs refactor; W3 HDR shelved.)
-- `unity-port-planning` — specs/plans-only working branch
-  (being consolidated into `agent_docs/` as of W6).
-- `modern-games-sdk-api` on `kim2091` remote — the **shipping** branch.
-  Downstream users clone this. Fast-forward only, never force-push.
+- `main` — NVIDIA upstream mirror. Never commit port work here.
+- `modern-games-sdk-api` — your fork's tracking copy of canonical's
+  default branch. Fast-forward this to a W-branch tip when that
+  W-branch is ready to ship; then open a PR to canonical.
+- `unity-workstream/NN-<name>` — one branch per workstream. Branch
+  prefix is historical — it tracks gmod's `origin/unity` baseline,
+  not an engine-specific intent.
+  - W1 = Remix API + HW skinning
+  - W2 = tonemap operators
+  - W3 = HDR (shelved 2026-04-19 — upstream gmod impl broken per author)
+  - W4 = Remix API correctness fixes (externalMesh + capture guards + log silence)
+  - W5 = Hillaire atmosphere
+  - W6 = agent-docs consolidation
+  - W7 = contributing / repo-model docs
+- `unity-port-planning` — legacy planning-only branch. Being phased
+  out now that specs/plans/audits live in `agent_docs/` on the
+  shipping lineage. Kept read-only for historical reference.
 
 ## End-of-project checklist
 
-1. Build with `build_dxvk_release.ps1` pattern (cleanup `nv-private/` +
-   `tests/rtx/dxvk_rt_testing/` first, then `PerformBuild -release`).
-2. Ship only when exit code 0 and zero compile errors.
-3. Ask before pushing to `kim2091/modern-games-sdk-api` — it's visible to
-   downstream users. Fast-forward push only.
-4. Commits authored as `Kim2091 <jpavatargirl@gmail.com>`. No AI
-   co-author trailers unless explicitly requested.
+1. **Build** via the `rtx-build` skill (pre-cleans `nv-private/` +
+   `tests/rtx/dxvk_rt_testing/`, then `PerformBuild -release`).
+2. **Ship** only when exit code 0 and zero compile errors.
+3. **Author** commits as the human contributor in the repo's git
+   config. No AI co-author trailers unless explicitly requested.
+4. **Fast-forward only.** Never `--force`, never `--force-with-lease`
+   on `modern-games-sdk-api`. If a push is rejected as non-ff, stop
+   and investigate.
+5. **Ask** before any push to a remote with downstream readers —
+   that includes canonical (`RemixProjGroup/dxvk-remix`) and any
+   maintainer's personal fork (`kim2091/dxvk-remix`) that contributors
+   pull from.
+6. **Open a PR** to canonical `modern-games-sdk-api` rather than
+   direct-pushing, even if you have write access — PR review is the
+   discipline checkpoint.
 
 ## Project-local skills
 
@@ -65,13 +120,14 @@ via the `Skill` tool by name:
 
 ## Don't
 
-- Don't push to `origin` (NVIDIA upstream) — only `kim2091` and `fork`
-  are writable remotes.
-- Don't force-push anything.
+- Don't push to `origin` (NVIDIA upstream) — that's read-only.
+- Don't force-push anything, ever.
 - Don't skip hooks (`--no-verify`) unless explicitly asked.
 - Don't add a feature, refactor, or "cleanup" beyond the task scope.
 - Don't edit files under `submodules/` or `external/` — those are
   third-party pins.
+- Don't create W-branches on the canonical repo. They belong on
+  contributor forks only.
 
 ## Gmod reference repo
 
