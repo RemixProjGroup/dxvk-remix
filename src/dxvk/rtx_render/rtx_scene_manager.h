@@ -112,11 +112,28 @@ struct ExternalDrawState {
   std::vector<Matrix4> gpuInstancingTransforms {};
 };
 
+// Forward decls so SceneManager can friend the fork hook that needs access
+// to private m_drawCallMeta state. See docs/fork-touchpoints.md.
+class SceneManager;
+namespace fork_hooks {
+  void externalDrawObjectPicking(
+    DxvkDevice& device,
+    DrawCallState& drawCall,
+    XXH64_hash_t textureHash,
+    SceneManager& scene);
+}
+
 // Scene manager is a super manager, it's the interface between rendering and world state
 // along with managing the operation of other caches, scene manager also manages the cache
 // directly for "SceneObject"'s - which are "unique meshes/geometry", which map 1-to-1 with
 // BLAS entries in raytracing terminology.
 class SceneManager : public CommonDeviceObject, public ResourceCache {
+  // Fork touchpoint: the external-draw object-picking hook needs access to
+  // private m_drawCallMeta. Tracked as an inline tweak in
+  // docs/fork-touchpoints.md.
+  friend void fork_hooks::externalDrawObjectPicking(
+    DxvkDevice&, DrawCallState&, XXH64_hash_t, SceneManager&);
+
 public:
   SceneManager(SceneManager const&) = delete;
   SceneManager& operator=(SceneManager const&) = delete;

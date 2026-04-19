@@ -591,7 +591,21 @@ check will enforce it if discipline slips.
   *Resolves albedo texture hash from the API material's opaque data and auto-applies all texture-based instance categories (Sky, Ignore, WorldUI, WorldMatte, Particle, Beam, DecalStatic, Terrain, AnimatedWater, IgnoreLights, IgnoreAntiCulling, IgnoreMotionBlur, Hidden).*
 
 - **Hook** at `SceneManager::submitExternalDraw` (after particle setup, before `processDrawCallState`) → `fork_hooks::externalDrawObjectPicking` in `rtx_fork_submit.cpp`
-  *Stores per-draw texture hash metadata in `m_drawCallMeta` when object picking is active. Requires a `friend` declaration for this function in `SceneManager` (or a public accessor for `m_drawCallMeta`) — flagged for Phase 4 build-validation fixup.*
+  *Stores per-draw texture hash metadata in `m_drawCallMeta` when object picking is active. Access to the private `m_drawCallMeta` member is granted via a `friend` declaration — see the `rtx_scene_manager.h` entry below.*
+
+---
+
+## src/dxvk/rtx_render/rtx_scene_manager.h
+
+**Post-refactor fork footprint:** forward decl + `friend` declaration (added 2026-04-18)
+
+**Category:** index-only
+
+- **Inline tweak** at file scope (just before `class SceneManager`) — 9-line forward declaration of `fork_hooks::externalDrawObjectPicking` so the friend declaration inside `SceneManager` can name the fork-owned hook.
+  *Companion to the `rtx_fork_submit.cpp` hook that needs private-member access to `m_drawCallMeta`.*
+
+- **Inline tweak** at `SceneManager` class body (top of class, before `public:`) — 5-line `friend` declaration granting `fork_hooks::externalDrawObjectPicking` access to `m_drawCallMeta`.
+  *Canonical pattern for hooks that must read/write private upstream state — one inline tweak per such hook, tracked here.*
 
 ---
 
