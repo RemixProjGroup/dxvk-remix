@@ -194,6 +194,12 @@ void AssetReplacer::registerExternalMesh(remixapi_MeshHandle handle, std::vector
     return;
   }
 
+  // Tag each submesh with the external mesh handle so capture + runtime
+  // use the same identity for replacement-lookup parity.
+  for (auto& submesh : submeshes) {
+    submesh.externalMesh = handle;
+  }
+
   m_extMeshes.emplace(handle, std::move(submeshes));
 }
 

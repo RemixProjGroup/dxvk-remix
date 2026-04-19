@@ -462,7 +462,18 @@ namespace dxvk {
     const BlasEntry* pBlas = rtInstance.getBlas();
     assert(pBlas != nullptr);
     const XXH64_hash_t matHash = rtInstance.getMaterialDataHash();
-    const XXH64_hash_t meshHash = pBlas->input.getHash(RtxOptions::geometryAssetHashRule());
+
+    // For external (API-submitted) meshes, use the original API handle as the hash so
+    // captures and runtime replacement lookups agree on mesh identity. Falling back to
+    // the geometry-data hash for API meshes produces a different hash at capture-time
+    // than at runtime, breaking replacement parity.
+    XXH64_hash_t meshHash = 0;
+    if (pBlas->input.getGeometryData().externalMesh != nullptr) {
+      meshHash = reinterpret_cast<XXH64_hash_t>(pBlas->input.getGeometryData().externalMesh);
+      Logger::info(str::format("[GameCapturer] Using external mesh hash: 0x", std::hex, meshHash, std::dec));
+    } else {
+      meshHash = pBlas->input.getHash(RtxOptions::geometryAssetHashRule());
+    }
     assert(meshHash != 0);
 
     const LegacyMaterialData& material = pBlas->getMaterialData(matHash);

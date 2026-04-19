@@ -1803,13 +1803,31 @@ namespace dxvk {
     }
 
     const XXH64_hash_t meshHash = reinterpret_cast<XXH64_hash_t>(state.mesh);
-    if (std::vector<AssetReplacement>* pReplacements = fork_hooks::externalDrawMeshReplacement(*m_pReplacer, meshHash)) {
-      MaterialData renderMaterialData = determineMaterialData(nullptr, state.drawCall);
-      drawReplacements(ctx, &state.drawCall, pReplacements, renderMaterialData);
+
+    // Fetch submeshes once — they drive both the replacement path (needs submeshes[0]
+    // as geometry template) and the default iteration path.
+    const std::vector<RasterGeometry>& submeshes = m_pReplacer->accessExternalMesh(state.mesh);
+    if (submeshes.empty()) {
+      Logger::err(str::format("[RTX-Mesh] External mesh has no submeshes: 0x", std::hex, meshHash, std::dec));
       return;
     }
 
-    for (const RasterGeometry& submesh : m_pReplacer->accessExternalMesh(state.mesh)) {
+    if (std::vector<AssetReplacement>* pReplacements = fork_hooks::externalDrawMeshReplacement(*m_pReplacer, meshHash)) {
+      // Copy the DrawCallState so we don't mutate the caller's state. Point geometryData
+      // at submeshes[0] as the replacement geometry template, clear externalMaterial so
+      // the USD replacement material takes precedence, and use a neutral default material
+      // since the replacement will provide its own.
+      DrawCallState replacementDrawCall = state.drawCall;
+      replacementDrawCall.geometryData = submeshes[0];
+      replacementDrawCall.geometryData.cullMode = state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+      replacementDrawCall.geometryData.externalMaterial = nullptr;
+
+      MaterialData renderMaterialData = LegacyMaterialData().as<OpaqueMaterialData>();
+      drawReplacements(ctx, &replacementDrawCall, pReplacements, renderMaterialData);
+      return;
+    }
+
+    for (const RasterGeometry& submesh : submeshes) {
       state.drawCall.geometryData = submesh;
       state.drawCall.geometryData.cullMode = state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
 

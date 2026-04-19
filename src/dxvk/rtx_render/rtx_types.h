@@ -267,6 +267,7 @@ struct RasterGeometry {
   Future<AxisAlignedBoundingBox> futureBoundingBox;
 
   remixapi_MaterialHandle externalMaterial = nullptr;
+  remixapi_MeshHandle externalMesh = nullptr;
 
   template<uint32_t rule>
   const XXH64_hash_t getHashForRule() const {
