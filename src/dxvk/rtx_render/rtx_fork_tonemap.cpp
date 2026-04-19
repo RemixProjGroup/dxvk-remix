@@ -25,25 +25,25 @@ namespace dxvk {
   namespace fork_hooks {
 
     // Shared helper: copies the Hable / AgX / Lottes RtxOption values into
-    // whatever args struct exposes the matching fields. The Hable slots are
-    // overwritten with Lottes values when Lottes is the selected operator
-    // (the two operators are mutually exclusive — see tonemapping.h for
-    // the documented slot mapping).
-    template<typename ArgsT>
+    // whatever args struct exposes the matching fields. The AgX + Lottes
+    // source classes are template parameters so global and local paths
+    // can share this plumbing while reading from their own option sets.
+    // Hable is always read from the shared RtxForkHableFilmic (gmod also
+    // uses global Hable params on the local path). When Lottes is the
+    // selected operator, its 5 params overlay the 8 Hable push-constant
+    // slots — see tonemapping.h for the documented slot mapping.
+    template<typename AgXClass, typename LottesClass, typename ArgsT>
     static void writeOperatorParams(ArgsT& args, TonemapOperator op) {
       if (op == TonemapOperator::Lottes) {
-        // Lottes overlay (commit 5): map 5 Lottes params into Hable slots.
-        args.hableExposureBias     = RtxForkLottes::hdrMax();
-        args.hableShoulderStrength = RtxForkLottes::contrast();
-        args.hableLinearStrength   = RtxForkLottes::shoulder();
-        args.hableLinearAngle      = RtxForkLottes::midIn();
-        args.hableToeStrength      = RtxForkLottes::midOut();
+        args.hableExposureBias     = LottesClass::hdrMax();
+        args.hableShoulderStrength = LottesClass::contrast();
+        args.hableLinearStrength   = LottesClass::shoulder();
+        args.hableLinearAngle      = LottesClass::midIn();
+        args.hableToeStrength      = LottesClass::midOut();
         args.hableToeNumerator     = 0.0f;
         args.hableToeDenominator   = 0.0f;
         args.hableWhitePoint       = 0.0f;
       } else {
-        // Hable (commit 3) — also the default when other operators selected;
-        // shader only reads these when op == HableFilmic.
         args.hableExposureBias     = RtxForkHableFilmic::exposureBias();
         args.hableShoulderStrength = RtxForkHableFilmic::shoulderStrength();
         args.hableLinearStrength   = RtxForkHableFilmic::linearStrength();
@@ -53,28 +53,27 @@ namespace dxvk {
         args.hableToeDenominator   = RtxForkHableFilmic::toeDenominator();
         args.hableWhitePoint       = RtxForkHableFilmic::whitePoint();
       }
-      // AgX (commit 4).
-      args.agxGamma          = RtxForkAgX::gamma();
-      args.agxSaturation     = RtxForkAgX::saturation();
-      args.agxExposureOffset = RtxForkAgX::exposureOffset();
-      args.agxLook           = static_cast<uint32_t>(RtxForkAgX::look());
-      args.agxContrast       = RtxForkAgX::contrast();
-      args.agxSlope          = RtxForkAgX::slope();
-      args.agxPower          = RtxForkAgX::power();
+      args.agxGamma          = AgXClass::gamma();
+      args.agxSaturation     = AgXClass::saturation();
+      args.agxExposureOffset = AgXClass::exposureOffset();
+      args.agxLook           = static_cast<uint32_t>(AgXClass::look());
+      args.agxContrast       = AgXClass::contrast();
+      args.agxSlope          = AgXClass::slope();
+      args.agxPower          = AgXClass::power();
     }
 
     void populateTonemapOperatorArgs(ToneMappingApplyToneMappingArgs& args) {
       const TonemapOperator op = RtxForkGlobalTonemap::tonemapOperator();
       args.tonemapOperator    = static_cast<uint32_t>(op);
       args.directOperatorMode = (RtxOptions::tonemappingMode() == TonemappingMode::Direct) ? 1u : 0u;
-      writeOperatorParams(args, op);
+      writeOperatorParams<RtxForkAgX, RtxForkLottes>(args, op);
     }
 
     void populateLocalTonemapOperatorArgs(FinalCombineArgs& args) {
       const TonemapOperator op = RtxForkLocalTonemap::tonemapOperator();
       args.tonemapOperator    = static_cast<uint32_t>(op);
       args.directOperatorMode = (RtxOptions::tonemappingMode() == TonemappingMode::Direct) ? 1u : 0u;
-      writeOperatorParams(args, op);
+      writeOperatorParams<RtxForkLocalAgX, RtxForkLocalLottes>(args, op);
     }
 
     // Combo items string uses ImGui's \0-separated format.
@@ -116,49 +115,55 @@ namespace dxvk {
       ImGui::Unindent();
     }
 
-    static void showAgXSliders() {
+    // The AgX min-value arg parameterizes the lower bound for Gamma /
+    // Saturation / Contrast / Slope / Power — gmod's global AgX sliders
+    // clamp at 0.5, gmod's local AgX sliders clamp at 0.0.
+    template<typename AgXClass>
+    static void showAgXSlidersImpl(float minValue) {
       ImGui::Indent();
       ImGui::Text("AgX Controls:");
       ImGui::Separator();
-      RemixGui::DragFloat("AgX Gamma",           &RtxForkAgX::gammaObject(),          0.01f,  0.5f,  3.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("AgX Saturation",      &RtxForkAgX::saturationObject(),     0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("AgX Exposure Offset", &RtxForkAgX::exposureOffsetObject(), 0.01f, -2.0f,  2.0f, "%.3f EV", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("AgX Gamma",           &AgXClass::gammaObject(),          0.01f, minValue,  3.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("AgX Saturation",      &AgXClass::saturationObject(),     0.01f, minValue,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("AgX Exposure Offset", &AgXClass::exposureOffsetObject(), 0.01f, -2.0f,     2.0f, "%.3f EV", ImGuiSliderFlags_AlwaysClamp);
       ImGui::Separator();
-      RemixGui::Combo(    "AgX Look",            &RtxForkAgX::lookObject(),           "None\0Punchy\0Golden\0Greyscale\0\0");
+      RemixGui::Combo(    "AgX Look",            &AgXClass::lookObject(),           "None\0Punchy\0Golden\0Greyscale\0\0");
       ImGui::Separator();
       ImGui::Text("Advanced:");
-      RemixGui::DragFloat("AgX Contrast",        &RtxForkAgX::contrastObject(),       0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("AgX Slope",           &RtxForkAgX::slopeObject(),          0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("AgX Power",           &RtxForkAgX::powerObject(),          0.01f,  0.5f,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("AgX Contrast",        &AgXClass::contrastObject(),       0.01f, minValue,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("AgX Slope",           &AgXClass::slopeObject(),          0.01f, minValue,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("AgX Power",           &AgXClass::powerObject(),          0.01f, minValue,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
       ImGui::Unindent();
     }
 
-    static void showLottesSliders() {
+    static void showGlobalAgXSliders() { showAgXSlidersImpl<RtxForkAgX>     (0.5f); }
+    static void showLocalAgXSliders()  { showAgXSlidersImpl<RtxForkLocalAgX>(0.0f); }
+
+    template<typename LottesClass>
+    static void showLottesSlidersImpl() {
       ImGui::Indent();
       ImGui::Text("Lottes 2016 Parameters:");
       ImGui::Separator();
-      RemixGui::DragFloat("HDR Max",         &RtxForkLottes::hdrMaxObject(),   0.5f,   1.0f,  64.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("Lottes Contrast", &RtxForkLottes::contrastObject(), 0.01f,  1.0f,   3.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("Shoulder",        &RtxForkLottes::shoulderObject(), 0.01f,  0.5f,   2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("Mid In",          &RtxForkLottes::midInObject(),    0.005f, 0.01f,  1.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("Mid Out",         &RtxForkLottes::midOutObject(),   0.005f, 0.01f,  1.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("HDR Max",         &LottesClass::hdrMaxObject(),   0.5f,   1.0f,  64.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Lottes Contrast", &LottesClass::contrastObject(), 0.01f,  1.0f,   3.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Shoulder",        &LottesClass::shoulderObject(), 0.01f,  0.5f,   2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Mid In",          &LottesClass::midInObject(),    0.005f, 0.01f,  1.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Mid Out",         &LottesClass::midOutObject(),   0.005f, 0.01f,  1.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
       ImGui::Unindent();
     }
+
+    static void showGlobalLottesSliders() { showLottesSlidersImpl<RtxForkLottes>     (); }
+    static void showLocalLottesSliders()  { showLottesSlidersImpl<RtxForkLocalLottes>(); }
 
     void showTonemapOperatorUI() {
       RemixGui::Combo("Tonemapping Operator",
                       &RtxForkGlobalTonemap::tonemapOperatorObject(),
                       k_operatorItems);
 
-      if (RtxForkGlobalTonemap::tonemapOperator() == TonemapOperator::HableFilmic) {
-        showHableFilmicSliders();
-      }
-      if (RtxForkGlobalTonemap::tonemapOperator() == TonemapOperator::AgX) {
-        showAgXSliders();
-      }
-      if (RtxForkGlobalTonemap::tonemapOperator() == TonemapOperator::Lottes) {
-        showLottesSliders();
-      }
+      const TonemapOperator op = RtxForkGlobalTonemap::tonemapOperator();
+      if (op == TonemapOperator::HableFilmic) { showHableFilmicSliders(); }
+      if (op == TonemapOperator::AgX)         { showGlobalAgXSliders();    }
+      if (op == TonemapOperator::Lottes)      { showGlobalLottesSliders(); }
     }
 
     void showLocalTonemapOperatorUI() {
@@ -166,15 +171,10 @@ namespace dxvk {
                       &RtxForkLocalTonemap::tonemapOperatorObject(),
                       k_operatorItems);
 
-      if (RtxForkLocalTonemap::tonemapOperator() == TonemapOperator::HableFilmic) {
-        showHableFilmicSliders();
-      }
-      if (RtxForkLocalTonemap::tonemapOperator() == TonemapOperator::AgX) {
-        showAgXSliders();
-      }
-      if (RtxForkLocalTonemap::tonemapOperator() == TonemapOperator::Lottes) {
-        showLottesSliders();
-      }
+      const TonemapOperator op = RtxForkLocalTonemap::tonemapOperator();
+      if (op == TonemapOperator::HableFilmic) { showHableFilmicSliders(); }
+      if (op == TonemapOperator::AgX)         { showLocalAgXSliders();    }
+      if (op == TonemapOperator::Lottes)      { showLocalLottesSliders(); }
     }
 
     bool shouldSkipToneCurve() {

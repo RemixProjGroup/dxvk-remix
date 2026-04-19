@@ -96,4 +96,33 @@ namespace dxvk {
     RTX_OPTION("rtx.tonemap.lottes", float, midOut,   0.18f, "Lottes: mid-grey output. Range [0.01, 1.0].");
   };
 
+  // Local-tonemapper AgX operator parameters. Separate from RtxForkAgX
+  // because gmod tunes the local tonemapper's AgX differently from the
+  // global path — the local tonemapper operates on a different dynamic
+  // range, so lower gamma / lower contrast / higher slope land better.
+  // Defaults and docstring ranges match gmod's rtx_local_tone_mapping.h
+  // at cdf2c723; the UI exposes min-value 0.0 for Gamma / Saturation /
+  // Contrast / Slope / Power (gmod's local-path range).
+  class RtxForkLocalAgX {
+    RTX_OPTION("rtx.localtonemap.agx", float, gamma,          0.45f, "AgX gamma adjustment (local path). Lower values increase contrast. Range [0.0, 3.0].");
+    RTX_OPTION("rtx.localtonemap.agx", float, saturation,     1.0f,  "AgX saturation multiplier (local path). Range [0.0, 2.0].");
+    RTX_OPTION("rtx.localtonemap.agx", float, exposureOffset, 0.0f,  "AgX exposure offset (local path) in EV stops. Range [-2.0, 2.0].");
+    RTX_OPTION("rtx.localtonemap.agx", int,   look,           0,     "AgX look preset (local path): 0 = None, 1 = Punchy, 2 = Golden, 3 = Greyscale.");
+    RTX_OPTION("rtx.localtonemap.agx", float, contrast,       0.8f,  "AgX contrast adjustment (local path). Range [0.0, 2.0].");
+    RTX_OPTION("rtx.localtonemap.agx", float, slope,          1.2f,  "AgX slope adjustment for highlight rolloff (local path). Range [0.0, 2.0].");
+    RTX_OPTION("rtx.localtonemap.agx", float, power,          1.0f,  "AgX power adjustment for midtone response (local path). Range [0.0, 2.0].");
+  };
+
+  // Local-tonemapper Lottes operator parameters. Separate from RtxForkLottes
+  // for architectural symmetry with the AgX split; gmod's local Lottes
+  // defaults happen to match global but are independently tunable via the
+  // rtx.localtonemap.lottes.* keys.
+  class RtxForkLocalLottes {
+    RTX_OPTION("rtx.localtonemap.lottes", float, hdrMax,   16.0f, "Lottes: peak HDR white value (local path). Range [1.0, 64.0].");
+    RTX_OPTION("rtx.localtonemap.lottes", float, contrast,  2.0f, "Lottes: contrast control (local path). Range [1.0, 3.0].");
+    RTX_OPTION("rtx.localtonemap.lottes", float, shoulder,  1.0f, "Lottes: shoulder strength (local path). Range [0.5, 2.0].");
+    RTX_OPTION("rtx.localtonemap.lottes", float, midIn,    0.18f, "Lottes: mid-grey input (local path). Range [0.01, 1.0].");
+    RTX_OPTION("rtx.localtonemap.lottes", float, midOut,   0.18f, "Lottes: mid-grey output (local path). Range [0.01, 1.0].");
+  };
+
 } // namespace dxvk
