@@ -228,6 +228,29 @@ namespace dxvk {
     // Implementation in rtx_fork_light.cpp.
     void queueAutoInstancePersistent(LightManager& mgr);
 
+    // Pins ImGui and ImPlot to the dev menu's private contexts at wndProcHandler
+    // entry. Prevents context corruption when plugin activity on other threads
+    // drifts GImGui off the dev menu's context between frames.
+    // Call site passes m_context and m_plotContext from ImGUI directly — no friend
+    // declaration needed.
+    // Implementation in rtx_fork_overlay.cpp.
+    void imguiContextPin(struct ImGuiContext* ctx, struct ImPlotContext* plotCtx);
+
+    // Renders the atmosphere preset buttons and parameter tree inside the
+    // "Sky Tuning" collapsing header. Owns the skyModeCombo static and branches
+    // on SkyMode::PhysicalAtmosphere vs SkyboxRasterization.
+    // No private-member access — uses only public RtxOptions and ImGui APIs.
+    // No friend declaration needed.
+    // Implementation in rtx_fork_atmosphere.cpp.
+    void showAtmosphereUI();
+
+    // Invokes the registered plugin draw callback for the Plugin tab in the dev
+    // menu. Called from the kTab_Wrapper switch case in ImGUI::showMainMenu.
+    // No private-member access — delegates to remixapi_imgui_InvokeDrawCallback().
+    // No friend declaration needed.
+    // Implementation in rtx_fork_overlay.cpp.
+    void wrapperTabDraw();
+
   } // namespace fork_hooks
 
 } // namespace dxvk

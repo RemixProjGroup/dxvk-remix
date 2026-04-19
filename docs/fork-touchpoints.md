@@ -184,26 +184,27 @@ check will enforce it if discipline slips.
 ## src/dxvk/imgui/dxvk_imgui.cpp
 
 **Pre-refactor fork footprint:** +236 / -71 LOC (audit 2026-04-18)
+**Post-refactor footprint:** 3 hook call sites + `#include "rtx_render/rtx_fork_hooks.h"` (migrated 2026-04-18)
 
 **Category:** migrate
 
 - **Block** at `ImGUI::wndProcHandler` (top of function + dispatch points) — ~30 LOC, planned target `fork_hooks::wndProcHandlerDiag` in `rtx_fork_overlay.cpp`.
-  *Adds [RTX-Diag] instrumentation to `wndProcHandler`: logs ENTER/AFTER-PIN ImGui context pointers for WM_KEY* and WM_INPUT messages, and logs which dispatch branch (GameOverlay vs legacy ImGui_ImplWin32) is taken.*
+  *REVERTED before migration (commit 664a9ba4). Not present in current file. No hook created.*
 
 - **Block** at `ImGUI::processHotkeys` (top) — ~10 LOC, planned target `fork_hooks::processHotkeysDiag` in `rtx_fork_overlay.cpp`.
-  *Logs per-frame ImGui context pointer vs pinned `m_context` and modifier-key state in `processHotkeys` for diagnosing Alt+X shortcut failures.*
+  *REVERTED before migration (commit 664a9ba4). Not present in current file. No hook created.*
 
 - **Block** at `ImGUI::checkHotkeyState` (alt-chord logging branch) — ~22 LOC, planned target `fork_hooks::checkHotkeyStateDiag` in `rtx_fork_overlay.cpp`.
-  *Adds Alt-chord detection logic and logs `IsKeyDown`/`IsKeyPressed` results for the non-menu key in the chord when Alt is held or the result fires.*
+  *REVERTED before migration (commit 664a9ba4). Not present in current file. No hook created.*
 
-- **Block** at `ImGUI::wndProcHandler` (context pin at entry) — ~2 LOC, planned target `fork_hooks::imguiContextPin` in `rtx_fork_overlay.cpp`.
-  *Pins ImGui and ImPlot contexts at the top of `wndProcHandler` via `ImGui::SetCurrentContext` / `ImPlot::SetCurrentContext` to prevent context corruption on the game-wndproc path.*
+- **Block** at `ImGUI::wndProcHandler` (context pin at entry) — ~2 LOC. **Migrated** to `fork_hooks::imguiContextPin` in `rtx_fork_overlay.cpp`.
+  *Pins ImGui and ImPlot contexts at the top of `wndProcHandler` to prevent context corruption when plugin activity drifts GImGui off the dev menu's context between frames. Call site passes `m_context` and `m_plotContext` directly — no friend declaration needed.*
 
-- **Block** at `ImGUI::showSkyOptions` / `ImGUI::showRenderingSettings` (sky mode UI section) — ~154 LOC, planned target `fork_hooks::showAtmosphereUI` in `rtx_fork_atmosphere.cpp`.
-  *Adds the Sky Mode combo (Skybox Rasterization / Physical Atmosphere), atmosphere preset buttons (Earth, Alien, Desert Planet), and the full atmosphere parameter tree (sun, density sliders, advanced coefficients) under the Rendering tab.*
+- **Block** at `ImGUI::showRenderingSettings` (sky mode UI section) — ~154 LOC. **Migrated** to `fork_hooks::showAtmosphereUI` in `rtx_fork_atmosphere.cpp`.
+  *Adds the Sky Mode combo (Skybox Rasterization / Physical Atmosphere), atmosphere preset buttons (Earth, Mars, Clear Sky, Polluted/Hazy, Alien World, Desert Planet), and the full atmosphere parameter tree (sun, density sliders, advanced coefficients) under the Sky Tuning collapsing header. The `skyModeCombo` static was moved from `dxvk_imgui.cpp` into the fork-owned atmosphere file. No friend declaration needed.*
 
-- **Block** at `ImGUI::showMainMenu` (wrapper tab handling) — ~6 LOC, planned target `fork_hooks::wrapperTabDraw` in `rtx_fork_overlay.cpp`.
-  *Adds `kTab_Wrapper` to the tab list and guards the tab on `remixapi_imgui_HasDrawCallback()`, then dispatches to `remixapi_imgui_InvokeDrawCallback()` when the Plugin tab is selected.*
+- **Block** at `ImGUI::showMainMenu` (wrapper tab handling) — ~6 LOC. **Partially migrated** to `fork_hooks::wrapperTabDraw` in `rtx_fork_overlay.cpp`.
+  *The `kTab_Wrapper` guard (`remixapi_imgui_HasDrawCallback()` check + `continue`) remains as an inline tweak in the tab loop (structural control flow, not extractable). The case body (`remixapi_imgui_InvokeDrawCallback()`) is wrapped as `fork_hooks::wrapperTabDraw()`. No friend declaration needed.*
 
 ---
 

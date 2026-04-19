@@ -72,6 +72,7 @@
 #include "rtx_render/rtx_particle_system.h"
 #include "rtx_render/rtx_point_instancer_system.h"
 #include "rtx_render/rtx_overlay_window.h"
+#include "rtx_render/rtx_fork_hooks.h"
 
 
 namespace dxvk {
@@ -234,14 +235,6 @@ namespace dxvk {
         {CameraAnimationMode::CameraShake_Yaw, "CameraShake Yaw"},
         {CameraAnimationMode::CameraShake_Pitch, "CameraShake Pitch"},
         {CameraAnimationMode::YawRotation, "Camera Yaw Rotation"}
-    } }
-  };
-
-  RemixGui::ComboWithKey<SkyMode> skyModeCombo {
-    "Sky Mode",
-    RemixGui::ComboWithKey<SkyMode>::ComboEntries { {
-        {SkyMode::SkyboxRasterization, "Skybox Rasterization"},
-        {SkyMode::PhysicalAtmosphere, "Physical Atmosphere"}
     } }
   };
 
@@ -670,8 +663,7 @@ namespace dxvk {
   }
 
   void ImGUI::wndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    ImGui::SetCurrentContext(m_context);
-    ImPlot::SetCurrentContext(m_plotContext);
+    fork_hooks::imguiContextPin(m_context, m_plotContext);
     if (m_overlayWin.ptr() != nullptr) {
       m_overlayWin->gameWndProcHandler(hWnd, msg, wParam, lParam);
     } else {
@@ -1061,7 +1053,7 @@ namespace dxvk {
               showDevelopmentSettings(ctx);
               break;
             case kTab_Wrapper:
-              remixapi_imgui_InvokeDrawCallback();
+              fork_hooks::wrapperTabDraw();
               break;
             case kTab_Count:
               assert(false && "kTab_Count hit in ImGUI::showMainMenu");
@@ -2797,154 +2789,7 @@ namespace dxvk {
 
       if (RemixGui::CollapsingHeader("Sky Tuning", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
-        
-        // Sky mode selection
-        skyModeCombo.getKey(&RtxOptions::skyModeObject());
-        RemixGui::SetTooltipToLastWidgetOnHover("Skybox Rasterization: Traditional skybox rendering\nPhysical Atmosphere: Hillaire atmospheric scattering");
-        
-        if (RtxOptions::skyMode() == SkyMode::SkyboxRasterization) {
-          RemixGui::DragFloat("Sky Brightness", &RtxOptions::skyBrightnessObject(), 0.01f, 0.01f, FLT_MAX, "%.3f", sliderFlags);
-        } else {
-          // Atmosphere Presets
-          ImGui::Separator();
-          ImGui::Text("Atmosphere Presets:");
-          
-          if (ImGui::Button("Earth (Default)", ImVec2(120, 0))) {
-            // Earth-like atmosphere based on Hillaire paper
-            RtxOptions::sunIlluminanceObject().setImmediately(Vector3(20.0f, 20.0f, 20.0f));
-            RtxOptions::planetRadiusObject().setImmediately(6371.0f);  // Earth's actual radius
-            RtxOptions::atmosphereThicknessObject().setImmediately(100.0f);
-            RtxOptions::rayleighScatteringObject().setImmediately(Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f));
-            RtxOptions::mieScatteringObject().setImmediately(Vector3(3.996e-3f, 3.996e-3f, 3.996e-3f));
-            RtxOptions::mieAnisotropyObject().setImmediately(0.8f);
-            RtxOptions::ozoneAbsorptionObject().setImmediately(Vector3(2.04e-3f, 4.97e-3f, 2.14e-4f));
-            RtxOptions::ozoneLayerAltitudeObject().setImmediately(25.0f);
-            RtxOptions::ozoneLayerWidthObject().setImmediately(15.0f);
-          }
-          RemixGui::SetTooltipToLastWidgetOnHover("Physically accurate Earth atmosphere parameters from Hillaire paper");
-          
-          ImGui::SameLine();
-          if (ImGui::Button("Mars", ImVec2(120, 0))) {
-            // Mars atmosphere (thin, dusty, red-shifted)
-            RtxOptions::sunIlluminanceObject().setImmediately(Vector3(15.0f, 12.0f, 10.0f));  // Weaker, reddish sun
-            RtxOptions::planetRadiusObject().setImmediately(3389.5f);  // Mars radius
-            RtxOptions::atmosphereThicknessObject().setImmediately(50.0f);  // Thinner atmosphere
-            RtxOptions::rayleighScatteringObject().setImmediately(Vector3(8.0e-3f, 10.0e-3f, 12.0e-3f));  // Red bias
-            RtxOptions::mieScatteringObject().setImmediately(Vector3(8.0e-3f, 8.0e-3f, 8.0e-3f));  // More dust
-            RtxOptions::mieAnisotropyObject().setImmediately(0.7f);
-            RtxOptions::ozoneAbsorptionObject().setImmediately(Vector3(0.0f, 0.0f, 0.0f));  // No ozone
-            RtxOptions::ozoneLayerAltitudeObject().setImmediately(0.0f);
-            RtxOptions::ozoneLayerWidthObject().setImmediately(1.0f);
-          }
-          RemixGui::SetTooltipToLastWidgetOnHover("Mars-like atmosphere: thin, dusty, yellowish sky with blue sunsets");
-          
-          ImGui::SameLine();
-          if (ImGui::Button("Clear Sky", ImVec2(120, 0))) {
-            // Very clear, minimal scattering (high altitude/clean air)
-            RtxOptions::sunIlluminanceObject().setImmediately(Vector3(25.0f, 25.0f, 25.0f));
-            RtxOptions::planetRadiusObject().setImmediately(6371.0f);
-            RtxOptions::atmosphereThicknessObject().setImmediately(80.0f);
-            RtxOptions::rayleighScatteringObject().setImmediately(Vector3(4.0e-3f, 9.0e-3f, 22.0e-3f));  // Reduced
-            RtxOptions::mieScatteringObject().setImmediately(Vector3(1.0e-3f, 1.0e-3f, 1.0e-3f));  // Minimal dust
-            RtxOptions::mieAnisotropyObject().setImmediately(0.9f);  // Sharp sun
-            RtxOptions::ozoneAbsorptionObject().setImmediately(Vector3(2.04e-3f, 4.97e-3f, 2.14e-4f));
-            RtxOptions::ozoneLayerAltitudeObject().setImmediately(25.0f);
-            RtxOptions::ozoneLayerWidthObject().setImmediately(15.0f);
-          }
-          RemixGui::SetTooltipToLastWidgetOnHover("Crystal clear atmosphere with minimal haze");
-          
-          if (ImGui::Button("Polluted/Hazy", ImVec2(120, 0))) {
-            // Heavy pollution/haze (smoggy city)
-            RtxOptions::sunIlluminanceObject().setImmediately(Vector3(18.0f, 18.0f, 18.0f));
-            RtxOptions::planetRadiusObject().setImmediately(6371.0f);
-            RtxOptions::atmosphereThicknessObject().setImmediately(100.0f);
-            RtxOptions::rayleighScatteringObject().setImmediately(Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f));
-            RtxOptions::mieScatteringObject().setImmediately(Vector3(12.0e-3f, 12.0e-3f, 12.0e-3f));  // Heavy aerosols
-            RtxOptions::mieAnisotropyObject().setImmediately(0.65f);  // More diffuse sun
-            RtxOptions::ozoneAbsorptionObject().setImmediately(Vector3(2.04e-3f, 4.97e-3f, 2.14e-4f));
-            RtxOptions::ozoneLayerAltitudeObject().setImmediately(25.0f);
-            RtxOptions::ozoneLayerWidthObject().setImmediately(15.0f);
-          }
-          RemixGui::SetTooltipToLastWidgetOnHover("Heavy atmospheric haze with strong light scattering");
-          
-          ImGui::SameLine();
-          if (ImGui::Button("Alien World", ImVec2(120, 0))) {
-            // Exotic alien atmosphere (greenish tint)
-            RtxOptions::sunIlluminanceObject().setImmediately(Vector3(15.0f, 22.0f, 18.0f));  // Green bias
-            RtxOptions::planetRadiusObject().setImmediately(5000.0f);
-            RtxOptions::atmosphereThicknessObject().setImmediately(120.0f);
-            RtxOptions::rayleighScatteringObject().setImmediately(Vector3(4.0e-3f, 18.0e-3f, 10.0e-3f));  // Green peak
-            RtxOptions::mieScatteringObject().setImmediately(Vector3(5.0e-3f, 5.0e-3f, 5.0e-3f));
-            RtxOptions::mieAnisotropyObject().setImmediately(0.75f);
-            RtxOptions::ozoneAbsorptionObject().setImmediately(Vector3(1.0e-3f, 0.5e-3f, 3.0e-3f));  // Exotic absorption
-            RtxOptions::ozoneLayerAltitudeObject().setImmediately(30.0f);
-            RtxOptions::ozoneLayerWidthObject().setImmediately(20.0f);
-          }
-          RemixGui::SetTooltipToLastWidgetOnHover("Fictional alien atmosphere with green-tinted scattering");
-          
-          ImGui::SameLine();
-          if (ImGui::Button("Desert Planet", ImVec2(120, 0))) {
-            // Arid desert world (Dune-like)
-            RtxOptions::sunIlluminanceObject().setImmediately(Vector3(28.0f, 24.0f, 18.0f));  // Warm sun
-            RtxOptions::planetRadiusObject().setImmediately(6000.0f);
-            RtxOptions::atmosphereThicknessObject().setImmediately(90.0f);
-            RtxOptions::rayleighScatteringObject().setImmediately(Vector3(7.0e-3f, 11.0e-3f, 18.0e-3f));
-            RtxOptions::mieScatteringObject().setImmediately(Vector3(15.0e-3f, 12.0e-3f, 8.0e-3f));  // Sandy dust
-            RtxOptions::mieAnisotropyObject().setImmediately(0.6f);  // Diffuse from dust
-            RtxOptions::ozoneAbsorptionObject().setImmediately(Vector3(0.5e-3f, 1.0e-3f, 0.1e-3f));
-            RtxOptions::ozoneLayerAltitudeObject().setImmediately(20.0f);
-            RtxOptions::ozoneLayerWidthObject().setImmediately(10.0f);
-          }
-          RemixGui::SetTooltipToLastWidgetOnHover("Hot, arid world with sandy atmospheric dust");
-          
-          ImGui::Separator();
-          
-          // Physical Atmosphere controls (Blender Style)
-          if (ImGui::TreeNode("Atmosphere Parameters")) {
-            
-            RemixGui::DragFloat("Sun Size", &RtxOptions::sunSizeObject(), 0.01f, 0.0f, 10.0f, "%.3f°", sliderFlags);
-            RemixGui::SetTooltipToLastWidgetOnHover("Size of sun disc in degrees");
-            
-            RemixGui::DragFloat("Sun Intensity", &RtxOptions::sunIntensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
-            RemixGui::SetTooltipToLastWidgetOnHover("Strength of Sun");
-            
-            RemixGui::DragFloat("Sun Elevation", &RtxOptions::sunElevationObject(), 0.01f, -90.0f, 90.0f, "%.2f°", sliderFlags);
-            RemixGui::SetTooltipToLastWidgetOnHover("Sun angle from horizon");
-            
-            RemixGui::DragFloat("Sun Rotation", &RtxOptions::sunRotationObject(), 0.01f, 0.0f, 360.0f, "%.1f°", sliderFlags);
-            RemixGui::SetTooltipToLastWidgetOnHover("Rotation of sun around zenith");
-            
-            RemixGui::DragFloat("Altitude", &RtxOptions::altitudeObject(), 1.0f, 0.0f, 100000.0f, "%.0f m", sliderFlags);
-            RemixGui::SetTooltipToLastWidgetOnHover("Height from sea level");
-            
-            RemixGui::DragFloat("Air", &RtxOptions::airDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
-            RemixGui::SetTooltipToLastWidgetOnHover("Density of air molecules");
-            
-            RemixGui::DragFloat("Dust", &RtxOptions::aerosolDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
-            RemixGui::SetTooltipToLastWidgetOnHover("Density of aerosols/dust");
-            
-            RemixGui::DragFloat("Ozone", &RtxOptions::ozoneDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
-            RemixGui::SetTooltipToLastWidgetOnHover("Density of ozone layer");
-            
-            if (ImGui::TreeNode("Advanced")) {
-              RemixGui::DragFloat("Planet Radius", &RtxOptions::planetRadiusObject(), 10.0f, 1000.0f, 10000.0f, "%.0f km", sliderFlags);
-              RemixGui::DragFloat("Atmosphere Thickness", &RtxOptions::atmosphereThicknessObject(), 1.0f, 10.0f, 500.0f, "%.0f km", sliderFlags);
-              RemixGui::DragFloat("Mie Anisotropy", &RtxOptions::mieAnisotropyObject(), 0.01f, -1.0f, 1.0f, "%.2f", sliderFlags);
-              
-              RemixGui::DragFloat3("Base Sun Illuminance", &RtxOptions::sunIlluminanceObject(), 0.1f, 0.0f, 100.0f, "%.1f", sliderFlags);
-              RemixGui::DragFloat3("Base Rayleigh", &RtxOptions::rayleighScatteringObject(), 0.0001f, 0.0f, 0.0001f, "%.6f", sliderFlags);
-              RemixGui::DragFloat3("Base Mie", &RtxOptions::mieScatteringObject(), 0.0001f, 0.0f, 0.0001f, "%.6f", sliderFlags);
-              RemixGui::DragFloat3("Base Ozone", &RtxOptions::ozoneAbsorptionObject(), 0.0001f, 0.0f, 0.01f, "%.6f", sliderFlags);
-              RemixGui::DragFloat("Ozone Layer Altitude", &RtxOptions::ozoneLayerAltitudeObject(), 0.5f, 0.0f, 50.0f, "%.1f km", sliderFlags);
-              RemixGui::DragFloat("Ozone Layer Width", &RtxOptions::ozoneLayerWidthObject(), 0.5f, 1.0f, 30.0f, "%.1f km", sliderFlags);
-              
-              ImGui::TreePop();
-            }
-            
-            ImGui::TreePop();
-          }
-        }
-        
+        fork_hooks::showAtmosphereUI();
         RemixGui::InputInt("First N Untextured Draw Calls", &RtxOptions::skyDrawcallIdThresholdObject(), 1, 1, 0);
         RemixGui::SliderFloat("Sky Min Z Threshold", &RtxOptions::skyMinZThresholdObject(), 0.0f, 1.0f);
         skyAutoDetectCombo.getKey(&RtxOptions::skyAutoDetectObject());

@@ -18,6 +18,9 @@
 
 #include "rtx_overlay_window.h"       // GameOverlay
 #include "imgui/imgui_impl_win32.h"   // ImGui_ImplWin32_WndProcHandler
+#include "imgui/imgui.h"              // ImGui::SetCurrentContext (imguiContextPin)
+#include "imgui/implot.h"             // ImPlot::SetCurrentContext (imguiContextPin)
+#include "imgui/imgui_remix_exports.h" // remixapi_imgui_InvokeDrawCallback (wrapperTabDraw)
 
 #include "rtx_context.h"              // RtxContext
 #include "rtx_resources.h"            // Resources::RaytracingOutput
@@ -192,6 +195,40 @@ namespace fork_hooks {
 
     // Clear pending overlay after dispatch
     ctx.m_pendingScreenOverlay.reset();
+  }
+
+  // ---------------------------------------------------------------------------
+  // imguiContextPin
+  //
+  // Pins the ImGui and ImPlot thread-local context pointers to the dev menu's
+  // private contexts at wndProcHandler entry. Plugin-side rendering on other
+  // threads can drift GImGui off the dev menu's context between frames;
+  // without this pin, keyboard input is written into the wrong (or null)
+  // context and the dev menu stops seeing keypresses (pressing Alt+X produces
+  // a Windows "ding" rather than toggling the menu).
+  //
+  // Matches the pattern used in ImGUI's ctor, dtor, and render().
+  //
+  // No private-member access — the call site passes m_context and m_plotContext
+  // directly. No friend declaration needed.
+  // ---------------------------------------------------------------------------
+  void imguiContextPin(ImGuiContext* ctx, ImPlotContext* plotCtx) {
+    ImGui::SetCurrentContext(ctx);
+    ImPlot::SetCurrentContext(plotCtx);
+  }
+
+  // ---------------------------------------------------------------------------
+  // wrapperTabDraw
+  //
+  // Invokes the registered plugin ImGui draw callback for the Plugin tab in
+  // the dev menu. Called from the kTab_Wrapper switch case in
+  // ImGUI::showMainMenu when the Plugin tab is selected.
+  //
+  // No private-member access — delegates to remixapi_imgui_InvokeDrawCallback.
+  // No friend declaration needed.
+  // ---------------------------------------------------------------------------
+  void wrapperTabDraw() {
+    remixapi_imgui_InvokeDrawCallback();
   }
 
 } // namespace fork_hooks
