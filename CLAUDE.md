@@ -32,8 +32,10 @@ syncs the canonical separately.
 1. **Fork** `RemixProjGroup/dxvk-remix` on GitHub.
 2. **Clone** your fork locally. Optionally add the canonical repo as
    a remote: `git remote add canonical https://github.com/RemixProjGroup/dxvk-remix.git`.
-3. **Branch** for each piece of work using the `unity-workstream/NN-<name>`
-   pattern. Pick the next free N — numbering is ad-hoc, W3 is shelved.
+3. **Branch** for each piece of work using the
+   `unity-workstream/<two-digit-number>-<short-name>` pattern —
+   e.g. `unity-workstream/08-my-feature`. Pick the next free number
+   (08 at time of writing). Numbering is ad-hoc, W3 is shelved.
 4. **Commit** in small pieces with clear messages. No AI co-author
    trailers unless explicitly requested.
 5. **Compile-check** via the `rtx-build` skill (or the equivalent
@@ -76,16 +78,18 @@ Short version:
 - `modern-games-sdk-api` — your fork's tracking copy of canonical's
   default branch. Fast-forward this to a W-branch tip when that
   W-branch is ready to ship; then open a PR to canonical.
-- `unity-workstream/NN-<name>` — one branch per workstream. Branch
-  prefix is historical — it tracks gmod's `origin/unity` baseline,
-  not an engine-specific intent.
-  - W1 = Remix API + HW skinning
-  - W2 = tonemap operators
-  - W3 = HDR (shelved 2026-04-19 — upstream gmod impl broken per author)
-  - W4 = Remix API correctness fixes (externalMesh + capture guards + log silence)
-  - W5 = Hillaire atmosphere
-  - W6 = agent-docs consolidation
-  - W7 = contributing / repo-model docs
+- `unity-workstream/<NN>-<short-name>` — one branch per workstream,
+  where `<NN>` is a zero-padded two-digit number (next free = 08 at
+  time of writing). Branch prefix is historical — it tracks gmod's
+  `origin/unity` baseline, not an engine-specific intent. In
+  conversation mommy/humans abbreviate these as W1, W2, W3, etc.
+  - `01-api-skinning` (W1) — Remix API + HW skinning
+  - `02-tonemap` (W2) — tonemap operators
+  - `03-hdr` (W3) — HDR (shelved 2026-04-19 — upstream gmod impl broken per author)
+  - `04-unity-native-fixes` (W4) — Remix API correctness fixes (externalMesh + capture guards + log silence)
+  - `05-hillaire-atmosphere` (W5) — Hillaire atmosphere
+  - `06-agent-docs-refactor` (W6) — agent-docs consolidation
+  - `07-contributing-model` (W7) — contributing / repo-model docs
 - `unity-port-planning` — legacy planning-only branch. Being phased
   out now that specs/plans/audits live in `agent_docs/` on the
   shipping lineage. Kept read-only for historical reference.
