@@ -873,6 +873,45 @@ extern "C" {
     uint64_t            version;
   } remixapi_InitializeLibraryInfo;
 
+  // Release unused memory back to the driver (force compaction).
+  // DXVK's memory allocator retains freed VkDeviceMemory chunks as spare empty
+  // chunks in a high-water-mark pattern, only returning them to the driver
+  // when a second spare chunk of the same type appears or the heap is over
+  // budget. This call asks the renderer to explicitly release those retained
+  // chunks on the next render-thread tick (see
+  // SceneManager::requestVramCompaction + DxvkMemoryAllocator::freeUnusedChunks).
+  //
+  // Intent: plugins call this after bulk destroy events (cell transitions,
+  // fast-travel, scene turnover) where the allocator is likely holding onto
+  // VRAM that will not be reused. The call is not free -- it blocks on the
+  // next frame's vkFreeMemory sweep -- so fire it at a low rate, not every
+  // frame.
+  //
+  // Thread-safe: sets an atomic flag on SceneManager; no lock acquired.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_RequestVramCompaction)(void);
+
+  // Per-category VRAM usage snapshot aggregated across all device-local heaps.
+  // Sizes are in bytes. poolRetainedBytes == totalAllocatedBytes - totalUsedBytes
+  // and represents memory owned by the DXVK allocator's empty-chunk pool that
+  // has not been returned to the driver -- the number that RequestVramCompaction
+  // moves. Category breakdown mirrors DxvkMemoryStats::Category and covers only
+  // RTX-owned suballocations; app-owned buffers/textures (D3D9 app traffic) are
+  // not included.
+  typedef struct remixapi_VramStats {
+    uint64_t totalAllocatedBytes;
+    uint64_t totalUsedBytes;
+    uint64_t poolRetainedBytes;
+    uint64_t usedReplacementGeometryBytes;
+    uint64_t usedBufferBytes;
+    uint64_t usedAccelerationStructureBytes;
+    uint64_t usedOpacityMicromapBytes;
+    uint64_t usedMaterialTextureBytes;
+    uint64_t usedRenderTargetBytes;
+  } remixapi_VramStats;
+
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_GetVramStats)(
+    remixapi_VramStats* out_stats);
+
   typedef struct remixapi_Interface {
     PFN_remixapi_Shutdown           Shutdown;
     PFN_remixapi_CreateMaterial     CreateMaterial;
@@ -916,6 +955,8 @@ extern "C" {
     PFN_remixapi_UpdateLightDefinition      UpdateLightDefinition;
     PFN_remixapi_DrawScreenOverlay          DrawScreenOverlay;
     PFN_remixapi_SetGameValue               SetGameValue;
+    PFN_remixapi_RequestVramCompaction      RequestVramCompaction;
+    PFN_remixapi_GetVramStats               GetVramStats;
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(
