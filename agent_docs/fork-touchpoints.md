@@ -502,8 +502,8 @@ check will enforce it if discipline slips.
 
 **Note on diag blocks:** The fridge list originally listed 3 `[RTX-Diag]` blocks (blocks 2-4). These were introduced and then immediately reverted (commit `664a9ba4` reverted `0d590fb4`) before this migration ran. They are not present in the current file; no action was taken. Only block 1 (keyboard-forward) was active and required migration.
 
-- **Hook** at `GameOverlay::gameWndProcHandler` (after hwnd guard) → `fork_hooks::overlayKeyboardForward` in `rtx_fork_overlay.cpp`
-  *Forwards WM_KEYDOWN/UP, WM_SYSKEYDOWN/UP, WM_CHAR, WM_SYSCHAR messages to `ImGui_ImplWin32_WndProcHandler` on the legacy WndProc path so ImGui key state stays in sync when a game menu captures raw input and the overlay window is not foreground. Access to private `m_hwnd` is granted via a `friend` declaration — see the `rtx_overlay_window.h` entry below.*
+- **Hook** at `GameOverlay::gameWndProcHandler` (after hwnd guard) → `fork_hooks::overlayInputForward` in `rtx_fork_overlay.cpp`
+  *Forwards keyboard (WM_KEY\*, WM_CHAR, WM_SYSCHAR) AND mouse (WM_MOUSEMOVE, WM_{L,R,M,X}BUTTON\*, WM_MOUSE{,H}WHEEL) messages to `ImGui_ImplWin32_WndProcHandler` on the legacy WndProc path so ImGui keyboard + mouse state stays in sync when a game menu captures raw input or when the plugin HUD pulls focus via the Remix API. Mouse coords in lParam are translated from gameHwnd to overlayHwnd client-space when the two differ; wheel lParam is screen-space and forwards without translation. Access to private `m_hwnd` is granted via a `friend` declaration — see the `rtx_overlay_window.h` entry below. Previously named `overlayKeyboardForward` (keyboard-only); renamed + expanded 2026-04-19 when the plugin-API mouse-input bug was diagnosed.*
 
 ---
 
@@ -513,10 +513,10 @@ check will enforce it if discipline slips.
 
 **Category:** index-only
 
-- **Inline tweak** at file scope (just before `class GameOverlay`) — 6-line forward declaration of `fork_hooks::overlayKeyboardForward` so the friend declaration inside `GameOverlay` can name the fork-owned hook.
-  *Companion to the `rtx_fork_overlay.cpp` hook that needs private-member access to `m_hwnd`.*
+- **Inline tweak** at file scope (just before `class GameOverlay`) — 6-line forward declaration of `fork_hooks::overlayInputForward` so the friend declaration inside `GameOverlay` can name the fork-owned hook.
+  *Companion to the `rtx_fork_overlay.cpp` hook that needs private-member access to `m_hwnd`. Renamed from `overlayKeyboardForward` on 2026-04-19 when the hook's scope expanded to cover mouse messages.*
 
-- **Inline tweak** at `GameOverlay` class body (top of class, before `public:`) — 3-line `friend` declaration granting `fork_hooks::overlayKeyboardForward` access to `m_hwnd`.
+- **Inline tweak** at `GameOverlay` class body (top of class, before `public:`) — 3-line `friend` declaration granting `fork_hooks::overlayInputForward` access to `m_hwnd`.
   *Canonical pattern for hooks that must read/write private upstream state — one inline tweak per such hook, tracked here.*
 
 ---

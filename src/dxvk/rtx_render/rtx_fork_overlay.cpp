@@ -6,7 +6,7 @@
 //
 // See agent_docs/fork-touchpoints.md for the full fork-hooks catalogue.
 //
-// NOTE: overlayKeyboardForward accesses GameOverlay::m_hwnd (private).
+// NOTE: overlayInputForward accesses GameOverlay::m_hwnd (private).
 // dispatchScreenOverlay accesses multiple private members of RtxContext
 // (m_pendingScreenOverlay, m_screenOverlay*) and uses ScreenOverlayShader.
 // Both classes require the corresponding fork_hooks functions to be declared
@@ -14,6 +14,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <windowsx.h>                 // GET_X_LPARAM / GET_Y_LPARAM for mouse coord translation
 #include "rtx_fork_hooks.h"
 
 #include "rtx_overlay_window.h"       // GameOverlay
@@ -55,33 +56,74 @@ namespace dxvk {
 namespace fork_hooks {
 
   // ---------------------------------------------------------------------------
-  // overlayKeyboardForward
+  // overlayInputForward
   //
-  // Forwards keyboard and character WM_* messages to ImGui's Win32 backend
-  // so its io.KeyAlt / io.KeysDown state stays in sync when the legacy
-  // WndProc path is the only delivery path (e.g. when a game menu captures
-  // raw input and overlayWndProc is not receiving messages directly).
+  // Forwards keyboard AND mouse WM_* messages from the legacy gameWndProc
+  // path to ImGui's Win32 backend. Used when a game menu captures raw input
+  // OR when plugin HUD activity pulls focus away from the overlay window,
+  // either of which causes overlayWndProc to stop receiving direct messages
+  // and the legacy wndProcHandler fallback to be the only delivery path.
   //
-  // Mouse messages are intentionally not forwarded: the overlay's WM_INPUT
-  // path already synthesizes scaled mouse events.
+  // A previous revision of this function forwarded only keyboard messages,
+  // with a comment that mouse was "intentionally not forwarded" because the
+  // overlay's WM_INPUT path already synthesized scaled mouse events. That
+  // assumption fails in the plugin-API case: when the plugin HUD pulls focus,
+  // raw-input delivery to overlayWndProc also stops (the same root cause
+  // that broke keyboard), and mouse events disappear. This function now
+  // forwards both.
+  //
+  // Coordinate translation: mouse WM_MOUSEMOVE and WM_{L,R,M,X}BUTTON*
+  // messages carry CLIENT-AREA coordinates in lParam. When the overlay is a
+  // separate HWND from the game window (the common case), we translate game-
+  // client coords to overlay-client coords via ClientToScreen + ScreenToClient
+  // so ImGui hit-tests against the overlay's own geometry. Wheel messages
+  // (WM_MOUSEWHEEL / WM_MOUSEHWHEEL) carry SCREEN coordinates per Windows
+  // convention and are forwarded without translation.
   //
   // ACCESS NOTE: this function reads GameOverlay::m_hwnd (private atomic).
   // A friend declaration for this function is required in GameOverlay.
   // ---------------------------------------------------------------------------
-  void overlayKeyboardForward(
+  void overlayInputForward(
       GameOverlay& overlay, HWND gameHwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    HWND overlayHwnd = overlay.m_hwnd.load();
+    HWND targetHwnd = overlayHwnd ? overlayHwnd : gameHwnd;
+
     switch (msg) {
+    // Keyboard: lParam has no coordinates, pass through as-is.
     case WM_KEYDOWN:
     case WM_KEYUP:
     case WM_SYSKEYDOWN:
     case WM_SYSKEYUP:
     case WM_CHAR:
     case WM_SYSCHAR:
+      ImGui_ImplWin32_WndProcHandler(targetHwnd, msg, wParam, lParam);
+      break;
+
+    // Mouse motion + buttons: lParam has game-client coords; translate to
+    // overlay-client coords when the overlay is a distinct HWND.
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+    case WM_XBUTTONDOWN: case WM_XBUTTONUP: case WM_XBUTTONDBLCLK:
     {
-      HWND overlayHwnd = overlay.m_hwnd.load();
-      ImGui_ImplWin32_WndProcHandler(overlayHwnd ? overlayHwnd : gameHwnd, msg, wParam, lParam);
+      LPARAM translated = lParam;
+      if (overlayHwnd && overlayHwnd != gameHwnd) {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        ClientToScreen(gameHwnd, &pt);
+        ScreenToClient(overlayHwnd, &pt);
+        translated = MAKELPARAM(pt.x, pt.y);
+      }
+      ImGui_ImplWin32_WndProcHandler(targetHwnd, msg, wParam, translated);
       break;
     }
+
+    // Wheel: lParam already in screen coords, pass through.
+    case WM_MOUSEWHEEL:
+    case WM_MOUSEHWHEEL:
+      ImGui_ImplWin32_WndProcHandler(targetHwnd, msg, wParam, lParam);
+      break;
+
     default:
       break;
     }

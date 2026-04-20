@@ -141,14 +141,21 @@ namespace dxvk {
       XXH64_hash_t textureHash,
       SceneManager& scene);
 
-    // Forwards WM_KEYDOWN/UP, WM_SYSKEYDOWN/UP, WM_CHAR, WM_SYSCHAR messages
-    // to ImGui_ImplWin32_WndProcHandler so ImGui key state stays in sync on
-    // the legacy WndProc path (when a game menu captures raw input and the
-    // overlay window is not foreground).
+    // Forwards keyboard (WM_KEY*, WM_CHAR, WM_SYSCHAR) AND mouse
+    // (WM_MOUSEMOVE, WM_{L,R,M,X}BUTTON*, WM_MOUSE{,H}WHEEL) messages to
+    // ImGui_ImplWin32_WndProcHandler so ImGui's keyboard + mouse state stays
+    // in sync on the legacy WndProc path. Used when a game menu captures raw
+    // input OR the plugin HUD pulls focus via the Remix API — either case
+    // stops overlayWndProc from receiving messages directly and the legacy
+    // wndProcHandler fallback becomes the only delivery path.
+    // Mouse coords in lParam are translated from gameHwnd client-space to
+    // overlayHwnd client-space when the two differ, so ImGui hit-tests
+    // correctly. Wheel lParam is screen-space per Windows convention and
+    // forwards without translation.
     // NOTE: requires GameOverlay to declare this as a friend for access to the
     // private m_hwnd member. See rtx_overlay_window.h.
     // Implementation in rtx_fork_overlay.cpp.
-    void overlayKeyboardForward(
+    void overlayInputForward(
       GameOverlay& overlay, HWND gameHwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
     // Alpha-composites a plugin-uploaded RGBA pixel buffer over the final
