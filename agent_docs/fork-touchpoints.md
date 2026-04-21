@@ -539,7 +539,7 @@ check will enforce it if discipline slips.
 ## src/dxvk/rtx_render/rtx_remix_api.cpp
 
 **Pre-refactor fork footprint:** +1277 / -118 LOC (audit 2026-04-18)
-**Post-refactor footprint (fully migrated — migrations #7a, #7b, #7c done):** 20 hook call sites + 1 `#include "rtx_fork_hooks.h"` + inline tweaks listed below. All extractable fork blocks have been migrated to `rtx_fork_api_entry.cpp`.
+**Post-refactor footprint (fully migrated — migrations #7a, #7b, #7c, #7d done):** 23 hook call sites + 1 `#include "rtx_fork_hooks.h"` + inline tweaks listed below. All extractable fork blocks have been migrated to `rtx_fork_api_entry.cpp`.
 
 - **Inline tweak** at `(file scope)` (includes block) — ~8 LOC added. Not migrated: include lines don't get hooks — they either stay inline or the fork-owned file pulls them for its own code. Tracked here per the fridge-list invariant.
   *Adds includes for `dxvk_objects.h`, `dxvk_imgui.h`, `rtx_context.h`, `rtx_option_layer.h`, `util_hash_set_layer.h`, `xxhash.h`, `algorithm`, and `d3d9_texture.h` to support fork-added API functions, plus `rtx_fork_hooks.h` added in migration #7a and `rtx_fork_game_state.h` added in workstream 10 for the `remixapi_SetGameValue` entry point.*
@@ -612,6 +612,15 @@ check will enforce it if discipline slips.
 
 - **Hook** at `remixapi_RegisterCallbacks` (function body) → `fork_hooks::registerCallbacks` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7c).
   *One-liner delegate. Body now lives in the fork-owned TU where the callback state vars live.*
+
+- **Hook** at `remixapi_RequestVramCompaction` (function body) → `fork_hooks::requestVramCompaction` in `rtx_fork_api_entry.cpp` (migrated 2026-04-20, migration #7d).
+  *One-liner delegate passing `tryAsDxvk()` to the hook. Hook does its own null check and sets SceneManager's atomic VRAM-compaction flag; render thread consumes it in manageTextureVram. Lock-free — `s_mutex` not taken.*
+
+- **Hook** at `remixapi_RequestTextureVramFree` (function body) → `fork_hooks::requestTextureVramFree` in `rtx_fork_api_entry.cpp` (migrated 2026-04-20, migration #7d).
+  *One-liner delegate. Hook sets SceneManager's atomic texture-VRAM-free flag; the render-thread tick calls `textureManager.clear()`, matching the DX9 scene-transition behavior exposed to plugins. Lock-free — `s_mutex` not taken.*
+
+- **Hook** at `remixapi_GetVramStats` (function body) → `fork_hooks::getVramStats` in `rtx_fork_api_entry.cpp` (migrated 2026-04-20, migration #7d).
+  *One-liner delegate. Hook fills `remixapi_VramStats` with per-category DXVK totals plus driver-view heap info (`driverAllocatedBytes` / `driverBudgetBytes`) and the fork-side `RtxTextureManager::getTextureTable().size()` (`forkTextureCacheCount`). Driver-view numbers match Task Manager / nvidia-smi; the gap vs `totalAllocatedBytes` exposes non-DXVK allocations (NGX, RT pipeline state, descriptor pools, NRC).*
 
 - **Inline tweak** at `(anonymous namespace)` frame-boundary callback infrastructure — `s_pendingLightCreates`, `s_pendingLightUpdates`, `s_pendingDomeUpdates`, `s_pendingLightDestroys`, `s_pendingMeshCreates`, `s_handlesDeletedThisFrame`. Not migrated. The pending-queue state stays in upstream because it is accessed by too many anonymous-namespace functions (`flushPendingMeshes`, `remixapi_CreateMeshBatched`, `remixapi_CreateLight`, `remixapi_DestroyLight`, `remixapi_Present`, `remixapi_UpdateLightDefinition`) — moving it would require either lifting all those callers or exposing a wide accessor surface. Tracked here per the fridge-list invariant.
 

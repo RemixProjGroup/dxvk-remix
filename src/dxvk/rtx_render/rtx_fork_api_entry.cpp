@@ -6,7 +6,7 @@
 //
 // See agent_docs/fork-touchpoints.md for the full fork-hooks catalogue.
 //
-// This file is populated in three passes:
+// This file is populated in four passes:
 //   #7a  — infrastructure / foundation blocks:
 //           * textureHashPathLookup
 //           * mutateTextureHashOption
@@ -17,12 +17,16 @@
 //           * getSharedD3D11TextureHandle (stub)
 //           * dxvkGetTextureHash
 //           * createTexture / destroyTexture
-//   #7c  — interception + vtable init + frame-boundary callback infrastructure (this pass):
+//   #7c  — interception + vtable init + frame-boundary callback infrastructure:
 //           * notifyBeginScene    — fires s_beginCallback on first frame submission
 //           * registerCallbacks   — stores begin/end/present callbacks
 //           * shutdownCallbacks   — clears all four callback-state vars
 //           * presentCallbackDispatch — fires end/present callbacks + resets s_inFrame
 //           * remixApiVtableInit  — populates all fork-added vtable slots
+//   #7d  — VRAM telemetry + compaction hooks (this pass):
+//           * requestVramCompaction  — sets SceneManager atomic flag
+//           * requestTextureVramFree — sets SceneManager atomic flag
+//           * getVramStats           — fills remixapi_VramStats (DXVK + driver-view)
 //
 // PendingScreenOverlay state (struct + s_pendingScreenOverlay) lives in the
 // anonymous namespace of THIS translation unit so both the writer
@@ -39,12 +43,14 @@
 #include "rtx_texture.h"                  // TextureRef
 #include "rtx_texture_manager.h"          // RtxTextureManager::getTextureTable()
 
+#include "../dxvk_adapter.h"              // DxvkAdapter::memoryProperties, getMemoryHeapInfo, DxvkAdapterMemoryInfo
 #include "../dxvk_buffer.h"               // DxvkBuffer, DxvkBufferCreateInfo, DxvkBufferSlice
 #include "../dxvk_image.h"                // DxvkImage, DxvkImageCreateInfo, DxvkImageViewCreateInfo
 #include "../dxvk_memory.h"               // DxvkMemoryStats::Category
 #include "../dxvk_objects.h"              // DxvkCommonObjects, getImgui()
 #include "../dxvk_util.h"                 // util::computeMipLevelExtent, computeImageDataSize
 #include "../imgui/dxvk_imgui.h"          // ImGUI::switchMenu, ImGUI::AddTexture
+#include "rtx_scene_manager.h"            // SceneManager::requestVramCompaction, requestTextureVramFree
 
 #include "../../d3d9/d3d9_device.h"       // D3D9DeviceEx, LockDevice, EmitCs, GetDXVKDevice
 #include "../../d3d9/d3d9_texture.h"      // D3D9CommonTexture, GetCommonTexture
@@ -763,13 +769,111 @@ namespace fork_hooks {
   // CreateLightBatched, etc.) are assigned inline in rtx_remix_api.cpp where
   // their symbols are visible.
   //
-  // The static_assert(sizeof(interf) == 288) sentinel is retained inline in
-  // upstream; it is not repeated here.
+  // The sizeof(interf) static_assert sentinel is retained inline in upstream;
+  // it is not repeated here.
   // ---------------------------------------------------------------------------
   void remixApiVtableInit(remixapi_Interface& interf) {
     interf.RegisterCallbacks              = remixapi_RegisterCallbacks;
     interf.AutoInstancePersistentLights   = remixapi_AutoInstancePersistentLights;
     interf.UpdateLightDefinition          = remixapi_UpdateLightDefinition;
+  }
+
+  // ---------------------------------------------------------------------------
+  // requestVramCompaction (migration #7d)
+  //
+  // Sets an atomic flag that the render thread consumes in
+  // SceneManager::manageTextureVram on the next tick. Flag mutation is
+  // lock-free; the remix-api static mutex is deliberately NOT taken by the
+  // caller.
+  // ---------------------------------------------------------------------------
+  remixapi_ErrorCode requestVramCompaction(D3D9DeviceEx* remixDevice) {
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    remixDevice->GetDXVKDevice()->getCommon()->getSceneManager().requestVramCompaction();
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  // ---------------------------------------------------------------------------
+  // requestTextureVramFree (migration #7d)
+  //
+  // Sets an atomic flag that the render thread consumes in
+  // SceneManager::manageTextureVram on the next tick. The tick calls
+  // textureManager.clear() (SparseUniqueCache wipe + budget-gated streaming
+  // demotion), matching the DX9 path's scene-transition behavior exposed to
+  // plugins. Lock-free atomic mutation so the remix-api static mutex is not
+  // taken by the caller.
+  // ---------------------------------------------------------------------------
+  remixapi_ErrorCode requestTextureVramFree(D3D9DeviceEx* remixDevice) {
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    remixDevice->GetDXVKDevice()->getCommon()->getSceneManager().requestTextureVramFree();
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  // ---------------------------------------------------------------------------
+  // getVramStats (migration #7d)
+  //
+  // Fills a remixapi_VramStats struct with DXVK per-category totals plus
+  // driver-view heap info (matches Task Manager / nvidia-smi; gap vs
+  // totalAllocatedBytes exposes non-DXVK allocations such as NGX, RT pipeline
+  // state, descriptor pools, NRC, etc.) and the fork-side texture manager's
+  // table size.
+  //
+  // forkTextureCacheCount comes from RtxTextureManager::getTextureTable()
+  // (the backing SparseUniqueCache's object vector). Its length is the cache's
+  // high-water mark rather than the live entry count (freed slots become
+  // sentinels rather than being removed), but growth here is a proxy for
+  // "more textures are getting tracked by the fork," useful for catching
+  // fork-side native-texture accumulation when plugin caches are stable.
+  // ---------------------------------------------------------------------------
+  remixapi_ErrorCode getVramStats(
+      D3D9DeviceEx*        remixDevice,
+      remixapi_VramStats*  out_stats) {
+    if (!out_stats) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+
+    *out_stats = {};
+
+    auto device = remixDevice->GetDXVKDevice();
+    const VkPhysicalDeviceMemoryProperties memProps = device->adapter()->memoryProperties();
+    for (uint32_t i = 0; i < memProps.memoryHeapCount; i++) {
+      const bool isDeviceLocal = (memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
+      if (!isDeviceLocal) {
+        continue;
+      }
+      const DxvkMemoryStats stats = device->getMemoryStats(i);
+      out_stats->totalAllocatedBytes               += stats.totalAllocated();
+      out_stats->totalUsedBytes                    += stats.totalUsed();
+      out_stats->usedReplacementGeometryBytes      += stats.usedByCategory(DxvkMemoryStats::Category::RTXReplacementGeometry);
+      out_stats->usedBufferBytes                   += stats.usedByCategory(DxvkMemoryStats::Category::RTXBuffer);
+      out_stats->usedAccelerationStructureBytes    += stats.usedByCategory(DxvkMemoryStats::Category::RTXAccelerationStructure);
+      out_stats->usedOpacityMicromapBytes          += stats.usedByCategory(DxvkMemoryStats::Category::RTXOpacityMicromap);
+      out_stats->usedMaterialTextureBytes          += stats.usedByCategory(DxvkMemoryStats::Category::RTXMaterialTexture);
+      out_stats->usedRenderTargetBytes             += stats.usedByCategory(DxvkMemoryStats::Category::RTXRenderTarget);
+    }
+    out_stats->poolRetainedBytes =
+      (out_stats->totalAllocatedBytes > out_stats->totalUsedBytes)
+        ? (out_stats->totalAllocatedBytes - out_stats->totalUsedBytes)
+        : 0;
+
+    const DxvkAdapterMemoryInfo memHeapInfo = device->adapter()->getMemoryHeapInfo();
+    for (uint32_t i = 0; i < memHeapInfo.heapCount; i++) {
+      if (memHeapInfo.heaps[i].heapFlags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+        out_stats->driverAllocatedBytes += memHeapInfo.heaps[i].memoryAllocated;
+        out_stats->driverBudgetBytes    += memHeapInfo.heaps[i].memoryBudget;
+      }
+    }
+
+    out_stats->forkTextureCacheCount =
+      static_cast<uint32_t>(device->getCommon()->getTextureManager().getTextureTable().size());
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
 } // namespace fork_hooks

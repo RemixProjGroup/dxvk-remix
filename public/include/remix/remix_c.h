@@ -873,6 +873,20 @@ extern "C" {
     uint64_t            version;
   } remixapi_InitializeLibraryInfo;
 
+  // Force the RtxTextureManager to demote/clear textures not currently needed.
+  // Hooks SceneManager::requestTextureVramFree, which sets an atomic flag
+  // consumed next render-thread tick; the tick calls textureManager.clear(),
+  // which wipes the SparseUniqueCache and (if over the fork's texturemanager
+  // budget) demotes streaming textures to 0 mips. Complements the plugin's
+  // own material/texture refcount chain: this catches orphans whose cache
+  // entry outlives their last owner.
+  //
+  // Not free -- the cache wipe runs on the render thread. Fire at bulk
+  // scene-turnover events (cell transitions, fast-travel), not every frame.
+  //
+  // Thread-safe: sets an atomic on SceneManager; no lock acquired.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_RequestTextureVramFree)(void);
+
   // Release unused memory back to the driver (force compaction).
   // DXVK's memory allocator retains freed VkDeviceMemory chunks as spare empty
   // chunks in a high-water-mark pattern, only returning them to the driver
@@ -907,6 +921,20 @@ extern "C" {
     uint64_t usedOpacityMicromapBytes;
     uint64_t usedMaterialTextureBytes;
     uint64_t usedRenderTargetBytes;
+    // Driver-reported allocation on device-local heaps. Sourced from
+    // VK_EXT_memory_budget (adapter->getMemoryHeapInfo -> memoryAllocated).
+    // This is the Task-Manager / nvidia-smi view of the process's Vulkan
+    // footprint. totalAllocatedBytes only counts DXVK's own allocator path,
+    // so (driverAllocatedBytes - totalAllocatedBytes) is the non-DXVK
+    // overhead: DLSS/NGX internal buffers, raytracing pipeline driver
+    // state, bindless descriptor pools, NRC CUDA, pipeline caches, etc.
+    uint64_t driverAllocatedBytes;
+    uint64_t driverBudgetBytes;
+    // Size of the fork-side RtxTextureManager's SparseUniqueCache. Grows
+    // with both D3D9-native and plugin-created textures tracked by Remix.
+    // If this climbs while plugin's own texture count is stable, the
+    // growth is in fork-side streaming/native textures, not plugin uploads.
+    uint32_t forkTextureCacheCount;
   } remixapi_VramStats;
 
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_GetVramStats)(
@@ -957,6 +985,7 @@ extern "C" {
     PFN_remixapi_SetGameValue               SetGameValue;
     PFN_remixapi_RequestVramCompaction      RequestVramCompaction;
     PFN_remixapi_GetVramStats               GetVramStats;
+    PFN_remixapi_RequestTextureVramFree     RequestTextureVramFree;
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(

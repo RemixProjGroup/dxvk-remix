@@ -1609,52 +1609,16 @@ namespace {
   }
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_RequestVramCompaction() {
-    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
-    if (!remixDevice) {
-      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
-    }
-    // requestVramCompaction sets an atomic flag that the render thread
-    // consumes in SceneManager::manageTextureVram on the next tick. The flag
-    // mutation is lock-free, so s_mutex is deliberately NOT taken.
-    remixDevice->GetDXVKDevice()->getCommon()->getSceneManager().requestVramCompaction();
-    return REMIXAPI_ERROR_CODE_SUCCESS;
+    return dxvk::fork_hooks::requestVramCompaction(tryAsDxvk());
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_RequestTextureVramFree() {
+    return dxvk::fork_hooks::requestTextureVramFree(tryAsDxvk());
   }
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_GetVramStats(
-    remixapi_VramStats* out_stats) {
-    if (!out_stats) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
-    if (!remixDevice) {
-      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
-    }
-
-    *out_stats = {};
-
-    auto device = remixDevice->GetDXVKDevice();
-    const VkPhysicalDeviceMemoryProperties memProps = device->adapter()->memoryProperties();
-    for (uint32_t i = 0; i < memProps.memoryHeapCount; i++) {
-      const bool isDeviceLocal = (memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
-      if (!isDeviceLocal) {
-        continue;
-      }
-      const dxvk::DxvkMemoryStats stats = device->getMemoryStats(i);
-      out_stats->totalAllocatedBytes               += stats.totalAllocated();
-      out_stats->totalUsedBytes                    += stats.totalUsed();
-      out_stats->usedReplacementGeometryBytes      += stats.usedByCategory(dxvk::DxvkMemoryStats::Category::RTXReplacementGeometry);
-      out_stats->usedBufferBytes                   += stats.usedByCategory(dxvk::DxvkMemoryStats::Category::RTXBuffer);
-      out_stats->usedAccelerationStructureBytes    += stats.usedByCategory(dxvk::DxvkMemoryStats::Category::RTXAccelerationStructure);
-      out_stats->usedOpacityMicromapBytes          += stats.usedByCategory(dxvk::DxvkMemoryStats::Category::RTXOpacityMicromap);
-      out_stats->usedMaterialTextureBytes          += stats.usedByCategory(dxvk::DxvkMemoryStats::Category::RTXMaterialTexture);
-      out_stats->usedRenderTargetBytes             += stats.usedByCategory(dxvk::DxvkMemoryStats::Category::RTXRenderTarget);
-    }
-    out_stats->poolRetainedBytes =
-      (out_stats->totalAllocatedBytes > out_stats->totalUsedBytes)
-        ? (out_stats->totalAllocatedBytes - out_stats->totalUsedBytes)
-        : 0;
-
-    return REMIXAPI_ERROR_CODE_SUCCESS;
+      remixapi_VramStats* out_stats) {
+    return dxvk::fork_hooks::getVramStats(tryAsDxvk(), out_stats);
   }
 
   // Fork-owned helper body lives in rtx_fork_api_entry.cpp as
@@ -2516,10 +2480,11 @@ extern "C"
       interf.SetGameValue = remixapi_SetGameValue;
       interf.RequestVramCompaction = remixapi_RequestVramCompaction;
       interf.GetVramStats = remixapi_GetVramStats;
+      interf.RequestTextureVramFree = remixapi_RequestTextureVramFree;
       // Fork-added vtable slots (extern-C exported; delegated to fork hook)
       dxvk::fork_hooks::remixApiVtableInit(interf);
     }
-    static_assert(sizeof(interf) == 304, "Add/remove function registration");
+    static_assert(sizeof(interf) == 312, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;
