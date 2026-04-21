@@ -642,10 +642,18 @@ namespace fork_hooks {
       // Find the texture entry registered for this hash and release it via
       // RtxTextureManager::releaseTexture. releaseTexture drops the entry
       // from the SparseUniqueCache's internal map, which in turn releases
-      // the held Rc<DxvkImageView> / Rc<ManagedTexture> references. Once
-      // no other holders remain (caller has already discarded the handle
-      // and no materials reference the texture), the GPU resources are
-      // refcount-released by DXVK.
+      // the held Rc<DxvkImageView> / Rc<ManagedTexture> references.
+      //
+      // The cache's ref is NOT the only holder: createTexture also pushes
+      // the image view into the ImGui texture-tagging catalog at
+      // g_imguiTextureMap (see ImGUI::AddTexture above), which retains its
+      // own Rc<DxvkImageView>. Without releasing that too, every plugin
+      // CreateTexture permanently retains its VkImage -- a monotonic VRAM
+      // leak under cell-reload workloads (plugin destroys, re-uploads,
+      // destroys again; ImGui keeps every generation alive). Match the
+      // AddTexture call with its corresponding ReleaseTexture here.
+      ctx->getCommonObjects()->getImgui().ReleaseTexture(cHash);
+
       const auto& textureTable = textureManager.getTextureTable();
       for (const auto& textureRef : textureTable) {
         if (textureRef.isValid() && textureRef.getImageHash() == cHash) {
