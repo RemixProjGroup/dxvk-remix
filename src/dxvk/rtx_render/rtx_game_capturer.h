@@ -106,7 +106,7 @@ struct DrawCallState;
 struct LegacyMaterialData;
 
 // Forward decls so GameCapturer can friend the fork hook that needs access
-// to private m_exporter and m_pCap state. See agent_docs/fork-touchpoints.md.
+// to private m_exporter and m_pCap state. See docs/fork-touchpoints.md.
 class GameCapturer;
 namespace fork_hooks {
   void captureMaterialApiPath(
@@ -122,7 +122,7 @@ class GameCapturer : public RcObject
 {
   // Fork touchpoint: the capture material API-path hook needs access to
   // private m_exporter and m_pCap. Tracked as an inline tweak in
-  // agent_docs/fork-touchpoints.md.
+  // docs/fork-touchpoints.md.
   friend void fork_hooks::captureMaterialApiPath(
     GameCapturer&, const Rc<DxvkContext>, const RtInstance&,
     XXH64_hash_t, const LegacyMaterialData&, bool);

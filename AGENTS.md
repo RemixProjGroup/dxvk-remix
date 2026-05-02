@@ -26,7 +26,7 @@ Some additional test instructions are in `tests/rtx/dxvk_rt_testing/AGENTS.md` (
 
 ## C++ Coding Standards
 
-Full guide: `documentation/CONTRIBUTING-style-guide.md`
+Full guide: `docs/CONTRIBUTING-style-guide.md`
 
 ### Key Rules
 
@@ -129,4 +129,4 @@ When modifying shared headers, ensure both C++ and Slang code paths remain consi
 | `src/util/` | Shared utility code |
 | `bridge/` | 32-bit to 64-bit bridge |
 | `tests/rtx/unit/` | Unit tests |
-| `documentation/` | Project documentation |
+| `docs/` | Project documentation |

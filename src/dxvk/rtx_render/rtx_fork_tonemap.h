@@ -6,7 +6,7 @@
 // under src/dxvk/shaders/rtx/pass/tonemap/fork_tonemap_operators.slangh
 // (plus AgX.hlsl and Lottes.hlsl).
 //
-// See agent_docs/fork-touchpoints.md for the index of upstream files that
+// See docs/fork-touchpoints.md for the index of upstream files that
 // call into fork_hooks::... for tonemap operator dispatch and UI.
 
 #include <cstdint>
@@ -32,7 +32,7 @@ namespace dxvk {
   // NOTE: the existing TonemappingMode enum in rtx_options.h (values Global,
   // Local) is extended with a third value `Direct` (operator-only, no tone
   // curve) in Commit 3 of this workstream. The extension is an inline tweak
-  // to that enum, tracked in agent_docs/fork-touchpoints.md. No separate enum is
+  // to that enum, tracked in docs/fork-touchpoints.md. No separate enum is
   // defined here; the hooks read the existing RtxOptions::tonemappingMode().
 
   // Global-tonemapper operator selection. Defaults to None to preserve the

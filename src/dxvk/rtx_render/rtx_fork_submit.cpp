@@ -4,7 +4,7 @@
 // for the SceneManager::submitExternalDraw path, lifted from
 // rtx_scene_manager.cpp during the 2026-04-18 fork touchpoint-pattern refactor.
 //
-// See agent_docs/fork-touchpoints.md for the full fork-hooks catalogue.
+// See docs/fork-touchpoints.md for the full fork-hooks catalogue.
 //
 // NOTE: externalDrawObjectPicking accesses SceneManager::m_drawCallMeta, which
 // is a private member. This file requires that SceneManager declare

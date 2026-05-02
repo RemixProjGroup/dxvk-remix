@@ -4,7 +4,7 @@
 // for the LightManager external-light and persistent-light paths, lifted from
 // rtx_light_manager.cpp during the 2026-04-18 fork touchpoint-pattern refactor.
 //
-// See agent_docs/fork-touchpoints.md for the full fork-hooks catalogue.
+// See docs/fork-touchpoints.md for the full fork-hooks catalogue.
 //
 // NOTE: Several hooks below access private members of LightManager
 // (m_externalLights, m_externalDomeLights, m_externalActiveLightList,

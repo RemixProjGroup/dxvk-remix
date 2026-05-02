@@ -11,7 +11,7 @@
 //   - Commit 4: AgX operator + AgX sliders.
 //   - Commit 5: Lottes 2016 operator + Lottes sliders.
 //
-// See agent_docs/fork-touchpoints.md for the catalogue of fork hooks and which
+// See docs/fork-touchpoints.md for the catalogue of fork hooks and which
 // upstream files call each one.
 
 #include "rtx_fork_hooks.h"

@@ -331,7 +331,7 @@ namespace dxvk {
     // Grant fork_hooks functions access to private members they require.
     // Each friend corresponds to a hook that was lifted out of this class's
     // method bodies during the 2026-04-18 fork touchpoint-pattern refactor.
-    // See agent_docs/fork-touchpoints.md and rtx_fork_hooks.h for the catalogue.
+    // See docs/fork-touchpoints.md and rtx_fork_hooks.h for the catalogue.
     friend void fork_hooks::initAtmosphere(RtxContext&);
     friend void fork_hooks::updateAtmosphereConstants(RtxContext&, RaytraceArgs&);
     friend void fork_hooks::bindAtmosphereLuts(RtxContext&);

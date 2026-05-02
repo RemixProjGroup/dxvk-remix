@@ -113,7 +113,7 @@ struct ExternalDrawState {
 };
 
 // Forward decls so SceneManager can friend the fork hook that needs access
-// to private m_drawCallMeta state. See agent_docs/fork-touchpoints.md.
+// to private m_drawCallMeta state. See docs/fork-touchpoints.md.
 class SceneManager;
 namespace fork_hooks {
   void externalDrawObjectPicking(
@@ -130,7 +130,7 @@ namespace fork_hooks {
 class SceneManager : public CommonDeviceObject, public ResourceCache {
   // Fork touchpoint: the external-draw object-picking hook needs access to
   // private m_drawCallMeta. Tracked as an inline tweak in
-  // agent_docs/fork-touchpoints.md.
+  // docs/fork-touchpoints.md.
   friend void fork_hooks::externalDrawObjectPicking(
     DxvkDevice&, DrawCallState&, XXH64_hash_t, SceneManager&);
 

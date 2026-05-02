@@ -4,4 +4,4 @@
 
 ## Checklist
 
-- [ ] If this PR touches an upstream file, I updated `agent_docs/fork-touchpoints.md`.
+- [ ] If this PR touches an upstream file, I updated `docs/fork-touchpoints.md`.

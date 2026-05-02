@@ -5,7 +5,7 @@
 // rtx_fork_*.cpp file, keeping upstream files' fork footprint to one-line
 // call sites only.
 //
-// See agent_docs/fork-touchpoints.md for the index of every hook and which
+// See docs/fork-touchpoints.md for the index of every hook and which
 // upstream file calls it.
 
 // Brings in AssetReplacer, AssetReplacement, MaterialData, DrawCallState,

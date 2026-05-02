@@ -4,7 +4,7 @@
 // lifted from rtx_remix_api.cpp during the 2026-04-18 fork touchpoint-pattern
 // refactor.
 //
-// See agent_docs/fork-touchpoints.md for the full fork-hooks catalogue.
+// See docs/fork-touchpoints.md for the full fork-hooks catalogue.
 //
 // This file is populated in four passes:
 //   #7a  — infrastructure / foundation blocks:

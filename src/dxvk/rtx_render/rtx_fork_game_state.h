@@ -10,7 +10,7 @@
 // survives Remix Shutdown / re-init so plugins do not have to re-populate
 // their state across device resets.
 //
-// See agent_docs/fork-touchpoints.md for the upstream file touches
+// See docs/fork-touchpoints.md for the upstream file touches
 // associated with the remixapi_SetGameValue entrypoint.
 
 #include <mutex>

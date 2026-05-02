@@ -19,7 +19,7 @@ time.
 
 ## When NOT to invoke
 
-- Doc-only changes (`.md`, `CLAUDE.md`, `agent_docs/`, `.claude/`
+- Doc-only changes (`.md`, `CLAUDE.md`, `docs/`, `.claude/`
   entries) — no compile impact
 - Skill / settings / config edits
 - Before the user has finished their code edits — building against a
@@ -31,12 +31,14 @@ time.
    (expected duration: 1-3 min incremental, 10-15 min cold full):
 
    ```powershell
-   cd "c:\Users\mystery\Projects\dxvk-unity-new\dxvk-remix"
    Remove-Item -Path .\nv-private -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
    Remove-Item -Path .\tests\rtx\dxvk_rt_testing -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
    . .\build_common.ps1
    PerformBuild -BuildFlavour release -BuildSubDir _Comp64Release -Backend ninja -EnableTracy false
    ```
+
+   (Run from the project root — the working directory Claude Code
+   starts in is already correct.)
 
 2. Wait for the task-completion notification — DO NOT poll, the
    runtime will wake you up when the background command exits.

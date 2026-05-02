@@ -4,7 +4,7 @@
 // for the RtxAtmosphere subsystem (Hillaire physically-based sky), lifted
 // from rtx_context.cpp during the 2026-04-18 fork touchpoint-pattern refactor.
 //
-// See agent_docs/fork-touchpoints.md for the full fork-hooks catalogue.
+// See docs/fork-touchpoints.md for the full fork-hooks catalogue.
 //
 // NOTE: initAtmosphere, updateAtmosphereConstants, and bindAtmosphereLuts
 // access private members of RtxContext (m_atmosphere, m_lastSkyMode,

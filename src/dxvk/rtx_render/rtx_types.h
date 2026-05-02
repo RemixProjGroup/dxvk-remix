@@ -535,7 +535,7 @@ using CategoryFlags = Flags<InstanceCategories>;
 #define DECAL_CATEGORY_FLAGS InstanceCategories::DecalStatic, InstanceCategories::DecalDynamic, InstanceCategories::DecalSingleOffset, InstanceCategories::DecalNoOffset
 
 // Forward decl so DrawCallState can friend the fork hook that needs access
-// to private setCategory. See agent_docs/fork-touchpoints.md.
+// to private setCategory. See docs/fork-touchpoints.md.
 struct MaterialData;
 struct DrawCallState;
 namespace fork_hooks {
@@ -697,7 +697,7 @@ private:
   friend class RtxParticleSystemManager;
 
   // Fork touchpoint: the external-draw texture-category hook needs access to
-  // private setCategory. See agent_docs/fork-touchpoints.md.
+  // private setCategory. See docs/fork-touchpoints.md.
   friend void fork_hooks::externalDrawTextureCategories(
     const MaterialData* material, DrawCallState& drawCall, XXH64_hash_t& textureHash);
 
