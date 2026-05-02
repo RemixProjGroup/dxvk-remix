@@ -82,7 +82,7 @@ Short version:
   where `<NN>` is a zero-padded two-digit number (next free = 08 at
   time of writing). Branch prefix is historical — it tracks gmod's
   `origin/unity` baseline, not an engine-specific intent. In
-  conversation mommy/humans abbreviate these as W1, W2, W3, etc.
+  conversation, abbreviate these as W1, W2, W3, etc.
   - `01-api-skinning` (W1) — Remix API + HW skinning
   - `02-tonemap` (W2) — tonemap operators
   - `03-hdr` (W3) — HDR (shelved 2026-04-19 — upstream gmod impl broken per author)
