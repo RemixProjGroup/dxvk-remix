@@ -91,6 +91,16 @@ struct AtmosphereArgs {
   vec3 nightSkyColor;       // Base color of night-sky airglow
   float timeSeconds;        // Elapsed time for star twinkle animation
 
+  // Sidereal sky rotation (axis-angle representation).
+  // Default elevation=90 / rotation=0 puts the celestial pole at zenith,
+  // and starRotation=0 leaves the star sample direction unchanged — preserving
+  // original at-the-pole behavior. Games push starRotation per frame; the axis
+  // fields are persistent and set once at startup or via rtx.conf.
+  float starRotation;       // Sidereal angle, degrees [0, 360]
+  float starAxisElevation;  // Celestial pole elevation from horizon, degrees
+  float starAxisRotation;   // Celestial pole azimuth, degrees
+  float pad3;               // 16-byte alignment
+
   // ----- Per-moon parameters (fork) -----
   MoonParams moons[MAX_MOONS];
 };
