@@ -298,9 +298,9 @@ void RtxAtmosphere::dispatchMultiscatteringLut(Rc<DxvkContext> ctx) {
   // Bind resources
   ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
   ctx->bindResourceView(1, m_transmittanceLut.view, nullptr);
-  
+
   // Create and bind a linear sampler
-  DxvkSamplerCreateInfo samplerInfo;
+  DxvkSamplerCreateInfo samplerInfo = {};
   samplerInfo.magFilter = VK_FILTER_LINEAR;
   samplerInfo.minFilter = VK_FILTER_LINEAR;
   samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -337,9 +337,9 @@ void RtxAtmosphere::dispatchSkyViewLut(Rc<DxvkContext> ctx) {
   ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
   ctx->bindResourceView(1, m_transmittanceLut.view, nullptr);
   ctx->bindResourceView(2, m_multiscatteringLut.view, nullptr);
-  
+
   // Create and bind a linear sampler
-  DxvkSamplerCreateInfo samplerInfo;
+  DxvkSamplerCreateInfo samplerInfo = {};
   samplerInfo.magFilter = VK_FILTER_LINEAR;
   samplerInfo.minFilter = VK_FILTER_LINEAR;
   samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
