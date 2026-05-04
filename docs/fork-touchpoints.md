@@ -219,6 +219,19 @@ check will enforce it if discipline slips.
 
 ---
 
+## src/dxvk/imgui/dxvk_imgui_about.cpp
+
+**Category:** index-only
+
+**Rationale:** Fork additions are string-literal entries in the in-game
+About panel's "GitHub Contributors" list — they live inside a curly-braced
+initializer list and can't be lifted into a separate TU.
+
+- **Inline tweak** at `ImGuiAbout::Credits::Credits` constructor (GitHub Contributors string list, ~lines 91-107) — one string literal per fork contributor, sorted alphabetically per the inline comment. Per CONTRIBUTING.md, contributors add their own entry when their PR adds something visible. Tracked here per the fridge-list invariant.
+  *Each entry is in the format `"FirstName 'Handle' LastName"` or handle-only (`"BrunchyChineapple"`, `"Dayton 'watbulb'"`). The list is the canonical record of community contributors visible in the About panel.*
+
+---
+
 ## src/dxvk/imgui/dxvk_imgui.h
 
 **Pre-refactor fork footprint:** +2 / -1 LOC (audit 2026-04-18)
