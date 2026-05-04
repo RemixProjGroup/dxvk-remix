@@ -773,6 +773,273 @@ vec3 getAnalyticalMultiscattering(float altitude, float sunZenithCosAngle, Atmos
   return groundReflect + airScatter;
 }
 
+// ----- Night-sky shading (fork) -----
+// Stars (with twinkle), Milky Way galactic band, shooting stars, airglow.
+// All composited inside the Physical Atmosphere sky path; users on the default
+// Skybox Rasterization sky mode see no behavior change.
+
+// Hash functions for procedural star generation
+// Based on integer lattice hashing for stable, non-repeating patterns
+float hash31(vec3 p) {
+  // Integer hash — avoids sin() patterns
+  uvec3 q = uvec3(int(p.x * 1597.0f), int(p.y * 2549.0f), int(p.z * 3571.0f));
+  uint n = (q.x ^ q.y ^ q.z) * 2654435761u;
+  n = (n >> 16u) ^ n;
+  return float(n) / 4294967296.0f;
+}
+
+vec3 hash33(vec3 p) {
+  // Integer hash — avoids sin() which creates visible patterns on GPU
+  uvec3 q = uvec3(int(p.x * 1597.0f), int(p.y * 2549.0f), int(p.z * 3571.0f));
+  q = (q.x ^ q.y ^ q.z) * uvec3(2654435761u, 2246822519u, 3266489917u);
+  q = (q >> 16u) ^ q;
+  return vec3(float(q.x), float(q.y), float(q.z)) / 4294967296.0f;
+}
+
+// Smooth 2D value noise using hash31 for lattice values
+float smoothNoise2D(vec2 p, float seed) {
+  // Scale up coordinates to ensure integer hash gets distinct values
+  vec2 sp = p * 100.0f + vec2(seed * 13.7f, seed * 7.3f);
+  vec2 i = floor(sp);
+  vec2 f = fract(sp);
+  f = f * f * (3.0f - 2.0f * f);
+
+  float a = hash31(vec3(i.x, i.y, seed));
+  float b = hash31(vec3(i.x + 1.0f, i.y, seed));
+  float c = hash31(vec3(i.x, i.y + 1.0f, seed));
+  float d = hash31(vec3(i.x + 1.0f, i.y + 1.0f, seed));
+
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// Multi-octave FBM using smoothNoise2D
+float fbmNoise2D(vec2 p, int octaves, float seed) {
+  float value = 0.0f;
+  float amplitude = 0.5f;
+
+  for (int i = 0; i < octaves && i < 6; i++) {
+    value += amplitude * smoothNoise2D(p, seed + float(i) * 17.31f);
+    p *= 2.0f;
+    amplitude *= 0.5f;
+  }
+  return value;
+}
+
+// Generate star brightness for a given sky direction
+// Returns star color (white-blue-orange based on temperature) and brightness
+vec3 evalStarField(vec3 viewDir, AtmosphereArgs args) {
+  vec3 totalStars = vec3(0.0f);
+  vec3 dir = normalize(viewDir);
+
+  float theta = acos(clamp(dir.y, -1.0f, 1.0f));
+  float phi = atan2(dir.z, dir.x);
+
+  // Galactic plane: compute distance from the galactic band
+  // Band tilted ~60° from vertical, meandering slightly
+  float galacticLat = dir.x * 0.866f + dir.y * 0.5f;
+  float meander = smoothNoise2D(vec2(phi * 2.0f, theta * 0.5f), 200.0f) * 0.08f;
+  galacticLat += meander;
+  float galacticDist = abs(galacticLat);
+
+  // Galactic density: more stars near the galactic plane
+  float galacticCore = exp(-galacticDist * galacticDist * 300.0f);
+  float galacticHalo = exp(-galacticDist * galacticDist * 80.0f);
+  float galacticDensity = galacticCore * 0.5f + galacticHalo * 0.25f;
+
+  float bandVariation = smoothNoise2D(vec2(phi * 3.0f + 1.5f, galacticLat * 10.0f), 210.0f);
+  galacticDensity *= (0.5f + 0.5f * bandVariation);
+
+  // 3D cube-face grid: project direction onto the dominant axis face of a cube,
+  // then use the other two axes as a 2D grid. This gives uniform cell sizes
+  // across the entire sphere with no pole singularities or view-dependent artifacts.
+  vec3 absDir = abs(dir);
+  float maxComp = max(absDir.x, max(absDir.y, absDir.z));
+
+  // Determine which cube face we're on and get 2D coordinates
+  vec2 faceUV;
+  float faceId;
+  if (maxComp == absDir.x) {
+    faceUV = dir.yz / absDir.x;
+    faceId = dir.x > 0.0f ? 0.0f : 1.0f;
+  } else if (maxComp == absDir.y) {
+    faceUV = dir.xz / absDir.y;
+    faceId = dir.y > 0.0f ? 2.0f : 3.0f;
+  } else {
+    faceUV = dir.xy / absDir.z;
+    faceId = dir.z > 0.0f ? 4.0f : 5.0f;
+  }
+
+  // Scale to grid resolution (faceUV ranges from -1 to 1, so 400 gives ~800 cells across)
+  float gridScale = 400.0f;
+  vec2 gridUV = faceUV * gridScale;
+  vec2 gridCell = floor(gridUV);
+  vec2 gridFrac = fract(gridUV);
+
+  // Check this cell and neighbors for star centers
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      vec2 neighbor = vec2(float(dx), float(dy));
+      vec2 cell = gridCell + neighbor;
+
+      // Include faceId in hash to avoid star patterns repeating across cube faces
+      vec3 cellHash = hash33(vec3(cell, faceId));
+      vec2 starPos = neighbor + cellHash.xy - gridFrac;
+
+      // Distance to star center
+      float dist = length(starPos);
+
+      // Star brightness from hash (most cells have no visible star)
+      float starMag = cellHash.z;
+
+      // Density threshold: lower in the galactic band = more stars visible
+      float localThreshold = args.starDensity - galacticDensity * 0.15f;
+      if (starMag < localThreshold) continue;
+
+      // Remap magnitude above threshold to brightness
+      float brightness = (starMag - args.starDensity) / (1.0f - args.starDensity);
+      brightness = brightness * brightness;  // Quadratic falloff for natural magnitude distribution
+
+      // Star point spread function (small Gaussian)
+      float psf = exp(-dist * dist * 800.0f);
+
+      // Star color based on temperature (hash-derived)
+      // In the galactic band, shift colors toward warm amber/gold core
+      // with cooler purple/blue at the edges — matching real Galactic Center
+      float temp = hash31(vec3(cell, 1.0f));
+      vec3 starColor;
+
+      // Galactic band color gradient: warm core → cool edges
+      // galacticDist is 0 at center, increases outward
+      float bandInfluence = exp(-galacticDist * galacticDist * 120.0f);  // How deep in the band
+
+      if (bandInfluence > 0.05f) {
+        // Inside the galactic band: warm amber/gold/pink gradient
+        // Core (bandInfluence ~1.0): warm gold/amber
+        // Mid-band: dusty rose/pink
+        // Edge (bandInfluence ~0.05): cool blue-purple
+        float coreToEdge = 1.0f - bandInfluence;  // 0 = core, 1 = edge
+
+        if (temp > 0.6f) {
+          // Warm gold/amber stars (dominant in core)
+          vec3 coreColor = vec3(1.0f, 0.82f, 0.45f);    // Warm amber-gold
+          vec3 edgeColor = vec3(0.55f, 0.45f, 0.85f);    // Cool blue-purple
+          starColor = mix(coreColor, edgeColor, coreToEdge * coreToEdge);
+        } else if (temp > 0.25f) {
+          // Dusty rose/pink stars (mid-band)
+          vec3 coreColor = vec3(0.95f, 0.60f, 0.55f);    // Dusty rose-pink
+          vec3 edgeColor = vec3(0.50f, 0.40f, 0.75f);    // Muted purple
+          starColor = mix(coreColor, edgeColor, coreToEdge);
+        } else {
+          // Reddish-orange stars (scattered throughout)
+          vec3 coreColor = vec3(1.0f, 0.55f, 0.30f);     // Deep orange-red
+          vec3 edgeColor = vec3(0.60f, 0.50f, 0.80f);     // Lavender
+          starColor = mix(coreColor, edgeColor, coreToEdge);
+        }
+      } else {
+        // Outside the galactic band: normal star colors
+        if (temp > 0.7f) {
+          starColor = vec3(0.7f, 0.8f, 1.0f);   // Blue-white (O/B type)
+        } else if (temp > 0.3f) {
+          starColor = vec3(1.0f, 1.0f, 0.95f);   // White-yellow (F/G type)
+        } else {
+          starColor = vec3(1.0f, 0.85f, 0.7f);   // Orange (K type)
+        }
+      }
+
+      // Twinkling: subtle brightness variation over time
+      float twinkle = 1.0f;
+      if (args.starTwinkleSpeed > 0.0f) {
+        float twinklePhase = hash31(vec3(cell, 2.0f)) * 6.283f;
+        float twinkleFreq = 0.5f + hash31(vec3(cell, 3.0f)) * 2.0f;
+        twinkle = 0.7f + 0.3f * sin(args.timeSeconds * twinkleFreq * args.starTwinkleSpeed + twinklePhase);
+      }
+
+      totalStars += starColor * brightness * psf * twinkle;
+    }
+  }
+
+  return totalStars * args.starBrightness;
+}
+
+// Compute night sky contribution (stars + shooting stars + airglow).
+// Moons are composited separately by the caller after this.
+vec3 evalNightSky(vec3 viewDir, AtmosphereArgs args) {
+  float sunElevation = args.sunDirection.y;
+
+  // Night sky visibility: fade in during twilight, full at night
+  // Civil twilight ends at -6° (sunDirection.y ≈ -0.105)
+  // Stars become visible around nautical twilight
+  // sunElevation is sunDirection.y: negative = below horizon
+  const float kStarFadeStart = 0.02f;   // Stars start appearing when sun is 1° below horizon
+  const float kStarFadeFull = 0.15f;    // Full star brightness when sun is ~8.5° below
+
+  // -sunElevation is positive when sun is below horizon
+  float belowHorizon = -sunElevation;
+  float nightFactor = smoothstep(kStarFadeStart, kStarFadeFull, belowHorizon);
+  if (nightFactor <= 0.0f) return vec3(0.0f);
+
+  // Atmospheric extinction for stars near horizon — gentle fade only
+  float viewElevation = viewDir.y;
+  float horizonExtinction = smoothstep(-0.02f, 0.1f, viewElevation);
+
+  // Star field (includes galactic density band — no separate nebula overlay needed)
+  vec3 stars = evalStarField(viewDir, args) * horizonExtinction;
+
+  // Shooting stars — thin streaks with fading tail
+  {
+    float slotTime = floor(args.timeSeconds / 4.0f);
+    float slotFrac = fract(args.timeSeconds / 4.0f);
+
+    float slotHash = hash31(vec3(slotTime, 0.0f, 42.0f));
+    if (slotHash > 0.92f) {
+      float startTheta = hash31(vec3(slotTime, 1.0f, 42.0f)) * kPi * 0.5f + 0.3f;
+      float startPhi = hash31(vec3(slotTime, 2.0f, 42.0f)) * 2.0f * kPi;
+
+      vec3 streakStart = vec3(
+        sin(startTheta) * cos(startPhi),
+        cos(startTheta),
+        sin(startTheta) * sin(startPhi)
+      );
+
+      float streakAng = hash31(vec3(slotTime, 3.0f, 42.0f)) * kPi;
+      vec3 streakMoveDir = normalize(vec3(cos(streakAng) * 0.3f, -0.4f, sin(streakAng) * 0.3f));
+
+      float streakLen = 0.05f;  // Longer tail
+      vec3 headPos = normalize(streakStart + streakMoveDir * slotFrac * 0.4f);  // Faster travel
+      vec3 tailPos = normalize(streakStart + streakMoveDir * (slotFrac * 0.4f - streakLen));
+
+      vec3 v = normalize(viewDir);
+      vec3 segVec = headPos - tailPos;
+      float segLen = length(segVec);
+      if (segLen > 0.001f) {
+        vec3 segNorm = segVec / segLen;
+        float t = dot(v - tailPos, segNorm);
+        t = clamp(t, 0.0f, segLen);
+        vec3 closest = tailPos + segNorm * t;
+        float dist = length(v - closest);
+
+        // Thinner streak — tighter Gaussian falloff
+        float streakBright = exp(-dist * dist * 18000000.0f);
+
+        // Tail gradient: bright head fading to dim tail
+        float tailFade = t / max(segLen, 0.001f);
+        tailFade = pow(tailFade, 1.5f);
+
+        float timeFade = sin(slotFrac * kPi);
+
+        stars += vec3(1.0f, 0.95f, 0.85f) * streakBright * tailFade * timeFade * 2.0f;
+      }
+    }
+  }
+
+  // Airglow: faint ambient glow of the night sky
+  // Slightly brighter near the horizon (van Rhijn effect)
+  float airglowHorizonBoost = 1.0f + 0.5f * exp(-viewElevation * 5.0f);
+  vec3 airglow = args.nightSkyColor * args.nightSkyBrightness * airglowHorizonBoost;
+
+  return (stars + airglow) * nightFactor;
+}
+
 // Main evaluation function - computes atmosphere directly instead of using sky view LUT
 vec3 evalSkyRadiance(
   vec3 viewDir,
@@ -795,8 +1062,22 @@ vec3 evalSkyRadiance(
     args,
     32  // numSamples hint (now using fixed physical step size)
   );
-  
-  // Note: Sun disk rendering removed - direct lighting handles sun contribution
-  
+
+  // Suppress residual atmosphere glow at deep night.
+  // The ray marching and multiscattering approximation produce small non-zero
+  // values even when the sun is well below the horizon. These wash out dim stars
+  // and create view-dependent dark blobs in the star field. Fade the atmosphere
+  // contribution to zero once the sun is more than ~5° below the horizon.
+  {
+    float sunElev = args.sunDirection.y;
+    float atmosphereFade = smoothstep(-0.09f, 0.0f, sunElev);
+    radiance *= atmosphereFade;
+  }
+
+  // Add night-sky contribution (stars + airglow + shooting stars).
+  // Additive — daytime nightFactor is 0; during twilight and night, stars/airglow fade in.
+  // Note: Sun disk rendering removed - direct lighting handles sun contribution.
+  radiance += evalNightSky(viewDirYUp, args);
+
   return max(radiance, vec3(0.0f));
 }
