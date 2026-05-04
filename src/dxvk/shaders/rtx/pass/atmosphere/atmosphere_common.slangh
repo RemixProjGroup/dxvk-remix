@@ -1040,6 +1040,245 @@ vec3 evalNightSky(vec3 viewDir, AtmosphereArgs args) {
   return (stars + airglow) * nightFactor;
 }
 
+// ----- Moon shading (fork) -----
+// One unified moon disk evaluator that loops over args.moons[MAX_MOONS] in
+// the caller. Surface shading is dispatched by MoonParams::surfaceStyle:
+//   0 = Rocky    (pale-grey, craters, maria, ray patterns)
+//   1 = Volcanic (warm-red, veins, large impact craters, dusty rose terrain)
+
+// 2D disk-space phase illumination — produces a CURVED (elliptical) terminator
+// like a real sphere shadow, not a straight line. diskX must be oriented so
+// positive X points toward the sun (the caller builds a sun-oriented frame).
+//
+// phase: 0 = new, 0.25 = first quarter, 0.5 = full, 0.75 = third quarter
+// diskX, diskY: position on the disk [-1, 1], X axis toward the sun
+// Returns illumination factor [0, 1].
+float getPhaseIllumination(float phase, float diskX, float diskY) {
+  // The terminator on a sphere projects as an ellipse on the disk.
+  //   phase 0.0 (new)  -> terminatorX = +1 (boundary at right edge = all dark)
+  //   phase 0.25 (1Q)  -> terminatorX =  0 (boundary at center = right half lit)
+  //   phase 0.5 (full) -> terminatorX = -1 (boundary at left edge = all lit)
+  //   phase 0.75 (3Q)  -> terminatorX =  0 (boundary at center = right half lit)
+  //   phase 1.0 (new)  -> terminatorX = +1 (back to all dark)
+  float terminatorX = cos(phase * 2.0f * kPi);
+
+  float diskR = length(vec2(diskX, diskY));
+  if (diskR > 1.0f) return 0.0f;
+
+  // Sphere-projected terminator position at this Y coordinate
+  float sphereWidth = sqrt(max(0.0f, 1.0f - diskY * diskY));
+  float localTerminator = terminatorX * sphereWidth;
+
+  // Lit side is always at diskX > localTerminator.
+  return smoothstep(localTerminator - 0.03f, localTerminator + 0.03f, diskX);
+}
+
+// Rocky surface shader — pale-grey procedural surface (craters, maria, ray patterns).
+// Knob mapping:
+//   m.surfaceNoiseScale → multiplies UV scale (feature size)
+//   m.surfaceContrast   → multiplies maria-darken weight, ray amplitude
+//   m.craterDensity     → multiplies large + small crater contribution
+//   m.roughnessAmount   → multiplies micro-roughness amplitude
+void computeRockySurfaceDetail(float diskX, float diskY, MoonParams m,
+                               out float surfaceDetail, out vec3 surfaceColor) {
+  float uvScale = 8.0f * m.surfaceNoiseScale;
+  vec2 moonUV = vec2(diskX, diskY) * uvScale;
+
+  // Maria (dark basaltic plains) — smooth multi-octave noise
+  float maria = fbmNoise2D(moonUV * 0.4f + vec2(3.7f, 1.2f), 4, 10.0f);
+  maria = smoothstep(0.25f, 0.55f, maria);
+
+  // Highland base brightness (maria darken weighted by surfaceContrast)
+  float highland = 1.0f - maria * 0.5f * m.surfaceContrast;
+
+  // Large craters — fixed positions with dark interiors and bright rims
+  float craters = 0.0f;
+  vec2 craterPositions[7];
+  craterPositions[0] = vec2(-0.25f, 0.3f);
+  craterPositions[1] = vec2(0.35f, -0.15f);
+  craterPositions[2] = vec2(-0.1f, -0.35f);
+  craterPositions[3] = vec2(0.2f, 0.25f);
+  craterPositions[4] = vec2(-0.3f, -0.1f);
+  craterPositions[5] = vec2(0.15f, -0.3f);
+  craterPositions[6] = vec2(-0.35f, 0.15f);
+  float craterSizes[7];
+  craterSizes[0] = 0.12f;
+  craterSizes[1] = 0.09f;
+  craterSizes[2] = 0.15f;
+  craterSizes[3] = 0.07f;
+  craterSizes[4] = 0.10f;
+  craterSizes[5] = 0.06f;
+  craterSizes[6] = 0.08f;
+
+  for (int ci = 0; ci < 7; ci++) {
+    float crDist = length(vec2(diskX, diskY) - craterPositions[ci]);
+    float craterRadius = craterSizes[ci];
+
+    float bowl = 1.0f - smoothstep(craterRadius * 0.3f, craterRadius * 0.9f, crDist);
+    float craterShadow = 0.5f;
+    float rim = smoothstep(craterRadius * 0.75f, craterRadius * 0.9f, crDist) *
+                (1.0f - smoothstep(craterRadius * 0.9f, craterRadius * 1.15f, crDist));
+
+    craters += bowl * 0.3f * craterShadow - rim * 0.1f;
+  }
+  craters *= m.craterDensity;
+
+  // Small craters — smooth noise threshold
+  float smallCraterNoise = fbmNoise2D(moonUV * 2.5f + vec2(7.3f, 2.1f), 3, 20.0f);
+  float smallCraters = smoothstep(0.62f, 0.72f, smallCraterNoise) * 0.2f * m.craterDensity;
+
+  // Surface roughness — fine detail
+  float roughness = fbmNoise2D(moonUV * 4.0f + vec2(11.1f, 5.5f), 2, 30.0f) * 0.15f * m.roughnessAmount;
+
+  // Streaks/rays from impacts
+  float rays = fbmNoise2D(moonUV * 1.5f + vec2(2.3f, 8.7f), 2, 40.0f);
+  rays = smoothstep(0.5f, 0.65f, rays) * 0.12f * m.surfaceContrast;
+
+  float detail = highland - craters - smallCraters + roughness + rays;
+  surfaceDetail = clamp(detail, 0.3f, 1.15f);
+
+  // Color: maria are warm grey-brown, highlands cool light grey
+  surfaceColor = mix(
+    vec3(0.78f, 0.76f, 0.72f),  // Maria: warm grey-brown
+    vec3(0.95f, 0.94f, 0.92f),  // Highlands: cool light grey
+    1.0f - maria
+  );
+}
+
+// Volcanic surface shader — warm-red procedural surface (veins, large impact
+// craters, dusty rose terrain). Same knob mapping rules as the rocky helper.
+void computeVolcanicSurfaceDetail(float diskX, float diskY, MoonParams m,
+                                  out float surfaceDetail, out vec3 surfaceColor) {
+  float uvScale = 6.0f * m.surfaceNoiseScale;
+  vec2 surfUV = vec2(diskX, diskY) * uvScale;
+
+  // Large dark volcanic basins
+  float volcanic = fbmNoise2D(surfUV * 0.5f + vec2(5.1f, 3.3f), 4, 50.0f);
+  volcanic = smoothstep(0.2f, 0.55f, volcanic) * 0.45f * m.surfaceContrast;
+
+  // Surface terrain — medium scale
+  float terrain = fbmNoise2D(surfUV * 1.2f + vec2(11.0f, 7.0f), 3, 60.0f) * 0.2f * m.surfaceContrast;
+
+  // Dark veins/canyons
+  float veins = fbmNoise2D(surfUV * 2.0f + vec2(7.0f, 3.0f), 3, 70.0f);
+  veins = smoothstep(0.55f, 0.68f, veins) * 0.25f * m.surfaceContrast;
+
+  // Fine surface texture (micro-roughness)
+  float fineDetail = fbmNoise2D(surfUV * 3.5f + vec2(13.0f, 9.0f), 2, 80.0f) * 0.08f * m.roughnessAmount;
+
+  // Large impact craters — fixed positions
+  float craters = 0.0f;
+  vec2 craterPos[4];
+  craterPos[0] = vec2(-0.2f, -0.25f);
+  craterPos[1] = vec2(0.25f, 0.15f);
+  craterPos[2] = vec2(-0.15f, 0.3f);
+  craterPos[3] = vec2(0.3f, -0.2f);
+  float craterSz[4];
+  craterSz[0] = 0.15f;
+  craterSz[1] = 0.12f;
+  craterSz[2] = 0.10f;
+  craterSz[3] = 0.08f;
+
+  for (int mci = 0; mci < 4; mci++) {
+    float dist = length(vec2(diskX, diskY) - craterPos[mci]);
+    float cr = craterSz[mci];
+    float interior = 1.0f - smoothstep(cr * 0.5f, cr * 0.85f, dist);
+    craters += interior * 0.2f;
+  }
+  craters *= m.craterDensity;
+
+  float detail = 1.0f - volcanic - veins - craters + terrain + fineDetail;
+  surfaceDetail = clamp(detail, 0.35f, 1.1f);
+
+  // Color: dark volcanic basins → deep crimson-purple, lighter terrain → dusty rose
+  surfaceColor = mix(
+    vec3(0.30f, 0.08f, 0.12f),
+    vec3(0.70f, 0.28f, 0.32f),
+    clamp(detail, 0.0f, 1.0f)
+  );
+}
+
+// Render moon disk for moonIdx in args.moons[]. Returns radiance contribution
+// for this pixel and writes diskCoverage in [0,1] indicating disk opacity at
+// this view direction. Caller composites moons over the night sky using
+// `radiance = mix(radiance, moonContrib, coverage)` so opaque parts of the
+// disk replace the background (atmosphere + stars) cleanly.
+vec3 evalMoonDisk(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float diskCoverage) {
+  diskCoverage = 0.0f;
+  if (moonIdx >= MAX_MOONS) return vec3(0.0f);
+
+  MoonParams m = args.moons[moonIdx];
+  if (m.enabled < 0.5f) return vec3(0.0f);
+
+  vec3 moonDir = normalize(m.direction);
+  if (dot(moonDir, moonDir) < 0.5f) {
+    moonDir = normalize(vec3(0.5f, 0.7f, 0.5f));
+  }
+
+  float cosAngle = dot(viewDir, moonDir);
+  float moonCosRadius = cos(m.angularRadius);
+  if (m.angularRadius < 0.001f) {
+    moonCosRadius = cos(0.5f * kPi / 180.0f);
+  }
+  if (cosAngle < moonCosRadius) return vec3(0.0f);
+
+  // Inside the moon disk — fully opaque, blocks stars and atmosphere behind it
+  diskCoverage = 1.0f;
+
+  float normalizedAngle = acos(clamp(cosAngle, -1.0f, 1.0f)) / m.angularRadius;
+
+  // Soft edge at disk boundary to avoid hard aliased circle
+  float edgeSoftness = smoothstep(1.0f, 0.97f, normalizedAngle);
+  diskCoverage *= edgeSoftness;
+
+  float limbDarkening = 1.0f - 0.3f * normalizedAngle * normalizedAngle;
+  limbDarkening = max(limbDarkening, 0.0f);
+
+  // Disk-local frame — diskX horizontal, diskY vertical (world-up basis)
+  vec3 upVec = abs(moonDir.y) < 0.999f ? vec3(0.0f, 1.0f, 0.0f) : vec3(1.0f, 0.0f, 0.0f);
+  vec3 moonRight = normalize(cross(upVec, moonDir));
+  vec3 moonUp    = cross(moonDir, moonRight);
+
+  vec3 toView = normalize(viewDir - moonDir * cosAngle);
+  float diskX = dot(toView, moonRight) * normalizedAngle;
+  float diskY = dot(toView, moonUp)    * normalizedAngle;
+
+  float illumination = getPhaseIllumination(m.phase, diskX, diskY);
+  float diffuse = 0.7f + 0.3f * (1.0f - normalizedAngle);
+
+  // Surface shading dispatched by style preset
+  float surfaceDetail = 1.0f;
+  vec3 surfaceColor = m.color;
+  switch (m.surfaceStyle) {
+  case 0u:
+    computeRockySurfaceDetail(diskX, diskY, m, surfaceDetail, surfaceColor);
+    break;
+  case 1u:
+    computeVolcanicSurfaceDetail(diskX, diskY, m, surfaceDetail, surfaceColor);
+    break;
+  default:
+    surfaceDetail = 1.0f;
+    surfaceColor = m.color;
+    break;
+  }
+
+  // Atmospheric transmittance — reduced Rayleigh keeps moon white/silver
+  float moonElev = moonDir.y;
+  float moonAirMass = min(1.0f / max(abs(moonElev) + 0.05f, 0.05f), 10.0f);
+  vec3 moonTransmittance = exp(-args.rayleighScattering * args.rayleighScaleHeight * moonAirMass * 0.2f);
+
+  // Lit side: full surface detail + per-moon brightness/color
+  vec3 litRadiance = m.color * surfaceColor * m.brightness *
+                     limbDarkening * surfaceDetail * diffuse * moonTransmittance;
+
+  // Dark side: very dim — knob-controlled fraction of surface color
+  vec3 darkRadiance = surfaceColor * m.darkSideBrightness * limbDarkening;
+
+  // Blend lit and dark by phase illumination
+  vec3 moonRadiance = mix(darkRadiance, litRadiance, illumination);
+  return max(moonRadiance, vec3(0.0f));
+}
+
 // Main evaluation function - computes atmosphere directly instead of using sky view LUT
 vec3 evalSkyRadiance(
   vec3 viewDir,
@@ -1078,6 +1317,20 @@ vec3 evalSkyRadiance(
   // Additive — daytime nightFactor is 0; during twilight and night, stars/airglow fade in.
   // Note: Sun disk rendering removed - direct lighting handles sun contribution.
   radiance += evalNightSky(viewDirYUp, args);
+
+  // Moons composite over the night sky and atmosphere — only visible at night,
+  // fade in during twilight. Each moon disk REPLACES the background where
+  // it covers (so dark-side stars don't bleed through). Loop over moons in
+  // array order: later array indices render on top of earlier ones.
+  float moonFade = smoothstep(0.02f, -0.05f, args.sunDirection.y);
+  if (moonFade > 0.001f) {
+    for (uint i = 0u; i < MAX_MOONS; ++i) {
+      float coverage = 0.0f;
+      vec3 moonContrib = evalMoonDisk(viewDirYUp, i, args, coverage);
+      coverage *= moonFade;
+      radiance = mix(radiance, moonContrib, coverage);
+    }
+  }
 
   return max(radiance, vec3(0.0f));
 }

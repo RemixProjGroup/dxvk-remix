@@ -1275,7 +1275,7 @@ namespace dxvk {
                "Moon " #N " surface light/dark contrast multiplier.");                          \
     RTX_OPTION("rtx.atmosphere.moon" #N, float, surfaceNoiseScale##N, 1.0f,                     \
                "Moon " #N " surface feature size multiplier.");                                 \
-    RTX_OPTION("rtx.atmosphere.moon" #N, float, darkSideBrightness##N, 0.05f,                   \
+    RTX_OPTION("rtx.atmosphere.moon" #N, float, darkSideBrightness##N, 0.005f,                  \
                "Moon " #N " dark-side brightness as fraction of lit side.");                    \
     RTX_OPTION("rtx.atmosphere.moon" #N, float, roughnessAmount##N, 1.0f,                       \
                "Moon " #N " micro-detail surface roughness amplitude.");                        \
