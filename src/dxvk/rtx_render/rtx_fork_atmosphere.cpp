@@ -19,8 +19,10 @@
 #include "rtx_options.h"
 #include "rtx/pass/raytrace_args.h"
 #include "rtx/pass/common_binding_indices.h"
+#include "rtx/pass/atmosphere/atmosphere_args.h" // MAX_MOONS (showAtmosphereUI moon loop)
 #include "imgui/imgui.h"              // ImGui::Button, ImGui::Text, etc. (showAtmosphereUI)
 #include "rtx_imgui.h"                // RemixGui::DragFloat, ComboWithKey (showAtmosphereUI)
+#include <cstdio>                     // std::snprintf (renderMoonUI label)
 
 namespace dxvk {
 namespace fork_hooks {
@@ -168,6 +170,84 @@ namespace fork_hooks {
           {SkyMode::PhysicalAtmosphere, "Physical Atmosphere"}
       } }
     };
+
+    // Per-moon UI block. RTX_OPTION accessors are static-named per index
+    // (enabled0, enabled1, ...), so we dispatch via a small macro that fans
+    // the index into one set of pointers, then drive a single index-agnostic
+    // ImGui body off those pointers. MAX_MOONS = 4; the macro expands four
+    // times — deliberate simple repetition over a fixed cap.
+    void renderMoonUI(int idx) {
+      constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
+
+      RtxOption<bool>*     pEnabled         = nullptr;
+      RtxOption<float>*    pAngularRadius   = nullptr;
+      RtxOption<float>*    pBrightness      = nullptr;
+      RtxOption<Vector3>*  pColor           = nullptr;
+      RtxOption<uint32_t>* pSurfaceStyle    = nullptr;
+      RtxOption<float>*    pCraterDensity   = nullptr;
+      RtxOption<float>*    pSurfaceContrast = nullptr;
+      RtxOption<float>*    pNoiseScale      = nullptr;
+      RtxOption<float>*    pDarkSide        = nullptr;
+      RtxOption<float>*    pRoughness       = nullptr;
+      float elevDeg = 0.0f, rotDeg = 0.0f, phaseVal = 0.0f;
+
+      switch (idx) {
+#define MOON_PTRS(N)                                                         \
+        case N:                                                              \
+          pEnabled         = &RtxOptions::enabled##N##Object();              \
+          pAngularRadius   = &RtxOptions::angularRadius##N##Object();        \
+          pBrightness      = &RtxOptions::brightness##N##Object();           \
+          pColor           = &RtxOptions::color##N##Object();                \
+          pSurfaceStyle    = &RtxOptions::surfaceStyle##N##Object();         \
+          pCraterDensity   = &RtxOptions::craterDensity##N##Object();        \
+          pSurfaceContrast = &RtxOptions::surfaceContrast##N##Object();      \
+          pNoiseScale      = &RtxOptions::surfaceNoiseScale##N##Object();    \
+          pDarkSide        = &RtxOptions::darkSideBrightness##N##Object();   \
+          pRoughness       = &RtxOptions::roughnessAmount##N##Object();      \
+          elevDeg          = RtxOptions::elevation##N();                     \
+          rotDeg           = RtxOptions::rotation##N();                      \
+          phaseVal         = RtxOptions::phase##N();                         \
+          break
+        MOON_PTRS(0);
+        MOON_PTRS(1);
+        MOON_PTRS(2);
+        MOON_PTRS(3);
+#undef MOON_PTRS
+      default:
+        return;
+      }
+
+      char headerLabel[16];
+      std::snprintf(headerLabel, sizeof(headerLabel), "Moon %d", idx);
+
+      if (ImGui::TreeNode(headerLabel)) {
+        RemixGui::Checkbox("Enabled", pEnabled);
+        RemixGui::DragFloat("Angular Radius", pAngularRadius, 0.1f, 0.1f, 30.0f, "%.1f\xc2\xb0", sliderFlags);
+        RemixGui::DragFloat("Brightness",     pBrightness,    0.1f, 0.0f, 20.0f, "%.1f",         sliderFlags);
+        RemixGui::DragFloat3("Color",         pColor,         0.01f, 0.0f, 1.0f, "%.2f",         sliderFlags);
+
+        ImGui::Text("Elevation: %.1f\xc2\xb0  Rotation: %.1f\xc2\xb0  Phase: %.2f", elevDeg, rotDeg, phaseVal);
+        RemixGui::SetTooltipToLastWidgetOnHover("Pose is driven by game sync (read-only). Set elevation/rotation/phase in rtx.conf for static moons.");
+
+        if (ImGui::TreeNode("Appearance")) {
+          static const char* kStyleNames[] = { "Rocky", "Volcanic" };
+          int styleInt = static_cast<int>(pSurfaceStyle->get());
+          if (ImGui::Combo("Surface Style", &styleInt, kStyleNames, IM_ARRAYSIZE(kStyleNames))) {
+            pSurfaceStyle->setImmediately(static_cast<uint32_t>(styleInt));
+          }
+          RemixGui::SetTooltipToLastWidgetOnHover("Procedural surface preset. Knobs below tune the chosen style.");
+
+          RemixGui::DragFloat("Crater Density",      pCraterDensity,   0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
+          RemixGui::DragFloat("Surface Contrast",    pSurfaceContrast, 0.01f, 0.0f, 3.0f, "%.2f", sliderFlags);
+          RemixGui::DragFloat("Surface Noise Scale", pNoiseScale,      0.01f, 0.1f, 5.0f, "%.2f", sliderFlags);
+          RemixGui::DragFloat("Dark Side Brightness",pDarkSide,        0.005f,0.0f, 1.0f, "%.3f", sliderFlags);
+          RemixGui::DragFloat("Roughness",           pRoughness,       0.01f, 0.0f, 3.0f, "%.2f", sliderFlags);
+          ImGui::TreePop();
+        }
+
+        ImGui::TreePop();
+      }
+    }
   } // anonymous namespace
 
   void showAtmosphereUI() {
@@ -316,6 +396,31 @@ namespace fork_hooks {
           ImGui::TreePop();
         }
 
+        ImGui::TreePop();
+      }
+
+      // ----- Night Sky tree (fork) -----
+      if (ImGui::TreeNode("Night Sky")) {
+        RemixGui::DragFloat("Star Brightness",      &RtxOptions::starBrightnessObject(),
+                            0.1f, 0.0f, 50.0f, "%.1f", sliderFlags);
+        RemixGui::DragFloat("Star Density",         &RtxOptions::starDensityObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Threshold: 0 = all stars visible, 1 = no stars.");
+        RemixGui::DragFloat("Star Twinkle Speed",   &RtxOptions::starTwinkleSpeedObject(),
+                            0.1f, 0.0f, 10.0f, "%.1f", sliderFlags);
+        RemixGui::DragFloat("Night Sky Brightness", &RtxOptions::nightSkyBrightnessObject(),
+                            0.001f, 0.0f, 0.1f, "%.4f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Airglow / ambient night-sky brightness.");
+        RemixGui::DragFloat3("Night Sky Color",     &RtxOptions::nightSkyColorObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        ImGui::TreePop();
+      }
+
+      // ----- Moons tree (fork) -----
+      if (ImGui::TreeNode("Moons")) {
+        for (int i = 0; i < static_cast<int>(MAX_MOONS); ++i) {
+          renderMoonUI(i);
+        }
         ImGui::TreePop();
       }
     }
