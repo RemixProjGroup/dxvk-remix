@@ -18,11 +18,11 @@ inventory of every upstream file the fork touches is
 Classic GitHub **fork + PR** workflow:
 
 **Canonical repo** — [`github.com/RemixProjGroup/dxvk-remix`](https://github.com/RemixProjGroup/dxvk-remix).
-The PR target. Default branch is `modern-games-sdk-api`.
+Default branch is `main`.
 
 **Personal forks** — anyone contributing forks the canonical repo.
 Each contributor's fork holds their own feature branches and a
-personal tracking copy of `modern-games-sdk-api`.
+personal tracking copy of `main`.
 
 For the full contribution flow (setup, branch conventions, build,
 discipline, PR submission), point contributors at
@@ -49,10 +49,8 @@ against upstream NVIDIA `dxvk-remix`. The pattern is documented in
 
 ## Branch conventions (personal fork)
 
-- `main` — NVIDIA upstream mirror. Never commit port work here.
-- `modern-games-sdk-api` — your fork's tracking copy of canonical's
-  default branch. Fast-forward this to a feature-branch tip when the
-  branch is ready to ship; then open a PR to canonical.
+- `main` — primary development branch on canonical. Port work
+  lands here.
 - Feature branches — name them however you like on your fork. The
   maintainer's internal convention is `unity-workstream/<NN>-<short-name>`
   (e.g. `unity-workstream/05-hillaire-atmosphere`) — ad-hoc numbering,
@@ -67,15 +65,12 @@ against upstream NVIDIA `dxvk-remix`. The pattern is documented in
 3. **Author** commits as the human contributor in the repo's git
    config. No AI co-author trailers unless explicitly requested.
 4. **Fast-forward only.** Never `--force`, never `--force-with-lease`
-   on `modern-games-sdk-api`. If a push is rejected as non-ff, stop
+   on `main`. If a push is rejected as non-ff, stop
    and investigate.
 5. **Ask** before any push to a remote with downstream readers —
    that includes canonical (`RemixProjGroup/dxvk-remix`) and any
    maintainer's personal fork (`kim2091/dxvk-remix`) that contributors
    pull from.
-6. **Open a PR** to canonical `modern-games-sdk-api` rather than
-   direct-pushing, even if you have write access — PR review is the
-   discipline checkpoint.
 
 ## Project-local skills
 
@@ -89,14 +84,11 @@ via the `Skill` tool by name:
 
 ## Don't
 
-- Don't push to `origin` (NVIDIA upstream) — that's read-only.
 - Don't force-push anything, ever.
 - Don't skip hooks (`--no-verify`) unless explicitly asked.
 - Don't add a feature, refactor, or "cleanup" beyond the task scope.
 - Don't edit files under `submodules/` or `external/` — those are
   third-party pins.
-- Don't create feature branches on the canonical repo. They belong
-  on contributor forks only.
 
 ## Gmod reference repo
 
