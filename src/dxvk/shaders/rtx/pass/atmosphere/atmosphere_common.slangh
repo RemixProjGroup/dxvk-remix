@@ -1467,12 +1467,24 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
   // converted to Y-up space in evalSkyRadiance before invoking evalClouds.
   vec3 airTrans = getTransmittanceToSun(hitPos, args, false);
 
-  // Day brightness: direct sun * phase function * cloud self-shadow
-  vec3 directLight = args.sunIlluminance * airTrans * sunTransmittance
-                   * (0.5f + phase * 12.566f);  // 4π normalization bias for visible phase term
+  // Diffuse top-lighting term: sun elevation at the cloud top. Soft floor so
+  // the top of a cloud at low sun still receives some light (multi-scatter
+  // approximation) rather than going black at golden hour.
+  float lambert = saturate(sunDir.y * 0.8f + 0.2f);
+
+  // Combined lighting: a Lambertian diffuse core plus a phase-function
+  // forward-scatter bump that becomes visible when you look toward the sun
+  // (silver lining). Keep the coefficients small since they're multiplied by
+  // sunIlluminance which already has real-world scale.
+  const float kDiffuseGain = 0.35f;
+  const float kPhaseGain   = 0.20f;
+  float lightResponse = kDiffuseGain * lambert + kPhaseGain * phase;
+
+  // Direct sun: attenuated by atmospheric transmittance and cloud self-shadow
+  vec3 directLight = args.sunIlluminance * airTrans * sunTransmittance * lightResponse;
 
   // Ambient sky contribution keeps the shadow side from going black
-  vec3 ambient = args.sunIlluminance * airTrans * 0.08f;
+  vec3 ambient = args.sunIlluminance * airTrans * 0.04f;
 
   // Night light: faint contribution from each enabled moon plus airglow tint.
   // Per-moon loop: each moon emits independently (reflected sunlight from each
