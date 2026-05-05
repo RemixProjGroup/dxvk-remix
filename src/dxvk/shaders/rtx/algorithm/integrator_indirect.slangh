@@ -35,6 +35,9 @@
 #include "rtx/concept/surface_material/opaque_surface_material_interaction.slangh"
 #include "rtx/pass/nrc/nrc_integrator_utilities.slangh"
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
+#ifdef ATMOSPHERE_AVAILABLE
+#include "rtx/pass/atmosphere/atmosphere_sky.slangh"
+#endif
 
 // Evaluate direct sun lighting for secondary bounces (atmosphere mode) with soft shadows
 bool evalAtmosphereSunNEESecondary(

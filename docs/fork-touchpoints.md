@@ -774,8 +774,8 @@ initializer list and can't be lifted into a separate TU.
 - **Block** at `geometryPSRResolverVertex` (PSR hit — occluder comment block) — ~45 LOC (fully commented out), planned target `fork_hooks::geoResolverPsrOccluder` in `rtx_fork_atmosphere.slangh`.
   *Same occluder design-preservation comment block for the PSR path.*
 
-- **Block** at `(file scope)` (atmosphere include) — ~1 LOC, planned target `fork_hooks::atmosphereInclude` in `rtx_fork_atmosphere.slangh`.
-  *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"` at the top of the file.*
+- **Block** at `(file scope)` (atmosphere include) — ~4 LOC, planned target `fork_hooks::atmosphereInclude` in `rtx_fork_atmosphere.slangh`.
+  *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"` at the top of the file, plus `#include "rtx/pass/atmosphere/atmosphere_sky.slangh"` gated by `#ifdef ATMOSPHERE_AVAILABLE` for the sky-radiance evaluation paths.*
 
 ---
 
@@ -808,8 +808,8 @@ initializer list and can't be lifted into a separate TU.
 
 **Category:** migrate
 
-- **Block** at `(file scope)` (atmosphere include) — ~1 LOC, planned target `fork_hooks::atmosphereInclude` in `rtx_fork_atmosphere.slangh`.
-  *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"`.*
+- **Block** at `(file scope)` (atmosphere include) — ~4 LOC, planned target `fork_hooks::atmosphereInclude` in `rtx_fork_atmosphere.slangh`.
+  *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"`, plus `#include "rtx/pass/atmosphere/atmosphere_sky.slangh"` gated by `#ifdef ATMOSPHERE_AVAILABLE` for the sky-radiance evaluation in the indirect-path miss handler.*
 
 - **Block** at `evalAtmosphereSunNEESecondary` (full function) — ~100 LOC, planned target `fork_hooks::evalAtmosphereSunNEEIndirect` in `rtx_fork_atmosphere.slangh`.
   *Secondary-bounce variant of the atmosphere sun NEE function: uses half the sample count for performance, otherwise identical structure to the direct-path version.*
