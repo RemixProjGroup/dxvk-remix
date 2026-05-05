@@ -1299,24 +1299,24 @@ namespace dxvk {
 #undef DECLARE_MOON_OPTIONS
 
     // Cloud parameters (procedural FBM cloud layer)
-    RTX_OPTION("rtx.atmosphere", bool, cloudEnabled, false, "Enable procedural cloud rendering.");
-    RTX_OPTION_FLAG("rtx.atmosphere", float, cloudCoverage, 0.0f, RtxOptionFlags::NoSave,
+    RTX_OPTION("rtx.atmosphere", bool, cloudEnabled, true, "Enable procedural cloud rendering.");
+    RTX_OPTION_FLAG("rtx.atmosphere", float, cloudCoverage, 0.93f, RtxOptionFlags::NoSave,
                     "Cloud coverage [0,1]: 0=clear sky, 1=overcast. Driven by game weather every frame.");
-    RTX_OPTION("rtx.atmosphere", float, cloudDensity, 1.0f, "Cloud opacity/density multiplier.");
+    RTX_OPTION("rtx.atmosphere", float, cloudDensity, 2.1f, "Cloud opacity/density multiplier.");
     RTX_OPTION("rtx.atmosphere", float, cloudAltitude, 3.0f, "Cloud layer altitude in kilometers.");
-    RTX_OPTION("rtx.atmosphere", float, cloudScale, 0.08f, "Horizontal noise scale — smaller values produce larger clouds.");
+    RTX_OPTION("rtx.atmosphere", float, cloudScale, 0.010f, "Horizontal noise scale — smaller values produce larger clouds.");
     RTX_OPTION("rtx.atmosphere", Vector3, cloudColor, Vector3(1.0f, 1.0f, 1.0f), "Base cloud color (albedo).");
     RTX_OPTION("rtx.atmosphere", float, cloudWindSpeed, 0.02f, "Cloud drift speed in km/s. Clouds scroll with this velocity.");
     RTX_OPTION("rtx.atmosphere", float, cloudWindDirection, 45.0f, "Cloud wind direction in degrees (0 = +X, 90 = +Z).");
-    RTX_OPTION("rtx.atmosphere", float, cloudShadowStrength, 0.6f, "How strongly overcast clouds dim ground and atmosphere lighting [0..1].");
+    RTX_OPTION("rtx.atmosphere", float, cloudShadowStrength, 0.4f, "How strongly overcast clouds dim ground and atmosphere lighting [0..1].");
     RTX_OPTION("rtx.atmosphere", float, cloudAnisotropy, 0.6f, "Henyey-Greenstein g for cloud forward-scatter (silver lining).");
 
     // Cloud volumetric / appearance enhancements
-    RTX_OPTION("rtx.atmosphere", uint32_t, cloudViewSamples, 5,
+    RTX_OPTION("rtx.atmosphere", uint32_t, cloudViewSamples, 6,
                "Number of ray-march steps through the cloud slab. Higher = better quality, more cost. Range 1..32.");
-    RTX_OPTION("rtx.atmosphere", float, cloudThickness, 0.8f,
+    RTX_OPTION("rtx.atmosphere", float, cloudThickness, 0.45f,
                "Vertical depth of the cloud slab in km.");
-    RTX_OPTION("rtx.atmosphere", float, cloudDetailWeight, 0.25f,
+    RTX_OPTION("rtx.atmosphere", float, cloudDetailWeight, 1.0f,
                "Weight of the high-frequency detail FBM term [0..1]. Auto-fades at low cloudScale to avoid visible noise.");
     RTX_OPTION("rtx.atmosphere", Vector3, cloudShadowTint, Vector3(0.55f, 0.65f, 0.85f),
                "Sky-blue bounce color applied on the shadow side of clouds.");
@@ -1324,9 +1324,9 @@ namespace dxvk {
                "How strongly the shadow tint contributes [0..1].");
     RTX_OPTION("rtx.atmosphere", float, cloudSunsetWarmth, 1.0f,
                "Strength of low-sun warm tint on sunward side. 0 = disabled.");
-    RTX_OPTION("rtx.atmosphere", float, cloudVariance, 0.4f,
+    RTX_OPTION("rtx.atmosphere", float, cloudVariance, 0.23f,
                "Density variation across the sky [0..1]. 0 = uniform, 1 = patchy.");
-    RTX_OPTION("rtx.atmosphere", float, cloudVarianceScale, 0.015f,
+    RTX_OPTION("rtx.atmosphere", float, cloudVarianceScale, 0.038f,
                "Scale of variance noise. Smaller = bigger cloud groups.");
 
     // TODO (REMIX-656): Remove this once we can transition content to new hash
