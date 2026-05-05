@@ -443,6 +443,94 @@ vec3 evalAtmosphereRadiance(
   return L;
 }
 
+// ============================================================================
+// Procedural Cloud Layer
+// ============================================================================
+// Analytical cloud rendering via ray/plane intersection with a cloud dome at
+// fixed altitude. Density is computed from FBM noise scaled by coverage.
+// Shading uses a simple single-scatter approximation: sun transmittance through
+// the slab plus Henyey-Greenstein forward scatter for silver lining, mixed with
+// ambient sky/night light.
+//
+// The cloud layer is treated as a flat layer above the spherical planet. For a
+// given view direction we compute the intersection with a sphere at the cloud
+// altitude, sample the noise at that point, and then composite (alpha, color).
+// Returns cloud radiance premultiplied by coverage in .rgb and coverage in .a.
+
+// Sample cloud density (procedural FBM) at a given horizontal world position
+// (km) on the cloud layer. Returns density in [0, 1].
+float sampleCloudDensity(vec2 worldPosKm, AtmosphereArgs args) {
+  // Base cloud shape — large slowly moving clumps
+  vec2 uv = worldPosKm * args.cloudScale + args.cloudWindOffset * args.cloudScale;
+
+  // Two-octave FBM with detail layer
+  float base   = fbmNoise2D(uv,             4, 90.0f);
+  float detail = fbmNoise2D(uv * 4.0f + vec2(5.3f, 2.1f), 3, 95.0f);
+
+  // Combine base and detail. Base dominates the overall shape; detail
+  // roughens the edges without creating noisy isolated puffs.
+  float shape = base * 0.75f + detail * 0.25f;
+
+  // Coverage threshold: low coverage keeps clouds sparse; high coverage
+  // (overcast) pushes everything above the threshold so the sky fills in.
+  // Remap [coverageThreshold .. 1] -> [0 .. 1].
+  float coverageThreshold = mix(0.80f, 0.15f, args.cloudCoverage);
+  float density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, shape);
+
+  return saturate(density);
+}
+
+// Intersect view ray with the cloud shell. Returns true and the hit distance
+// if we hit the upward-looking cloud sphere at altitude args.cloudAltitude.
+// Ray origin is at the camera (0,0,0) in Y-up space where planet center =
+// (0, -planetRadius, 0).
+bool intersectCloudLayer(vec3 rayDir, AtmosphereArgs args, out float t, out vec3 hitPos) {
+  t = -1.0f;
+  hitPos = vec3(0.0f);
+
+  // Looking below the horizon: no cloud layer hit above us.
+  if (rayDir.y <= 0.001f) return false;
+
+  vec3 planetCenter = vec3(0.0f, -args.planetRadius, 0.0f);
+  float cloudSphereRadius = args.planetRadius + args.cloudAltitude;
+
+  float t0, t1;
+  if (!intersectSphere(vec3(0.0f), rayDir, planetCenter, cloudSphereRadius, t0, t1)) {
+    return false;
+  }
+
+  // We're inside the cloud sphere; the far side is what we want (upward ray
+  // going through the layer from below).
+  float hitT = t1 > 0.0f ? t1 : t0;
+  if (hitT <= 0.0f) return false;
+
+  t = hitT;
+  hitPos = rayDir * hitT;
+  return true;
+}
+
+// Compute cloud shadowing for light arriving from the sun direction. Returns
+// a multiplier in [0, 1] — 1 means no cloud blocking, 0 means fully overcast
+// and shadowed. Used by getTransmittanceToSun to darken ground/atmosphere
+// lighting under heavy cloud cover.
+float evalCloudGroundShadow(vec3 sunDir, AtmosphereArgs args) {
+  if (args.cloudEnabled < 0.5f || args.cloudCoverage < 0.01f) return 1.0f;
+  if (args.cloudShadowStrength < 0.01f) return 1.0f;
+
+  float t;
+  vec3 hitPos;
+  if (!intersectCloudLayer(sunDir, args, t, hitPos)) {
+    return 1.0f;  // Sun direction doesn't pierce the cloud layer (below horizon etc.)
+  }
+
+  // Sample density where the sun ray pierces the cloud layer above us.
+  float density = sampleCloudDensity(vec2(hitPos.x, hitPos.z), args);
+  float transmittance = exp(-density * args.cloudDensity * 2.0f);
+
+  // Strength slider attenuates the effect so it can be tuned.
+  return mix(1.0f, transmittance, args.cloudShadowStrength);
+}
+
 // Sun disk angular radius is now dynamic (args.sunAngularRadius)
 // static const float kSunAngularRadius = 0.00873f;
 
@@ -483,7 +571,14 @@ vec3 getTransmittanceToSun(vec3 worldPos, AtmosphereArgs args, bool isZUp = fals
   vec3 transmittance = exp(-extinction);
   
   // Fade out smoothly during twilight instead of hard cutoff
-  return transmittance * twilightFade;
+  transmittance *= twilightFade;
+
+  // Apply cloud occlusion: if there's an overcast layer above, the sun is
+  // partly blocked. This darkens both ground shading (via NEE sampling) and
+  // the atmospheric color.
+  transmittance *= evalCloudGroundShadow(normalize(args.sunDirection), args);
+
+  return transmittance;
 }
 
 // Evaluate sun disk contribution (for sky miss shaders)
@@ -1304,6 +1399,111 @@ vec3 evalMoonDisk(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float dis
   return max(moonRadiance, vec3(0.0f));
 }
 
+// ============================================================================
+// Procedural Cloud Rendering (view-direction evaluation)
+// ============================================================================
+// The cloud density/intersection helpers (sampleCloudDensity,
+// intersectCloudLayer, evalCloudGroundShadow) are defined earlier so that
+// getTransmittanceToSun can use them. evalClouds itself depends on
+// getTransmittanceToSun and therefore must come after it.
+
+// Sample cloud density along the sun direction from a cloud hit point.
+// Used to self-shadow the clouds.
+float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir, AtmosphereArgs args) {
+  if (sunDir.y <= 0.01f) return 1.0f;  // Sun near/below horizon: no meaningful shadow
+
+  const int kTaps = 4;
+  const float kStepKm = 0.4f;
+  float opticalDepth = 0.0f;
+
+  for (int i = 0; i < kTaps; ++i) {
+    vec3 p = cloudHitPos + sunDir * (kStepKm * float(i + 1));
+    // Project to horizontal plane at cloud altitude
+    float d = sampleCloudDensity(vec2(p.x, p.z), args);
+    opticalDepth += d;
+  }
+
+  // Beer-Lambert with a moderate extinction coefficient scaled by density setting
+  float sigma = 2.0f * args.cloudDensity;
+  return exp(-opticalDepth * kStepKm * sigma);
+}
+
+// Evaluate cloud contribution for a view direction.
+// Returns (rgb = cloud radiance, a = alpha/coverage [0..1]) in Y-up space.
+vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
+  if (args.cloudEnabled < 0.5f || args.cloudCoverage < 0.01f) {
+    return vec4(0.0f);
+  }
+
+  float t;
+  vec3 hitPos;
+  if (!intersectCloudLayer(viewDir, args, t, hitPos)) {
+    return vec4(0.0f);
+  }
+
+  // Sample density at the hit point (horizontal XZ plane)
+  float density = sampleCloudDensity(vec2(hitPos.x, hitPos.z), args);
+  if (density < 0.01f) {
+    return vec4(0.0f);
+  }
+
+  // Fade out clouds near the horizon to avoid a hard edge where the cloud
+  // sphere tangents the viewer. Use the elevation angle.
+  float horizonFade = smoothstep(0.02f, 0.15f, viewDir.y);
+  density *= horizonFade;
+
+  // ---- Lighting ----
+  vec3 sunDir = normalize(args.sunDirection);
+  float cosTheta = dot(viewDir, sunDir);
+
+  // HG phase function for forward-scatter / silver lining
+  float phase = hgPhase(cosTheta, args.cloudAnisotropy);
+
+  // Cloud self-shadowing: sun transmittance through cloud layer
+  float sunTransmittance = sampleCloudSunTransmittance(hitPos, sunDir, args);
+
+  // Sun illuminance reaching the cloud top (atmospheric attenuation).
+  // We call getTransmittanceToSun with isZUp=false because we already
+  // converted to Y-up space in evalSkyRadiance before invoking evalClouds.
+  vec3 airTrans = getTransmittanceToSun(hitPos, args, false);
+
+  // Day brightness: direct sun * phase function * cloud self-shadow
+  vec3 directLight = args.sunIlluminance * airTrans * sunTransmittance
+                   * (0.5f + phase * 12.566f);  // 4π normalization bias for visible phase term
+
+  // Ambient sky contribution keeps the shadow side from going black
+  vec3 ambient = args.sunIlluminance * airTrans * 0.08f;
+
+  // Night light: faint contribution from each enabled moon plus airglow tint.
+  // Per-moon loop: each moon emits independently (reflected sunlight from each
+  // body), so contributions sum. Cheap — 4 unrolled iterations.
+  vec3 nightLight = vec3(0.0f);
+  {
+    float sunElev = args.sunDirection.y;
+    float nightFactor = smoothstep(0.02f, -0.05f, sunElev);
+    if (nightFactor > 0.001f) {
+      for (uint mi = 0u; mi < MAX_MOONS; ++mi) {
+        MoonParams m = args.moons[mi];
+        if (m.enabled < 0.5f) continue;
+        vec3 moonDir = normalize(m.direction);
+        float moonDot = max(dot(moonDir, vec3(0.0f, 1.0f, 0.0f)), 0.0f);
+        float phaseGlow = 1.0f - abs(cos(m.phase * 2.0f * kPi));
+        nightLight += m.color * m.brightness * 0.0015f
+                    * moonDot * phaseGlow * nightFactor;
+      }
+      // Add faint night sky airglow tint so dark clouds aren't pitch black
+      nightLight += args.nightSkyColor * args.nightSkyBrightness * nightFactor * 0.5f;
+    }
+  }
+
+  vec3 cloudLit = args.cloudColor * (directLight + ambient) + nightLight;
+
+  // Alpha = density * density multiplier (clamped)
+  float alpha = saturate(density * args.cloudDensity);
+
+  return vec4(cloudLit, alpha);
+}
+
 // Main evaluation function - computes atmosphere directly instead of using sky view LUT
 vec3 evalSkyRadiance(
   vec3 viewDir,
@@ -1356,6 +1556,11 @@ vec3 evalSkyRadiance(
       radiance = mix(radiance, moonContrib, coverage);
     }
   }
+
+  // Clouds render on top of everything (atmosphere + stars + moons). They
+  // occlude whatever is behind them based on their alpha.
+  vec4 cloudLayer = evalClouds(viewDirYUp, args);
+  radiance = mix(radiance, cloudLayer.rgb, cloudLayer.a);
 
   return max(radiance, vec3(0.0f));
 }

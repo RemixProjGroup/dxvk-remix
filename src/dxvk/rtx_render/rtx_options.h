@@ -1298,6 +1298,19 @@ namespace dxvk {
     DECLARE_MOON_OPTIONS(3);
 #undef DECLARE_MOON_OPTIONS
 
+    // Cloud parameters (procedural FBM cloud layer)
+    RTX_OPTION("rtx.atmosphere", bool, cloudEnabled, true, "Enable procedural cloud rendering.");
+    RTX_OPTION_FLAG("rtx.atmosphere", float, cloudCoverage, 0.0f, RtxOptionFlags::NoSave,
+                    "Cloud coverage [0,1]: 0=clear sky, 1=overcast. Driven by game weather every frame.");
+    RTX_OPTION("rtx.atmosphere", float, cloudDensity, 1.0f, "Cloud opacity/density multiplier.");
+    RTX_OPTION("rtx.atmosphere", float, cloudAltitude, 3.0f, "Cloud layer altitude in kilometers.");
+    RTX_OPTION("rtx.atmosphere", float, cloudScale, 0.08f, "Horizontal noise scale — smaller values produce larger clouds.");
+    RTX_OPTION("rtx.atmosphere", Vector3, cloudColor, Vector3(1.0f, 1.0f, 1.0f), "Base cloud color (albedo).");
+    RTX_OPTION("rtx.atmosphere", float, cloudWindSpeed, 0.02f, "Cloud drift speed in km/s. Clouds scroll with this velocity.");
+    RTX_OPTION("rtx.atmosphere", float, cloudWindDirection, 45.0f, "Cloud wind direction in degrees (0 = +X, 90 = +Z).");
+    RTX_OPTION("rtx.atmosphere", float, cloudShadowStrength, 0.6f, "How strongly overcast clouds dim ground and atmosphere lighting [0..1].");
+    RTX_OPTION("rtx.atmosphere", float, cloudAnisotropy, 0.6f, "Henyey-Greenstein g for cloud forward-scatter (silver lining).");
+
     // TODO (REMIX-656): Remove this once we can transition content to new hash
     RTX_OPTION("rtx", bool, logLegacyHashReplacementMatches, false, "");
 
