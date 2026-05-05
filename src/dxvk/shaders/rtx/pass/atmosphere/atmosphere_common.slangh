@@ -1561,6 +1561,28 @@ vec3 evalSkyRadiance(
   // array order: later array indices render on top of earlier ones.
   float moonFade = smoothstep(0.02f, -0.05f, args.sunDirection.y);
   if (moonFade > 0.001f) {
+    // Moon glow/halo: soft radial Gaussian falloff around each enabled moon,
+    // additive. Rendered before the opaque disks so each disk cleanly
+    // replaces the glow under it.
+    for (uint gi = 0u; gi < MAX_MOONS; ++gi) {
+      MoonParams m = args.moons[gi];
+      if (m.enabled < 0.5f) continue;
+      vec3 moonDir = normalize(m.direction);
+      float cosAngle = dot(viewDirYUp, moonDir);
+      float angularDist = acos(clamp(cosAngle, -1.0f, 1.0f));
+      // Glow extends to ~3x the moon radius with soft Gaussian falloff
+      float glowRadius = m.angularRadius * 3.0f;
+      if (angularDist < glowRadius) {
+        float glowFalloff = angularDist / glowRadius;
+        float glow = exp(-glowFalloff * glowFalloff * 4.0f);  // Gaussian
+        // Scale by brightness and phase (fuller = brighter glow)
+        float phaseGlow = 1.0f - abs(cos(m.phase * 2.0f * kPi));
+        phaseGlow = max(phaseGlow, 0.1f);  // minimum glow even at new moon
+        vec3 glowColor = m.color * m.brightness * 0.03f * glow * phaseGlow * moonFade;
+        radiance += glowColor;
+      }
+    }
+
     for (uint i = 0u; i < MAX_MOONS; ++i) {
       float coverage = 0.0f;
       vec3 moonContrib = evalMoonDisk(viewDirYUp, i, args, coverage);
