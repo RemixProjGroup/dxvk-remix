@@ -478,6 +478,22 @@ float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args) {
   return saturate((altitudeAboveSea - args.cloudAltitude) / max(args.cloudThickness, 0.001f));
 }
 
+// Nubis sliding-keypoint vertical density profile. Type slides the rise/peak/fall
+// keypoints from stratus values (narrow band low in slab) to cumulus values (full
+// vertical extent). Stratocumulus emerges naturally at type=0.5.
+//   stratus  (type=0):   rise 0..0.10, peak 0.10..0.20, fall 0.20..0.30
+//   cumulus  (type=1):   rise 0..0.20, peak 0.20..0.40, fall 0.40..0.95
+// No integral normalization across types -- cumulus is naturally ~3x denser
+// than stratus, matching reality (cumulus carries more total water).
+float cloudTypeProfile(float hf, float type) {
+  float riseEnd   = mix(0.10f, 0.20f, type);
+  float fallStart = mix(0.20f, 0.40f, type);
+  float fallEnd   = mix(0.30f, 0.95f, type);
+  float rise = saturate(hf / max(riseEnd, 1e-4f));
+  float fall = saturate((fallEnd - hf) / max(fallEnd - fallStart, 1e-4f));
+  return saturate(rise * fall);
+}
+
 // Asymmetric vertical density profile: rounded cumulus bottom (sharp rise
 // from base), wispy top (gradual taper). Mixed with constant 1.0 by the
 // cloudVerticalProfile strength so 0 = no-op (current extrusion behavior),
