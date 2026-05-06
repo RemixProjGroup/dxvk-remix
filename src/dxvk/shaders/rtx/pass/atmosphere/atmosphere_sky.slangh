@@ -682,18 +682,27 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
   float warmFactor = max(cosTheta, 0.0f);
   vec3 warmAdd = args.sunIlluminance * lowSunFactor * warmFactor * 0.3f * args.cloudSunsetWarmth;
 
-  // Pre-compute night light (constant per ray, applied per sample). Two
-  // contributions:
-  //   - nightLight (ambient): per-moon zenith-cosine fill + nightSkyColor
-  //     airglow. Uniform across the cloud volume — represents moon-bounce
-  //     and skybounce light that arrives from all directions.
-  //   - moonDirectLight (directional): per-moon Lambert+HG response gated
-  //     by phaseGlow and cloudMoonBrightness. Mirrors the sun's directLight
-  //     pre-compute. No per-sample shadow march for v1 (single-bounce
-  //     only) — the effect is subtle at moonlight intensity and shadow
-  //     taps would scale with MAX_MOONS, which gets expensive fast.
+  // Pre-compute night light (constant per ray) + per-moon directional
+  // coefficients (consumed per sample). Three contributions to the
+  // moonlit-cloud look:
+  //   - nightLight (ambient, per-ray): per-moon zenith-cosine fill +
+  //     nightSkyColor airglow. Uniform across the cloud volume —
+  //     represents moon-bounce and skybounce light from all directions.
+  //   - moonCoeff[mi] (directional, per-ray): per-moon Lambert+HG
+  //     response gated by phaseGlow and cloudMoonBrightness. Same shape
+  //     as the sun's per-ray lightResponse * sunIlluminance product.
+  //   - moonShadow (per-sample, computed in the march loop below):
+  //     4-tap density march along moon direction via the same
+  //     sampleCloudSunTransmittance helper the sun uses. Multiplies
+  //     moonCoeff[mi] per sample so the cumulus moon-facing side reads
+  //     bright while the far side darkens — mirrors sun behavior.
   vec3 nightLight = vec3(0.0f);
-  vec3 moonDirectLight = vec3(0.0f);
+  vec3 moonCoeff[MAX_MOONS];
+  vec3 moonDirNorm[MAX_MOONS];
+  [unroll] for (uint mInit = 0u; mInit < MAX_MOONS; ++mInit) {
+    moonCoeff[mInit]   = vec3(0.0f);
+    moonDirNorm[mInit] = vec3(0.0f, 1.0f, 0.0f);
+  }
   {
     float sunElev = sunDir.y;
     float nightFactor = smoothstep(0.02f, -0.05f, sunElev);
@@ -714,8 +723,9 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
           float moonCosTheta = dot(viewDir, moonDir);
           float moonPhase = hgPhase(moonCosTheta, args.cloudAnisotropy);
           float moonResponse = kDiffuseGain * moonLambert + kPhaseGain * moonPhase;
-          moonDirectLight += m.color * m.brightness * moonResponse * phaseGlow
-                           * args.cloudMoonBrightness * nightFactor;
+          moonCoeff[mi]   = m.color * m.brightness * moonResponse * phaseGlow
+                          * args.cloudMoonBrightness * nightFactor;
+          moonDirNorm[mi] = moonDir;
         }
       }
       nightLight += args.nightSkyColor * args.nightSkyBrightness * nightFactor * 0.5f;
@@ -757,6 +767,20 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     vec3 airTrans = getTransmittanceToSun(samplePos, args, false);
     vec3 directLight = args.sunIlluminance * airTrans * sunTransmittance * lightResponse;
     vec3 ambient = args.sunIlluminance * airTrans * 0.04f;
+
+    // Per-sample moon direct light: each above-horizon moon's pre-computed
+    // Lambert+HG coefficient multiplied by a 4-tap shadow march along its
+    // direction. Mirrors the sun's directLight = lightResponse * sunTrans
+    // structure. Skipped for moons whose coefficient is effectively zero
+    // (disabled, below horizon, new moon, or cloudMoonBrightness=0).
+    vec3 moonDirectLight = vec3(0.0f);
+    [unroll] for (uint moonI = 0u; moonI < MAX_MOONS; ++moonI) {
+      if (any(moonCoeff[moonI] > vec3(0.001f))) {
+        float moonShadow = sampleCloudSunTransmittance(samplePos, moonDirNorm[moonI],
+                                                       typeLocal, coverageLocal, args);
+        moonDirectLight += moonCoeff[moonI] * moonShadow;
+      }
+    }
 
     // Sky-bounce shadow tint: shadowed parts get faint blue contribution
     float shadowFraction = 1.0f - sunTransmittance;
