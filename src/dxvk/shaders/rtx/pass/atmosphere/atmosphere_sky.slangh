@@ -673,13 +673,32 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
   const float kPhaseGain   = 0.20f;
   float lightResponse = kDiffuseGain * lambert + kPhaseGain * phase;
 
+  // Atmospheric transmittance to the sun. Purely a function of sun direction
+  // (the simplified ground-level model has no altitude/position dependence),
+  // so hoisted out of the march loop. Calling getAtmosphericTransmittanceForDir
+  // directly rather than getTransmittanceToSun avoids the cloud-ground-shadow
+  // term — clouds shouldn't be self-shadowed by the cloud layer when their
+  // own per-sample sun-shadow march already accounts for occlusion.
+  vec3 airTrans = getAtmosphericTransmittanceForDir(sunDir, args);
+
   // Pre-compute warm tint (constant per ray). lowSunFactor peaks near the
   // horizon and fades on both sides — the below-horizon smoothstep gate
   // prevents warmAdd from persisting at night (directLight/ambient already
   // fade via airTrans's twilightFade, but warmAdd has no airTrans gate).
+  // Tightened from smoothstep(-0.10, -0.02, ...) so the warm sunset tint
+  // is fully gone by ~-3° below horizon instead of lingering to -5.7°.
   float lowSunFactor = saturate(1.0f - sunDir.y * 3.0f)
-                     * smoothstep(-0.10f, -0.02f, sunDir.y);
-  float warmFactor = max(cosTheta, 0.0f);
+                     * smoothstep(-0.05f, -0.02f, sunDir.y);
+  // pow(0.5 + 0.5*cosTheta, 4): half-Lambert raised to the 4th power. This
+  // is the only shape that satisfies all three constraints simultaneously:
+  // (1) localized warm peak around the sun direction so the anti-sun sky
+  // doesn't read uniformly warm; (2) steep enough falloff that 90° from
+  // sun is at 6% intensity, anti-sun side under 1%; (3) strictly positive
+  // everywhere except the single anti-pole point — no surface where the
+  // function hits zero, so no visible boundary line on the sky sphere.
+  // max(cos, 0) had a 90° boundary; plain half-Lambert was too uniform;
+  // smoothstep(-0.1, 0.3) had a 96° boundary. The exponent kills both.
+  float warmFactor = pow(0.5f + 0.5f * cosTheta, 4.0f);
   vec3 warmAdd = args.sunIlluminance * lowSunFactor * warmFactor * 0.3f * args.cloudSunsetWarmth;
 
   // Pre-compute night light (constant per ray) + per-moon directional
@@ -730,8 +749,14 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
           // clouds (roughly 16% of sun's contribution), which reads as "way
           // too bright" — real moonlight is ~1-3% of sun perceptually.
           const float kMoonIllumScale = 0.05f;
+          // Atmospheric extinction along the moon direction — same Kasten-Young
+          // model as the sun. A moon near the horizon should redden and dim
+          // through ~40 air masses just like the sun does at sunset; folded
+          // into moonCoeff here so the per-sample march loop stays unchanged.
+          vec3 moonAirTrans = getAtmosphericTransmittanceForDir(moonDir, args);
           moonCoeff[mi]   = m.color * m.brightness * moonResponse * phaseGlow
-                          * args.cloudMoonBrightness * kMoonIllumScale * nightFactor;
+                          * args.cloudMoonBrightness * kMoonIllumScale * nightFactor
+                          * moonAirTrans;
           moonDirNorm[mi] = moonDir;
         }
       }
@@ -769,9 +794,8 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     density *= horizonFade;
     if (density < 0.001f) continue;
 
-    // Per-sample lighting
+    // Per-sample lighting (airTrans hoisted above the loop)
     float sunTransmittance = sampleCloudSunTransmittance(samplePos, sunDir, typeLocal, coverageLocal, args);
-    vec3 airTrans = getTransmittanceToSun(samplePos, args, false);
     vec3 directLight = args.sunIlluminance * airTrans * sunTransmittance * lightResponse;
     vec3 ambient = args.sunIlluminance * airTrans * 0.04f;
 
@@ -789,10 +813,14 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
       }
     }
 
-    // Sky-bounce shadow tint: shadowed parts get faint blue contribution
+    // Sky-bounce shadow tint: shadowed parts get faint blue contribution.
+    // Multiplied by airTrans because the bounce is ultimately sun light —
+    // without this gate the term carried full unattenuated sunIlluminance
+    // even when the sun was below the horizon, leaving an unnatural blue
+    // glow on every cloud at night.
     float shadowFraction = 1.0f - sunTransmittance;
     vec3 shadowTintAdd = args.cloudShadowTint * args.cloudShadowTintStrength
-                       * shadowFraction * args.sunIlluminance * 0.05f;
+                       * shadowFraction * args.sunIlluminance * airTrans * 0.05f;
 
     vec3 sampleColor = args.cloudColor * (directLight + ambient + moonDirectLight)
                      + nightLight + shadowTintAdd + warmAdd;

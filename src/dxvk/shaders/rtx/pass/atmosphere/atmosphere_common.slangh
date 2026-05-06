@@ -619,50 +619,61 @@ float evalCloudGroundShadow(vec3 sunDir, AtmosphereArgs args) {
 // Sun disk angular radius is now dynamic (args.sunAngularRadius)
 // static const float kSunAngularRadius = 0.00873f;
 
-// Compute transmittance from a point to the sun (simplified for ground-level surfaces)
-vec3 getTransmittanceToSun(vec3 worldPos, AtmosphereArgs args, bool isZUp = false) {
-  // For ground-level surfaces, use a simplified constant transmittance
-  // The atmosphere calculations assume we're at ground level (altitude ~0)
-  
-  // Transform sun direction to Y-up space for horizon check
-  vec3 sunDirYUp = args.sunDirection;
-  float sunZenithCosAngle = sunDirYUp.y;  // In Y-up space, Y component is zenith angle
-  
-  // Exponential twilight fade matching the ray marching
-  float twilightFade;
-  if (sunZenithCosAngle >= 0.0f) {
-    twilightFade = 1.0f;
+// Pure atmospheric transmittance to a Y-up direction at ground level. Uses
+// Kasten-Young air mass above horizon and an exponential extension below,
+// matching the per-sample model inside evalAtmosphereRadiance so that cloud,
+// moon, and atmosphere paths all crush consistently at low elevation. Real
+// transmittance on blue at horizon is ~4e-5 (Hillaire/Frostbite Fig 23) — the
+// simpler 1/cos(z) clamped model previously used here only reached ~0.56,
+// which is the source of the "lit clouds at sunset" look.
+//
+// dirYUp must be normalized and in Y-up space (Y = up). Does NOT include cloud
+// ground shadow — callers that need it (ground-surface NEE) should add it
+// after, via getTransmittanceToSun. Cloud-self-lighting and moon-direction
+// callers should use this directly to avoid double-counting their own
+// self-shadow march with the cloud-layer ground shadow.
+vec3 getAtmosphericTransmittanceForDir(vec3 dirYUp, AtmosphereArgs args) {
+  float H = args.rayleighScaleHeight;
+  float zenithCosAngle = dirYUp.y;
+
+  // Kasten-Young air mass above horizon, exponential continuation below.
+  // Mirrors lines 308-328 of evalAtmosphereRadiance verbatim — single
+  // source of truth for sun-direction transmittance physics.
+  float airMass;
+  if (zenithCosAngle > 0.01f) {
+    float zenithRad = acos(clamp(zenithCosAngle, -1.0f, 1.0f));
+    float zenithDeg = degrees(zenithRad);
+    airMass = 1.0f / (zenithCosAngle + 0.15f * pow(93.885f - zenithDeg, -1.253f));
   } else {
-    float angleBelow = -sunZenithCosAngle;
-    twilightFade = exp(-angleBelow * 15.0f);
+    const float kHorizonAirMass = 40.0f;
+    float belowHorizonFactor = exp(-zenithCosAngle * 10.0f);
+    airMass = kHorizonAirMass * belowHorizonFactor;
   }
-  
-  // Even when sun is below horizon, allow some scattering for twilight colors
-  float effectiveCosAngle = max(abs(sunZenithCosAngle), 0.01f);
-  
-  // Simple atmospheric extinction based on sun elevation
-  // Lower sun angle = more atmosphere to traverse = more extinction
-  float atmosphericDepth = 1.0f / effectiveCosAngle;
-  
-  // Clamp atmospheric depth to reasonable values
-  atmosphericDepth = min(atmosphericDepth, 100.0f);
-  
-  // Apply extinction (using Rayleigh scattering + ozone absorption)
-  // Ozone absorption reduced to prevent excessive purple at sunset
-  float ozoneContribution = ozoneDensity(args.ozoneLayerAltitude, args);  // Sample at peak
-  vec3 extinction = args.rayleighScattering * atmosphericDepth + 
-                    args.ozoneAbsorption * ozoneContribution * atmosphericDepth * 0.1f;  // Reduced from 0.3
-  
-  vec3 transmittance = exp(-extinction);
-  
-  // Fade out smoothly during twilight instead of hard cutoff
-  transmittance *= twilightFade;
+  airMass = min(airMass, 200.0f);
 
-  // Apply cloud occlusion: if there's an overcast layer above, the sun is
-  // partly blocked. This darkens both ground shading (via NEE sampling) and
-  // the atmospheric color.
+  // Optical depth for ground-level samples: H * density(0) * airMass = H * airMass.
+  float opticalDepthToSun = H * airMass;
+  float ozonePathLength = ozoneDensity(args.ozoneLayerAltitude, args) * airMass;
+  vec3 transmittance = exp(-args.rayleighScattering * opticalDepthToSun
+                            - args.ozoneAbsorption * ozonePathLength * 0.15f);
+
+  // Twilight fade — sky/light should be effectively black by ~-15° below
+  // horizon (astronomical twilight ends around -18°). Identical falloff
+  // constant to evalAtmosphereRadiance.
+  if (zenithCosAngle < 0.0f) {
+    float angleBelow = -zenithCosAngle;
+    transmittance *= exp(-angleBelow * 15.0f);
+  }
+
+  return transmittance;
+}
+
+// Compute transmittance from a point to the sun (simplified for ground-level surfaces).
+// Adds cloud-layer occlusion on top of the pure atmospheric term — used by NEE
+// surface/volume sampling so that overcast skies darken ground shading.
+vec3 getTransmittanceToSun(vec3 worldPos, AtmosphereArgs args, bool isZUp = false) {
+  vec3 transmittance = getAtmosphericTransmittanceForDir(args.sunDirection, args);
   transmittance *= evalCloudGroundShadow(normalize(args.sunDirection), args);
-
   return transmittance;
 }
 
