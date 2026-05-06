@@ -1300,8 +1300,6 @@ namespace dxvk {
 
     // Cloud parameters (procedural FBM cloud layer)
     RTX_OPTION("rtx.atmosphere", bool, cloudEnabled, true, "Enable procedural cloud rendering.");
-    RTX_OPTION_FLAG("rtx.atmosphere", float, cloudCoverage, 0.93f, RtxOptionFlags::NoSave,
-                    "Cloud coverage [0,1]: 0=clear sky, 1=overcast. Driven by game weather every frame.");
     RTX_OPTION("rtx.atmosphere", float, cloudDensity, 1.55f, "Cloud opacity/density multiplier.");
     RTX_OPTION("rtx.atmosphere", float, cloudAltitude, 2.4f, "Cloud layer altitude in kilometers.");
     RTX_OPTION("rtx.atmosphere", float, cloudScale, 0.010f, "Horizontal noise scale — smaller values produce larger clouds.");
@@ -1324,14 +1322,6 @@ namespace dxvk {
                "How strongly the shadow tint contributes [0..1].");
     RTX_OPTION("rtx.atmosphere", float, cloudSunsetWarmth, 1.0f,
                "Strength of low-sun warm tint on sunward side. 0 = disabled.");
-    RTX_OPTION("rtx.atmosphere", float, cloudVariance, 0.19f,
-               "Density variation across the sky [0..1]. 0 = uniform, 1 = patchy.");
-    RTX_OPTION("rtx.atmosphere", float, cloudVarianceScale, 0.048f,
-               "Scale of variance noise. Smaller = bigger cloud groups.");
-    RTX_OPTION("rtx.atmosphere", float, cloudVerticalProfile, 0.83f,
-               "Volumetric cloud character: 0 = flat 2D extrusion, 1 = rounded "
-               "cumulus bottoms with wispy tops + wind-shear lateral shift. "
-               "Integral normalized so total opacity stays roughly constant.");
     RTX_OPTION("rtx.atmosphere", float, cloudCurvature, 0.3f,
                "Sky-dome curvature for the cloud layer: 0 = real-planet radius "
                "(nearly flat ceiling), 1 = tight dome (clouds visibly curve down "

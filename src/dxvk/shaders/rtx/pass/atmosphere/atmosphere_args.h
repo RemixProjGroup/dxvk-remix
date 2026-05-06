@@ -106,16 +106,16 @@ struct AtmosphereArgs {
 
   // ----- Cloud parameters (fork: procedural FBM cloud layer at fixed altitude) -----
   vec3 cloudColor;          // Cloud base color (typically white)
-  float cloudCoverage;      // [0,1]: 0 = clear sky, 1 = overcast
-
   float cloudDensity;       // Overall opacity/density multiplier
+
   float cloudAltitude;      // Altitude of cloud layer (km)
   float cloudScale;         // Horizontal noise scale (smaller = larger clouds)
   float cloudEnabled;       // 1.0 if clouds should be rendered, 0.0 otherwise
+  float cloudShadowStrength;// How strongly clouds dim ground/atmosphere lighting [0..1]
 
   vec2 cloudWindOffset;     // Accumulated wind-driven UV offset (km)
-  float cloudShadowStrength;// How strongly clouds dim ground/atmosphere lighting [0..1]
   float cloudAnisotropy;    // HG g for cloud sun forward-scatter (silver lining)
+  float cloudCurvature;     // 0 = Earth-scale dome, 1 = tight dome
 
   // ----- Cloud volumetric / appearance enhancements (fork) -----
   vec3 cloudShadowTint;        // RGB sky-bounce tint on shadow side
@@ -125,11 +125,6 @@ struct AtmosphereArgs {
   float cloudDetailWeight;     // Pre-fade detail FBM weight [0..1]
   float cloudSunsetWarmth;     // Strength of low-sun warm tint
   uint cloudViewSamples;       // Ray-march steps through cloud slab
-
-  float cloudVariance;         // 0..1
-  float cloudVarianceScale;    // Variance noise scale
-  float cloudVerticalProfile;  // 0 = flat extrude, 1 = bell + perturb
-  float cloudCurvature;        // 0 = Earth-scale dome, 1 = tight dome
 
   // ----- Spatial variation fields (Nubis-style weather) -----
   float cloudTypeMean;             // [0,1] mean cloud type. 0=stratus, 0.5=stratocumulus, 1=cumulus.

@@ -271,7 +271,6 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // Cloud parameters
   {
     args.cloudColor = RtxOptions::cloudColor();
-    args.cloudCoverage = RtxOptions::cloudCoverage();
     args.cloudDensity = RtxOptions::cloudDensity();
     args.cloudAltitude = RtxOptions::cloudAltitude();
     args.cloudScale = RtxOptions::cloudScale();
@@ -298,9 +297,6 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudDetailWeight = RtxOptions::cloudDetailWeight();
     args.cloudSunsetWarmth = RtxOptions::cloudSunsetWarmth();
     args.cloudViewSamples = RtxOptions::cloudViewSamples();
-    args.cloudVariance = RtxOptions::cloudVariance();
-    args.cloudVarianceScale = RtxOptions::cloudVarianceScale();
-    args.cloudVerticalProfile = RtxOptions::cloudVerticalProfile();
     args.cloudCurvature = RtxOptions::cloudCurvature();
     args.cloudTypeMean = RtxOptions::cloudTypeMean();
     args.cloudTypeSpread = RtxOptions::cloudTypeSpread();

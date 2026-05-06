@@ -494,19 +494,6 @@ float cloudTypeProfile(float hf, float type) {
   return saturate(rise * fall);
 }
 
-// Asymmetric vertical density profile: rounded cumulus bottom (sharp rise
-// from base), wispy top (gradual taper). Mixed with constant 1.0 by the
-// cloudVerticalProfile strength so 0 = no-op (current extrusion behavior),
-// 1 = full bell. Integral over [0,1] is 0.60, normalized by 1.67 so total
-// opacity stays roughly constant across the strength range.
-float cloudVerticalProfileMultiplier(float hf, AtmosphereArgs args) {
-  float bellRise = smoothstep(0.0f, 0.20f, hf);
-  float bellFall = 1.0f - smoothstep(0.40f, 1.0f, hf);
-  float bell = bellRise * bellFall;
-  const float kIntegralNorm = 1.67f;
-  return mix(1.0f, bell * kIntegralNorm, args.cloudVerticalProfile);
-}
-
 // Sample cloud density (procedural FBM) at a given horizontal world position
 // (km), normalized height fraction within the cloud slab, and per-XZ local
 // type/coverage values from the spatial-variation control noises. Returns
