@@ -845,12 +845,17 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
 
     // Per-sample moon direct light: ONE shadow march along the brightness-
     // weighted combined moon direction (Lever 4), participating in the same
-    // cadence cache as the sun shadow (Lever 3). All enabled-moon coefficients
-    // are summed into combinedMoonCoeff and modulated by this single shadow.
+    // cadence cache as the sun shadow (Lever 3). At low local density the
+    // unshadowed moon contribution gets crushed by (1 - stepTransmittance)
+    // anyway, so we skip the march entirely below kMoonShadowSkipDensity
+    // (Lever 5).
+    const float kMoonShadowSkipDensity = 0.05f;
     vec3 moonDirectLight = vec3(0.0f);
     if (any(combinedMoonCoeff > vec3(0.001f))) {
       float moonShadow;
-      if (reuse) {
+      if (density < kMoonShadowSkipDensity) {
+        moonShadow = 1.0f;  // unshadowed; visible contribution stays small via (1-T) factor
+      } else if (reuse) {
         moonShadow = cachedMoonShadow;
       } else {
         moonShadow = sampleCloudSunTransmittance(samplePos, combinedMoonDir,
