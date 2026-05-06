@@ -550,6 +550,41 @@ float sampleCloudDensity(vec2 worldPosKm, float heightFraction,
   return saturate(density);
 }
 
+// Stripped-down cloud density for shadow-direction extinction taps. Identical
+// to sampleCloudDensity except: drops the 4×-frequency detail FBM call, and
+// reduces the base FBM from 4 octaves to 2. Used by sampleCloudSunTransmittance
+// (sun + combined-moon shadow march). Justification: high-frequency detail
+// integrates out along the 1.6km sun-direction shadow path -- the dominant
+// signal is the coverage-threshold-shaped large-scale shape, captured by 2
+// octaves. Saves ~22 hashes per shadow tap (28 → 6).
+float sampleCloudDensityShadow(vec2 worldPosKm, float heightFraction,
+                               float typeLocal, float coverageLocal,
+                               AtmosphereArgs args) {
+  // Wind-shear UV perturbation (identical to sampleCloudDensity)
+  vec2 windOffset = args.cloudWindOffset;
+  float windLen = length(windOffset);
+  vec2 windDir = (windLen > 0.0001f) ? (windOffset / windLen) : vec2(0.7071f, 0.7071f);
+  vec2 perturb = windDir * (heightFraction * args.cloudThickness * typeLocal * args.cloudWindShearStrength);
+
+  vec2 uv = (worldPosKm + perturb) * args.cloudScale + args.cloudWindOffset * args.cloudScale;
+
+  // 2-octave base only; no detail layer.
+  float base = fbmNoise2D(uv, 2, 90.0f);
+  float shape = base;
+
+  // Anvil pow + coverage threshold + vertical profile (identical to sampleCloudDensity).
+  float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
+                            smoothstep(0.7f, 0.8f, heightFraction));
+  float coverageAnvil = pow(coverageLocal, anvilExponent);
+
+  float coverageThreshold = mix(0.80f, 0.15f, coverageAnvil);
+  float density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, shape);
+
+  density *= cloudTypeProfile(heightFraction, typeLocal);
+
+  return saturate(density);
+}
+
 // Intersect view ray with the cloud shell. Returns true and the hit distance
 // if we hit the upward-looking cloud sphere at altitude args.cloudAltitude.
 // Ray origin is at the camera (0,0,0) in Y-up space; the cloud sphere uses

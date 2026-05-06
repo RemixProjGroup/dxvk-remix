@@ -607,8 +607,8 @@ float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir,
     // Project to horizontal plane and compute heightFraction at the tap.
     // Taps that march above the slab top get hf=1 → bell→0 → density=0,
     // which is correct (no clouds outside the slab).
-    float d = sampleCloudDensity(vec2(p.x, p.z), computeCloudHeightFraction(p, args),
-                                  typeLocal, coverageLocal, args);
+    float d = sampleCloudDensityShadow(vec2(p.x, p.z), computeCloudHeightFraction(p, args),
+                                        typeLocal, coverageLocal, args);
     opticalDepth += d;
   }
 
