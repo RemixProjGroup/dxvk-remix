@@ -539,7 +539,7 @@ float sampleCloudDensity(vec2 worldPosKm, float heightFraction,
 
   // Anvil top: raise effective coverage at high height-fraction so cumulus
   // tops inflate outward (Nubis pow-with-reduced-exponent trick).
-  float anvilExponent = mix(1.0f, lerp(1.0f, 0.5f, args.cloudAnvilBias),
+  float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
                             smoothstep(0.7f, 0.8f, heightFraction));
   float coverageAnvil = pow(coverageLocal, anvilExponent);
 
