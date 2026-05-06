@@ -481,13 +481,17 @@ float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args) {
 // Nubis sliding-keypoint vertical density profile. Type slides the rise/peak/fall
 // keypoints from stratus values (narrow band low in slab) to cumulus values (full
 // vertical extent). Stratocumulus emerges naturally at type=0.5.
-//   stratus  (type=0):   rise 0..0.10, peak 0.10..0.20, fall 0.20..0.30
-//   cumulus  (type=1):   rise 0..0.20, peak 0.20..0.40, fall 0.40..0.95
-// No integral normalization across types -- cumulus is naturally ~3x denser
-// than stratus, matching reality (cumulus carries more total water).
+//   stratus  (type=0):   rise 0..0.10, plateau 0.10..0.20, fall 0.20..0.30
+//   cumulus  (type=1):   rise 0..0.20, plateau 0.20..0.75, fall 0.75..0.95
+// The cumulus plateau extends through the upper slab so the Nubis anvil pow
+// trick (gated 0.7..0.8 in sampleCloudDensity) lands on dense cloud rather
+// than already-faded tail. Without the long plateau the anvil widening
+// applies to ~30% density and reads as "no visible change" on the silhouette.
+// No integral normalization across types -- cumulus is naturally denser than
+// stratus, matching reality (cumulus carries more total water).
 float cloudTypeProfile(float hf, float type) {
   float riseEnd   = mix(0.10f, 0.20f, type);
-  float fallStart = mix(0.20f, 0.40f, type);
+  float fallStart = mix(0.20f, 0.75f, type);
   float fallEnd   = mix(0.30f, 0.95f, type);
   float rise = saturate(hf / max(riseEnd, 1e-4f));
   float fall = saturate((fallEnd - hf) / max(fallEnd - fallStart, 1e-4f));
@@ -525,12 +529,14 @@ float sampleCloudDensity(vec2 worldPosKm, float heightFraction,
   float shape = base * 0.75f + detail * args.cloudDetailWeight * detailFade;
 
   // Anvil top: raise effective coverage at high height-fraction so cumulus
-  // tops inflate outward (Nubis pow-with-reduced-exponent trick). Kick-in
-  // starts at hf=0.4 (around the cumulus density peak) so the inflation
-  // overlaps actual density — sampling above hf=0.7 hits already-attenuated
-  // tail density and the visible widening collapses.
-  float anvilExponent = mix(1.0f, mix(1.0f, 0.3f, args.cloudAnvilBias),
-                            smoothstep(0.4f, 0.7f, heightFraction));
+  // tops inflate outward. Paper-faithful Nubis formula (SIGGRAPH 2017 slide 46):
+  //   coverage = pow(coverage, remap(height, 0.7, 0.8, 1.0, lerp(1.0, 0.5, anvil_bias)));
+  // Gated purely by height fraction (not type) — same line runs for all types,
+  // only tall (cumulus) clouds reach the zone. Pairs with the wind-direction
+  // skew in the perturb expression above (cloudWindShearStrength) to read as
+  // a leaning anvil top, matching slides 49-50 of the paper.
+  float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
+                            smoothstep(0.7f, 0.8f, heightFraction));
   float coverageAnvil = pow(coverageLocal, anvilExponent);
 
   // Coverage threshold — overcast pockets push above threshold, sparse
@@ -597,12 +603,13 @@ float evalCloudGroundShadow(vec3 sunDir, AtmosphereArgs args) {
   float typeLocal     = saturate(args.cloudTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
   float coverageLocal = saturate(args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 
-  // Sample at the type-aware peak height of the bell, not mid-slab. The new
-  // cloudTypeProfile peaks at (riseEnd + fallStart) / 2 — sliding from 0.15
-  // (stratus) to 0.30 (cumulus). Sampling at hf=0.5 falls past fallEnd for
-  // stratus (zero density) and well into the fall band for stratocumulus
-  // (~0.39x peak), making shadows ~3x weaker than intended.
-  float hfPeak = 0.15f + 0.15f * typeLocal;
+  // Sample at the type-aware peak height of the bell, not mid-slab. The
+  // cloudTypeProfile plateau midpoint slides as plateau widens with type:
+  // riseEnd = 0.10 + 0.10*type, fallStart = 0.20 + 0.55*type
+  // → midpoint = 0.15 + 0.325*type (stratus 0.15, stratocumulus 0.31, cumulus 0.475).
+  // Sampling at any hf in the plateau gives profile=1.0; midpoint is the
+  // most conservative choice given the noise sampling jitter at the call site.
+  float hfPeak = 0.15f + 0.325f * typeLocal;
   float density = sampleCloudDensity(hitXZ, hfPeak, typeLocal, coverageLocal, args);
   float transmittance = exp(-density * args.cloudDensity * 2.0f);
 
