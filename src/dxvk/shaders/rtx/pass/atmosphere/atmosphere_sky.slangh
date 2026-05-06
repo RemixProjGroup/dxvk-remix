@@ -775,6 +775,14 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
   vec3 accumRadiance = vec3(0.0f);
   float transmittance = 1.0f;
 
+  // Shadow cadence cache (Lever 3). Sun and combined-moon shadow march only
+  // every other density-passing sample; reuse cached value on the alternate.
+  // Cache is invalidated whenever the density gate fires so we never reuse
+  // a stale shadow across an empty interval.
+  float cachedSunShadow  = 1.0f;
+  float cachedMoonShadow = 1.0f;
+  bool  cacheValid       = false;
+
   for (uint i = 0u; i < args.cloudViewSamples; ++i) {
     if (transmittance < 0.01f) break;  // early-exit (free perf win)
 
@@ -792,10 +800,22 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     float hf = computeCloudHeightFraction(samplePos, args);
     float density = sampleCloudDensity(sampleXZ, hf, typeLocal, coverageLocal, args);
     density *= horizonFade;
-    if (density < 0.001f) continue;
+    if (density < 0.001f) {
+      cacheValid = false;
+      continue;
+    }
 
-    // Per-sample lighting (airTrans hoisted above the loop)
-    float sunTransmittance = sampleCloudSunTransmittance(samplePos, sunDir, typeLocal, coverageLocal, args);
+    // Per-sample lighting (airTrans hoisted above the loop). Sun and combined-
+    // moon shadow share a single parity decision so they march together.
+    bool reuse = cacheValid && ((i & 1u) == 1u);
+
+    float sunTransmittance;
+    if (reuse) {
+      sunTransmittance = cachedSunShadow;
+    } else {
+      sunTransmittance = sampleCloudSunTransmittance(samplePos, sunDir, typeLocal, coverageLocal, args);
+      cachedSunShadow = sunTransmittance;
+    }
     vec3 directLight = args.sunIlluminance * airTrans * sunTransmittance * lightResponse;
     vec3 ambient = args.sunIlluminance * airTrans * 0.04f;
 
@@ -831,6 +851,8 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     vec3 stepRadiance = sampleColor * (1.0f - stepTransmittance);
     accumRadiance += stepRadiance * transmittance;
     transmittance *= stepTransmittance;
+
+    cacheValid = true;
   }
 
   float alpha = 1.0f - transmittance;
