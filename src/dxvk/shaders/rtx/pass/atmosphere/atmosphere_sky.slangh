@@ -682,8 +682,18 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
   float warmFactor = max(cosTheta, 0.0f);
   vec3 warmAdd = args.sunIlluminance * lowSunFactor * warmFactor * 0.3f * args.cloudSunsetWarmth;
 
-  // Pre-compute night light (constant per ray, applied per sample)
+  // Pre-compute night light (constant per ray, applied per sample). Two
+  // contributions:
+  //   - nightLight (ambient): per-moon zenith-cosine fill + nightSkyColor
+  //     airglow. Uniform across the cloud volume — represents moon-bounce
+  //     and skybounce light that arrives from all directions.
+  //   - moonDirectLight (directional): per-moon Lambert+HG response gated
+  //     by phaseGlow and cloudMoonBrightness. Mirrors the sun's directLight
+  //     pre-compute. No per-sample shadow march for v1 (single-bounce
+  //     only) — the effect is subtle at moonlight intensity and shadow
+  //     taps would scale with MAX_MOONS, which gets expensive fast.
   vec3 nightLight = vec3(0.0f);
+  vec3 moonDirectLight = vec3(0.0f);
   {
     float sunElev = sunDir.y;
     float nightFactor = smoothstep(0.02f, -0.05f, sunElev);
@@ -696,6 +706,17 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
         float phaseGlow = 1.0f - abs(cos(m.phase * 2.0f * kPi));
         nightLight += m.color * m.brightness * 0.0015f
                     * moonDot * phaseGlow * nightFactor;
+
+        // Directional contribution — only moons above horizon matter for
+        // direct illumination of the cloud body.
+        if (moonDir.y > 0.01f && args.cloudMoonBrightness > 0.001f) {
+          float moonLambert = saturate(moonDir.y * 0.8f + 0.2f);
+          float moonCosTheta = dot(viewDir, moonDir);
+          float moonPhase = hgPhase(moonCosTheta, args.cloudAnisotropy);
+          float moonResponse = kDiffuseGain * moonLambert + kPhaseGain * moonPhase;
+          moonDirectLight += m.color * m.brightness * moonResponse * phaseGlow
+                           * args.cloudMoonBrightness * nightFactor;
+        }
       }
       nightLight += args.nightSkyColor * args.nightSkyBrightness * nightFactor * 0.5f;
     }
@@ -742,7 +763,7 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     vec3 shadowTintAdd = args.cloudShadowTint * args.cloudShadowTintStrength
                        * shadowFraction * args.sunIlluminance * 0.05f;
 
-    vec3 sampleColor = args.cloudColor * (directLight + ambient)
+    vec3 sampleColor = args.cloudColor * (directLight + ambient + moonDirectLight)
                      + nightLight + shadowTintAdd + warmAdd;
 
     // Beer-Lambert step (analytical integration of constant emission)

@@ -1347,6 +1347,12 @@ namespace dxvk {
                "Lateral cloud-top displacement along wind direction, scaled by cloud type [0,1+]. "
                "0=cloud tops vertical above base, 1=tops offset by ~thickness*type along wind. "
                "Reduces the visible per-cumulus 45-degree lean at default settings.");
+    RTX_OPTION("rtx.atmosphere", float, cloudMoonBrightness, 0.3f,
+               "Strength of directional moon lighting on clouds [0,1+]. "
+               "0=moonlit-cloud feature off (only nightSkyColor airglow + per-moon ambient remain), "
+               "1=full strength. Each enabled, above-horizon moon contributes Lambert+HG response "
+               "scaled by its phaseGlow (full at full moon, zero at new moon). No per-sample shadow "
+               "march — single-bounce only.");
 
     // TODO (REMIX-656): Remove this once we can transition content to new hash
     RTX_OPTION("rtx", bool, logLegacyHashReplacementMatches, false, "");

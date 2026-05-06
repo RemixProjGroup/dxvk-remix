@@ -518,6 +518,9 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `RtxOptions` class body (cloud spatial-variation block) — +21 / -11 net LOC.
   *Adds `cloudTypeMean`, `cloudTypeSpread`, `cloudTypeNoiseScale`, `cloudCoverageMean`, `cloudCoverageSpread`, `cloudCoverageNoiseScale`, `cloudAnvilBias`, `cloudWindShearStrength` RTX_OPTIONs (Nubis-style spatial variation, spec 2026-05-06; `cloudWindShearStrength` added as a tunable knob on the existing wind-shear UV perturbation in `sampleCloudDensity`). Replaces retired `cloudCoverage`, `cloudVariance`, `cloudVarianceScale`, `cloudVerticalProfile`.*
 
+- **Inline tweak** at `RtxOptions` class body (moon-lit cloud lighting) — +6 LOC.
+  *Adds `cloudMoonBrightness` RTX_OPTION controlling the strength of directional moon lighting on cloud volumes (Lambert + HG, single-bounce v1, no shadow march). Consumed by the `moonDirectLight` pre-compute in `evalClouds` (`atmosphere_sky.slangh`).*
+
 - **Inline tweak** — remove `rtx.useLegacyACES` + `rtx.showLegacyACESOption` RtxOptions (superseded by `TonemapOperator::ACESLegacy` enum value).
   *Both options live at the `rtx` namespace (not `rtx.tonemap`); removed in the enum refactor.*
 
