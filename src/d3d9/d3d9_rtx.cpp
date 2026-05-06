@@ -30,8 +30,11 @@ namespace dxvk {
     , m_enableDrawCallConversion(enableDrawCallConversion)
     , m_pGeometryWorkers(enableDrawCallConversion ? std::make_unique<GeometryProcessor>(numGeometryProcessingThreads(), "geometry-processing") : nullptr) {
 
-    // Add space for 256 objects skinned with 256 bones each.
-    m_stagedBones.resize(256 * 256);
+    // Add space for 2048 objects skinned with 256 bones each. 256 is too
+    // tight for open-world scenes (e.g. Fallout NV via D3D9 FFP wrapper) where
+    // hundreds of skinned draws per frame are normal — the throw downstream
+    // would otherwise crash the renderer.
+    m_stagedBones.resize(2048 * 256);
   }
 
   void D3D9Rtx::Initialize() {
