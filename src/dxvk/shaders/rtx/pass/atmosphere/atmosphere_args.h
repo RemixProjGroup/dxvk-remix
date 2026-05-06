@@ -135,5 +135,5 @@ struct AtmosphereArgs {
   float cloudCoverageSpread;       // [0,1] amplitude of coverage variation around mean.
   float cloudCoverageNoiseScale;   // Region size frequency for coverage noise (independent of type).
   float cloudAnvilBias;            // [0,1] cumulus top inflation strength (Nubis anvil pow trick).
-  float pad4;                      // 16-byte alignment
+  float cloudWindShearStrength;    // [0,1+] lateral cloud-top displacement along wind, scaled by type.
 };

@@ -673,8 +673,12 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
   const float kPhaseGain   = 0.20f;
   float lightResponse = kDiffuseGain * lambert + kPhaseGain * phase;
 
-  // Pre-compute warm tint (constant per ray)
-  float lowSunFactor = saturate(1.0f - sunDir.y * 3.0f);
+  // Pre-compute warm tint (constant per ray). lowSunFactor peaks near the
+  // horizon and fades on both sides — the below-horizon smoothstep gate
+  // prevents warmAdd from persisting at night (directLight/ambient already
+  // fade via airTrans's twilightFade, but warmAdd has no airTrans gate).
+  float lowSunFactor = saturate(1.0f - sunDir.y * 3.0f)
+                     * smoothstep(-0.10f, -0.02f, sunDir.y);
   float warmFactor = max(cosTheta, 0.0f);
   vec3 warmAdd = args.sunIlluminance * lowSunFactor * warmFactor * 0.3f * args.cloudSunsetWarmth;
 

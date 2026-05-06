@@ -1343,6 +1343,10 @@ namespace dxvk {
                "Region size frequency for coverage noise. Independent from type noise scale.");
     RTX_OPTION("rtx.atmosphere", float, cloudAnvilBias, 0.3f,
                "Cumulus top inflation strength [0,1]. 0=flat tops, 1=fully spread mushroom-cap anvils.");
+    RTX_OPTION("rtx.atmosphere", float, cloudWindShearStrength, 0.5f,
+               "Lateral cloud-top displacement along wind direction, scaled by cloud type [0,1+]. "
+               "0=cloud tops vertical above base, 1=tops offset by ~thickness*type along wind. "
+               "Reduces the visible per-cumulus 45-degree lean at default settings.");
 
     // TODO (REMIX-656): Remove this once we can transition content to new hash
     RTX_OPTION("rtx", bool, logLegacyHashReplacementMatches, false, "");

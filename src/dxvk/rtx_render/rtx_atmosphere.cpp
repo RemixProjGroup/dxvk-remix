@@ -305,7 +305,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudCoverageSpread = RtxOptions::cloudCoverageSpread();
     args.cloudCoverageNoiseScale = RtxOptions::cloudCoverageNoiseScale();
     args.cloudAnvilBias = RtxOptions::cloudAnvilBias();
-    args.pad4 = 0.0f;
+    args.cloudWindShearStrength = RtxOptions::cloudWindShearStrength();
   }
 
   return args;
