@@ -98,7 +98,7 @@ d3d9_dll = shared_library('d3d9', d3d9_src, dxvk_version, glsl_generator.process
   link_with           : [ util_lib ],
   link_args           : [ usd_plugin_delay_load_args ],
   dependencies        : [ dxso_dep, dxvk_dep, util_dep ],
-  include_directories : [ dxvk_include_path, dxvk_shader_include_path, usd_include_paths, remix_api_include_path ],
+  include_directories : [ dxvk_include_path, dxvk_shader_include_path, usd_include_paths, remix_api_include_path, include_directories('../dxvk') ],
   objects             : not dxvk_is_msvc ? 'd3d9' + def_spec_ext : [],
   vs_module_defs      : 'd3d9'+def_spec_ext,
   override_options    : ['cpp_std='+dxvk_cpp_std],

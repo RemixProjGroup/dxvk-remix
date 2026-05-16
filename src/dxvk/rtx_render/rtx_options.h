@@ -130,15 +130,10 @@ namespace dxvk {
     YawRotation
   };
 
-  enum class TonemappingMode : int {
-    Global = 0,
-    Local,
-    // Fork addition (Workstream 2 commit 3 / gmod baad5e79): operator-only
-    // dispatch that skips the dynamic tone curve + local pyramid entirely.
-    // Used by fork_hooks::shouldSkipToneCurve (called from the tonemap
-    // dispatch gate in rtx_context.cpp / DxvkToneMapping).
-    Direct
-  };
+  // TonemappingMode (Global / Local / Direct) and the dynamic tone curve
+  // were removed in the tonemap refactor (2026-05-13 / 2026-05-15). The
+  // apply pass dispatches the selected operator directly via
+  // RtxForkGlobalTonemap::tonemapOperator.
 
   enum class UIType : int {
     None = 0,
@@ -1142,17 +1137,6 @@ namespace dxvk {
                "Generally this should be always enabled as it allows for simple parsing of DDS header information without loading the entire texture into memory like GLI does to retrieve similar information.\n"
                "Should only be set to false for debugging purposes if the partial DDS loader's logic is suspected to be incorrect to compare against GLI's implementation.");
 
-    RTX_OPTION("rtx", TonemappingMode, tonemappingMode, TonemappingMode::Local,
-               "The tonemapping type to use, 0 for Global, 1 for Local (Default).\n"
-               "Global tonemapping tonemaps the image with respect to global parameters, usually based on statistics about the rendered image as a whole.\n"
-               "Local tonemapping on the other hand uses more spatially-local parameters determined by regions of the rendered image rather than the whole image.\n"
-               "Local tonemapping can result in better preservation of highlights and shadows in scenes with high amounts of dynamic range whereas global tonemapping may have to comprimise between over or underexposure.");
-    // `rtx.useLegacyACES` and `rtx.showLegacyACESOption` were removed in
-    // Workstream 2 commit 2 under the TonemapOperator enum refactor. Legacy
-    // ACES is now reachable via TonemapOperator::ACESLegacy in the per-path
-    // rtx.tonemap.tonemapOperator / rtx.localtonemap.tonemapOperator options
-    // declared in RtxForkGlobalTonemap / RtxForkLocalTonemap (rtx_fork_tonemap.h).
-
     // Capture Options
     //   General
     RTX_OPTION("rtx", bool, captureShowMenuOnHotkey, true,
@@ -1616,9 +1600,6 @@ namespace dxvk {
     RTX_OPTION("rtx.terrain", bool, terrainAsDecalsEnabledIfNoBaker, false, "If terrain baker is disabled, attempt to blend with the decals.");
     RTX_OPTION("rtx.terrain", bool, terrainAsDecalsAllowOverModulate, false, "Set to true, if it's known that terrain layers with ModulateX2 / ModulateX4 flags do not contain a lighting info, but ModulateX2 / ModulateX4 are used only to blend layers.");
 
-    RTX_OPTION_ARGS("rtx.userBrightness", int, userBrightness, 50, "How bright the final image should be. [0,100] range.",
-                    args.flags = RtxOptionFlags::UserSetting);
-    RTX_OPTION("rtx.userBrightnessEVRange", float, userBrightnessEVRange, 3.f, "The exposure value (EV) range for \'rtx.userBrightness\' slider, i.e. how much of EV there is between 0 and 100 slider values.");
 
     struct Eye {
       RTX_OPTION("rtx.eye", bool, showOptions, false, "Show eye options in the developer menu.");
@@ -1846,9 +1827,5 @@ namespace dxvk {
     
     static std::string getCurrentDirectory();
 
-    static float calcUserEVBias() {
-      return (float(RtxOptions::userBrightness() - 50) / 100.f)
-        * RtxOptions::userBrightnessEVRange();
-    }
   };
 }

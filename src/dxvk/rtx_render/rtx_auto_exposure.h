@@ -64,31 +64,31 @@ namespace dxvk {
 
     Resources::Resource m_exposure;
     Resources::Resource m_exposureHistogram;
-    Resources::Resource m_exposureWeightCurve;
 
     bool m_resetState = true;
-    bool m_isCurveChanged = true;
 
-    enum ExposureAverageMode : uint32_t {
-      Mean = 0,
-      Median
-    };
-
-    RTX_OPTION("rtx.autoExposure", bool, enabled, true, "Automatically adjusts exposure so that the image won't be too bright or too dark.");
-
-    // Exposure Settings
-    RTX_OPTION("rtx.autoExposure", float, autoExposureSpeed, 5.f, "Average exposure changing speed (in units per second) when the image changes.");
-    RTX_OPTION("rtx.autoExposure", float, evMinValue, -2.0f, "Min/Max values tuned by moving from bright/dark locations in game, and adjusting until they look correct.");
-    RTX_OPTION("rtx.autoExposure", float, evMaxValue, 5.f, "Min/Max values tuned by moving from bright/dark locations in game, and adjusting until they look correct.");
-    RTX_OPTION("rtx.autoExposure", bool,  exposureCenterMeteringEnabled, false, "Gives higher weight to pixels around the screen center.");
-    RTX_OPTION("rtx.autoExposure", float, centerMeteringSize, 0.5f, "The importance of pixels around the screen center.");
-    RTX_OPTION("rtx.autoExposure", ExposureAverageMode, exposureAverageMode, ExposureAverageMode::Median, "Average mode. Valid values: <Mean=0, Median=1>. The mean mode averages exposures across pixels. The median mode is more stable for extreme pixel values.");
-    RTX_OPTION("rtx.autoExposure", bool, useExposureCompensation, false, "Uses a curve to determine the importance of different exposure levels when calculating average exposure.");
-    RTX_OPTION("rtx.autoExposure", float, exposureWeightCurve0, 1.f, "Curve control point 0.");
-    RTX_OPTION("rtx.autoExposure", float, exposureWeightCurve1, 1.f, "Curve control point 1.");
-    RTX_OPTION("rtx.autoExposure", float, exposureWeightCurve2, 1.f, "Curve control point 2.");
-    RTX_OPTION("rtx.autoExposure", float, exposureWeightCurve3, 1.f, "Curve control point 3.");
-    RTX_OPTION("rtx.autoExposure", float, exposureWeightCurve4, 1.f, "Curve control point 4.");
+    // Eye-adaptation settings.
+    //
+    // The pipeline is: per-pixel BT.709 luminance is binned into a
+    // log-luminance histogram, then a Gaussian-weighted average across
+    // bins (biased toward mid-tones) yields the scene luminance. That
+    // luminance is fed to a Naka-Rushton response curve to produce the
+    // target exposure scale; finally, the stored exposure is advanced
+    // toward that target with asymmetric exponential dynamics
+    // (light_tau when the scene brightens, dark_tau when it dims).
+    //
+    // No EV mapping, no middle-grey re-targeting, no center metering,
+    // no exposure-compensation curve — those have been removed.
+    RTX_OPTION("rtx.autoExposure", bool, enabled, true,
+               "Automatically adjusts exposure so the image is neither too bright nor too dark.");
+    RTX_OPTION("rtx.autoExposure", float, lightAdaptTau, 0.15f,
+               "Photopic (light) adaptation time constant in seconds. "
+               "Controls how quickly the eye dims down when the scene brightens. "
+               "Smaller = faster response. Typical range: 0.05 – 0.50 s.");
+    RTX_OPTION("rtx.autoExposure", float, darkAdaptTau, 0.75f,
+               "Scotopic (dark) adaptation time constant in seconds. "
+               "Controls how slowly the eye brightens up when the scene dims. "
+               "Larger = slower response. Typical range: 0.25 – 3.00 s.");
   };
   
 }

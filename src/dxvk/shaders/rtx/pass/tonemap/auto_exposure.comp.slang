@@ -20,6 +20,7 @@
 * DEALINGS IN THE SOFTWARE.
 */
 #include "rtx/pass/tonemap/tonemapping.slangh"
+#include "rtx/pass/tonemap/adaptation_v1.slangh"
 
 layout(binding = AUTO_EXPOSURE_HISTOGRAM_INPUT_OUTPUT)
 RWTexture1D<uint> InOutHistogram;
@@ -27,126 +28,102 @@ RWTexture1D<uint> InOutHistogram;
 layout(binding = AUTO_EXPOSURE_EXPOSURE_INPUT_OUTPUT)
 RWTexture1D<float> OutExposure;
 
-layout(binding = AUTO_EXPOSURE_EC_INPUT)
-Sampler1D<float> InExposureCompensation;
-
 layout(binding = AUTO_EXPOSURE_DEBUG_VIEW_OUTPUT)
 RWTexture2D<float4> DebugView;
 
 layout(push_constant)
 ConstantBuffer<ToneMappingAutoExposureArgs> cb;
 
-groupshared float g_localData[EXPOSURE_HISTOGRAM_SIZE];
+groupshared float g_weightedLuminance[EXPOSURE_HISTOGRAM_SIZE];
+groupshared float g_weight[EXPOSURE_HISTOGRAM_SIZE];
 
-// Computes the inclusive prefix sum of val across the entire group.
-// For instance, [3, 10, 5, 1, ...] maps to [3, 13, 18, 19, ...]
-float computePrefixSum(float val, const uint linearIndex)
+// Naka-Rushton half-saturation luminance.  This is the luminance level
+// that the response curve maps to its midpoint; the resulting exposure
+// scale therefore brings a "typical" mid-tone scene to a comfortable
+// display brightness without ever explicitly re-targeting middle grey.
+static const float kNakaRushtonSigma = 0.18f;
+
+// Gaussian weighting across histogram bins.  Centering on the middle bin
+// biases the scene-key estimate toward perceptual mid-tones (the brain
+// does this too: peripheral extreme luminances contribute less to the
+// adaptation state than mid-luminance content near the fovea).
+static const float kGaussianCenterBin = 0.5f * float(EXPOSURE_HISTOGRAM_SIZE - 1);
+static const float kGaussianSigmaBins = 0.25f * float(EXPOSURE_HISTOGRAM_SIZE);
+
+float gaussianBinWeight(uint bin)
 {
-  GroupMemoryBarrierWithGroupSync();
-
-  // NOTE: WavePrefixSum computes an _ex_clusive prefix sum, so add the original 'val'
-  val = WavePrefixSum(val) + val;
-  g_localData[linearIndex] = val;
-  GroupMemoryBarrierWithGroupSync();
-
-  for (uint k = WaveGetLaneCount(); k < EXPOSURE_HISTOGRAM_SIZE; k *= 2)
-  {
-    uint blockIndex = linearIndex / k;
-    // Propagate prefixSum to the next block for every other block so as to avoid 
-    // writing into shared memory cells that are being read in this iteration.
-    // This way ith + 1 block will contain prefixSum considering ith block. 
-    // Then the next iteration will double the block size.    
-    if ((blockIndex % 2) == 1)
-        g_localData[linearIndex] += g_localData[k*blockIndex - 1];
-    
-    GroupMemoryBarrierWithGroupSync();
-  }
-
-  return g_localData[EXPOSURE_HISTOGRAM_SIZE-1];
-}
-
-float getHistogramWeight(uint index) {
-  float weightUV = (index + 0.5) / float(EXPOSURE_HISTOGRAM_SIZE);
-  return InExposureCompensation.SampleLevel(weightUV, 0).r;
+  const float d = (float(bin) - kGaussianCenterBin) / kGaussianSigmaBins;
+  return exp(-0.5f * d * d);
 }
 
 [shader("compute")]
 [numthreads(EXPOSURE_HISTOGRAM_SIZE, 1, 1)]
 void main(uint2 threadId : SV_DispatchThreadID, uint linearIndex : SV_GroupIndex)
 {
-  float weight = cb.useExposureCompensation ? getHistogramWeight(linearIndex) : 1.0f;
-
-  float countThisBucket = (float)InOutHistogram[linearIndex] * weight;
-  float totalWeight = computePrefixSum(countThisBucket, linearIndex);
-
-  float adaptedCountThisBucket = countThisBucket;
-  if (cb.averageMode == 0) // mean
+  // Accumulate (bin_count * gaussian_weight * bin_luminance) and the
+  // corresponding (bin_count * gaussian_weight) for a perceptually
+  // weighted scene-luminance average. Bin 0 is excluded — it holds
+  // near-black pixels which would otherwise drag the average to zero.
+  const uint pixelCount = InOutHistogram[linearIndex];
+  float weightedLum = 0.0f;
+  float weight = 0.0f;
+  if (linearIndex >= 1 && pixelCount > 0)
   {
-    adaptedCountThisBucket *= linearIndex; // factor in the index so we can compute the mean bucket quickly
+    const float gauss = gaussianBinWeight(linearIndex);
+    const float w = float(pixelCount) * gauss;
+    weight = w;
+    weightedLum = w * histogramBinToLuminance(linearIndex);
+  }
+  g_weightedLuminance[linearIndex] = weightedLum;
+  g_weight[linearIndex] = weight;
+  GroupMemoryBarrierWithGroupSync();
+
+  // Single-thread reduction.  The histogram only has 256 entries so a
+  // serial sum on lane 0 is fine and keeps the code obvious.
+  float sceneLum = 0.0f;
+  if (linearIndex == 0)
+  {
+    float sumLum = 0.0f;
+    float sumWeight = 0.0f;
+    for (uint i = 1; i < EXPOSURE_HISTOGRAM_SIZE; ++i)
+    {
+      sumLum    += g_weightedLuminance[i];
+      sumWeight += g_weight[i];
+    }
+    sceneLum = (sumWeight > 1e-6f)
+        ? (sumLum / sumWeight)
+        : kNakaRushtonSigma;  // Empty histogram => neutral exposure.
+
+    // Naka-Rushton exposure: the scene luminance feeds a saturating
+    // response curve R(L) = L / (L + sigma).  We want exposure to be
+    // *inverse* to scene brightness (bright scenes => small exposure,
+    // dark scenes => large exposure), so we use the complementary form
+    //   targetExposure = sigma / (L + sigma)              -- (1)
+    // which is also what you get from solving "1 - R(L)" and dividing
+    // by sigma.  Form (1) gives:
+    //   L = 0       => 1 / sigma           (max brightening, ~5.6x)
+    //   L = sigma   => 0.5 / sigma         (~2.8x)
+    //   L >> sigma  => sigma / L           (asymptotically dimming)
+    const float targetExposure = 1.0f / (sceneLum + kNakaRushtonSigma);
+
+    // Asymmetric exponential adaptation in exposure space — light_tau
+    // when the new exposure is *smaller* than the old (the scene just
+    // brightened, eyes dim down quickly), dark_tau when it's larger
+    // (scene dimmed, eyes brighten slowly).
+    const float prevExposure = max(OutExposure[0], 1e-6f);
+    const bool sceneBrightened = (targetExposure < prevExposure);
+    const float tau = sceneBrightened ? cb.lightAdaptTau : cb.darkAdaptTau;
+    const float newExposure = adaptation::v1::ExponentialBlend(
+        prevExposure, targetExposure, cb.deltaTime, tau);
+
+    OutExposure[0] = max(newExposure, 1e-6f);
   }
 
-  // Populate the g_localData with   
-  const float weightedSum = computePrefixSum(adaptedCountThisBucket, linearIndex);
-
-  float normalizedEV = 0;
-  if (linearIndex == 0) 
-  {
-
-    uint discardSampleCount = countThisBucket; // discarded (e.g. black) pixel count, since this is the 0th bucket
-
-    float weightedAverage;
-
-    if (cb.averageMode == 1) 
-    {
-      float median = (weightedSum - discardSampleCount) / 2.f;
-      weightedAverage = 0.5f; // Start with the first bucket center
-
-      for (uint i=1 ; i<EXPOSURE_HISTOGRAM_SIZE ; i++) 
-      {
-        if (g_localData[i] > median)
-        {
-          break;
-        }
-        
-        weightedAverage = i + 0.5f; // +0.5 as we want the center of the bucket
-      }
-    }
-    else 
-    {
-      // Weight our sum by the number of pixels (account for the almost black pixels in bucket[0] - which shouldnt contribute to the average)
-      weightedAverage = weightedSum / totalWeight;
-    }
-
-    // Undo histogram transform
-    normalizedEV = histogramOffsetToNormalizedEV(weightedAverage);
-
-    const float currentEV100 = normalizedEV * cb.evRange + cb.evMinValue;
-    
-    const float currentLum = calcEV100Luminance(currentEV100);
-
-    // Map average luminance to middle grey
-    const float middleGrey = 0.18f;
-
-    const float currentExposure = middleGrey / max(0.001f, currentLum * (1.0 - middleGrey));
-
-    // Smooth out large exposure swings over time
-    const float previousExposure = OutExposure[0];
-    const float adaptedExposure = previousExposure + (currentExposure - previousExposure) * (1.f - exp2(-cb.autoExposureSpeed));
-
-    OutExposure[0] = adaptedExposure;
-  }
-  
   if (cb.debugMode)
   {
-    DebugView[uint2(linearIndex, 0)] = vec4(float(countThisBucket) / 10000, 0, weight, 1.0);
-    if (linearIndex == 0) 
-    {
-      // Remap exposure to bucket (1, size-1)
-      int avgIdx = uint(normalizedEVToHistogramOffset(normalizedEV));
-      DebugView[uint2(avgIdx, 0)] = float4(0,1,weight,1);
-    }
+    DebugView[uint2(linearIndex, 0)] = vec4(float(pixelCount) / 10000.0f, 0.0f, gaussianBinWeight(linearIndex), 1.0f);
   }
-  
-  // Reset the histogram
+
+  // Reset the histogram for the next frame.
   InOutHistogram[linearIndex] = 0;
 }

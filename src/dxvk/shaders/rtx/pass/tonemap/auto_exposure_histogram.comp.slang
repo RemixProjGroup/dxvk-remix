@@ -32,34 +32,23 @@ ConstantBuffer<ToneMappingAutoExposureArgs> cb;
 
 groupshared uint g_localData[EXPOSURE_HISTOGRAM_SIZE];
 
+// Map per-pixel luminance to a log-luminance histogram bucket.
+//   Bucket 0       => "near-black" pixels, excluded from the average.
+//   Buckets 1..N-1 => log2-luminance evenly spaced over
+//                     [kAutoExposureLogLumMin, kAutoExposureLogLumMax].
+// The range and helpers are defined in tonemapping.slangh so the resolve
+// pass can decode them symmetrically.
 uint inputToHistogramBucket(const float3 inputColor)
 {
   const float inputLuminance = calcBt709Luminance(inputColor);
 
-  // Count nearly black pixels in the 0th bucket
-  const float kEpsilon = 0.00001f;
+  const float kEpsilon = 1e-5f;
   if (inputLuminance < kEpsilon)
   {
     return 0;
   }
 
-  const float ev100 = calcLuminanceEV100(inputLuminance);
-  
-  const float normalizedEV = saturate((ev100 - cb.evMinValue) / cb.evRange);
-
-  // Remap exposure to bucket (1, size-1)
-  return uint(normalizedEVToHistogramOffset(normalizedEV));
-}
-
-float centerMeteringWeight(float2 screenUV, float aspect)
-{
-  if (!cb.enableCenterMetering)
-  {
-    return 1.f;
-  }
-
-  const float weight = saturate(length( (screenUV - vec2(0.5f)) / vec2(1.0f, aspect) ) / cb.centerMeteringSize);
-  return lerp(1.0f, 0.0f, weight);
+  return luminanceToHistogramBin(inputLuminance);
 }
 
 [shader("compute")]
@@ -67,20 +56,16 @@ float centerMeteringWeight(float2 screenUV, float aspect)
 void main(uint2 threadId : SV_DispatchThreadID, uint linearIndex : SV_GroupIndex)
 {
   g_localData[linearIndex] = 0;
-  
+
   GroupMemoryBarrierWithGroupSync();
 
   uint2 dimensions;
   InColorBuffer.GetDimensions(dimensions.x, dimensions.y);
-  
+
   if (all(threadId < dimensions))
   {
     const float3 inputColor = InColorBuffer[threadId].xyz;
-
-    const float3 weightedColor = inputColor * centerMeteringWeight(float2(threadId)/dimensions, (float)dimensions.x/dimensions.y);
-
-    const uint bucketIdx = inputToHistogramBucket(weightedColor);
-    
+    const uint bucketIdx = inputToHistogramBucket(inputColor);
     InterlockedAdd(g_localData[bucketIdx], 1);
   }
 

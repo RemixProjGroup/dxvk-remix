@@ -224,7 +224,8 @@ check will enforce it if discipline slips.
 - **Hook** at tonemapper ImGui settings → `fork_hooks::showTonemapOperatorUI` / `fork_hooks::showLocalTonemapOperatorUI` in `rtx_fork_tonemap.cpp`. Also remove the standalone `RemixGui::Checkbox("Use Legacy ACES", ...)` at ~line 3888 — its RtxOption `rtx.useLegacyACES` is being deleted.
   *Operator combo + per-operator sliders replace the old ACES checkbox. "Use Legacy ACES" reachable via TonemapOperator::ACESLegacy enum value.*
 
-- **Inline tweak** at `ImGUI::showRenderingSettings` "Tonemapping" header (~line 3880) — 2-line change: extend the `Tonemapping Mode` combo string from `"Global\0Local\0"` to `"Global\0Local\0Direct\0"` and invert the `if/else` branch so both Global and Direct route to `metaToneMapping().showImguiSettings()`. Required because `TonemappingMode::Direct` (added to the enum in commit 3 of workstream 2) must be selectable from the primary top-level combo, and Direct shares the global tonemapper's UI panel — only the dynamic tone curve is bypassed at dispatch time.
+- **Inline tweak** at `ImGUI::showRenderingSettings` "Tonemapping" header — replaced the `Tonemapping Mode` combo (Global / Local / Direct) with a `Use Local Tonemapping` checkbox and always-visible `metaToneMapping().showImguiSettings()` call. Local tonemapper settings are shown below when the checkbox is enabled. Tuning Mode (tone curve sliders) removed from the panel.
+  *2026-05-13 tonemap refactor: mode selector removed; operator dropdown is now the primary control.*
 
 ---
 
@@ -260,6 +261,15 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** at `ImGui_ImplWin32_UpdateMouseCursor` (~line 236) — 1-line modification to `GetAsyncKeyState` call.
   *Changes key-state sampling to use `GetAsyncKeyState` (async hardware state) instead of the previous synchronous variant to fix key-state detection on the overlay's WndProc path.*
+
+---
+
+## src/dxvk/dxvk_limits.h
+
+**Category:** inline-tweak
+
+- **Inline tweak** at `MaxPushConstantSize` constant — increased from `128` to `256`.
+  *`ToneMappingApplyToneMappingArgs` is 144 bytes (after AgX params added in commit 4), exceeding the original 128-byte limit. Changing to 256 keeps the constant larger than any current push-constant struct and stays within the 256-byte push constant size supported by all target GPUs.*
 
 ---
 
@@ -327,8 +337,8 @@ initializer list and can't be lifted into a separate TU.
 - **Hook** at `RtxContext::dispatchScreenOverlay` (method body + ScreenOverlayShader class) → `fork_hooks::dispatchScreenOverlay` in `rtx_fork_overlay.cpp`
   *`ScreenOverlayShader` lifted to `rtx_fork_overlay.cpp`; `dispatchScreenOverlay` is now a one-line delegate. The hook alpha-composites a plugin-uploaded RGBA buffer over the final tone-mapped image using the compute shader.*
 
-- **Inline tweak** at `RtxContext::dispatchTonemapping` (~line 1727) — global-tonemap dispatch gate widened to include `TonemappingMode::Direct` (`if (mode == Global || mode == Direct)`). In Direct mode, the global tonemapper runs but the apply shader's `cb.directOperatorMode` gate skips the dynamic curve and applies only the selected operator.
-  *Direct tonemapping mode (operator-only, no curve) dispatches through the global path.*
+- **Inline tweak** at `RtxContext::dispatchTonemapping` — removed the `TonemappingMode::Global || TonemappingMode::Direct` dispatch gate; the tonemapper now always runs (always operator-only). The `DxvkLocalToneMapping` dispatch block was removed entirely (2026-05-15).
+  *2026-05-13 tonemap refactor: global tone curve removed. 2026-05-15: local tonemapper removed.*
 
 - **Inline tweak** at `(file scope)` (weather header include) — 1-line addition near the existing `rtx_fork_*.h` includes.
   *Adds `#include "rtx_fork_weather.h"` so `WeatherBlender` and the `fork_weather` namespace are available in this translation unit.*
@@ -513,20 +523,6 @@ initializer list and can't be lifted into a separate TU.
 
 ---
 
-## src/dxvk/rtx_render/rtx_local_tone_mapping.cpp
-
-- **Hook calls** at `DxvkLocalToneMapping::dispatchFinalCombine` (args-population) and `DxvkLocalToneMapping::showImguiSettings` (ImGui panel) → `fork_hooks::populateLocalTonemapOperatorArgs` + `fork_hooks::showLocalTonemapOperatorUI` in `rtx_fork_tonemap.cpp`. Plus inline tweak: `LuminanceArgs::useLegacyACES` field assignment → write operator-derived uint (1-field struct, not worth its own hook).
-  *Routes local tonemap through the fork operator dispatcher.*
-
----
-
-## src/dxvk/rtx_render/rtx_local_tone_mapping.h
-
-- **Inline tweak** — remove `rtx.localtonemap.finalizeWithACES` RtxOption (default was `true`; superseded by `rtx.localtonemap.tonemapOperator` in `rtx_fork_tonemap.cpp` with default `ACESLegacy` to preserve behavior); add `#include "rtx_fork_tonemap.h"`.
-  *Adopts the fork operator enum; preserves the port's local ACES-Legacy default.*
-
----
-
 ## src/dxvk/rtx_render/rtx_options.h
 
 **Pre-refactor fork footprint:** +32 / -0 LOC (audit 2026-04-18)
@@ -560,11 +556,11 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `RtxOptions` class body (weather preset RTX_OPTION block) -- 1-line macro invocation + 14-line undef block.
   *Invokes `DECLARE_ALL_WEATHER_PRESETS()` inside the `RtxOptions` struct body to expand all 348 RTX_OPTION declarations (12 presets x 29 fields). The 14 `#undef` lines immediately following clean up the binder macros so they do not leak into downstream includes.*
 
-- **Inline tweak** — remove `rtx.useLegacyACES` + `rtx.showLegacyACESOption` RtxOptions (superseded by `TonemapOperator::ACESLegacy` enum value).
+- **Inline tweak** — remove `rtx.useLegacyACES` + `rtx.showLegacyACESOption` RtxOptions (superseded by `TonemapOperator::ACESNarkowicz` enum value).
   *Both options live at the `rtx` namespace (not `rtx.tonemap`); removed in the enum refactor.*
 
-- **Inline tweak** at `TonemappingMode` enum (Workstream 2 commit 3) — add third value `Direct` (operator-only dispatch, skips dynamic curve + local pyramid). Consumed by `fork_hooks::shouldSkipToneCurve` and by the widened tonemap dispatch gate in `rtx_context.cpp`.
-  *Extends the upstream two-value `TonemappingMode` enum with the fork-introduced `Direct` value (gmod baad5e79).*
+- **Inline tweak** — remove `TonemappingMode` enum (Global / Local / Direct) and `tonemappingMode` RTX_OPTION. The dynamic tone curve (histogram + curve passes) is removed; the apply pass dispatches the operator directly. Local tonemapping (`DxvkLocalToneMapping`, `useLocalToneMapping` RTX_OPTION, `rtx.localtonemap.*`) removed entirely on 2026-05-15. The vestigial `directOperatorMode` CB field was removed in the 2026-05-XX cleanup along with the dead histogram / tone-curve dispatch passes and the ACES enum rename (`ACES`/`ACESLegacy` → `ACESHill`/`ACESNarkowicz`).
+  *2026-05-13 tonemap refactor: simplified from three-mode selector to global operator dropdown. 2026-05-15: local tonemap path removed entirely. 2026-05-XX: dead-code cleanup + snake_case shader rename.*
 
 ---
 
@@ -1080,27 +1076,6 @@ initializer list and can't be lifted into a separate TU.
 
 ---
 
-## src/dxvk/shaders/rtx/pass/local_tonemap/final_combine.comp.slang
-
-- **Inline tweak** at `main` (luminance weighting + final combine paths) — replace `cb.useLegacyACES` with `cb.tonemapOperator == tonemapOperatorACESLegacy`; replace `if (cb.finalizeWithACES) { ... ACESFilm(...) }` with `applyTonemapOperator(cb.tonemapOperator, ...)`. Add `#include "rtx/pass/tonemap/fork_tonemap_operators.slangh"`.
-  *Local-tonemap final combine routes through the fork dispatcher for operator selection.*
-
----
-
-## src/dxvk/shaders/rtx/pass/local_tonemap/local_tonemapping.h
-
-- **Inline tweak** at `LuminanceArgs` and `FinalCombineArgs` struct definitions — swap `useLegacyACES` (LuminanceArgs) and `finalizeWithACES`/`useLegacyACES` (FinalCombineArgs) uint fields for `tonemapOperator` + `directOperatorMode` uints; preserve struct sizes (32 / 64 bytes) via field renaming and `static_assert`s.
-  *Local args structs adopt the operator enum; shader-side reads via `cb.tonemapOperator`.*
-
----
-
-## src/dxvk/shaders/rtx/pass/local_tonemap/luminance.comp.slang
-
-- **Inline tweak** at `main` — replace `cb.useLegacyACES` reads with `cb.tonemapOperator == tonemapOperatorACESLegacy`. ACES is always used for luminance weighting regardless of the final operator.
-  *Legacy/fitted ACES variant is now derived from the operator enum.*
-
----
-
 ## src/dxvk/shaders/rtx/pass/tonemap/AgX.hlsl
 
 - **Fork-owned** — new file (commit 4, byte-for-byte port from gmod f3501d46). Contains the AgX tonemapper (`AgXToneMapping(color, gamma, saturation, exposureOffset, look, contrast, slope, power)`) plus its look presets and internal helpers. Included by `fork_tonemap_operators.slangh`.
@@ -1117,22 +1092,43 @@ initializer list and can't be lifted into a separate TU.
 
 ## src/dxvk/shaders/rtx/pass/tonemap/fork_tonemap_operators.slangh
 
-- **Fork-owned** — new file. Hosts the `applyTonemapOperator(uint op, vec3 color, bool suppressBlackLevelClamp, ...)` dispatcher. Commits 3-5 extend the dispatcher with HableFilmic / AgX / Lottes branches and include their respective operator implementations (`AgX.hlsl` in commit 4, `Lottes.hlsl` in commit 5).
+- **Fork-owned** — new file. Hosts the `applyTonemapOperator(uint op, vec3 color, bool suppressBlackLevelClamp, ...)` dispatcher. Commits 3-5 extend the dispatcher with HableFilmic / AgX / Lottes branches and include their respective operator implementations (`AgX.hlsl` in commit 4, `Lottes.hlsl` in commit 5). The GT7 branch was added 2026-05-XX (no extra dispatcher params — the SDR-mode GT7 operator hardcodes peak = 1.0).
   *Fork-owned shader header: operator dispatch lives here so upstream passes shrink to one-line calls.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/tonemap/gt7.slangh
+
+- **Fork-owned** — new file (2026-05-XX). Slang port of the Polyphony Digital "GT7 Tone Mapping" reference (MIT 2025, SIGGRAPH 2025 supplemental). SDR mode, peak hardcoded to 1.0, ICtCp UCS. Wired into the dispatcher via `tonemapOperatorGT7` (= 7).
+  *Fork-owned GT7 operator implementation.*
+
+---
+
+## src/dxvk/shaders/rtx/utility/pq.slangh
+
+- **Fork-owned** — new file (2026-05-XX). Shared SMPTE ST.2084 (PQ) constants + `PQDecode` / `PQEncode` (vec3, donut-attributed) + scalar `pq_eotfSt2084` / `pq_inverseEotfSt2084` (GT7-style, frame-buffer units). Extracted from `temporal_aa.comp.slang` so both the TAA pass and the GT7 tonemap operator can share the same math.
+  *Fork-owned shared PQ math.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/temporal_aa/temporal_aa.comp.slang
+
+- **Inline tweak** at the include block + PQ constants/helpers (~lines 22-83) — replaced the inlined PQ constants and `PQDecode` / `PQEncode` definitions with `#include "rtx/utility/pq.slangh"` so the GT7 tonemap operator can share them. The function signatures and constant values are unchanged.
+  *PQ helpers extracted to a shared header; donut attribution preserved in `utility/pq.slangh`.*
 
 ---
 
 ## src/dxvk/shaders/rtx/pass/tonemap/tonemapping.h
 
-- **Inline tweak** at `(file scope)` (operator constants) — add `tonemapOperatorNone` / `tonemapOperatorACES` / `tonemapOperatorACESLegacy` (commits 3-5 extend with HableFilmic / AgX / Lottes).
-- **Inline tweak** at `ToneMappingApplyToneMappingArgs` struct — swap `finalizeWithACES`/`useLegacyACES` uints for `tonemapOperator` + `directOperatorMode` + pad slots; `static_assert(sizeof(...) == 80)` pins the struct size (commits 3-5 grow the struct and update the assert).
+- **Inline tweak** at `(file scope)` (operator constants) — add `tonemapOperatorNone` / `tonemapOperatorACESHill` / `tonemapOperatorACESNarkowicz` / `tonemapOperatorHableFilmic` / `tonemapOperatorAgX` / `tonemapOperatorLottes` / `tonemapOperatorPsycho17` / `tonemapOperatorGT7` (renamed from the original `tonemapOperatorACES` / `tonemapOperatorACESLegacy` in the 2026-05-XX cleanup; `Psycho11` was renamed to `Psycho17` when the operator was replaced with a port of renodx Psycho Test 17 — see `src/dxvk/shaders/rtx/pass/tonemap/psycho17.slangh` for the MIT attribution to Carlos Lopez Jr. The UI dropdown label is `PsychoV17_Beta`. `tonemapOperatorGT7` was added 2026-05-XX for the Polyphony Digital GT7 SDR port — see `src/dxvk/shaders/rtx/pass/tonemap/gt7.slangh`).
+- **Inline tweak** at `ToneMappingApplyToneMappingArgs` struct — swap `finalizeWithACES`/`useLegacyACES` uints for `tonemapOperator` + per-operator param blocks (Hable, AgX, Psycho17). The vestigial `directOperatorMode` field and the legacy histogram / tone-curve bindings (`TONEMAPPING_HISTOGRAM_*`, `TONEMAPPING_TONE_CURVE_*`, `TONEMAPPING_APPLY_TONEMAPPING_TONE_CURVE_INPUT`) and the structs `ToneMappingHistogramArgs` / `ToneMappingCurveArgs` were removed in the 2026-05-XX cleanup. `static_assert(sizeof(...) == 192)` pins the current struct size (Psycho17 block is 64 B: 14 floats + 2 trailing pad floats for 16-byte alignment).
   *Global tonemap shader-shared header adopts the operator enum.*
 
 ---
 
 ## src/dxvk/shaders/rtx/pass/tonemap/tonemapping_apply_tonemapping.comp.slang
 
-- **Inline tweak** at `applyToneMapping` — replace `if (cb.finalizeWithACES) { color = ACESFilm(color, cb.useLegacyACES); }` with `color = applyTonemapOperator(cb.tonemapOperator, color, false);`. Add `#include "rtx/pass/tonemap/fork_tonemap_operators.slangh"`.
+- **Inline tweak** at `applyToneMapping` — replace `if (cb.finalizeWithACES) { color = ACESFilm(color, cb.useLegacyACES); }` with `color = applyTonemapOperator(cb.tonemapOperator, color, false, ...);`. Add `#include "rtx/pass/tonemap/fork_tonemap_operators.slangh"`. The 2026-05-XX cleanup also stripped the dead helpers (`reinhardToneMapper`, `filmicToneMapper`, `dynamicToneMapper`, `lumaAverage`, `setSaturationAverage`) and the `InToneCurve` binding.
   *Global apply pass routes through the fork dispatcher for operator selection.*
 
 ---

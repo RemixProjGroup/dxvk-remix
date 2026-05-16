@@ -52,10 +52,9 @@ namespace dxvk { class D3D9DeviceEx; }
 #include "rtx_resources.h"
 #include "rtx/pass/raytrace_args.h"
 
-// Tonemap shader args structs (ToneMappingApplyToneMappingArgs, FinalCombineArgs)
-// needed by fork_hooks::populateTonemapOperatorArgs / populateLocalTonemapOperatorArgs.
+// Tonemap shader args structs (ToneMappingApplyToneMappingArgs)
+// needed by fork_hooks::populateTonemapOperatorArgs.
 #include "rtx/pass/tonemap/tonemapping.h"
-#include "rtx/pass/local_tonemap/local_tonemapping.h"
 
 namespace dxvk {
 
@@ -467,47 +466,19 @@ namespace dxvk {
       remixapi_VramStats*  out_stats);
 
     // Populates the tonemap-operator-related fields of the global tonemapper's
-    // shader args struct (tonemapOperator, directOperatorMode, Hable params,
-    // AgX params, Lottes params). Called from DxvkToneMapping::dispatchApplyToneMapping.
+    // shader args struct (tonemapOperator + per-operator param blocks for
+    // Hable, AgX, Lottes, Psycho17). Called from
+    // DxvkToneMapping::dispatchApplyToneMapping.
     // No private-member access — uses public RtxOption accessors only.
     // Implementation in rtx_fork_tonemap.cpp.
     void populateTonemapOperatorArgs(ToneMappingApplyToneMappingArgs& args);
 
-    // Populates the tonemap-operator-related fields of the local tonemapper's
-    // FinalCombineArgs constant-buffer struct. Called from
-    // DxvkLocalToneMapping::dispatchFinalCombine (or equivalent args-population
-    // site). The local tonemapper's LuminanceArgs struct (which also has a
-    // useLegacyACES field) is handled inline via a small tweak in Commit 2;
-    // no dedicated hook is warranted for that 1-field struct.
-    // No private-member access.
-    // Implementation in rtx_fork_tonemap.cpp.
-    void populateLocalTonemapOperatorArgs(FinalCombineArgs& args);
-
-    // Renders the Tonemapping Operator combo + per-operator parameter sliders +
-    // Direct-mode toggle inside DxvkToneMapping::showImguiSettings. Called from
-    // the fork-hook call site replacing the old "Finalize With ACES" checkbox.
+    // Renders the Tonemapping Operator combo + per-operator parameter sliders
+    // inside DxvkToneMapping::showImguiSettings. Called from the fork-hook call
+    // site replacing the old "Finalize With ACES" checkbox.
     // No private-member access — uses only public RtxOption / RemixGui / ImGui APIs.
     // Implementation in rtx_fork_tonemap.cpp.
     void showTonemapOperatorUI();
-
-    // Same as showTonemapOperatorUI, but rendered inside
-    // DxvkLocalToneMapping::showImguiSettings. Separate hook because the local
-    // panel reads the rtx.localtonemap.tonemapOperator RtxOption (default
-    // ACESLegacy, preserving the port's current `finalizeWithACES=true` local
-    // default), whereas the global hook reads rtx.tonemap.tonemapOperator
-    // (default None, preserving the current `finalizeWithACES=false` global
-    // default). Keeping two options avoids silently changing either path's
-    // behavior under the enum refactor.
-    // Implementation in rtx_fork_tonemap.cpp.
-    void showLocalTonemapOperatorUI();
-
-    // Returns true when TonemappingMode::Direct is active. Callers in the
-    // global tonemap dispatch path (RtxContext / DxvkToneMapping::dispatch)
-    // use this to skip histogram, tone-curve, and local-pyramid passes and
-    // apply the operator alone to the exposure-adjusted input.
-    // No private-member access.
-    // Implementation in rtx_fork_tonemap.cpp.
-    bool shouldSkipToneCurve();
 
     // Renders the weather preset UI inside the existing atmosphere ImGui tree.
     // Includes preset dropdown, blend duration slider, current/target/progress

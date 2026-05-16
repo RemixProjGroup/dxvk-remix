@@ -185,11 +185,6 @@ namespace dxvk {
       const static ImGuiTabBarFlags tab_bar_flags = ImGuiTabBarFlags_NoCloseWithMiddleMouseButton;
       const static ImGuiTabItemFlags tab_item_flags = ImGuiTabItemFlags_NoCloseWithMiddleMouseButton;
 
-      {
-        ImGui::TextSeparator("Display Settings");
-        RemixGui::SliderInt("Brightness##user", &RtxOptions::userBrightnessObject(), 0, 100, "%d", ImGuiSliderFlags_AlwaysClamp);
-        ImGui::Dummy({ 0.f, 4.f });
-      }
 
       ImGui::PopStyleVar();
 
