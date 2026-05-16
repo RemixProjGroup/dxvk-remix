@@ -549,7 +549,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudWorleyCarveStrength = RtxOptions::cloudWorleyCarveStrength();
     args.cloudWorleyFrequency     = RtxOptions::cloudWorleyFrequency();
     args.cloudWorleyOctaves       = RtxOptions::cloudWorleyOctaves();
-    args.pad_cloudWorley_0        = 0.0f;
+    args.cloudAerialExtinctionPerKm = RtxOptions::cloudAerialExtinctionPerKm();
   }
 
   return args;
