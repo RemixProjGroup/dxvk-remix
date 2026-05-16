@@ -269,7 +269,7 @@ initializer list and can't be lifted into a separate TU.
 **Category:** inline-tweak
 
 - **Inline tweak** at `MaxPushConstantSize` constant — increased from `128` to `256`.
-  *`ToneMappingApplyToneMappingArgs` is 144 bytes (after AgX params added in commit 4), exceeding the original 128-byte limit. Changing to 256 keeps the constant larger than any current push-constant struct and stays within the 256-byte push constant size supported by all target GPUs.*
+  *`ToneMappingApplyToneMappingArgs` grew past the original 128-byte limit once per-operator parameter blocks were added (current size 176 B — see `tonemapping.h` `static_assert`). Changing to 256 keeps the constant larger than any current push-constant struct and stays within the 256-byte push-constant size supported by all target GPUs.*
 
 ---
 
@@ -285,8 +285,8 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `dxvk_src` files list (~line 400) — 2-line addition registering ImGui export sources.
   *Registers `imgui/imgui_remix_exports.cpp` and `imgui/imgui_remix_exports.h` in the DXVK build.*
 
-- **[pending commit 1]** Inline tweak — register `src/dxvk/rtx_render/rtx_fork_tonemap.cpp` in the rtx_render source list. Subsequent commits add `fork_tonemap_operators.slangh` (commit 2), `AgX.hlsl` (commit 4), `Lottes.hlsl` (commit 5).
-  *Fork-owned tonemap module and shader source files.*
+- **Inline tweak** — register `src/dxvk/rtx_render/rtx_fork_tonemap.cpp` in the rtx_render source list. The fork-owned tonemap operator headers (`aces.slangh`, `adaptation_v1.slangh`, `agx.slangh`, `fork_tonemap_operators.slangh`, `gt7.slangh`, `hable.slangh`, `lottes.slangh`, `neutwo.slangh`, `psycho17.slangh`) live under `src/dxvk/shaders/rtx/pass/tonemap/` and are picked up via the shader-include glob; no explicit meson.build entry is required for those.
+  *Fork-owned tonemap module.*
 
 - **Inline tweak** at `dxvk_src` files list (rtx_render block) — 2-line addition registering weather sources.
   *Registers `'rtx_render/rtx_fork_weather.cpp'` and `'rtx_render/rtx_fork_weather.h'` in the DXVK build source list.*
@@ -1076,23 +1076,30 @@ initializer list and can't be lifted into a separate TU.
 
 ---
 
-## src/dxvk/shaders/rtx/pass/tonemap/AgX.hlsl
+## src/dxvk/shaders/rtx/pass/tonemap/aces.slangh
 
-- **Fork-owned** — new file (commit 4, byte-for-byte port from gmod f3501d46). Contains the AgX tonemapper (`AgXToneMapping(color, gamma, saturation, exposureOffset, look, contrast, slope, power)`) plus its look presets and internal helpers. Included by `fork_tonemap_operators.slangh`.
-  *Fork-owned AgX operator implementation.*
+- **Fork-owned** — new file. ACES operator implementations: `acesHill` (Stephen Hill ACES fit) and `acesNarkowicz` (Krzysztof Narkowicz ACES approximation). Included by `fork_tonemap_operators.slangh`; dispatched as `tonemapOperatorACESHill` / `tonemapOperatorACESNarkowicz`.
+  *Fork-owned ACES operator implementations.*
 
 ---
 
-## src/dxvk/shaders/rtx/pass/tonemap/Lottes.hlsl
+## src/dxvk/shaders/rtx/pass/tonemap/adaptation_v1.slangh
 
-- **Fork-owned** — new file (commit 5, byte-for-byte port from gmod cdf2c723). Contains the Lottes 2016 tonemapper (`LottesToneMapping(color, hdrMax, contrast, shoulder, midIn, midOut)`). Included by `fork_tonemap_operators.slangh`. Lottes shares Hable Filmic's 8 param slots in the shader args struct (the two operators are mutually exclusive); slot mapping is documented at the struct definition in `tonemapping.h`.
-  *Fork-owned Lottes operator implementation.*
+- **Fork-owned** — new file. Tiny helper namespace `adaptation::v1` exposing `ExponentialBlend` and `AdaptAsymmetric` for asymmetric exponential eye adaptation (light-tau / dark-tau). Consumed by `auto_exposure.comp.slang`. Renodx-attributed (Carlos Lopez Jr., MIT 2025).
+  *Fork-owned eye-adaptation primitive.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/tonemap/agx.slangh
+
+- **Fork-owned** — new file (renamed from `AgX.hlsl`). AgX Minimal display rendering transform by Benjamin Wrensch (MIT 2024) — `agxMinimalToneMapping(color, saturation, look)`. Depends on `neutwo.slangh` for the max-channel pre-scale that normalizes HDR input into the curve's [0, 1] domain. Included by `fork_tonemap_operators.slangh`.
+  *Fork-owned AgX operator implementation (Minimal variant).*
 
 ---
 
 ## src/dxvk/shaders/rtx/pass/tonemap/fork_tonemap_operators.slangh
 
-- **Fork-owned** — new file. Hosts the `applyTonemapOperator(uint op, vec3 color, bool suppressBlackLevelClamp, ...)` dispatcher. Commits 3-5 extend the dispatcher with HableFilmic / AgX / Lottes branches and include their respective operator implementations (`AgX.hlsl` in commit 4, `Lottes.hlsl` in commit 5). The GT7 branch was added 2026-05-XX (no extra dispatcher params — the SDR-mode GT7 operator hardcodes peak = 1.0).
+- **Fork-owned** — new file. Hosts the `applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp, ...)` dispatcher. Branches on the operator enum and forwards into the operator-specific headers (`aces.slangh`, `hable.slangh`, `agx.slangh`, `lottes.slangh`, `psycho17.slangh`, `gt7.slangh`).
   *Fork-owned shader header: operator dispatch lives here so upstream passes shrink to one-line calls.*
 
 ---
@@ -1101,6 +1108,34 @@ initializer list and can't be lifted into a separate TU.
 
 - **Fork-owned** — new file (2026-05-XX). Slang port of the Polyphony Digital "GT7 Tone Mapping" reference (MIT 2025, SIGGRAPH 2025 supplemental). SDR mode, peak hardcoded to 1.0, ICtCp UCS. Wired into the dispatcher via `tonemapOperatorGT7` (= 7).
   *Fork-owned GT7 operator implementation.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/tonemap/hable.slangh
+
+- **Fork-owned** — new file. Hable Filmic (Uncharted 2) tonemap operator — `hableFilmicToneMapping(color, exposureBias, A, B, C, D, E, F, W)`. Split out of `fork_tonemap_operators.slangh` so each operator has its own header. Included by `fork_tonemap_operators.slangh`.
+  *Fork-owned Hable Filmic operator implementation.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/tonemap/lottes.slangh
+
+- **Fork-owned** — new file (renamed from `Lottes.hlsl`). Lottes 2016 tonemap operator — `lottesToneMapping(color, hdrMax, contrast, shoulder, midIn, midOut)`. Lottes shares Hable Filmic's 8 param slots in the shader args struct (the two operators are mutually exclusive); slot mapping is documented at the struct definition in `tonemapping.h`. Included by `fork_tonemap_operators.slangh`.
+  *Fork-owned Lottes operator implementation.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/tonemap/neutwo.slangh
+
+- **Fork-owned** — new file. Slang port of the renodx "Neutwo" max-channel pre-scale helper — `neutwo_ComputeMaxChannelScale(color)` returns a channel-coherent scale that brings HDR-range input into the [0, 1] curve domain; `neutwo_Neutwo(x) = x * rsqrt(x*x + 1)` is the underlying saturation kernel. Currently consumed by `agx.slangh`. Renodx-attributed (Carlos Lopez Jr., MIT 2025).
+  *Fork-owned curve-normalization helper.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/tonemap/psycho17.slangh
+
+- **Fork-owned** — new file. Self-contained Slang port of the renodx "Psycho Test 17" operator and its required color-pipeline dependencies (Stockman-Sharpe LMS, CIE 170-2 MacLeod-Boynton + gamut, Naka-Rushton, color grading). Dispatched as `tonemapOperatorPsycho17` (UI label: `PsychoV17_Beta`). Renodx-attributed (Carlos Lopez Jr., MIT 2025).
+  *Fork-owned Psycho Test 17 operator implementation.*
 
 ---
 
@@ -1121,7 +1156,7 @@ initializer list and can't be lifted into a separate TU.
 ## src/dxvk/shaders/rtx/pass/tonemap/tonemapping.h
 
 - **Inline tweak** at `(file scope)` (operator constants) — add `tonemapOperatorNone` / `tonemapOperatorACESHill` / `tonemapOperatorACESNarkowicz` / `tonemapOperatorHableFilmic` / `tonemapOperatorAgX` / `tonemapOperatorLottes` / `tonemapOperatorPsycho17` / `tonemapOperatorGT7` (renamed from the original `tonemapOperatorACES` / `tonemapOperatorACESLegacy` in the 2026-05-XX cleanup; `Psycho11` was renamed to `Psycho17` when the operator was replaced with a port of renodx Psycho Test 17 — see `src/dxvk/shaders/rtx/pass/tonemap/psycho17.slangh` for the MIT attribution to Carlos Lopez Jr. The UI dropdown label is `PsychoV17_Beta`. `tonemapOperatorGT7` was added 2026-05-XX for the Polyphony Digital GT7 SDR port — see `src/dxvk/shaders/rtx/pass/tonemap/gt7.slangh`).
-- **Inline tweak** at `ToneMappingApplyToneMappingArgs` struct — swap `finalizeWithACES`/`useLegacyACES` uints for `tonemapOperator` + per-operator param blocks (Hable, AgX, Psycho17). The vestigial `directOperatorMode` field and the legacy histogram / tone-curve bindings (`TONEMAPPING_HISTOGRAM_*`, `TONEMAPPING_TONE_CURVE_*`, `TONEMAPPING_APPLY_TONEMAPPING_TONE_CURVE_INPUT`) and the structs `ToneMappingHistogramArgs` / `ToneMappingCurveArgs` were removed in the 2026-05-XX cleanup. `static_assert(sizeof(...) == 192)` pins the current struct size (Psycho17 block is 64 B: 14 floats + 2 trailing pad floats for 16-byte alignment).
+- **Inline tweak** at `ToneMappingApplyToneMappingArgs` struct — swap `finalizeWithACES`/`useLegacyACES` uints for `tonemapOperator` + per-operator param blocks (Hable, AgX, Psycho17). The vestigial `directOperatorMode` field and the legacy histogram / tone-curve bindings (`TONEMAPPING_HISTOGRAM_*`, `TONEMAPPING_TONE_CURVE_*`, `TONEMAPPING_APPLY_TONEMAPPING_TONE_CURVE_INPUT`) and the structs `ToneMappingHistogramArgs` / `ToneMappingCurveArgs` were removed in the 2026-05-XX cleanup. `static_assert(sizeof(...) == 176)` pins the current struct size: AgX block is 16 B (saturation + look + 2 pad floats) since the AgX Minimal operator only consumes those two fields; Psycho17 block is 64 B (14 floats + 2 trailing pad floats for 16-byte alignment).
   *Global tonemap shader-shared header adopts the operator enum.*
 
 ---

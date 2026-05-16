@@ -1,15 +1,16 @@
 // rtx_fork_tonemap.cpp
 //
 // Fork-owned implementations of the tonemap operator hooks declared in
-// rtx_fork_hooks.h. Populated incrementally across Workstream 2 commits:
-//   - Commit 1: scaffold only.
-//   - Commit 2: TonemapOperator enum + ACES-through-dispatcher. Two
-//                tonemapOperator RtxOptions (rtx.tonemap default None,
-//                rtx.localtonemap default ACESLegacy) preserve each path's
-//                pre-refactor visual default.
-//   - Commit 3 (this commit): Hable Filmic operator + Direct mode + sliders.
-//   - Commit 4: AgX operator + AgX sliders.
-//   - Commit 5: Lottes 2016 operator + Lottes sliders.
+// rtx_fork_hooks.h. Hosts:
+//   - writeOperatorParams: copies the per-operator RtxOption values
+//     (Hable / AgX / Lottes / Psycho17) into the shared shader args
+//     struct. When Lottes is the selected operator, its 5 params overlay
+//     the 8 Hable push-constant slots — slot mapping is documented at
+//     the struct definition in shaders/rtx/pass/tonemap/tonemapping.h.
+//   - populateTonemapOperatorArgs: the global hook called from the
+//     apply-tonemapping pass to populate the args struct.
+//   - showTonemapOperatorUI: the operator-dropdown + per-operator
+//     parameter panels rendered inside the global tonemap ImGui section.
 //
 // See docs/fork-touchpoints.md for the catalogue of fork hooks and which
 // upstream files call each one.
@@ -51,13 +52,10 @@ namespace dxvk {
         args.hableToeDenominator   = RtxForkHableFilmic::toeDenominator();
         args.hableWhitePoint       = RtxForkHableFilmic::whitePoint();
       }
-      args.agxGamma          = 1.0f;
-      args.agxSaturation     = AgXClass::saturation();
-      args.agxExposureOffset = 0.0f;
-      args.agxLook           = static_cast<uint32_t>(AgXClass::look());
-      args.agxContrast       = 1.0f;
-      args.agxSlope          = 1.0f;
-      args.agxPower          = 1.0f;
+      args.agxSaturation = AgXClass::saturation();
+      args.agxLook       = static_cast<uint32_t>(AgXClass::look());
+      args.agxPad0       = 0.0f;
+      args.agxPad1       = 0.0f;
       args.psycho17PeakValue            = 1.0f; // Hardcoded per design: peak luminance pinned at 1.0 (no UI / RTX_OPTION).
       args.psycho17Exposure             = Psycho17Class::exposure();
       args.psycho17Highlights           = Psycho17Class::highlights();

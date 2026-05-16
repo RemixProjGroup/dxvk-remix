@@ -125,16 +125,14 @@ struct ToneMappingApplyToneMappingArgs {
   float hableToeDenominator;     // F
   float hableWhitePoint;         // W
 
-  // AgX Minimal parameters (op == tonemapOperatorAgX). 32 bytes.
-  float agxGamma;
+  // AgX Minimal parameters (op == tonemapOperatorAgX). 16 bytes.
+  // The AgX Minimal operator (agx.slangh) only consumes saturation + look;
+  // gamma / exposureOffset / contrast / slope / power from the older
+  // gmod-derived AgX surface are intentionally dropped here.
   float agxSaturation;
-  float agxExposureOffset;
   uint  agxLook;
-
-  float agxContrast;
-  float agxSlope;
-  float agxPower;
-  float agxPad;
+  float agxPad0;
+  float agxPad1;
 
   // Psycho Test 17 parameters (op == tonemapOperatorPsycho17). 64 bytes
   // (14 floats + 2 trailing pad floats to keep 16B alignment).
@@ -162,8 +160,8 @@ struct ToneMappingApplyToneMappingArgs {
 };
 
 #ifdef __cplusplus
-// 16B flags + 16B state + 16B grading scalars + 16B tint + 32B Hable + 32B AgX + 64B Psycho17.
-static_assert(sizeof(ToneMappingApplyToneMappingArgs) == 192,
+// 16B flags + 16B state + 16B grading scalars + 16B tint + 32B Hable + 16B AgX + 64B Psycho17.
+static_assert(sizeof(ToneMappingApplyToneMappingArgs) == 176,
               "ToneMappingApplyToneMappingArgs layout drift.");
 #endif
 

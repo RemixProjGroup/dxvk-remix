@@ -38,9 +38,7 @@ float3 applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp,
                             float hableD, float hableE, float hableF,
                             float hableW,
                             // AgX Minimal.
-                            float agxGamma, float agxSaturation, float agxExposureOffset,
-                            uint  agxLook,
-                            float agxContrast, float agxSlope, float agxPower,
+                            float agxSaturation, uint agxLook,
                             // Psycho17 (renodx Psycho Test 17 / PsychoV17_Beta).
                             float psycho17PeakValue, float psycho17Exposure,
                             float psycho17Highlights, float psycho17Shadows,
