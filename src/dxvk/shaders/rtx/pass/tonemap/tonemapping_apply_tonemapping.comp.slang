@@ -61,12 +61,9 @@ float3 applyToneMapping(float3 color, uint2 pixelPosition)
 
   if (cb.toneMappingEnabled != 0)
   {
-    // Perceptual observer adaptive state, in BT.709 post-AE-exposure
-    // space. With the perceptual auto-exposure on, the geometric-mean
-    // scene Yf has been scaled to ~mid-gray (0.18), so the operator's
-    // adapted state matches that mid-gray reference. With AE off, fall
-    // back to the renodx default. Only psycho17 currently consumes this;
-    // the other operators ignore the parameter.
+    // Observer adaptive state passed to psycho17; all other operators
+    // ignore this parameter. Fixed at the renodx reference mid-gray
+    // (0.18, 0.18, 0.18) unconditionally — AE state is not wired in.
     const float3 adaptiveStateBT709 = float3(0.18f, 0.18f, 0.18f);
 
     color = applyTonemapOperator(cb.tonemapOperator, color, /*suppressBlackLevelClamp=*/false,

@@ -133,17 +133,27 @@ void main(uint2 threadId : SV_DispatchThreadID, uint linearIndex : SV_GroupIndex
   g_count[linearIndex]    = sumWeight;
   GroupMemoryBarrierWithGroupSync();
 
-  // Single-thread reduction. 256 entries; serial sum on lane 0 keeps
-  // the math obvious and avoids needing a parallel scan.
+  // Parallel tree reduction across all EXPOSURE_HISTOGRAM_SIZE (power-of-two)
+  // lanes. Bin 0 is excluded by virtue of the contribution stage above
+  // having written 0 into g_sumLogYf[0] / g_count[0] (the `linearIndex >= 1`
+  // guard fails on lane 0), so summing the full array drops it implicitly.
+  // Replaces the previous single-thread serial sum which parked the other
+  // 255 lanes idle every frame.
+  [unroll]
+  for (uint stride = EXPOSURE_HISTOGRAM_SIZE / 2; stride > 0; stride >>= 1)
+  {
+    if (linearIndex < stride)
+    {
+      g_sumLogYf[linearIndex] += g_sumLogYf[linearIndex + stride];
+      g_count[linearIndex]    += g_count[linearIndex + stride];
+    }
+    GroupMemoryBarrierWithGroupSync();
+  }
+
   if (linearIndex == 0)
   {
-    float totalSumLogYf = 0.0f;
-    float totalWeight   = 0.0f;
-    for (uint i = 1; i < EXPOSURE_HISTOGRAM_SIZE; ++i)
-    {
-      totalSumLogYf += g_sumLogYf[i];
-      totalWeight   += g_count[i];
-    }
+    const float totalSumLogYf = g_sumLogYf[0];
+    const float totalWeight   = g_count[0];
 
     // Gaussian-weighted geometric mean of Yf. This is the adapted scene
     // level the cone system would settle on for static viewing, biased
