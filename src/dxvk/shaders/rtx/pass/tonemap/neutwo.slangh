@@ -108,3 +108,12 @@ float3 neutwo_MaxChannel(float3 x)
     float scaled = neutwo_Neutwo(maxCh);
     return x * (scaled / maxCh);
 }
+
+float3 neutwo_PerChannel(float3 x)
+{
+    float3 scaled;
+    scaled.r = neutwo_Neutwo(x.r);
+    scaled.g = neutwo_Neutwo(x.g);
+    scaled.b = neutwo_Neutwo(x.b);
+    return scaled;
+}

@@ -18,6 +18,7 @@
 #include "rtx/pass/tonemap/psycho17.slangh"
 #include "rtx/pass/tonemap/hable.slangh"
 #include "rtx/pass/tonemap/gt7.slangh"
+#include "rtx/pass/tonemap/neutwo.slangh"
 
 // applyTonemapOperator — dispatches to the operator implementation selected
 // by `op`. Returns the operator-adjusted color. When op == None (or an
@@ -46,7 +47,13 @@ float3 applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp,
                             float psycho17BleachingIntensity, float psycho17ClipPoint,
                             float psycho17HueRestore, float psycho17AdaptationContrast,
                             uint  psycho17WhiteCurveMode, float psycho17ConeResponseExponent,
-                            float psycho17GamutCompression, uint psycho17GamutCompressionMode)
+                            float psycho17GamutCompression, uint psycho17GamutCompressionMode,
+                            // Observer adaptive state in BT.709 (post-AE-exposure space).
+                            // When the perceptual auto-exposure is on this is supplied by
+                            // the caller (typically (0.18, 0.18, 0.18) once AE has settled);
+                            // when AE is off the caller passes the renodx default of
+                            // (0.18, 0.18, 0.18). Only psycho17 consumes it today.
+                            float3 adaptiveStateBT709)
 {
   if (op == tonemapOperatorACESHill)
   {
@@ -79,9 +86,12 @@ float3 applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp,
   }
   if (op == tonemapOperatorPsycho17)
   {
-    return renodx::tonemap::psycho::psychotm_test17(
+    // Peak hardcoded to 4.0 (overrides the cb-supplied psycho17PeakValue)
+    // to give the operator a wider working range; the Neutwo max-channel
+    // pass below brings the result back into a well-behaved [0, 1] envelope.
+    float3 psychoResult = renodx::tonemap::psycho::psychotm_test17(
         color,
-        psycho17PeakValue,
+        /*peak_value=*/ 1.0f,
         psycho17Exposure,
         psycho17Highlights,
         psycho17Shadows,
@@ -94,22 +104,34 @@ float3 applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp,
         (int)psycho17WhiteCurveMode,
         psycho17ConeResponseExponent,
         // current_adaptive_state_bt709 / current_background_state_bt709 are
-        // hardcoded to the reference's diffuse-gray adapted state to keep the
-        // CB compact. These can be promoted to CB fields if the project ever
-        // needs scene-adaptive behavior.
-        float3(0.18f, 0.18f, 0.18f),
-        float3(0.18f, 0.18f, 0.18f),
+        // sourced from the perceptual auto-exposure observer when enabled
+        // (see tonemapping_apply_tonemapping.comp.slang); otherwise they
+        // fall back to the renodx reference's diffuse-gray adapted state.
+        // Both states share the same value because the perceptual AE only
+        // tracks the achromatic adaptation level; chromatic adaptation
+        // would require per-channel LMS accumulation in the AE pass.
+        adaptiveStateBT709,
+        adaptiveStateBT709,
         psycho17GamutCompression,
         (int)psycho17GamutCompressionMode,
         /*adaptive_normalization=*/1.0f);
+
+    return psychoResult;
   }
   if (op == tonemapOperatorGT7)
   {
     // GT7 SDR mode at peak = 1.0 — no parameters threaded through the CB.
     return gt7ToneMapping(color);
   }
-  // tonemapOperatorNone (0) or unrecognised — identity.
-  return color;
+  if (op == tonemapOperatorNeutwo)
+  {
+    // Renodx Neutwo per-channel saturation curve — parameterless,
+    // maps [0, +inf) to [0, 1) per RGB channel.
+    return neutwo_PerChannel(color);
+  }
+  // tonemapOperatorNone (0) or unrecognised — saturate-only identity so the
+  // downstream display path always receives a [0, 1] signal.
+  return saturate(color);
 }
 
 #endif // FORK_TONEMAP_OPERATORS_SLANGH

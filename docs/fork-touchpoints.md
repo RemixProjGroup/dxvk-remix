@@ -1097,9 +1097,23 @@ initializer list and can't be lifted into a separate TU.
 
 ---
 
+## src/dxvk/shaders/rtx/pass/tonemap/auto_exposure.comp.slang
+
+- **Block** at `(file scope)` — full rewrite of the resolve stage to a perceptual observer model. Reads the log-Yf histogram emitted by `auto_exposure_histogram.comp.slang`, computes a geometric (log) mean of Yf as the adapted scene level, and derives the target exposure scale from a first-site cone-contrast law `exposure = Y_target / (Y_adapt + Y_noise)` with `Y_target = 0.18` (mid-gray) and `Y_noise = 0.0032` (Stockman & Brainard 2010 cone-system noise floor — caps the dark-scene boost without an arbitrary clamp). Asymmetric exponential blending then runs in log-exposure space so the time-constants are invariant to absolute scene level. Replaces the prior Naka-Rushton-in-resolve form (Gaussian bin weighting + `1 / (L + sigma)`).
+  *Auto-exposure resolve now shares an achromatic basis (Yf) with the psycho17 tonemap operator and produces an exposure scale any operator can consume.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/tonemap/auto_exposure_histogram.comp.slang
+
+- **Inline tweak** at `inputToHistogramBucket` — bin Stockman-Sharpe CIE 170-2 luminosity Yf (via `renodx::tonemap::psycho::yf::from_BT709`) instead of BT.709 photometric luminance, so the resolve pass and the psycho17 observer share a single physiological achromatic measure. Also collapses NaN / negative inputs to bin 0 via `!(yf >= eps)`. Adds `#include "rtx/pass/tonemap/psycho17.slangh"` for the Yf helper.
+  *Histogram now lives in observer-model space; the bin layout / size / atomic accumulation are unchanged.*
+
+---
+
 ## src/dxvk/shaders/rtx/pass/tonemap/fork_tonemap_operators.slangh
 
-- **Fork-owned** — new file. Hosts the `applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp, ...)` dispatcher. Branches on the operator enum and forwards into the operator-specific headers (`aces.slangh`, `hable.slangh`, `agx.slangh`, `lottes.slangh`, `psycho17.slangh`, `gt7.slangh`).
+- **Fork-owned** — new file. Hosts the `applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp, ..., float3 adaptiveStateBT709)` dispatcher. Branches on the operator enum and forwards into the operator-specific headers (`aces.slangh`, `hable.slangh`, `agx.slangh`, `lottes.slangh`, `psycho17.slangh`, `gt7.slangh`). The trailing `adaptiveStateBT709` parameter carries the perceptual-AE observer adaptive state into psycho17's `current_adaptive_state_bt709` / `current_background_state_bt709` slots; the other operators ignore it.
   *Fork-owned shader header: operator dispatch lives here so upstream passes shrink to one-line calls.*
 
 ---
@@ -1156,6 +1170,7 @@ initializer list and can't be lifted into a separate TU.
 ## src/dxvk/shaders/rtx/pass/tonemap/tonemapping.h
 
 - **Inline tweak** at `(file scope)` (operator constants) — add `tonemapOperatorNone` / `tonemapOperatorACESHill` / `tonemapOperatorACESNarkowicz` / `tonemapOperatorHableFilmic` / `tonemapOperatorAgX` / `tonemapOperatorLottes` / `tonemapOperatorPsycho17` / `tonemapOperatorGT7` (renamed from the original `tonemapOperatorACES` / `tonemapOperatorACESLegacy` in the 2026-05-XX cleanup; `Psycho11` was renamed to `Psycho17` when the operator was replaced with a port of renodx Psycho Test 17 — see `src/dxvk/shaders/rtx/pass/tonemap/psycho17.slangh` for the MIT attribution to Carlos Lopez Jr. The UI dropdown label is `PsychoV17_Beta`. `tonemapOperatorGT7` was added 2026-05-XX for the Polyphony Digital GT7 SDR port — see `src/dxvk/shaders/rtx/pass/tonemap/gt7.slangh`).
+- **Inline tweak** at `ToneMappingAutoExposureArgs` doc comment — updated to describe the new perceptual pipeline (log2-Yf histogram + geometric mean + first-site cone-contrast law + log-space asymmetric blend) instead of the previous BT.709-luminance + Gaussian + Naka-Rushton-in-resolve description. The struct fields themselves are unchanged.
 - **Inline tweak** at `ToneMappingApplyToneMappingArgs` struct — swap `finalizeWithACES`/`useLegacyACES` uints for `tonemapOperator` + per-operator param blocks (Hable, AgX, Psycho17). The vestigial `directOperatorMode` field and the legacy histogram / tone-curve bindings (`TONEMAPPING_HISTOGRAM_*`, `TONEMAPPING_TONE_CURVE_*`, `TONEMAPPING_APPLY_TONEMAPPING_TONE_CURVE_INPUT`) and the structs `ToneMappingHistogramArgs` / `ToneMappingCurveArgs` were removed in the 2026-05-XX cleanup. `static_assert(sizeof(...) == 176)` pins the current struct size: AgX block is 16 B (saturation + look + 2 pad floats) since the AgX Minimal operator only consumes those two fields; Psycho17 block is 64 B (14 floats + 2 trailing pad floats for 16-byte alignment).
   *Global tonemap shader-shared header adopts the operator enum.*
 
@@ -1163,7 +1178,7 @@ initializer list and can't be lifted into a separate TU.
 
 ## src/dxvk/shaders/rtx/pass/tonemap/tonemapping_apply_tonemapping.comp.slang
 
-- **Inline tweak** at `applyToneMapping` — replace `if (cb.finalizeWithACES) { color = ACESFilm(color, cb.useLegacyACES); }` with `color = applyTonemapOperator(cb.tonemapOperator, color, false, ...);`. Add `#include "rtx/pass/tonemap/fork_tonemap_operators.slangh"`. The 2026-05-XX cleanup also stripped the dead helpers (`reinhardToneMapper`, `filmicToneMapper`, `dynamicToneMapper`, `lumaAverage`, `setSaturationAverage`) and the `InToneCurve` binding.
+- **Inline tweak** at `applyToneMapping` — replace `if (cb.finalizeWithACES) { color = ACESFilm(color, cb.useLegacyACES); }` with `color = applyTonemapOperator(cb.tonemapOperator, color, false, ..., adaptiveStateBT709);`. Add `#include "rtx/pass/tonemap/fork_tonemap_operators.slangh"`. The 2026-05-XX cleanup also stripped the dead helpers (`reinhardToneMapper`, `filmicToneMapper`, `dynamicToneMapper`, `lumaAverage`, `setSaturationAverage`) and the `InToneCurve` binding. `adaptiveStateBT709` is the observer adaptive state in post-AE-exposure BT.709 space — currently `(0.18, 0.18, 0.18)` because the perceptual auto-exposure brings the geometric-mean scene Yf to mid-gray; consumed by psycho17, ignored by other operators.
   *Global apply pass routes through the fork dispatcher for operator selection.*
 
 ---

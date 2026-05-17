@@ -72,7 +72,7 @@ namespace dxvk {
   DxvkAutoExposure::~DxvkAutoExposure()  {  }
 
   void DxvkAutoExposure::showImguiSettings() {
-    RemixGui::Checkbox("Eye Adaptation", &enabledObject());
+    RemixGui::Checkbox("Perceptual Eye Adaptation", &enabledObject());
     if (enabled()) {
       ImGui::Indent();
       RemixGui::DragFloat("Light Adapt Tau (s)", &lightAdaptTauObject(), 0.005f, 0.01f, 5.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);

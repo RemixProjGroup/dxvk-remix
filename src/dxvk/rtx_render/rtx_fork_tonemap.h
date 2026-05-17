@@ -29,6 +29,7 @@ namespace dxvk {
     Lottes        = 5,
     Psycho17      = 6, // Renodx Psycho Test 17 (UI label: PsychoV17_Beta).
     GT7           = 7, // Gran Turismo 7 (Polyphony Digital / MIT). SDR, peak 1.0, ICtCp UCS.
+    Neutwo        = 8, // Renodx Neutwo per-channel saturation curve (Carlos Lopez Jr. / MIT). Parameterless.
   };
 
   // Global-tonemapper operator selection. Defaults to None (identity); the
@@ -38,9 +39,9 @@ namespace dxvk {
   class RtxForkGlobalTonemap {
     RTX_OPTION_ENV("rtx.tonemap", TonemapOperator, tonemapOperator, TonemapOperator::None, "DXVK_TONEMAP_OPERATOR",
                    "Tonemapping operator applied to the post-exposure color buffer.\n"
-                   "Supported values: 0 = None (identity), 1 = Hill ACES, 2 = Narkowicz ACES, "
+                   "Supported values: 0 = None (saturate-only identity), 1 = Hill ACES, 2 = Narkowicz ACES, "
                    "3 = Hable Filmic, 4 = AgX, 5 = Lottes 2016, 6 = PsychoV17_Beta, "
-                   "7 = Gran Turismo 7 (SDR).");
+                   "7 = Gran Turismo 7 (SDR), 8 = Neutwo (per-channel).");
   };
 
   // Local-tonemapper operator selection was removed; the local path now shares

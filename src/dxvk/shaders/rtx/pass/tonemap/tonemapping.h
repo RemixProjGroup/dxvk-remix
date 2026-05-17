@@ -54,15 +54,21 @@ static const uint32_t tonemapOperatorAgX            = 4;  // AgX Minimal (Benjam
 static const uint32_t tonemapOperatorLottes         = 5;  // Lottes 2016 (shares Hable's param slots).
 static const uint32_t tonemapOperatorPsycho17       = 6;  // Renodx Psycho Test 17 (PsychoV17_Beta).
 static const uint32_t tonemapOperatorGT7            = 7;  // Gran Turismo 7 (Polyphony Digital / MIT). SDR, peak 1.0, ICtCp UCS.
+static const uint32_t tonemapOperatorNeutwo         = 8;  // Renodx Neutwo per-channel saturation curve (MIT).
 
 // Inputs for the auto-exposure pass. Pipeline shape:
-//   1. Histogram pass bins per-pixel BT.709 luminance into a log-luminance
-//      histogram (no EV mapping).
-//   2. Exposure pass takes a Gaussian-weighted average across bins to get
-//      the scene luminance, runs it through a Naka-Rushton response curve
-//      to derive the target exposure scale, and advances the stored
-//      exposure toward that target with asymmetric exponential dynamics
-//      (lightAdaptTau when brightening, darkAdaptTau when dimming).
+//   1. Histogram pass bins per-pixel CIE 170-2 luminosity Yf
+//      (Stockman-Sharpe LMS, shared with the psycho17 tonemap operator)
+//      into a log2-Yf histogram.
+//   2. Exposure pass takes a geometric (log) mean across bins to get
+//      the adapted scene Yf, then derives the target exposure scale
+//      from a first-site cone-contrast law
+//          exposure = Y_target / (Y_adapt + Y_noise)
+//      (Stockman & Brainard 2010), with Y_target = mid-gray 0.18 and
+//      Y_noise the cone-system noise floor. The stored exposure is
+//      advanced toward that target in log-space with asymmetric
+//      exponential dynamics (lightAdaptTau when brightening,
+//      darkAdaptTau when dimming).
 struct ToneMappingAutoExposureArgs {
   uint  numPixels;
   float lightAdaptTau;  // Time constant (s) when adapting to a brighter scene (photopic, fast).

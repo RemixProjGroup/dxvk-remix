@@ -20,6 +20,7 @@
 * DEALINGS IN THE SOFTWARE.
 */
 #include "rtx/pass/tonemap/tonemapping.slangh"
+#include "rtx/pass/tonemap/psycho17.slangh"
 
 layout(binding = AUTO_EXPOSURE_HISTOGRAM_INPUT_OUTPUT)
 RWTexture1D<uint> OutHistogram;
@@ -32,23 +33,33 @@ ConstantBuffer<ToneMappingAutoExposureArgs> cb;
 
 groupshared uint g_localData[EXPOSURE_HISTOGRAM_SIZE];
 
-// Map per-pixel luminance to a log-luminance histogram bucket.
+// Map per-pixel CIE 170-2 luminosity Yf to a log-Yf histogram bucket.
+//
+// Switched from BT.709 photometric luminance to Stockman-Sharpe Yf
+// (PSYCHO17_MB_WEIGHTS . LMS, exposed as renodx::yf::from_BT709) so the
+// auto-exposure stage and the psycho17 observer model share a single
+// physiological achromatic measure. Exposure scale and any downstream
+// adaptive state therefore live in the same space.
+//
 //   Bucket 0       => "near-black" pixels, excluded from the average.
-//   Buckets 1..N-1 => log2-luminance evenly spaced over
+//   Buckets 1..N-1 => log2-Yf evenly spaced over
 //                     [kAutoExposureLogLumMin, kAutoExposureLogLumMax].
-// The range and helpers are defined in tonemapping.slangh so the resolve
-// pass can decode them symmetrically.
+// The bin helpers in tonemapping.slangh are unit-agnostic, so re-using
+// them for Yf is correct.
 uint inputToHistogramBucket(const float3 inputColor)
 {
-  const float inputLuminance = calcBt709Luminance(inputColor);
+  const float yf = renodx::tonemap::psycho::yf::from_BT709(inputColor);
 
+  // Negative or NaN inputs (e.g. denoiser ringing) collapse to bin 0
+  // via the !(yf >= eps) test so they are excluded from the resolve,
+  // matching the original near-black handling.
   const float kEpsilon = 1e-5f;
-  if (inputLuminance < kEpsilon)
+  if (!(yf >= kEpsilon))
   {
     return 0;
   }
 
-  return luminanceToHistogramBin(inputLuminance);
+  return luminanceToHistogramBin(yf);
 }
 
 [shader("compute")]

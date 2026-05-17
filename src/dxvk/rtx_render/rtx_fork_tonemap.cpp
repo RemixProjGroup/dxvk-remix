@@ -82,7 +82,7 @@ namespace dxvk {
 
     // Combo items string uses ImGui's \0-separated format. User-requested
     // dropdown label for the Psycho operator is `PsychoV17_Beta`.
-    static const char* k_operatorItems = "None\0Hill ACES\0Narkowicz ACES\0Hable Filmic\0AgX\0Lottes\0PsychoV17_Beta\0Gran Turismo 7\0\0";
+    static const char* k_operatorItems = "None\0Hill ACES\0Narkowicz ACES\0Hable Filmic\0AgX\0Lottes\0PsychoV17_Beta\0Gran Turismo 7\0Neutwo\0\0";
 
     // Shared slider rendering for per-operator parameter panels.
     static void showHableFilmicSliders() {

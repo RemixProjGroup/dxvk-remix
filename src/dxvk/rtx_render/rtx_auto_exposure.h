@@ -69,18 +69,32 @@ namespace dxvk {
 
     // Eye-adaptation settings.
     //
-    // The pipeline is: per-pixel BT.709 luminance is binned into a
-    // log-luminance histogram, then a Gaussian-weighted average across
-    // bins (biased toward mid-tones) yields the scene luminance. That
-    // luminance is fed to a Naka-Rushton response curve to produce the
-    // target exposure scale; finally, the stored exposure is advanced
-    // toward that target with asymmetric exponential dynamics
-    // (light_tau when the scene brightens, dark_tau when it dims).
+    // Perceptual auto-exposure pipeline (replaces the prior
+    // Naka-Rushton resolve):
+    //   1. Per-pixel CIE 170-2 luminosity Yf (Stockman-Sharpe LMS,
+    //      shared with the psycho17 tonemap operator) is binned into a
+    //      log2-Yf histogram.
+    //   2. The resolve pass takes a geometric (log) mean across bins,
+    //      giving the adapted scene Yf level the observer model would
+    //      settle on.
+    //   3. The target exposure scale is computed from a first-site
+    //      cone-contrast law, exposure = Y_target / (Y_adapt + Y_noise)
+    //      (Stockman & Brainard 2010), with Y_target = mid-gray (0.18)
+    //      and Y_noise = the cone-system noise floor. This caps the
+    //      dark-scene boost without an arbitrary clamp.
+    //   4. The stored exposure is advanced toward that target in
+    //      log-space with asymmetric exponential dynamics — light_tau
+    //      while brightening (cone-bleach), dark_tau while dimming
+    //      (rod-recovery). Log-space blending makes the tau invariant
+    //      to absolute scene level.
     //
-    // No EV mapping, no middle-grey re-targeting, no center metering,
-    // no exposure-compensation curve — those have been removed.
+    // The exposure scalar this produces is consumed by every tonemap
+    // operator. The psycho17 operator additionally reads it back as an
+    // adaptive-state hint (in BT.709 mid-gray space) for its cone-
+    // response stage; the other operators ignore that channel.
     RTX_OPTION("rtx.autoExposure", bool, enabled, true,
-               "Automatically adjusts exposure so the image is neither too bright nor too dark.");
+               "Automatically adjusts exposure so the image is neither too bright nor too dark. "
+               "Uses a perceptual observer model (geometric-mean Yf + first-site cone contrast).");
     RTX_OPTION("rtx.autoExposure", float, lightAdaptTau, 0.15f,
                "Photopic (light) adaptation time constant in seconds. "
                "Controls how quickly the eye dims down when the scene brightens. "
