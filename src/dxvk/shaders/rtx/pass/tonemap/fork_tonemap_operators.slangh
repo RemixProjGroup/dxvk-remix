@@ -95,7 +95,7 @@ float3 applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp,
     // handles its own clamp.
     float3 psychoResult = renodx::tonemap::psycho::psychotm_test17(
         color,
-        /*peak_value=*/ 1.0f,
+        /*peak_value=*/ 4.0f,
         psycho17Exposure,
         psycho17Highlights,
         psycho17Shadows,
@@ -119,6 +119,7 @@ float3 applyTonemapOperator(uint op, float3 color, bool suppressBlackLevelClamp,
         psycho17GamutCompression,
         (int)psycho17GamutCompressionMode,
         /*adaptive_normalization=*/1.0f);
+    psychoResult = neutwo_MaxChannel(psychoResult);
 
     return psychoResult;
   }
