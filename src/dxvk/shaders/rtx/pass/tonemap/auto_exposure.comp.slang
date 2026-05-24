@@ -50,9 +50,9 @@ groupshared float g_count[EXPOSURE_HISTOGRAM_SIZE];
 // - Spatial pooling for adaptation is geometric, not arithmetic. The
 //   neural response to luminance is approximately logarithmic
 //   (Stockman & Brainard 2010), so a log-mean of Yf is the appropriate
-//   first-moment statistic. We retain the Gaussian per-bin weighting
-//   the prior shader used (centred on mid-gray in log-Yf space) so
-//   adaptation tracks the mid-tone subject the eye actually fixates
+//   first-moment statistic. Center-weighted metering (a spatial
+//   Gaussian on pixel position applied in the histogram pass) biases
+//   bin counts toward the mid-tone subject the eye actually fixates
 //   on rather than the unweighted scene mean.
 // - The "what exposure scale do I apply" decision is a separate
 //   question from the tonemap shoulder/toe shape. The previous shader
@@ -67,55 +67,39 @@ groupshared float g_count[EXPOSURE_HISTOGRAM_SIZE];
 //   it. No basis change between pipeline stages.
 // ---------------------------------------------------------------------------
 
-// Adaptation target: mid-gray reflectance (~18%). After the exposure
-// scale is applied, the scene's geometric-mean Yf lands here, which is
-// the diffuse-gray adapted state psycho17 assumes for its default
-// adaptive_state_bt709 = (0.18, 0.18, 0.18).
-static const float kTargetAdaptedYf = 0.18f;
-
 // Stockman-Brainard first-site cone-noise floor. Caps the dark-scene
 // exposure boost so a near-black frame doesn't blow up to infinity:
-//   exposure = kTargetAdaptedYf / (Y_adapt + Y_noise)
-// With Y_noise = 0.0032 (~mid-mesopic), max exposure ~= 56x. Reference:
-// Stockman & Brainard (2010), "Color Vision Mechanisms".
+//   exposure = targetAdaptedYf / (Y_adapt + Y_noise)
+// With Y_noise = 0.0032 (~mid-mesopic), max boost ~= targetAdaptedYf/0.0032.
+// Reference: Stockman & Brainard (2010), "Color Vision Mechanisms".
+//
+// adaptedYf comes from the histogram pass in Yf-normalised-to-white
+// space (Yf rescaled so BT.709 (1,1,1) maps to ~1.0; see kYfRefWhite in
+// auto_exposure_histogram.comp.slang). The Stockman 0.0032 reference is
+// in raw cone-Yf, so applying it here is implicitly rescaled by 1/~1.05.
+// The shift is ~5% and well below the explicit `rtx.autoExposure.maxExposure`
+// cap that gates dark-scene boost in practice — left as-is so the
+// citation is meaningful for retuning; do not chase the rescale.
 static const float kConeNoiseFloorYf = 0.0032f;
 
-// Floor for the geometric-mean Yf so log/exp never see zero when the
-// histogram is empty or near-black-only.
+// Secondary floor for the adapted Yf. The primary dark-scene guard is
+// kConeNoiseFloorYf (0.0032), which dominates at all realistic adaptation
+// levels — this only activates if exp2(sumLogYf / totalWeight) underflows
+// below 1e-6 (e.g. heavily clipped histogram).
 static const float kAdaptedYfFloor = 1e-6f;
-
-// Gaussian weighting across log-Yf bins, centred on the mid-gray
-// adaptation target. The eye does not adapt to the unweighted scene
-// mean — overblown skies and crushed shadows are heavily discounted
-// when the gaze (and the cone population responding to it) is on the
-// mid-tone subject. A Gaussian in log-Yf space matches this falloff
-// closely and is the same pooling the prior Naka-Rushton resolve and
-// the reference RDR2 / renodx implementations use.
-//
-//   w_i = exp( -((log2(Yf_i) - log2(Y_target))^2) / (2 * sigma^2) )
-//
-// sigma is in stops (log2 units). 2.0 stops keeps ~95% of the
-// weighting mass inside +/-4 stops of mid-gray, which matches typical
-// outdoor / indoor dynamic ranges without letting a small bright
-// window pin adaptation to the sky.
-static const float kGaussianSigmaStops    = 2.0f;
-static const float kGaussianLogCenter     = -2.4739311883324f; // log2(0.18)
-static const float kGaussianInvTwoSigmaSq = 1.0f / (2.0f * kGaussianSigmaStops * kGaussianSigmaStops);
 
 [shader("compute")]
 [numthreads(EXPOSURE_HISTOGRAM_SIZE, 1, 1)]
 void main(uint2 threadId : SV_DispatchThreadID, uint linearIndex : SV_GroupIndex)
 {
-  // Per-bin contribution to a Gaussian-weighted log-Yf geometric mean.
-  //   w_i        = exp( -(log2(Yf_i) - log2(Y_target))^2 / (2*sigma^2) )
-  //   sum_wLogYf = sum_i ( w_i * count_i * log2(Yf_i) )
-  //   sum_w      = sum_i ( w_i * count_i )
+  // Per-bin contribution to a center-weighted log-Yf geometric mean.
+  // Spatial Gaussian center-weighting is applied in the histogram pass,
+  // so bin counts already reflect that weighting. Each bin contributes
+  // its center Yf scaled by its (spatially-weighted) pixel count.
+  //   sum_wLogYf = sum_i ( count_i * log2(Yf_i) )
+  //   sum_w      = sum_i ( count_i )
   //   geomMean   = exp2( sum_wLogYf / sum_w )
-  // Bin 0 is reserved for near-black pixels and excluded — they would
-  // pin the geometric mean at the histogram floor regardless of the
-  // rest of the scene. The Gaussian softly down-weights the remaining
-  // tail bins (overblown highlights, deep shadows) so adaptation
-  // tracks the mid-tone subject the eye is actually looking at.
+  // Bin 0 is reserved for near-black pixels and excluded.
   const uint pixelCount = InOutHistogram[linearIndex];
   float sumWeightedLogYf = 0.0f;
   float sumWeight        = 0.0f;
@@ -123,22 +107,16 @@ void main(uint2 threadId : SV_DispatchThreadID, uint linearIndex : SV_GroupIndex
   {
     const float binYf    = histogramBinToLuminance(linearIndex);
     const float logBinYf = log2(binYf);
-    const float dLog     = logBinYf - kGaussianLogCenter;
-    const float weight   = exp(-dLog * dLog * kGaussianInvTwoSigmaSq);
-    const float wCount   = weight * float(pixelCount);
-    sumWeightedLogYf     = wCount * logBinYf;
-    sumWeight            = wCount;
+    sumWeightedLogYf     = float(pixelCount) * logBinYf;
+    sumWeight            = float(pixelCount);
   }
   g_sumLogYf[linearIndex] = sumWeightedLogYf;
   g_count[linearIndex]    = sumWeight;
   GroupMemoryBarrierWithGroupSync();
 
   // Parallel tree reduction across all EXPOSURE_HISTOGRAM_SIZE (power-of-two)
-  // lanes. Bin 0 is excluded by virtue of the contribution stage above
-  // having written 0 into g_sumLogYf[0] / g_count[0] (the `linearIndex >= 1`
-  // guard fails on lane 0), so summing the full array drops it implicitly.
-  // Replaces the previous single-thread serial sum which parked the other
-  // 255 lanes idle every frame.
+  // lanes. Bin 0 is excluded by the `linearIndex >= 1` guard above, so
+  // summing the full array drops it implicitly.
   [unroll]
   for (uint stride = EXPOSURE_HISTOGRAM_SIZE / 2; stride > 0; stride >>= 1)
   {
@@ -155,26 +133,20 @@ void main(uint2 threadId : SV_DispatchThreadID, uint linearIndex : SV_GroupIndex
     const float totalSumLogYf = g_sumLogYf[0];
     const float totalWeight   = g_count[0];
 
-    // Gaussian-weighted geometric mean of Yf. This is the adapted scene
-    // level the cone system would settle on for static viewing, biased
-    // toward the mid-tone population the gaze fixates on.
+    // Center-weighted geometric mean of Yf. The spatial Gaussian from
+    // the histogram pass already biases counts toward the mid-tone
+    // subject at the screen centre; this reduces to a standard
+    // count-weighted log mean.
     const float adaptedYf = (totalWeight > 0.0f)
         ? max(exp2(totalSumLogYf / totalWeight), kAdaptedYfFloor)
-        : kTargetAdaptedYf;  // Empty histogram => neutral exposure.
+        : cb.targetAdaptedYf;  // Empty histogram => neutral exposure.
 
-    // First-site cone-contrast law (Stockman & Brainard 2010, eq. 3.1):
-    //   R(Y) = Y / (Y + Y0)
-    // We want the exposure scale s such that the adapted response lands
-    // at the response of the target mid-gray with the same noise floor:
-    //   s * Y_adapt / (s * Y_adapt + Y0) == Y_target / (Y_target + Y0)
-    // Approximating (s * Y_adapt + Y0) ~ Y_target + Y0 in the operating
-    // regime gives the classic compact form
-    //   s = Y_target / (Y_adapt + Y0)
-    // which agrees with the exact solution near the operating point and
-    // saturates gracefully for dark scenes (Y_adapt -> 0 => s capped by
-    // Y_target / Y0) and for bright scenes (Y_adapt >> Y_target => s
-    // falls off as Y_target / Y_adapt, classic inverse-luminance AE).
-    const float targetExposure = kTargetAdaptedYf / (adaptedYf + kConeNoiseFloorYf);
+    const float rawTargetExposure = cb.targetAdaptedYf / (adaptedYf + kConeNoiseFloorYf);
+
+    // Clamp the target before the temporal blend, not after. Clamping the
+    // smoothed output would let the integrator wind up against the cap and
+    // produce a sluggish recovery when the scene brightens again.
+    const float targetExposure    = min(rawTargetExposure, cb.maxExposure);
 
     // Asymmetric exponential adaptation in log-exposure space. Human
     // eyes adapt faster to bright scenes (cone bleaching) than to dark
@@ -182,12 +154,12 @@ void main(uint2 threadId : SV_DispatchThreadID, uint linearIndex : SV_GroupIndex
     // change. Log-space blending makes the time-constant invariant to
     // absolute scene level — a 4-stop change adapts in the same wall
     // time whether it happens at noon or twilight.
-    const float prevExposure  = max(OutExposure[0], 1e-6f);
-    const float logPrev       = log2(prevExposure);
-    const float logTarget     = log2(max(targetExposure, 1e-6f));
+    const float prevExposure    = max(OutExposure[0], 1e-6f);
+    const float logPrev         = log2(prevExposure);
+    const float logTarget       = log2(max(targetExposure, 1e-6f));
     const bool  sceneBrightened = (targetExposure < prevExposure);
-    const float tau           = sceneBrightened ? cb.lightAdaptTau : cb.darkAdaptTau;
-    const float logNew        = adaptation::v1::ExponentialBlend(
+    const float tau             = sceneBrightened ? cb.lightAdaptTau : cb.darkAdaptTau;
+    const float logNew          = adaptation::v1::ExponentialBlend(
         logPrev, logTarget, cb.deltaTime, tau);
 
     OutExposure[0] = max(exp2(logNew), 1e-6f);
@@ -195,12 +167,11 @@ void main(uint2 threadId : SV_DispatchThreadID, uint linearIndex : SV_GroupIndex
 
   if (cb.debugMode)
   {
-    // Debug view: raw histogram counts normalised (R) and per-bin Yf
-    // in [0, 1] reflectance (B), so the resolved adaptation level can
-    // be eyeballed in the debug pass.
+    // Debug view: spatially-weighted bin counts normalised by total pixel
+    // count (R) and per-bin Yf in [0, 1] reflectance (B).
     const float binYf = (linearIndex >= 1) ? histogramBinToLuminance(linearIndex) : 0.0f;
     DebugView[uint2(linearIndex, 0)] = vec4(
-        float(pixelCount) / 10000.0f,
+        float(pixelCount) / float(cb.numPixels),
         0.0f,
         saturate(binYf),
         1.0f);

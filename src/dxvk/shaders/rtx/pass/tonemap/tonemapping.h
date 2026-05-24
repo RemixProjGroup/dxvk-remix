@@ -70,15 +70,15 @@ static const uint32_t tonemapOperatorNeutwo         = 8;  // Renodx Neutwo per-c
 //      exponential dynamics (lightAdaptTau when brightening,
 //      darkAdaptTau when dimming).
 struct ToneMappingAutoExposureArgs {
-  uint  numPixels;
+  uint  numPixels;   // Total frame pixel count; used only for debug histogram normalization.
   float lightAdaptTau;  // Time constant (s) when adapting to a brighter scene (photopic, fast).
   float darkAdaptTau;   // Time constant (s) when adapting to a darker scene (scotopic, slow).
   float deltaTime;      // Frame delta in seconds.
 
-  uint  debugMode;      // 1 => write the exposure-histogram debug visualization.
+  uint  debugMode;           // 1 => write the exposure-histogram debug visualization.
+  float targetAdaptedYf;     // Mid-gray adaptation target (default 0.18); raise/lower to bias brightness.
+  float maxExposure;         // Hard ceiling on the auto-exposure multiplier; caps brightening in dark scenes.
   uint  pad0;
-  uint  pad1;
-  uint  pad2;
 };
 
 // Inputs for the apply-tonemapping pass. The dynamic tone curve and

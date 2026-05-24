@@ -103,6 +103,15 @@ namespace dxvk {
                "Scotopic (dark) adaptation time constant in seconds. "
                "Controls how slowly the eye brightens up when the scene dims. "
                "Larger = slower response. Typical range: 0.25 – 3.00 s.");
+    RTX_OPTION("rtx.autoExposure", float, targetAdaptedYf, 0.18f,
+               "Adaptation target Yf (mid-gray reflectance, default 0.18). "
+               "After exposure is applied the scene's geometric-mean Yf lands here. "
+               "Raise above 0.18 to bias the image brighter; lower to darken it.");
+    RTX_OPTION("rtx.autoExposure", float, maxExposure, 8.0f,
+               "Maximum auto-exposure multiplier. Caps how much the algorithm is allowed "
+               "to brighten the image when looking at something dark (1.0 = no brightening, "
+               "8.0 = up to 8x brighter, ~56 = uncapped default behaviour). Lower this if "
+               "shadows / dark rooms get blown out into mid-gray.");
   };
   
 }

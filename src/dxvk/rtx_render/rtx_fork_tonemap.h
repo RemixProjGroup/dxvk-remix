@@ -37,7 +37,7 @@ namespace dxvk {
   // 2026-05-13 / 2026-05-15 refactors and the apply pass now dispatches
   // directly to the operator selected here.
   class RtxForkGlobalTonemap {
-    RTX_OPTION_ENV("rtx.tonemap", TonemapOperator, tonemapOperator, TonemapOperator::None, "DXVK_TONEMAP_OPERATOR",
+    RTX_OPTION_ENV("rtx.tonemap", TonemapOperator, tonemapOperator, TonemapOperator::Psycho17, "DXVK_TONEMAP_OPERATOR",
                    "Tonemapping operator applied to the post-exposure color buffer.\n"
                    "Supported values: 0 = None (saturate-only identity), 1 = Hill ACES, 2 = Narkowicz ACES, "
                    "3 = Hable Filmic, 4 = AgX, 5 = Lottes 2016, 6 = PsychoV17_Beta, "
