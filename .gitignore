@@ -60,3 +60,7 @@ tests
 
 # Per-contributor auto-deploy targets, dot-sourced by scripts/build.ps1
 /scripts/auto-deploy.local.ps1
+
+# Pinned DLSS / NGX DLL override, populated by scripts/update-dlss-dlls.ps1.
+# Pulled from RemixProjGroup/dxvk-remix-dlss-bundle releases per scripts/dlss-pins.json.
+/dlss_override/

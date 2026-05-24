@@ -1239,10 +1239,14 @@ namespace dxvk {
 
     // ----- Night-sky shading (fork) -----
     // Stars, Milky Way, shooting stars, airglow. Active when skyMode == PhysicalAtmosphere.
-    RTX_OPTION_FLAG("rtx.atmosphere", float, starBrightness, 8.0f, RtxOptionFlags::NoSave,
+    RTX_OPTION_FLAG("rtx.atmosphere", float, starBrightness, 1.0f, RtxOptionFlags::NoSave,
                     "Overall brightness multiplier for stars. Game-driven so plugins can fade stars in/out around sunset/sunrise without polluting user.conf at frame rate.");
-    RTX_OPTION("rtx.atmosphere", float, starDensity, 0.98f,
-               "Star density threshold (0.0 = all stars, 1.0 = no stars). Higher = fewer, brighter stars.");
+    RTX_OPTION("rtx.atmosphere", float, starDensity, 0.5f,
+               "Star density on a linear-feel slider: 0 = no stars, 1 = maximum stars. Internally "
+               "maps via pow(starDensity, 4) * 0.05 to a per-cell visible-star fraction, so the "
+               "useful range (~0.1% to 5% of cells) spans the whole slider instead of compressing "
+               "into the top 1% (the prior behavior, which made 0.98/0.99/1.0 the only viable "
+               "settings). 0.5 = ~0.3% stars, 0.7 = ~1.2%, 1.0 = ~5%.");
     RTX_OPTION("rtx.atmosphere", float, starTwinkleSpeed, 1.0f,
                "Speed of star twinkling animation (0 = no twinkle).");
     RTX_OPTION_FLAG("rtx.atmosphere", float, starRotation, 0.0f, RtxOptionFlags::NoSave,
@@ -1255,6 +1259,52 @@ namespace dxvk {
                "Ambient night-sky brightness from airglow and zodiacal light.");
     RTX_OPTION("rtx.atmosphere", Vector3, nightSkyColor, Vector3(0.15f, 0.2f, 0.4f),
                "Base color tint of the night-sky airglow.");
+    // ----- Milky Way controls (fork) -----
+    RTX_OPTION("rtx.atmosphere", bool, milkyWayEnabled, false,
+               "Master toggle for the galactic-band Milky Way effects: increased star density "
+               "inside the band, and the diffuse background dust glow. When disabled, the star "
+               "field is uniformly distributed at the base density across the whole sky. Off by "
+               "default -- stylized opt-in for users who want the band aesthetic.");
+    RTX_OPTION("rtx.atmosphere", float, milkyWayDensityBoost, 0.3f,
+               "Density threshold reduction inside the galactic band. Higher = more (and dimmer) "
+               "stars visible only in the band region, producing the dense-band look.");
+    RTX_OPTION("rtx.atmosphere", float, milkyWayBackgroundBrightness, 0.05f,
+               "Diffuse background glow brightness for the Milky Way band -- represents unresolved "
+               "stars + dust haze. 0 disables the glow. Default 0.05 gives a subtle ambient.");
+    RTX_OPTION("rtx.atmosphere", Vector3, milkyWayBackgroundColor, Vector3(0.5f, 0.55f, 0.75f),
+               "Outer-edge tint for the Milky Way glow (the cool blue periphery away from the "
+               "galactic center, where young stars dominate). Default cool blue (0.5, 0.55, 0.75).");
+    RTX_OPTION("rtx.atmosphere", Vector3, milkyWayCoreColor, Vector3(1.0f, 0.85f, 0.55f),
+               "Bright core tint for the Milky Way glow (warm yellow-cream toward the galactic "
+               "center where stellar density peaks). Default warm cream (1.0, 0.85, 0.55).");
+    RTX_OPTION("rtx.atmosphere", Vector3, milkyWayDustColor, Vector3(0.15f, 0.08f, 0.05f),
+               "Dust-lane tint for the Milky Way glow (dark red-brown patches that occlude the "
+               "bright band, mirroring interstellar dust clouds). Default dark red-brown.");
+    RTX_OPTION("rtx.atmosphere", float, milkyWayDustAmount, 0.6f,
+               "How strongly dust-lane patches darken the Milky Way glow. 0 = no dust (smooth "
+               "uniform band), 1 = full dust contrast. Default 0.6.");
+
+    RTX_OPTION("rtx.atmosphere", float, starPsfSharpness, 20.0f,
+               "PSF Gaussian exponent for procedural stars. Controls the per-star spread "
+               "in cube-grid-cell space (gridScale=400 → 13.5 arcmin/cell). Lower = wider "
+               "softer stars; higher = sharper pinpoints. At 1080p/90° FOV, k=20 yields "
+               "~1-pixel-FWHM (anti-aliased), k=800 yields ~0.08-pixel-FWHM (severe sub-"
+               "pixel flicker on camera motion). 8-30 is the useful range for typical "
+               "render resolutions; reduce starBrightness if widening the PSF makes stars "
+               "too bright overall.");
+    RTX_OPTION("rtx.atmosphere", float, starCloudExtinctionPower, 2.5f,
+               "Power exponent applied to cloud view-transmittance when extincting stars. "
+               "Stars are HDR point sources; standard alpha compositing (T^1) leaves bright "
+               "pinpoints visible through cumulus cores. Raising to 2.5 makes stars die as "
+               "T^2.5, well below cloud body brightness at typical T<0.1 cores while leaving "
+               "clear sky (T=1) unaffected. Lower = stars survive thicker clouds; 1.0 = no "
+               "extra extinction (pure standard composite).");
+    RTX_OPTION("rtx.atmosphere", float, starAmbientCouplingStrength, 0.01f,
+               "Coupling strength of starlight/airglow into the cloud-march nightLight term. "
+               "Adds a faint per-ray ambient based on (nightSkyColor * starBrightness * this) "
+               "so cloud bodies lift slightly under starry skies, the same way moon-zenith "
+               "fill brightens cloud bodies near the moon. Default 0.01 = per-mille level; "
+               "0 disables the coupling.");
 
     // ----- Per-moon parameters (fork) -----
     // MAX_MOONS in atmosphere_args.h must equal the number of DECLARE_MOON_OPTIONS

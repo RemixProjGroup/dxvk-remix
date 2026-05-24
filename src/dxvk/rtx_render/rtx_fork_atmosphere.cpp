@@ -653,6 +653,70 @@ namespace fork_hooks {
         RemixGui::SetTooltipToLastWidgetOnHover("Airglow / ambient night-sky brightness.");
         RemixGui::DragFloat3("Night Sky Color",     &RtxOptions::nightSkyColorObject(),
                             0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Milky Way");
+        RemixGui::Checkbox("Milky Way Enabled##milkyway",
+                           &RtxOptions::milkyWayEnabledObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+          "Master toggle for galactic-band effects: in-band density boost, band-specific star "
+          "colors, and the diffuse background glow. When off, stars distribute uniformly.");
+        RemixGui::DragFloat("Milky Way Density Boost",
+                            &RtxOptions::milkyWayDensityBoostObject(),
+                            0.005f, 0.0f, 0.3f, "%.3f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+          "Extra star density inside the galactic band. Higher = more (dim) band stars. "
+          "Was hardcoded 0.15; default reduced to 0.05.");
+        RemixGui::DragFloat("Milky Way Glow Brightness",
+                            &RtxOptions::milkyWayBackgroundBrightnessObject(),
+                            0.01f, 0.0f, 2.0f, "%.3f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+          "Diffuse band-glow brightness (the soft dust haze across the Milky Way). "
+          "0 disables the glow.");
+        RemixGui::DragFloat3("Milky Way Outer Color",
+                            &RtxOptions::milkyWayBackgroundColorObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+          "Cool outer-edge tint of the band (where young stars dominate). Default cool blue.");
+        RemixGui::DragFloat3("Milky Way Core Color",
+                            &RtxOptions::milkyWayCoreColorObject(),
+                            0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+          "Warm bright-core tint at the galactic center. Default warm cream/yellow.");
+        RemixGui::DragFloat3("Milky Way Dust Color",
+                            &RtxOptions::milkyWayDustColorObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+          "Dark dust-lane tint -- the silhouetted patches across the band. "
+          "Default dark red-brown.");
+        RemixGui::DragFloat("Milky Way Dust Amount",
+                            &RtxOptions::milkyWayDustAmountObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+          "How strongly dust patches darken the glow. 0 = no dust, 1 = full dust contrast.");
+        ImGui::Separator();
+
+        RemixGui::DragFloat("Star PSF Sharpness",
+                            &RtxOptions::starPsfSharpnessObject(),
+                            0.5f, 1.0f, 500.0f, "%.1f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+          "Gaussian PSF exponent. Lower = bigger softer stars, higher = sharper "
+          "pinpoints. At 1080p/90° FOV, ~20 gives 1-pixel-FWHM (anti-aliased); "
+          "the old hardcoded 800 produced severe sub-pixel camera-motion flicker.");
+        RemixGui::DragFloat("Star Cloud Extinction Power",
+                            &RtxOptions::starCloudExtinctionPowerObject(),
+                            0.1f, 1.0f, 6.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+          "Exponent on cloud view-transmittance when extincting stars. 1.0 = standard "
+          "alpha-composite (HDR stars punch through cumulus cores). Higher = stars die "
+          "through clouds faster. Default 2.5.");
+        RemixGui::DragFloat("Star Ambient Coupling",
+                            &RtxOptions::starAmbientCouplingStrengthObject(),
+                            0.001f, 0.0f, 0.1f, "%.4f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+          "Star/airglow coupling into cloud-march nightLight. Adds a faint per-ray ambient "
+          "lift to cloud bodies under starry skies (analogous to moon-zenith fill). "
+          "0 = disabled. Default 0.01.");
         ImGui::TreePop();
       }
 

@@ -101,6 +101,72 @@ struct AtmosphereArgs {
   float starAxisRotation;   // Celestial pole azimuth, degrees
   float pad3;               // 16-byte alignment
 
+  // ----- Star anti-aliasing + cloud interaction (fork) -----
+  //
+  // starPsfSharpness: exponent in the per-star Gaussian PSF inside evalStarField.
+  // The hash-grid cube-face mapping (gridScale = 400 cells per face = ~13.5
+  // arcmin/cell) was originally evaluated with a hardcoded exp(-dist² * 800) —
+  // half-width ~0.029 cells = ~0.08 pixels at 1080p/90° FOV, well sub-pixel. As
+  // the camera rotated, star centers crossed pixel boundaries discontinuously,
+  // producing severe per-frame flicker even with DLSS disabled. Lowering the
+  // exponent widens the PSF: k=20 gives a ~1-pixel-FWHM star at 1080p, k=8 at
+  // 720p. Sized to anti-alias at typical FNV render resolutions (~720p–1440p
+  // including DLSS internal resolutions). Lower = bigger softer stars;
+  // higher = sharper pinpoints (with more flicker).
+  //
+  // Stars are also very bright HDR point sources (peak ~= starBrightness,
+  // default 8). The standard alpha-composite (stars * (1-cloudOpacity)) attenuates
+  // them by cloud view-transmittance T = 1-opacity, but cumulus cores rarely
+  // reach T<0.05 and stars at T=0.05 still read as bright pinpoints over a dim
+  // moonlit cloud (~0.1). Two corrections, mirroring the moon's "integrated"
+  // look:
+  //   - starCloudExtinctionPower raises the cloud_T extinction applied to stars
+  //     to a power > 1, so star contribution dies as T^k rather than T. At k=2.5
+  //     and T=0.05, stars get 0.05^2.5 = 0.00056 -- well below cloud body level.
+  //     Clear sky (T=1) is unaffected (1^k = 1).
+  //   - starAmbientCouplingStrength couples sky airglow brightness into the
+  //     cloud-march nightLight term, analogous to moon-zenith fill. Brightens
+  //     cloud bodies under starry skies so they visually compete with the
+  //     bright HDR stars and don't read as "floating dots on a dim cloud."
+  float starPsfSharpness;               // PSF exponent for evalStarField (default 20.0; was hardcoded 800)
+  float starCloudExtinctionPower;       // Power exponent on cloud view-T when extincting stars (default 2.5)
+  float starAmbientCouplingStrength;    // Star/airglow coupling into cloud nightLight (default 0.01)
+  float padStarCloud0;
+
+  // ----- Milky Way controls (fork) -----
+  // The galactic band is two independent visual layers: (1) increased star
+  // density inside the band region (drives the "thick with stars" look) and
+  // (2) a diffuse background glow (the real Milky Way's dust haze). Each is
+  // independently tunable; both gate on milkyWayEnabled.
+  //
+  // The prior implementation hardcoded the density boost at 0.15 (galacticDensity
+  // * 0.15 reduces the local star threshold), which combined with the brightness
+  // remap quirk -- (starMag - args.starDensity) producing large negative values
+  // for band-only stars, then squared into massive brightness -- made band stars
+  // explosively bright. The refactored evalStarField uses localThreshold as the
+  // brightness-remap floor instead of args.starDensity, so band stars sit in a
+  // physically-sensible brightness range and the user controls "how many" and
+  // "how bright" via these knobs without the explosion.
+  float milkyWayEnabled;                // 1.0 = render galactic-band effects, 0.0 = uniform star field
+  float milkyWayDensityBoost;           // Threshold reduction inside the band (default 0.05; was hardcoded 0.15)
+  float milkyWayBackgroundBrightness;   // Diffuse band-glow brightness multiplier (default 0.3)
+  float padMilkyWay0;
+
+  // Diffuse glow color zones. Real Milky Way photos show three distinct
+  // colors: a warm yellow-cream galactic center, dark red-brown dust lanes
+  // weaving through the band, and cool blue outer halo from young stars
+  // along the spiral arms. The glow blends between them based on direction
+  // and per-pixel multi-octave noise so the result has structure rather than
+  // a single flat tint × noise (the prior "blocky" look).
+  vec3 milkyWayBackgroundColor;         // OUTER edge tint (default cool blue 0.5/0.55/0.75)
+  float milkyWayDustAmount;             // How strongly dust lanes darken the glow (default 0.6)
+
+  vec3 milkyWayCoreColor;               // BRIGHT core tint (default warm cream 1.0/0.85/0.55)
+  float padMilkyWay1;
+
+  vec3 milkyWayDustColor;               // DARK dust-lane tint (default red-brown 0.15/0.08/0.05)
+  float padMilkyWay2;
+
   // ----- Per-moon parameters (fork) -----
   MoonParams moons[MAX_MOONS];
 

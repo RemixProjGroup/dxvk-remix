@@ -393,6 +393,22 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.starAxisRotation  = RtxOptions::starAxisRotation();
   args.pad3              = 0.0f;
 
+  args.starPsfSharpness            = RtxOptions::starPsfSharpness();
+  args.starCloudExtinctionPower    = RtxOptions::starCloudExtinctionPower();
+  args.starAmbientCouplingStrength = RtxOptions::starAmbientCouplingStrength();
+  args.padStarCloud0               = 0.0f;
+
+  args.milkyWayEnabled               = RtxOptions::milkyWayEnabled() ? 1.0f : 0.0f;
+  args.milkyWayDensityBoost          = RtxOptions::milkyWayDensityBoost();
+  args.milkyWayBackgroundBrightness  = RtxOptions::milkyWayBackgroundBrightness();
+  args.padMilkyWay0                  = 0.0f;
+  args.milkyWayBackgroundColor       = RtxOptions::milkyWayBackgroundColor();
+  args.milkyWayDustAmount            = RtxOptions::milkyWayDustAmount();
+  args.milkyWayCoreColor             = RtxOptions::milkyWayCoreColor();
+  args.padMilkyWay1                  = 0.0f;
+  args.milkyWayDustColor             = RtxOptions::milkyWayDustColor();
+  args.padMilkyWay2                  = 0.0f;
+
   // ----- Per-moon parameters (fork) -----
   for (uint32_t i = 0; i < MAX_MOONS; ++i) {
     populateMoonParams(args.moons[i], i);

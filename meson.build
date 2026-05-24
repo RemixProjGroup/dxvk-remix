@@ -556,6 +556,18 @@ dlfg_root_path = 'external/ngx_sdk_dlfg'
 dlfg_lib_path = join_paths(global_src_root_norm, dlfg_root_path, 'lib/Windows_x86_64/rel/')
 external_dll_paths += dlfg_lib_path
 
+# Optional fork override: dlss_override/ at repo root, populated by
+# scripts/update-dlss-dlls.ps1 from the dxvk-remix-dlss-bundle releases.
+# Wins over the packman NGX SDK paths above so contributors can pin newer DLLs
+# without editing packman-external.xml or touching the packman cache junctions.
+dlss_override_path = join_paths(global_src_root_norm, 'dlss_override')
+if fs.is_file(join_paths(dlss_override_path, 'nvngx_dlss.dll'))
+  message('DLSS override active: using dlss_override/ for nvngx_dlss/dlssd/dlssg.dll')
+  dlss_lib_path = dlss_override_path
+  dlfg_lib_path = dlss_override_path
+  external_dll_paths += dlss_override_path
+endif
+
 nrc_dll_name = 'NRC_Vulkan.dll'
 nrc_dll_path = join_paths(global_src_root_norm, 'submodules/nrc/bin/')
 
@@ -643,6 +655,12 @@ if dxvk_is_ninja
   dlss_lib_path = join_paths(global_src_root_norm, dlss_root_path, 'lib/Windows_x86_64/rel/')
   dlfg_root_path = 'external/ngx_sdk_dlfg'
   dlfg_lib_path = join_paths(global_src_root_norm, dlfg_root_path, 'lib/Windows_x86_64/rel/')
+
+  # Re-apply the dlss_override/ swap clobbered by subdir('src') above.
+  if fs.is_file(join_paths(dlss_override_path, 'nvngx_dlss.dll'))
+    dlss_lib_path = dlss_override_path
+    dlfg_lib_path = dlss_override_path
+  endif
 
   # meson seems to force / as the path separator in custom_target
   # ... except in the case where the path separators are inconsistent, in which case it does nothing

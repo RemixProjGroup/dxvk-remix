@@ -497,6 +497,15 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
       }
       // Night-sky airglow baseline (uncolored, mirrors legacy `* 0.5f`).
       nightLight += args.nightSkyColor * args.nightSkyBrightness * nightFactor * 0.5f;
+
+      // Starlight ambient coupling (fork — mirrors evalClouds in atmosphere_sky.slangh).
+      // Adds a faint per-ray ambient lift to cloud body lighting derived from
+      // the sky's star contribution so cumulus under starry skies doesn't read
+      // as pitch-black against HDR ~8 stars overhead. starAmbientCouplingStrength
+      // is per-mille by default (0.01); coupled to args.starBrightness so the
+      // lift tracks the user's star slider.
+      nightLight += args.nightSkyColor * args.starBrightness
+                  * args.starAmbientCouplingStrength * nightFactor;
     }
   }
 

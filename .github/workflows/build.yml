@@ -43,6 +43,10 @@ jobs:
     - name: Install Pillow for FAST-noise embedder
       run: pip install pillow
 
+    - name: Fetch pinned DLSS / NGX DLL bundle
+      shell: pwsh
+      run: .\scripts\update-dlss-dlls.ps1
+
     - name: Build
       shell: pwsh
       run: |
