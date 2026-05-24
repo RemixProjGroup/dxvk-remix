@@ -24,6 +24,7 @@
 #include "rtx_imgui.h"                // RemixGui::DragFloat, ComboWithKey (showAtmosphereUI)
 #include <cstdio>                     // std::snprintf (renderMoonUI label)
 #include <cmath>                      // std::tan (cloud render camera basis)
+#include <algorithm>                  // std::max / std::min (renderChromaticityWidget)
 
 namespace dxvk {
 namespace fork_hooks {
@@ -463,7 +464,7 @@ namespace fork_hooks {
         RemixGui::DragFloat3("Color",         pColor,         0.01f, 0.0f, 1.0f, "%.2f",         sliderFlags);
 
         RemixGui::DragFloat("Elevation", pElevation, 0.1f, -90.0f, 90.0f, "%.1f\xc2\xb0", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover("Moon elevation in degrees. Game-drivable per-frame; slider edits go to the Derived layer and don't persist to rtx.conf.");
+        RemixGui::SetTooltipToLastWidgetOnHover("Moon elevation in degrees. Game-drivable per-frame; slider edits persist when saved unless overridden by a runtime push.");
         RemixGui::DragFloat("Rotation",  pRotation,  0.1f, 0.0f, 360.0f, "%.1f\xc2\xb0", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Moon rotation/azimuth in degrees. Same persistence rules as Elevation.");
         RemixGui::DragFloat("Phase",     pPhase,     0.005f, 0.0f, 1.0f, "%.3f",  sliderFlags);
@@ -477,14 +478,229 @@ namespace fork_hooks {
           }
           RemixGui::SetTooltipToLastWidgetOnHover("Procedural surface preset. Knobs below tune the chosen style.");
 
-          RemixGui::DragFloat("Crater Density",      pCraterDensity,   0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
-          RemixGui::DragFloat("Surface Contrast",    pSurfaceContrast, 0.01f, 0.0f, 3.0f, "%.2f", sliderFlags);
-          RemixGui::DragFloat("Surface Noise Scale", pNoiseScale,      0.01f, 0.1f, 5.0f, "%.2f", sliderFlags);
-          RemixGui::DragFloat("Dark Side Brightness",pDarkSide,        0.005f,0.0f, 1.0f, "%.3f", sliderFlags);
-          RemixGui::DragFloat("Roughness",           pRoughness,       0.01f, 0.0f, 3.0f, "%.2f", sliderFlags);
+          RemixGui::DragFloat("Crater Density", pCraterDensity, 0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
+
+          // #8: Detail knob replaces Surface Contrast + Surface Noise Scale.
+          // Detail is transient ImGui state — reconstructed from current Contrast on each
+          // frame. NoiseScale is overwritten by the curve when Detail changes; off-curve
+          // .conf values are preserved on the Contrast side only.
+          //
+          // Curve (two-segment linear hitting three anchors exactly):
+          //   Detail = 0.0 -> Contrast=0.5, NoiseScale=2.0  (smooth, coarse)
+          //   Detail = 1.0 -> Contrast=1.0, NoiseScale=1.0  (default)
+          //   Detail = 2.0 -> Contrast=1.5, NoiseScale=0.5  (punchy, fine)
+          float detail = (pSurfaceContrast->get() - 0.5f) / 0.5f;
+          detail = std::max(0.0f, std::min(2.0f, detail));
+          if (ImGui::DragFloat("Detail", &detail, 0.01f, 0.0f, 2.0f, "%.2f", sliderFlags)) {
+            float newContrast, newNoiseScale;
+            if (detail <= 1.0f) {
+              newContrast   = 0.5f + 0.5f * detail;          // 0.5 -> 1.0
+              newNoiseScale = 2.0f - 1.0f * detail;          // 2.0 -> 1.0
+            } else {
+              newContrast   = 1.0f + 0.5f * (detail - 1.0f); // 1.0 -> 1.5
+              newNoiseScale = 1.0f - 0.5f * (detail - 1.0f); // 1.0 -> 0.5
+            }
+            pSurfaceContrast->setImmediately(newContrast);
+            pNoiseScale->setImmediately(newNoiseScale);
+          }
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Combined surface detail: smooth/coarse <- 0.0 ... 1.0 (default) ... 2.0 -> punchy/fine. "
+              "Drives Surface Contrast and Surface Noise Scale via a two-segment linear curve. "
+              "Power users can .conf-tune surfaceContrast / surfaceNoiseScale individually for off-curve combinations.");
+
+          RemixGui::DragFloat("Dark Side Brightness", pDarkSide,  0.005f, 0.0f, 1.0f, "%.3f", sliderFlags);
+          RemixGui::DragFloat("Roughness",            pRoughness, 0.01f,  0.0f, 3.0f, "%.2f", sliderFlags);
           ImGui::TreePop();
         }
 
+        ImGui::TreePop();
+      }
+    }
+
+    void renderSunUI() {
+      constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
+
+      if (ImGui::TreeNode("Sun")) {
+        RemixGui::DragFloat("Sun Size", &RtxOptions::sunSizeObject(), 0.01f, 0.0f, 10.0f, "%.3f\xc2\xb0", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Size of sun disc in degrees");
+
+        RemixGui::DragFloat("Sun Intensity", &RtxOptions::sunIntensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Strength of Sun");
+
+        RemixGui::DragFloat("Sun Elevation", &RtxOptions::sunElevationObject(), 0.01f, -90.0f, 90.0f, "%.2f\xc2\xb0", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Sun angle from horizon");
+
+        RemixGui::DragFloat("Sun Rotation", &RtxOptions::sunRotationObject(), 0.01f, 0.0f, 360.0f, "%.1f\xc2\xb0", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Rotation of sun around zenith");
+
+        ImGui::TreePop();
+      }
+    }
+
+    // Render an RtxOption<Vector3> as a ColorEdit3 chromaticity picker plus a
+    // magnitude scalar. Chromaticity is normalized using the max channel; magnitude
+    // is the max-channel value. On any widget change, writes back color * magnitude.
+    //
+    // Designed for atmospheric-coefficient triplets (Base Rayleigh / Base Mie /
+    // Base Ozone / Base Sun Illuminance) where the Vector3's per-channel ratio IS
+    // the visible "color" and the overall magnitude is the user-tunable strength.
+    void renderChromaticityWidget(const char* colorLabel,
+                                  const char* magLabel,
+                                  RtxOption<Vector3>* opt,
+                                  float magSpeed,
+                                  float magMax,
+                                  const char* magFormat,
+                                  const char* colorTooltip,
+                                  const char* magTooltip) {
+      constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
+
+      const Vector3 v = opt->get();
+      float magnitude = std::max({v.x, v.y, v.z});
+      Vector3 color = (magnitude > 1e-9f)
+                      ? Vector3(v.x / magnitude, v.y / magnitude, v.z / magnitude)
+                      : Vector3(1.0f, 1.0f, 1.0f);
+
+      bool changed = false;
+      if (ImGui::ColorEdit3(colorLabel, &color.x, ImGuiColorEditFlags_NoAlpha)) {
+        changed = true;
+      }
+      if (colorTooltip) RemixGui::SetTooltipToLastWidgetOnHover(colorTooltip);
+
+      if (ImGui::DragFloat(magLabel, &magnitude, magSpeed, 0.0f, magMax, magFormat, sliderFlags)) {
+        changed = true;
+      }
+      if (magTooltip) RemixGui::SetTooltipToLastWidgetOnHover(magTooltip);
+
+      if (changed) {
+        // Clamp normalized color into [0,1] in case the picker returned an
+        // out-of-gamut value (shouldn't happen with ColorEdit3 default flags).
+        color.x = std::max(0.0f, std::min(1.0f, color.x));
+        color.y = std::max(0.0f, std::min(1.0f, color.y));
+        color.z = std::max(0.0f, std::min(1.0f, color.z));
+        opt->setImmediately(Vector3(color.x * magnitude,
+                                    color.y * magnitude,
+                                    color.z * magnitude));
+      }
+    }
+
+    void renderStarsUI() {
+      constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
+      if (ImGui::TreeNode("Stars")) {
+        RemixGui::DragFloat("Star Brightness", &RtxOptions::starBrightnessObject(),
+                            0.1f, 0.0f, 50.0f, "%.1f", sliderFlags);
+        RemixGui::DragFloat("Star Density", &RtxOptions::starDensityObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Threshold: 0 = all stars visible, 1 = no stars.");
+        RemixGui::DragFloat("Star Twinkle Speed", &RtxOptions::starTwinkleSpeedObject(),
+                            0.1f, 0.0f, 10.0f, "%.1f", sliderFlags);
+        ImGui::TreePop();
+      }
+    }
+
+    void renderMilkyWayUI() {
+      constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
+      if (ImGui::TreeNode("Milky Way")) {
+        RemixGui::Checkbox("Enabled##milkyway", &RtxOptions::milkyWayEnabledObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Master toggle for galactic-band effects: in-band density boost, band-specific "
+            "star colors, and the diffuse background glow. When off, stars distribute uniformly.");
+        RemixGui::DragFloat("Density Boost", &RtxOptions::milkyWayDensityBoostObject(),
+                            0.005f, 0.0f, 0.3f, "%.3f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Extra star density inside the galactic band. Higher = more (dim) band stars.");
+        RemixGui::DragFloat("Glow Brightness", &RtxOptions::milkyWayBackgroundBrightnessObject(),
+                            0.01f, 0.0f, 2.0f, "%.3f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Diffuse band-glow brightness (the soft dust haze across the Milky Way). 0 disables the glow.");
+        RemixGui::ColorEdit3("Outer Color", &RtxOptions::milkyWayBackgroundColorObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Cool outer-edge tint of the band (where young stars dominate). Default cool blue.");
+        RemixGui::ColorEdit3("Core Color", &RtxOptions::milkyWayCoreColorObject(),
+                             ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Warm bright-core tint at the galactic center. Default warm cream/yellow. "
+            "HDR — values above 1.0 push beyond LDR gamut for a brighter core.");
+        // #4: Dust Color slider is intentionally dropped from ImGui.
+        // RtxOption rtx.atmosphere.milkyWayDustColor remains .conf-tunable.
+        RemixGui::DragFloat("Dust Amount", &RtxOptions::milkyWayDustAmountObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "How strongly dust patches darken the glow. 0 = no dust, 1 = full dust contrast.");
+        ImGui::TreePop();
+      }
+    }
+
+    void renderStarAppearanceUI() {
+      constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
+      if (ImGui::TreeNode("Star Appearance")) {
+        RemixGui::DragFloat("Star PSF Sharpness", &RtxOptions::starPsfSharpnessObject(),
+                            0.5f, 1.0f, 500.0f, "%.1f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Gaussian PSF exponent. Lower = bigger softer stars, higher = sharper pinpoints.");
+        RemixGui::DragFloat("Star Cloud Extinction Power", &RtxOptions::starCloudExtinctionPowerObject(),
+                            0.1f, 1.0f, 6.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Exponent on cloud view-transmittance when extincting stars. Higher = stars die through clouds faster.");
+        RemixGui::DragFloat("Star Ambient Coupling", &RtxOptions::starAmbientCouplingStrengthObject(),
+                            0.001f, 0.0f, 0.1f, "%.4f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Star/airglow coupling into cloud-march nightLight. 0 = disabled.");
+        ImGui::TreePop();
+      }
+    }
+
+    void renderMoonGlobalLightingUI() {
+      constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
+      if (ImGui::TreeNode("Global Lighting")) {
+        RemixGui::DragFloat("Atmospheric Coupling", &RtxOptions::moonAtmosphericCouplingStrengthObject(),
+                            0.05f, 0.0f, 5.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Multiplier on the moon's contribution to atmospheric scattering. "
+            "0 = no blue-dome around the moon; 1 = default; >1 = exaggerated.");
+
+        RemixGui::DragFloat("NEE Strength", &RtxOptions::moonNeeStrengthObject(),
+                            0.05f, 0.0f, 5.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "World-side master multiplier on direct moon lighting (surface NEE + cloud + future volumetric).");
+
+        RemixGui::DragFloat("Surface Brightness", &RtxOptions::surfaceMoonBrightnessObject(),
+                            1.0f, 0.0f, 200.0f, "%.1f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Per-path multiplier on surface NEE (ground moonlight).");
+
+        RemixGui::DragFloat("Cloud Brightness", &RtxOptions::cloudMoonBrightnessObject(),
+                            0.1f, 0.0f, 50.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Per-path multiplier on cloud-moon lighting (silver-lining + ambient airglow).");
+
+        RemixGui::DragFloat("Halo Brightness", &RtxOptions::haloMoonBrightnessObject(),
+                            0.5f, 0.0f, 100.0f, "%.1f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Per-path multiplier on the disk halo Gaussian glow.");
+        ImGui::TreePop();
+      }
+    }
+
+    void renderMoonCloudLookUI() {
+      constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
+      if (ImGui::TreeNode("Cloud-Look & Halo Shape")) {
+        RemixGui::DragFloat("Silver Lining Intensity", &RtxOptions::moonSilverLiningIntensityObject(),
+                            0.05f, 0.0f, 5.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Brightness of the cloud glow right in front of the moon. Master multiplier "
+            "on silver-lining contribution (Lambert diffuse + HG phase). 0 = no silver lining. "
+            "1 = default. Power users can .conf-tune moonCloudDiffuseGain / moonCloudPhaseGain for ratio.");
+
+        RemixGui::DragFloat("Silver Lining Sharpness", &RtxOptions::moonCloudAnisotropyObject(),
+                            0.01f, -1.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Tightness of the silver-lining glow peak. Higher = sharper pinpoint; lower = softer falloff. "
+            "Henyey-Greenstein g for cloud-moon forward scatter. Default 0.85.");
+
+        RemixGui::DragFloat("Halo Glow", &RtxOptions::moonHaloGlowStrengthObject(),
+                            0.05f, 0.0f, 5.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Brightness of the disk halo + ambient airglow around the moon. Master multiplier. "
+            "0 = no halo / airglow. 1 = default. Power users can .conf-tune moonHaloMagnitude / "
+            "moonAmbientAirglow for ratio.");
         ImGui::TreePop();
       }
     }
@@ -594,20 +810,16 @@ namespace fork_hooks {
 
       ImGui::Separator();
 
-      // Physical Atmosphere controls (Blender Style)
-      if (ImGui::TreeNode("Atmosphere Parameters")) {
+      // ----- Weather Presets panel (fork, placed right under atmosphere presets) -----
+      fork_hooks::showWeatherUI();
 
-        RemixGui::DragFloat("Sun Size", &RtxOptions::sunSizeObject(), 0.01f, 0.0f, 10.0f, "%.3f°", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover("Size of sun disc in degrees");
+      ImGui::Separator();
 
-        RemixGui::DragFloat("Sun Intensity", &RtxOptions::sunIntensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover("Strength of Sun");
+      // Sun (lifted out of former "Atmosphere Parameters" tree)
+      renderSunUI();
 
-        RemixGui::DragFloat("Sun Elevation", &RtxOptions::sunElevationObject(), 0.01f, -90.0f, 90.0f, "%.2f°", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover("Sun angle from horizon");
-
-        RemixGui::DragFloat("Sun Rotation", &RtxOptions::sunRotationObject(), 0.01f, 0.0f, 360.0f, "%.1f°", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover("Rotation of sun around zenith");
+      // Physical Atmosphere controls (renamed; Sun fields moved to renderSunUI above)
+      if (ImGui::TreeNode("Atmosphere")) {
 
         RemixGui::DragFloat("Altitude", &RtxOptions::altitudeObject(), 1.0f, 0.0f, 100000.0f, "%.0f m", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Height from sea level");
@@ -626,10 +838,35 @@ namespace fork_hooks {
           RemixGui::DragFloat("Atmosphere Thickness", &RtxOptions::atmosphereThicknessObject(), 1.0f, 10.0f, 500.0f, "%.0f km", sliderFlags);
           RemixGui::DragFloat("Mie Anisotropy", &RtxOptions::mieAnisotropyObject(), 0.01f, -1.0f, 1.0f, "%.2f", sliderFlags);
 
-          RemixGui::DragFloat3("Base Sun Illuminance", &RtxOptions::sunIlluminanceObject(), 0.1f, 0.0f, 100.0f, "%.1f", sliderFlags);
-          RemixGui::DragFloat3("Base Rayleigh", &RtxOptions::rayleighScatteringObject(), 0.0001f, 0.0f, 0.0001f, "%.6f", sliderFlags);
-          RemixGui::DragFloat3("Base Mie", &RtxOptions::mieScatteringObject(), 0.0001f, 0.0f, 0.0001f, "%.6f", sliderFlags);
-          RemixGui::DragFloat3("Base Ozone", &RtxOptions::ozoneAbsorptionObject(), 0.0001f, 0.0f, 0.01f, "%.6f", sliderFlags);
+          renderChromaticityWidget(
+              "Sun Color (Base)", "Sun Illuminance",
+              &RtxOptions::sunIlluminanceObject(),
+              0.1f, 100.0f, "%.1f",
+              "Sun spectral color (Hillaire base illuminance, chromaticity).",
+              "Sun base illuminance magnitude (overall sun-power level).");
+
+          renderChromaticityWidget(
+              "Air Color (Base)", "Air Scattering Strength",
+              &RtxOptions::rayleighScatteringObject(),
+              0.0005f, 0.1f, "%.4f km\xe2\x81\xbb\xc2\xb9",
+              "Air molecule scattering chromaticity (Rayleigh per-channel scattering coefficients). "
+              "Larger blue = cooler sky.",
+              "Air scattering magnitude. Higher = more atmospheric scattering overall.");
+
+          renderChromaticityWidget(
+              "Dust Color (Base)", "Dust Scattering Strength",
+              &RtxOptions::mieScatteringObject(),
+              0.0005f, 0.05f, "%.4f km\xe2\x81\xbb\xc2\xb9",
+              "Aerosol / dust scattering chromaticity (Mie per-channel coefficients).",
+              "Dust scattering magnitude. Higher = hazier atmosphere.");
+
+          renderChromaticityWidget(
+              "Ozone Tint (Base)", "Ozone Absorption Strength",
+              &RtxOptions::ozoneAbsorptionObject(),
+              0.0001f, 0.05f, "%.5f km\xe2\x81\xbb\xc2\xb9",
+              "Ozone absorption chromaticity (per-channel coefficients). "
+              "Affects twilight color and high-altitude tint.",
+              "Ozone absorption magnitude.");
           RemixGui::DragFloat("Ozone Layer Altitude", &RtxOptions::ozoneLayerAltitudeObject(), 0.5f, 0.0f, 50.0f, "%.1f km", sliderFlags);
           RemixGui::DragFloat("Ozone Layer Width", &RtxOptions::ozoneLayerWidthObject(), 0.5f, 1.0f, 30.0f, "%.1f km", sliderFlags);
 
@@ -639,183 +876,32 @@ namespace fork_hooks {
         ImGui::TreePop();
       }
 
-      // ----- Night Sky tree (fork) -----
+      // ----- Night Sky tree (fork, restructured) -----
       if (ImGui::TreeNode("Night Sky")) {
-        RemixGui::DragFloat("Star Brightness",      &RtxOptions::starBrightnessObject(),
-                            0.1f, 0.0f, 50.0f, "%.1f", sliderFlags);
-        RemixGui::DragFloat("Star Density",         &RtxOptions::starDensityObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover("Threshold: 0 = all stars visible, 1 = no stars.");
-        RemixGui::DragFloat("Star Twinkle Speed",   &RtxOptions::starTwinkleSpeedObject(),
-                            0.1f, 0.0f, 10.0f, "%.1f", sliderFlags);
         RemixGui::DragFloat("Night Sky Brightness", &RtxOptions::nightSkyBrightnessObject(),
                             0.001f, 0.0f, 0.1f, "%.4f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Airglow / ambient night-sky brightness.");
-        RemixGui::DragFloat3("Night Sky Color",     &RtxOptions::nightSkyColorObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::ColorEdit3("Night Sky Color", &RtxOptions::nightSkyColorObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Tint of the ambient night-sky / airglow contribution. Magnitude is set by Night Sky Brightness above.");
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Milky Way");
-        RemixGui::Checkbox("Milky Way Enabled##milkyway",
-                           &RtxOptions::milkyWayEnabledObject());
-        RemixGui::SetTooltipToLastWidgetOnHover(
-          "Master toggle for galactic-band effects: in-band density boost, band-specific star "
-          "colors, and the diffuse background glow. When off, stars distribute uniformly.");
-        RemixGui::DragFloat("Milky Way Density Boost",
-                            &RtxOptions::milkyWayDensityBoostObject(),
-                            0.005f, 0.0f, 0.3f, "%.3f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-          "Extra star density inside the galactic band. Higher = more (dim) band stars. "
-          "Was hardcoded 0.15; default reduced to 0.05.");
-        RemixGui::DragFloat("Milky Way Glow Brightness",
-                            &RtxOptions::milkyWayBackgroundBrightnessObject(),
-                            0.01f, 0.0f, 2.0f, "%.3f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-          "Diffuse band-glow brightness (the soft dust haze across the Milky Way). "
-          "0 disables the glow.");
-        RemixGui::DragFloat3("Milky Way Outer Color",
-                            &RtxOptions::milkyWayBackgroundColorObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-          "Cool outer-edge tint of the band (where young stars dominate). Default cool blue.");
-        RemixGui::DragFloat3("Milky Way Core Color",
-                            &RtxOptions::milkyWayCoreColorObject(),
-                            0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-          "Warm bright-core tint at the galactic center. Default warm cream/yellow.");
-        RemixGui::DragFloat3("Milky Way Dust Color",
-                            &RtxOptions::milkyWayDustColorObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-          "Dark dust-lane tint -- the silhouetted patches across the band. "
-          "Default dark red-brown.");
-        RemixGui::DragFloat("Milky Way Dust Amount",
-                            &RtxOptions::milkyWayDustAmountObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-          "How strongly dust patches darken the glow. 0 = no dust, 1 = full dust contrast.");
-        ImGui::Separator();
+        renderStarsUI();
+        renderMilkyWayUI();
+        renderStarAppearanceUI();
 
-        RemixGui::DragFloat("Star PSF Sharpness",
-                            &RtxOptions::starPsfSharpnessObject(),
-                            0.5f, 1.0f, 500.0f, "%.1f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-          "Gaussian PSF exponent. Lower = bigger softer stars, higher = sharper "
-          "pinpoints. At 1080p/90° FOV, ~20 gives 1-pixel-FWHM (anti-aliased); "
-          "the old hardcoded 800 produced severe sub-pixel camera-motion flicker.");
-        RemixGui::DragFloat("Star Cloud Extinction Power",
-                            &RtxOptions::starCloudExtinctionPowerObject(),
-                            0.1f, 1.0f, 6.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-          "Exponent on cloud view-transmittance when extincting stars. 1.0 = standard "
-          "alpha-composite (HDR stars punch through cumulus cores). Higher = stars die "
-          "through clouds faster. Default 2.5.");
-        RemixGui::DragFloat("Star Ambient Coupling",
-                            &RtxOptions::starAmbientCouplingStrengthObject(),
-                            0.001f, 0.0f, 0.1f, "%.4f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-          "Star/airglow coupling into cloud-march nightLight. Adds a faint per-ray ambient "
-          "lift to cloud bodies under starry skies (analogous to moon-zenith fill). "
-          "0 = disabled. Default 0.01.");
         ImGui::TreePop();
       }
 
-      // ----- Moons tree (fork) -----
+      // ----- Moons tree (fork, restructured) -----
       if (ImGui::TreeNode("Moons")) {
-        // Global moon-strength sliders apply across all moons. Per-moon enable +
-        // appearance lives inside renderMoonUI below.
-        RemixGui::DragFloat("Atmospheric Coupling",
-                            &RtxOptions::moonAtmosphericCouplingStrengthObject(),
-                            0.05f, 0.0f, 5.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Multiplier on the moon's contribution to atmospheric scattering. "
-            "0 = no blue-dome around the moon (sky stays pure black); 1 = default; "
-            ">1 = exaggerated.");
-
-        RemixGui::DragFloat("NEE Strength",
-                            &RtxOptions::moonNeeStrengthObject(),
-                            0.05f, 0.0f, 5.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "World-side master multiplier on direct moon lighting (surface NEE + "
-            "cloud illumination + future volumetric). 0 = moon does not light the "
-            "world; 1 = default physical-baseline; >1 = brighten across all world-"
-            "side paths simultaneously. Per-path fine-tuning via the three sliders "
-            "below.");
-
-        RemixGui::DragFloat("Surface Brightness",
-                            &RtxOptions::surfaceMoonBrightnessObject(),
-                            1.0f, 0.0f, 200.0f, "%.1f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Per-path stylistic multiplier on surface NEE (ground moonlight). "
-            "Default 50.0 = user-tested visibility baseline under FNV tonemapper "
-            "at m.brightness=1.0. Set to 1.0 for physically-pure (very dim).");
-
-        RemixGui::DragFloat("Cloud Brightness",
-                            &RtxOptions::cloudMoonBrightnessObject(),
-                            0.1f, 0.0f, 50.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Per-path stylistic multiplier on cloud-moon lighting (directional silver-"
-            "lining + ambient airglow). Default 2.0 = user-tested baseline at "
-            "m.brightness=1.0. Set to 1.0 for physically-pure; higher for stronger "
-            "silver-lining peak on the cloud directly in front of the moon.");
-
-        RemixGui::DragFloat("Halo Brightness",
-                            &RtxOptions::haloMoonBrightnessObject(),
-                            0.5f, 0.0f, 100.0f, "%.1f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Per-path stylistic multiplier on the disk halo Gaussian glow. "
-            "Default 15.0 = user-tested baseline at m.brightness=1.0. "
-            "Set to 1.0 for physically-pure.");
-
-        if (ImGui::TreeNode("Cloud-Look & Halo Shape")) {
-          RemixGui::DragFloat("Cloud Diffuse Gain",
-                              &RtxOptions::moonCloudDiffuseGainObject(),
-                              0.01f, 0.0f, 1.0f, "%.3f", sliderFlags);
-          RemixGui::SetTooltipToLastWidgetOnHover(
-              "Cloud-moon Lambert diffuse weight. Lower = stronger silver-lining "
-              "contrast (off-axis clouds darker); higher = more uniform cloud "
-              "lighting. Default 0.10.");
-
-          RemixGui::DragFloat("Cloud Phase Gain",
-                              &RtxOptions::moonCloudPhaseGainObject(),
-                              0.01f, 0.0f, 2.0f, "%.3f", sliderFlags);
-          RemixGui::SetTooltipToLastWidgetOnHover(
-              "Cloud-moon HG phase weight. Higher = brighter silver-lining peak "
-              "on cloud directly in front of moon. Default 0.30.");
-
-          RemixGui::DragFloat("Cloud Anisotropy",
-                              &RtxOptions::moonCloudAnisotropyObject(),
-                              0.01f, -1.0f, 1.0f, "%.3f", sliderFlags);
-          RemixGui::SetTooltipToLastWidgetOnHover(
-              "HG anisotropy for cloud-moon forward scatter. Higher = sharper "
-              "silver-lining peak; lower = softer falloff. Default 0.85.");
-
-          RemixGui::DragFloat("Halo Magnitude (shape)",
-                              &RtxOptions::moonHaloMagnitudeObject(),
-                              0.0005f, 0.0f, 0.05f, "%.4f", sliderFlags);
-          RemixGui::SetTooltipToLastWidgetOnHover(
-              "Disk halo Gaussian shape strength. Use Halo Brightness above for "
-              "the tonemapper-correction multiplier; this is the underlying shape "
-              "constant. Default 0.0015.");
-
-          RemixGui::DragFloat("Ambient Airglow",
-                              &RtxOptions::moonAmbientAirglowObject(),
-                              0.0005f, 0.0f, 0.05f, "%.4f", sliderFlags);
-          RemixGui::SetTooltipToLastWidgetOnHover(
-              "Ambient airglow per-moon strength contribution to cloud volume "
-              "background luminance. Default 0.0015.");
-
-          ImGui::TreePop();
-        }
+        renderMoonGlobalLightingUI();
+        renderMoonCloudLookUI();
 
         for (int i = 0; i < static_cast<int>(MAX_MOONS); ++i) {
           renderMoonUI(i);
         }
         ImGui::TreePop();
       }
-
-      // ----- Weather Presets panel (fork) -----
-      fork_hooks::showWeatherUI();
 
       // ----- Clouds tree (fork) -----
       // Simplified menu surface 2026-05-19. 14 user-facing sliders + 1 checkbox

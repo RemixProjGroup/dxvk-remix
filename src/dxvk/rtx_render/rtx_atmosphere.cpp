@@ -386,8 +386,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
 
   // Sidereal sky rotation. Default axis (elevation 90, rotation 0) keeps the
   // pre-rotation behavior; non-default values come from rtx.conf or game
-  // plugin pushes. starRotation is the only field expected to change frame-
-  // to-frame, so it is the only one flagged NoSave.
+  // plugin pushes. starRotation is game-drivable per-frame but also persists
+  // when saved (last writer wins during a session; cold start uses the saved
+  // value until any plugin push lands).
   args.starRotation      = RtxOptions::starRotation();
   args.starAxisElevation = RtxOptions::starAxisElevation();
   args.starAxisRotation  = RtxOptions::starAxisRotation();
@@ -425,11 +426,16 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.padMoonNee2                     = 0.0f;
 
   // ----- Moon cloud-look + halo shape constants (fork, Phase 3 Task 2) -----
-  args.moonCloudDiffuseGain            = RtxOptions::moonCloudDiffuseGain();
-  args.moonCloudPhaseGain              = RtxOptions::moonCloudPhaseGain();
+  // moonSilverLiningIntensity / moonHaloGlowStrength are master multipliers
+  // applied here at args-population time so shaders see the pre-scaled value.
+  // Default 1.0 yields byte-identical behavior to pre-master-multiplier builds.
+  const float silverLining             = RtxOptions::moonSilverLiningIntensity();
+  const float haloGlow                 = RtxOptions::moonHaloGlowStrength();
+  args.moonCloudDiffuseGain            = RtxOptions::moonCloudDiffuseGain()  * silverLining;
+  args.moonCloudPhaseGain              = RtxOptions::moonCloudPhaseGain()    * silverLining;
   args.moonCloudAnisotropy             = RtxOptions::moonCloudAnisotropy();
-  args.moonHaloMagnitude               = RtxOptions::moonHaloMagnitude();
-  args.moonAmbientAirglow              = RtxOptions::moonAmbientAirglow();
+  args.moonHaloMagnitude               = RtxOptions::moonHaloMagnitude()     * haloGlow;
+  args.moonAmbientAirglow              = RtxOptions::moonAmbientAirglow()    * haloGlow;
   args.padCloudLook0                   = 0.0f;
   args.padCloudLook1                   = 0.0f;
   args.padCloudLook2                   = 0.0f;
