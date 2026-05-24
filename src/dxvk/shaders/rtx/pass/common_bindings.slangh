@@ -144,3 +144,10 @@ Texture2D<float4> AtmosphereCloudHistoryPrev;
 
 layout(rgba16f, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR)
 RWTexture2D<float4> AtmosphereCloudHistoryCurr;
+
+// Cloud-occluded sky-ambient transmittance LUT (fork). 2D (azimuth, elevation),
+// R16F single-channel, baked per frame from camera position by
+// cloud_sky_transmittance_lut.comp.slang. Sampled via the linear/CLAMP sampler
+// produced alongside the bake (bound by fork_hooks::bindAtmosphereLuts).
+layout(binding = BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT)
+Texture2D<float> AtmosphereCloudSkyTransmittanceLut;

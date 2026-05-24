@@ -130,3 +130,39 @@ foreach ($rel in $artifacts.Keys) {
     $info = Get-Item $abs
     Write-Host ("  {0,-24} {1:yyyy-MM-dd HH:mm}  {2,12:N0} bytes  {3}" -f $artifacts[$rel], $info.LastWriteTime, $info.Length, $rel) -ForegroundColor Green
 }
+
+# --- Optional auto-deploy to user-local game install paths ---
+#
+# If `scripts/auto-deploy.local.ps1` exists (gitignored), dot-source it and
+# copy `_output/d3d9.dll` to each path listed in `$AutoDeployTargets`. Lets
+# contributors skip manual copy/paste into their test game install without
+# leaking machine-specific paths into the tracked tree.
+#
+# Local file template:
+#   $AutoDeployTargets = @(
+#     'I:\path\to\game\.trex'
+#   )
+$autoDeployScript = Join-Path $PSScriptRoot 'auto-deploy.local.ps1'
+if (Test-Path $autoDeployScript) {
+    $AutoDeployTargets = @()
+    . $autoDeployScript
+    if ($AutoDeployTargets.Count -gt 0) {
+        Write-Host ""
+        Write-Host "=== Auto-deploy (from scripts/auto-deploy.local.ps1) ===" -ForegroundColor Cyan
+        $sourceDll = Join-Path $RepoRoot '_output/d3d9.dll'
+        foreach ($target in $AutoDeployTargets) {
+            if (-not (Test-Path $target)) {
+                Write-Host "  SKIP (target dir missing): $target" -ForegroundColor Yellow
+                continue
+            }
+            $destDll = Join-Path $target 'd3d9.dll'
+            try {
+                Copy-Item -Path $sourceDll -Destination $destDll -Force
+                $info = Get-Item $destDll
+                Write-Host ("  copied -> {0:yyyy-MM-dd HH:mm}  {1,12:N0} bytes  {2}" -f $info.LastWriteTime, $info.Length, $destDll) -ForegroundColor Green
+            } catch {
+                Write-Host "  FAIL: $target -- $($_.Exception.Message)" -ForegroundColor Red
+            }
+        }
+    }
+}

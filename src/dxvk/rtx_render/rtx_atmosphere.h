@@ -85,6 +85,15 @@ public:
   Resources::Resource getCloudNoise3D() const { return m_cloudNoise3D; }  // Stage C
 
   /**
+   * \brief Get the cloud-occluded sky-ambient transmittance LUT (fork).
+   *
+   * 2D R16F texture keyed by (azimuth, elevation). Baked per frame from camera
+   * position. Consumed by the volumetric pass's sky-ambient hemisphere
+   * integration to attenuate sky-view radiance per direction.
+   */
+  Resources::Resource getCloudSkyTransmittanceLut() const { return m_cloudSkyTransmittanceLut; }
+
+  /**
    * \brief Get the EA Importance-Sampled FAST noise view for descriptor binding
    *
    * Returns nullptr if the FAST noise has not been initialized.
@@ -133,6 +142,7 @@ private:
   void dispatchMultiscatteringLut(Rc<DxvkContext> ctx);
   void dispatchSkyViewLut(Rc<DxvkContext> ctx);
   void dispatchCloudNoise3DBake(Rc<DxvkContext> ctx);  // Stage C: one-shot at init
+  void dispatchCloudSkyTransmittanceLut(Rc<DxvkContext> ctx);  // Fork: per-frame
 
   // LUT dimensions
   static constexpr uint32_t kTransmittanceLutWidth = 512;   // Increased from 256 for better precision
@@ -141,6 +151,14 @@ private:
   static constexpr uint32_t kSkyViewLutWidth = 512;   // Increased from 192 to eliminate aliasing artifacts
   static constexpr uint32_t kSkyViewLutHeight = 256;  // Increased from 108 to eliminate aliasing artifacts
   static constexpr uint32_t kCloudNoise3DSize = 256;  // 3D R8, 16 MB VRAM (Stage C)
+  // Cloud-occluded sky-ambient transmittance LUT (fork). Small 2D R16F texture
+  // keyed by (azimuth, elevation). 32x16 chosen because cumulus features at the
+  // bake scale are low-frequency relative to a 360x90 sweep — 32 azimuthal
+  // steps approximate cumulus cell width perception; 16 elevation steps cover
+  // [-pi/2, pi/2] with finer-than-necessary near-horizon detail.
+  // Keep in lockstep with kLutWidth/kLutHeight in cloud_sky_transmittance_lut.comp.slang.
+  static constexpr uint32_t kCloudSkyTransmittanceLutWidth = 32;
+  static constexpr uint32_t kCloudSkyTransmittanceLutHeight = 16;
 
   // Scale heights for exponential density profiles (in km)
   static constexpr float kRayleighScaleHeight = 8.0f;
@@ -150,6 +168,7 @@ private:
   Resources::Resource m_multiscatteringLut;
   Resources::Resource m_skyViewLut;
   Resources::Resource m_cloudNoise3D;  // Stage C: prebaked 3D Perlin FBM
+  Resources::Resource m_cloudSkyTransmittanceLut;  // Fork: per-frame cloud occlusion of sky-ambient hemisphere
   RtxFastNoise m_fastNoise;            // EA Importance-Sampled FAST noise (cloud ray-march jitter)
 
   // Cloud history ping-pong (fork). Screen-space RGBA16F (premultiplied

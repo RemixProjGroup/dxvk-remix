@@ -137,6 +137,14 @@ namespace dxvk {
                                 "Debug Knob [0]: (rounded down) which texture type to show: \n"
                                 "0: AlbedoOpacity, 1: Normal, 2: Tangent, 3: Height,\n"
                                 "4: Roughness, 5: Metallic, 6: Emissive"},
+
+        {DEBUG_VIEW_CLOUD_SKY_TRANSMITTANCE_LUT, "Atmosphere: Cloud Sky Transmittance LUT",
+                                "Fork diagnostic. Visualizes the 32x16 cloud-occluded sky-ambient\n"
+                                "transmittance LUT baked by cloud_sky_transmittance_lut.comp.slang.\n"
+                                "Stretched to fill the screen; red = full occlusion (thick cumulus),\n"
+                                "black = clear sky in that direction.\n"
+                                "X axis = azimuth [0, 360 deg], Y axis = elevation [-90, +90 deg]\n"
+                                "(bottom half = below horizon, always clear)."},
         {DEBUG_VIEW_CASCADE_LEVEL, "Terrain: Cascade Level"},
 
         {DEBUG_VIEW_VIRTUAL_HIT_DISTANCE, "Virtual Hit Distance"},
@@ -568,6 +576,7 @@ namespace dxvk {
         TEXTURE2D(DEBUG_VIEW_BINDING_COMPOSITE_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_ALTERNATE_DISOCCLUSION_THRESHOLD_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_PREV_WORLD_POSITION_INPUT)
+        TEXTURE2D(DEBUG_VIEW_BINDING_CLOUD_SKY_TRANSMITTANCE_LUT_INPUT)
 
         RW_TEXTURE2D(DEBUG_VIEW_BINDING_ACCUMULATED_DEBUG_VIEW_INPUT_OUTPUT)
 
@@ -1325,6 +1334,17 @@ namespace dxvk {
                       ReplacementMaterialTextureType::Count - 1));
     Resources::Resource terrain = common.getSceneManager().getTerrainBaker().getTerrainTexture(terrainTextureType);
     ctx->bindResourceView(DEBUG_VIEW_BINDING_TERRAIN_INPUT, terrain.view, nullptr);
+
+    // Fork: cloud-occluded sky-ambient transmittance LUT diagnostic binding.
+    // The fork hook lazy-initializes the atmosphere so the resource is always
+    // valid after the call.
+    Resources::Resource cloudSkyTransLut = fork_hooks::getCloudSkyTransmittanceLut(*ctx);
+    if (cloudSkyTransLut.isValid()) {
+      ctx->bindResourceView(
+        DEBUG_VIEW_BINDING_CLOUD_SKY_TRANSMITTANCE_LUT_INPUT,
+        cloudSkyTransLut.view,
+        nullptr);
+    }
 
     ctx->bindResourceView(DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT, globalVolumetrics.getPreviousVolumeReservoirs().view, nullptr);
     ctx->bindResourceView(DEBUG_VIEW_BINDING_VOLUME_AGE_INPUT, globalVolumetrics.getCurrentVolumeAccumulatedRadianceAge().view, nullptr);

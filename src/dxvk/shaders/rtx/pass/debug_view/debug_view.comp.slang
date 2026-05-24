@@ -84,6 +84,11 @@ Texture2D<float4> RenderOutput;
 Texture2D<uint> Instrumentation;
 [[vk::binding(DEBUG_VIEW_BINDING_TERRAIN_INPUT)]]
 Texture2D<float4> TerrainTexture;
+
+// Fork: cloud-occluded sky-ambient transmittance LUT (32x16 R16F).
+// Visualized by DEBUG_VIEW_CLOUD_SKY_TRANSMITTANCE_LUT.
+[[vk::binding(DEBUG_VIEW_BINDING_CLOUD_SKY_TRANSMITTANCE_LUT_INPUT)]]
+Texture2D<float> CloudSkyTransmittanceLut;
 [[vk::binding(DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT)]]
 Texture3D<uint4> VolumeReservoirs;
 
@@ -352,6 +357,17 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
     break;
   case DEBUG_VIEW_TERRAIN_MAP_OPACITY:
     value = vec4(sampleTexture(TerrainTexture, threadId).aaa, 1);
+    break;
+  case DEBUG_VIEW_CLOUD_SKY_TRANSMITTANCE_LUT:
+    {
+      // Stretch the 32x16 LUT to fill the screen via linear sampling.
+      // Heatmap: black = clear sky (transmittance 1.0), red = full cloud
+      // occlusion (transmittance 0.0). X axis = azimuth, Y axis = elevation.
+      const vec2 uv = (vec2(threadId) + 0.5f) / vec2(cb.debugViewResolution);
+      const float trans = CloudSkyTransmittanceLut.SampleLevel(LinearSampler, uv, 0).r;
+      const float occlusion = saturate(1.0f - trans);
+      value = vec4(occlusion, 0.0f, 0.0f, 1.0f);
+    }
     break;
   case DEBUG_VIEW_NRC_UPDATE_RADIANCE:
   case DEBUG_VIEW_NRC_UPDATE_THROUGHPUT:

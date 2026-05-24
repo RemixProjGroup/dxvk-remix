@@ -269,6 +269,9 @@
 
 #define DEBUG_VIEW_PREV_WORLD_POSITION_AND_TBN 860
 
+// Fork: atmosphere / cloud diagnostics
+#define DEBUG_VIEW_CLOUD_SKY_TRANSMITTANCE_LUT 870
+
 
 enum class CompositeDebugView : uint32_t {
   Disabled = 0,

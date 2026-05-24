@@ -44,6 +44,9 @@
 #define DEBUG_VIEW_BINDING_INSTRUMENTATION_INPUT                                           15
 #define DEBUG_VIEW_BINDING_TERRAIN_INPUT                                                   17
 
+// Fork: per-frame cloud-occluded sky-ambient transmittance LUT (32x16 R16F)
+#define DEBUG_VIEW_BINDING_CLOUD_SKY_TRANSMITTANCE_LUT_INPUT                                34
+
 #define DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT                                         19
 #define DEBUG_VIEW_BINDING_VOLUME_AGE_INPUT                                                20
 #define DEBUG_VIEW_BINDING_VOLUME_RADIANCE_Y_INPUT                                         21

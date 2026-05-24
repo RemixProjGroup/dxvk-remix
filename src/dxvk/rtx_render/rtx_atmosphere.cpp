@@ -30,6 +30,7 @@
 #include <rtx_shaders/multiscattering_lut.h>
 #include <rtx_shaders/sky_view_lut.h>
 #include <rtx_shaders/rtx_cloud_noise_baker.h>
+#include <rtx_shaders/cloud_sky_transmittance_lut.h>
 #include <cmath>
 #include <fstream>
 #include <chrono>
@@ -82,6 +83,18 @@ namespace dxvk {
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(CloudNoiseBakerShader);
+
+    // Fork: per-frame bake of the cloud-occluded sky-ambient transmittance LUT.
+    // 32x16 R16F keyed by (azimuth, elevation). Consumed by the volumetric pass.
+    class CloudSkyTransmittanceLutShader : public ManagedShader {
+      SHADER_SOURCE(CloudSkyTransmittanceLutShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_sky_transmittance_lut)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        RW_TEXTURE2D(1)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudSkyTransmittanceLutShader);
   }
 
 RtxAtmosphere::RtxAtmosphere(DxvkDevice* device)
@@ -345,8 +358,12 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.pad6 = 0.0f;
     args.pad7 = 0.0f;
     args.cloudNoiseTileKm = RtxOptions::cloudNoiseTileKm();
-    args.padCloudC0 = 0.0f;
-    args.padCloudC1 = 0.0f;
+    // Volumetric sky-ambient illumination knobs (fork, 2026-05-12). Defaults
+    // applied here are the ship-state defaults: skyAmbientStrength = 0 keeps
+    // the feature off by default; cloudOcclusionStrength = 1 means full
+    // physical cloud occlusion when the feature is enabled.
+    args.cloudSkyAmbientStrength = RtxOptions::cloudSkyAmbientStrength();
+    args.cloudSkyAmbientCloudOcclusionStrength = RtxOptions::cloudSkyAmbientCloudOcclusionStrength();
     args.padCloudC2 = 0.0f;
   }
 
@@ -430,6 +447,26 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
     1 // mipLevels
   );
 
+  // Fork: cloud-occluded sky-ambient transmittance LUT (2D R16F, 32x16).
+  // Baked every frame from the camera position; consumed by the volumetric
+  // pass's sky-ambient hemisphere integration.
+  VkExtent3D cloudSkyTransmittanceLutExtent = {
+    kCloudSkyTransmittanceLutWidth, kCloudSkyTransmittanceLutHeight, 1
+  };
+  m_cloudSkyTransmittanceLut = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud Sky Transmittance LUT",
+    cloudSkyTransmittanceLutExtent,
+    VK_FORMAT_R16_SFLOAT,
+    1, // numLayers
+    VK_IMAGE_TYPE_2D,
+    VK_IMAGE_VIEW_TYPE_2D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
+
   // EA Importance-Sampled FAST noise (128x128x32 RG8 Texture2DArray) used for
   // cloud ray-march jitter. One-shot upload of the embedded byte data; no-op on
   // subsequent calls.
@@ -465,7 +502,17 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
     VK_ACCESS_SHADER_READ_BIT);
   
   dispatchSkyViewLut(ctx);
-  
+
+  // Barrier: ensure sky-view bake is complete before the cloud-sky-transmittance
+  // bake runs (independent dispatches but we want clean ordering for profilers).
+  ctx->emitMemoryBarrier(0,
+    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+    VK_ACCESS_SHADER_WRITE_BIT,
+    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+    VK_ACCESS_SHADER_READ_BIT);
+
+  dispatchCloudSkyTransmittanceLut(ctx);
+
   // Final barrier: Ensure all LUTs are written before use in ray tracing
   ctx->emitMemoryBarrier(0,
     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -578,6 +625,32 @@ void RtxAtmosphere::dispatchSkyViewLut(Rc<DxvkContext> ctx) {
   ctx->dispatch(groupsX, groupsY, 1);
 }
 
+void RtxAtmosphere::dispatchCloudSkyTransmittanceLut(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud Sky Transmittance LUT");
+
+  // Update atmosphere args buffer (the SkyView dispatch above already updates,
+  // but the LUT-cascade dispatches each set their own copy to keep ordering
+  // explicit and to be safe against future refactors that reorder dispatches).
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  // Bind resources: ConstantBuffer<AtmosphereArgs> at slot 0, RWTexture2D<float> at slot 1.
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudSkyTransmittanceLut.view, nullptr);
+
+  // Track resources
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudSkyTransmittanceLut.image);
+
+  // Bind shader and dispatch
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudSkyTransmittanceLutShader::getShader());
+
+  // Dispatch with 8x8 thread groups (shader declares [numthreads(8, 8, 1)]).
+  uint32_t groupsX = (kCloudSkyTransmittanceLutWidth + 7) / 8;
+  uint32_t groupsY = (kCloudSkyTransmittanceLutHeight + 7) / 8;
+  ctx->dispatch(groupsX, groupsY, 1);
+}
+
 void RtxAtmosphere::dispatchCloudNoise3DBake(Rc<DxvkContext> ctx) {
   ScopedGpuProfileZone(ctx, "Atmosphere Cloud Noise 3D Bake");
 
@@ -676,6 +749,9 @@ void RtxAtmosphere::bindResources(Rc<DxvkContext> ctx, VkPipelineBindPoint pipel
   }
   if (m_fastNoise.isValid()) {
     ctx->bindResourceView(BINDING_ATMOSPHERE_FAST_NOISE, m_fastNoise.getView(), nullptr);
+  }
+  if (m_cloudSkyTransmittanceLut.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT, m_cloudSkyTransmittanceLut.view, nullptr);
   }
   // Cloud history bindings are wired in fork_hooks::bindAtmosphereLuts (the
   // active call site) and depend on the downscaled-extent ensure step. Left

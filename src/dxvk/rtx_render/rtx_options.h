@@ -1426,6 +1426,24 @@ namespace dxvk {
                "to the horizon). Only affects cloud sphere intersections; "
                "atmospheric scattering still uses the real planet radius.");
 
+    // Volumetric sky-ambient illumination (fork — 2026-05-12)
+    // Feeds the volumetric froxel pass with sky-view-LUT radiance attenuated
+    // by cloud coverage along each hemisphere sample direction. Default-off
+    // ship strategy: skyAmbientStrength=0 means baseline rendering is
+    // unchanged until the user flips this on. See
+    // docs/superpowers/specs/2026-05-12-volumetric-sky-ambient-design.md.
+    RTX_OPTION("rtx.atmosphere", float, cloudSkyAmbientStrength, 0.0f,
+               "Overall strength of the volumetric sky-ambient illumination term "
+               "[0..3]. 0 = feature disabled (baseline rendering). 1 = physical "
+               "baseline. Higher values brighten shadowed fog with sky-tinted "
+               "ambient. Gated on rtx.skyMode = 1 (Physical Atmosphere).");
+    RTX_OPTION("rtx.atmosphere", float, cloudSkyAmbientCloudOcclusionStrength, 1.0f,
+               "Strength of cloud occlusion applied to the volumetric sky-ambient "
+               "term [0..1]. 1 = full physical cloud occlusion (overcast scenes "
+               "have visibly darker volumetric ambient than clear-sky scenes). "
+               "0 = sky ambient ignores cloud cover (debug only — visually "
+               "inverted versus reality).");
+
     // Wrenninge / Hillaire (Frostbite 2016) multi-scatter approximation for the
     // sun-cloud interaction. Replaces the prior flat-Lambert + single-HG approximation
     // with a sum of N octaves (each with reduced energy, extinction and phase

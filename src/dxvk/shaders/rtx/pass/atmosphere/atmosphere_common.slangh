@@ -750,6 +750,50 @@ vec3 getTransmittanceToSun(vec3 worldPos, AtmosphereArgs args, bool isZUp = fals
   return transmittance;
 }
 
+// Sample the cloud-occluded sky radiance for a given direction. Returns
+// skyRadiance * lerp(1, cloudTransmittance, cloudOcclusionStrength) where
+// skyRadiance comes from the pre-baked sky-view LUT and cloudTransmittance
+// from the pre-baked cloud-sky-transmittance LUT (both baked from the camera
+// position per frame).
+//
+// The two LUTs and the linear/CLAMP sampler are passed as parameters so this
+// helper compiles in any translation unit that includes atmosphere_common.slangh,
+// regardless of whether the consumer pulled in common_bindings.slangh or
+// atmosphere_bindings.slangh. The sampler MUST be linear/CLAMP — sky-view LUT
+// is keyed by (azimuth, elevation) world-Y-up matching sky_view_lut.comp.slang.
+//
+// dirYUp must be normalized and in Y-up space; caller applies isZUp swap before
+// calling if the calling pass is in Z-up. Below-horizon directions return 0
+// (consumer is expected to clamp to the upper hemisphere anyway).
+vec3 sampleSkyAmbientForVolume(vec3 dirYUp,
+                               AtmosphereArgs args,
+                               Texture2D<float4> skyViewLut,
+                               Texture2D<float> cloudSkyTransmittanceLut,
+                               SamplerState lutSampler) {
+  // Below-horizon clamp. The sky-view LUT's bottom half holds twilight terms
+  // we don't want as volumetric ambient (the volumetric pass already has its
+  // own below-horizon falloff for the sun term).
+  if (dirYUp.y < 0.0f) {
+    return vec3(0.0f);
+  }
+
+  // Direction -> (azimuth, elevation) UV. Mirrors sky_view_lut.comp.slang:52-53
+  // exactly so a single UV samples both LUTs consistently.
+  float elevation = asin(saturate(dirYUp.y));
+  float azimuth = atan2(dirYUp.z, dirYUp.x);
+  if (azimuth < 0.0f) azimuth += 2.0f * kPi;
+  vec2 uv = vec2(azimuth / (2.0f * kPi), elevation / kPi + 0.5f);
+
+  vec3 skyRadiance = skyViewLut.SampleLevel(lutSampler, uv, 0).rgb;
+  float cloudTrans = cloudSkyTransmittanceLut.SampleLevel(lutSampler, uv, 0).r;
+
+  // Lerp lets cloudSkyAmbientCloudOcclusionStrength fade the occlusion
+  // independently of the overall sky-ambient strength. 1.0 = full cloud
+  // occlusion (physical baseline); 0.0 = sky ambient ignores clouds.
+  float cloudFactor = lerp(1.0f, cloudTrans, args.cloudSkyAmbientCloudOcclusionStrength);
+  return skyRadiance * cloudFactor;
+}
+
 // Structure for direct sun lighting sample (NEE)
 struct AtmosphereSunSample {
   vec3 direction;       // Direction TO the sun (normalized), in world space

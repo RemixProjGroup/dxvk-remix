@@ -70,6 +70,10 @@ namespace dxvk {
     void bindAtmosphereLuts(RtxContext&);
     void dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
     void updateWeatherBlender(RtxContext& ctx, float deltaTimeSeconds);
+    // Returns the per-frame cloud-occluded sky-ambient transmittance LUT, or an
+    // invalid Resource if the atmosphere has not been initialized yet. Used by
+    // the debug view to bind the LUT into its pass-local descriptor set.
+    Resources::Resource getCloudSkyTransmittanceLut(RtxContext& ctx);
   } // namespace fork_hooks
 
   /**
@@ -343,5 +347,6 @@ namespace dxvk {
     friend void fork_hooks::bindAtmosphereLuts(RtxContext&);
     friend void fork_hooks::dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
     friend void fork_hooks::updateWeatherBlender(RtxContext& ctx, float deltaTimeSeconds);
+    friend Resources::Resource fork_hooks::getCloudSkyTransmittanceLut(RtxContext& ctx);
   };
 } // namespace dxvk

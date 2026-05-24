@@ -114,11 +114,12 @@ namespace fork_hooks {
     // Always call initialize - it's idempotent (has internal m_initialized check)
     ctx.m_atmosphere->initialize(&ctx);
 
-    auto transmittanceLut   = ctx.m_atmosphere->getTransmittanceLut();
-    auto multiscatteringLut = ctx.m_atmosphere->getMultiscatteringLut();
-    auto skyViewLut         = ctx.m_atmosphere->getSkyViewLut();
-    auto cloudNoise3D       = ctx.m_atmosphere->getCloudNoise3D();  // Stage C
-    auto fastNoiseView      = ctx.m_atmosphere->getFastNoiseView();  // EA importance-sampled FAST noise
+    auto transmittanceLut         = ctx.m_atmosphere->getTransmittanceLut();
+    auto multiscatteringLut       = ctx.m_atmosphere->getMultiscatteringLut();
+    auto skyViewLut               = ctx.m_atmosphere->getSkyViewLut();
+    auto cloudNoise3D             = ctx.m_atmosphere->getCloudNoise3D();  // Stage C
+    auto fastNoiseView            = ctx.m_atmosphere->getFastNoiseView();  // EA importance-sampled FAST noise
+    auto cloudSkyTransmittanceLut = ctx.m_atmosphere->getCloudSkyTransmittanceLut();  // Fork: per-frame cloud occlusion of sky-ambient
 
     // Always bind the LUTs (they're declared in shaders unconditionally)
     if (transmittanceLut.isValid()) {
@@ -135,6 +136,9 @@ namespace fork_hooks {
     }
     if (fastNoiseView != nullptr) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_FAST_NOISE, fastNoiseView, nullptr);
+    }
+    if (cloudSkyTransmittanceLut.isValid()) {
+      ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT, cloudSkyTransmittanceLut.view, nullptr);
     }
 
     // Cloud history (fork). Allocate at the current downscaled render extent
@@ -176,6 +180,30 @@ namespace fork_hooks {
       Rc<DxvkSampler> cloudNoiseSampler = ctx.m_device->createSampler(samplerInfo);
       ctx.bindResourceSampler(BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER, cloudNoiseSampler);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // getCloudSkyTransmittanceLut
+  //
+  // Public accessor for the per-frame cloud-occluded sky-ambient transmittance
+  // LUT. Returns an invalid Resources::Resource if the atmosphere has not been
+  // initialized yet. Used by the debug view to bind the LUT into its
+  // pass-local descriptor set.
+  //
+  // ACCESS NOTE: reads m_atmosphere (private). Friend declaration required in
+  // RtxContext.
+  // ---------------------------------------------------------------------------
+  Resources::Resource getCloudSkyTransmittanceLut(RtxContext& ctx) {
+    // Lazy-initialize the atmosphere on demand so the LUT resource is allocated
+    // even when the caller (e.g. debug view dispatch) runs before any
+    // ray-tracing pass has triggered bindAtmosphereLuts. createLutResources is
+    // idempotent and allocates the LUT regardless of skyMode, so the returned
+    // resource is always valid after initialize() returns.
+    if (!ctx.m_atmosphere) {
+      ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
+    }
+    ctx.m_atmosphere->initialize(&ctx);
+    return ctx.m_atmosphere->getCloudSkyTransmittanceLut();
   }
 
   // ---------------------------------------------------------------------------
@@ -592,6 +620,13 @@ namespace fork_hooks {
         RemixGui::SetTooltipToLastWidgetOnHover("Strength of high-frequency detail. Auto-fades at low Scale to avoid visible noise.");
         RemixGui::DragFloat("Curvature", &RtxOptions::cloudCurvatureObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Sky-dome curvature: 0 = real-planet radius (nearly flat ceiling), 1 = tight dome. Only affects cloud sphere geometry — atmosphere math is untouched.");
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Volumetric — Sky-Ambient Illumination (fork)");
+        RemixGui::DragFloat("Sky Ambient Strength", &RtxOptions::cloudSkyAmbientStrengthObject(), 0.05f, 0.0f, 3.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Strength of cloud-occluded sky-ambient illumination of the volumetric fog. 0 = feature off (baseline rendering). 1 = physical baseline; higher brightens shadowed fog with sky-tinted ambient. Requires Sky Mode = Physical Atmosphere.");
+        RemixGui::DragFloat("Sky Ambient Cloud Occlusion", &RtxOptions::cloudSkyAmbientCloudOcclusionStrengthObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("How strongly clouds attenuate the sky-ambient term. 1 = full physical occlusion (overcast scenes have darker volumetric ambient). 0 = ambient ignores clouds (debug only, visually inverted).");
 
         ImGui::Separator();
         ImGui::TextDisabled("Color polish");

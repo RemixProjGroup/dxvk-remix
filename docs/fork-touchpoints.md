@@ -1150,3 +1150,24 @@ namespace block.
   *Adds `void updateWeatherBlender(class RtxContext& ctx, float deltaTimeSeconds)` and `void showWeatherUI()` forward declarations. These allow `rtx_context.cpp` and `rtx_fork_atmosphere.cpp` to call the weather hook without including the full `rtx_fork_weather.h` header at those call sites.*
 
 ---
+
+## submodules/rtxdi/rtxdi-sdk/include/volumetrics/rtx/algorithm/volume_integrator.slangh
+
+**Category:** submodule (fork-controlled — `RemixProjGroup/RTXDI` branch `remix`)
+
+**Note:** This file lives in the fork-controlled RTXDI submodule. Edits land
+via PR/commit to `RemixProjGroup/RTXDI` branch `remix` and then a sibling
+`dxvk-remix` commit bumps the submodule pointer (mirror of `96c56d5`). The
+audit script `scripts/audit-fork-touchpoints.sh` does NOT inspect submodule
+files; this entry exists for rebase-safety / human discoverability.
+
+- **Inline tweak** at the top of the file (atmosphere helper include) — 1-line addition.
+  *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"` so the per-froxel atmosphere-sun NEE block and the sky-ambient hemisphere integration block can call atmosphere helpers (`sampleAtmosphereSunLightVolume`, `sampleSkyAmbientForVolume`, `hgPhase`).*
+
+- **Inline tweak** at the end of `integrateVolume` (atmosphere sun NEE block, `cb.skyMode == 1`) — ~35 LOC. *(Authored by CattaRappa as RTXDI commit `2ff8c57`, pre-existing.)*
+  *Per-froxel direct sun NEE through the atmosphere: builds `AtmosphereVolumeSunSample` via `sampleAtmosphereSunLightVolume`, traces a separate visibility ray to the sun, applies firefly filtering, and adds the result to `radianceSH` before the temporal mix. Bypasses ReSTIR's light pool entirely.*
+
+- **Inline tweak** at the end of `integrateVolume` (sky-ambient hemisphere integration block, `cb.skyMode == 1 && cloudSkyAmbientStrength > 0`) — ~50 LOC. *(Workstream 2026-05-12.)*
+  *Fixed 6-direction upper-hemisphere integration (zenith + 5 mid-elevation at 30° elevation, 72° azimuth spacing) of `sampleSkyAmbientForVolume(dir, args, AtmosphereSkyViewLut, AtmosphereCloudSkyTransmittanceLut, sampler)` weighted by HG phase against the volumetric anisotropy (0.3). Results scaled by `cloudSkyAmbientStrength`, firefly-filtered, and stored as a single SH entry with zenith as the dominant direction. Gated on `cb.skyMode == 1` and on the strength knob being > 0 so the baseline ships with zero behavior change (`cloudSkyAmbientStrength` default = 0). Consumes the sky-view LUT (slot 202), cloud-sky-transmittance LUT (slot 208), and the cloud-noise sampler (slot 204 — REPEAT, correct on azimuth, never sampled below-horizon). See `docs/superpowers/specs/2026-05-12-volumetric-sky-ambient-design.md`.*
+
+---

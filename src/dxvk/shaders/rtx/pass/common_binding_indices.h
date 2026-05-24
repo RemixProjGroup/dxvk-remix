@@ -66,6 +66,13 @@
 // the raw cloud value.
 #define BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV    206
 #define BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR    207
+// Cloud-occluded sky-ambient transmittance LUT (fork). 2D (azimuth, elevation)
+// R16F texture baked per frame from camera position: for each direction, marches
+// the cloud slab and stores the directional cloud transmittance in [0, 1].
+// Consumed by the volumetric pass's sky-ambient hemisphere integration to
+// attenuate sky-view-LUT radiance per direction by cloud coverage along that
+// direction. See docs/superpowers/specs/2026-05-12-volumetric-sky-ambient-design.md.
+#define BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT 208
 
 #define COMMON_MAX_BINDING                       BINDING_SAMPLER_READBACK_BUFFER
 #define COMMON_NUM_BINDINGS                      (COMMON_MAX_BINDING + 1)
@@ -117,6 +124,7 @@
   SAMPLER(BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER)                   \
   TEXTURE2DARRAY(BINDING_ATMOSPHERE_FAST_NOISE)                     \
   TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV)                  \
-  RW_TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR)
+  RW_TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR)                \
+  TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT)
 
 #endif

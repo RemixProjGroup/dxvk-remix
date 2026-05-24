@@ -172,7 +172,13 @@ struct AtmosphereArgs {
                             // Texture is tilable; this controls how many km of
                             // unique cloud structure before the pattern repeats.
                             // Default 12.0 (~47 m/voxel at 256 resolution).
-  float padCloudC0;
-  float padCloudC1;
+
+  // ----- Volumetric sky-ambient illumination (fork — 2026-05-12) -----
+  // Multipliers consumed by sampleSkyAmbientForVolume and the hemisphere
+  // integration injected into the rtxdi volumetric pass at
+  // volume_integrator.slangh:302. Defaults below preserve baseline behavior
+  // (skyAmbientStrength = 0 means the feature is off by default).
+  float cloudSkyAmbientStrength;                 // Overall multiplier on the sky-ambient term [0..3]. 0 = feature off.
+  float cloudSkyAmbientCloudOcclusionStrength;   // Strength of cloud occlusion of sky ambient [0..1]. 1 = physical.
   float padCloudC2;
 };
