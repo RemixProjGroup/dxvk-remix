@@ -268,6 +268,28 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     populateMoonParams(args.moons[i], i);
   }
 
+  // Cloud parameters
+  {
+    args.cloudColor = RtxOptions::cloudColor();
+    args.cloudCoverage = RtxOptions::cloudCoverage();
+    args.cloudDensity = RtxOptions::cloudDensity();
+    args.cloudAltitude = RtxOptions::cloudAltitude();
+    args.cloudScale = RtxOptions::cloudScale();
+    args.cloudEnabled = RtxOptions::cloudEnabled() ? 1.0f : 0.0f;
+
+    // Accumulated wind offset. Wind scrolling is driven by timeSeconds so the
+    // motion is continuous across frames even though we only store a scalar
+    // offset per axis.
+    constexpr float kDegToRadLocal = 3.14159265358979323846f / 180.0f;
+    float windAngle = RtxOptions::cloudWindDirection() * kDegToRadLocal;
+    float windSpeed = RtxOptions::cloudWindSpeed();
+    args.cloudWindOffset.x = std::cos(windAngle) * windSpeed * args.timeSeconds;
+    args.cloudWindOffset.y = std::sin(windAngle) * windSpeed * args.timeSeconds;
+
+    args.cloudShadowStrength = RtxOptions::cloudShadowStrength();
+    args.cloudAnisotropy = RtxOptions::cloudAnisotropy();
+  }
+
   return args;
 }
 

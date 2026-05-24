@@ -103,4 +103,17 @@ struct AtmosphereArgs {
 
   // ----- Per-moon parameters (fork) -----
   MoonParams moons[MAX_MOONS];
+
+  // ----- Cloud parameters (fork: procedural FBM cloud layer at fixed altitude) -----
+  vec3 cloudColor;          // Cloud base color (typically white)
+  float cloudCoverage;      // [0,1]: 0 = clear sky, 1 = overcast
+
+  float cloudDensity;       // Overall opacity/density multiplier
+  float cloudAltitude;      // Altitude of cloud layer (km)
+  float cloudScale;         // Horizontal noise scale (smaller = larger clouds)
+  float cloudEnabled;       // 1.0 if clouds should be rendered, 0.0 otherwise
+
+  vec2 cloudWindOffset;     // Accumulated wind-driven UV offset (km)
+  float cloudShadowStrength;// How strongly clouds dim ground/atmosphere lighting [0..1]
+  float cloudAnisotropy;    // HG g for cloud sun forward-scatter (silver lining)
 };

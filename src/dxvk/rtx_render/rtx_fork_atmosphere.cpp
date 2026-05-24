@@ -429,6 +429,25 @@ namespace fork_hooks {
         }
         ImGui::TreePop();
       }
+
+      // ----- Clouds tree (fork) -----
+      if (ImGui::TreeNode("Clouds")) {
+        RemixGui::Checkbox("Enabled", &RtxOptions::cloudEnabledObject());
+        RemixGui::DragFloat("Coverage", &RtxOptions::cloudCoverageObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("0 = clear sky, 1 = overcast. Normally driven by game weather.");
+        RemixGui::DragFloat("Density", &RtxOptions::cloudDensityObject(), 0.05f, 0.0f, 4.0f, "%.2f", sliderFlags);
+        RemixGui::DragFloat("Altitude", &RtxOptions::cloudAltitudeObject(), 0.1f, 0.5f, 12.0f, "%.1f km", sliderFlags);
+        RemixGui::DragFloat("Scale", &RtxOptions::cloudScaleObject(), 0.005f, 0.005f, 1.0f, "%.3f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Horizontal noise scale. Smaller values = larger cloud clumps.");
+        RemixGui::DragFloat3("Color", &RtxOptions::cloudColorObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::DragFloat("Wind Speed", &RtxOptions::cloudWindSpeedObject(), 0.005f, 0.0f, 1.0f, "%.3f km/s", sliderFlags);
+        RemixGui::DragFloat("Wind Direction", &RtxOptions::cloudWindDirectionObject(), 1.0f, 0.0f, 360.0f, "%.1f°", sliderFlags);
+        RemixGui::DragFloat("Shadow Strength", &RtxOptions::cloudShadowStrengthObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("How much overcast cover dims ground and atmosphere lighting.");
+        RemixGui::DragFloat("Anisotropy", &RtxOptions::cloudAnisotropyObject(), 0.01f, 0.0f, 0.99f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Henyey-Greenstein g for forward-scatter silver lining.");
+        ImGui::TreePop();
+      }
     }
   }
 
