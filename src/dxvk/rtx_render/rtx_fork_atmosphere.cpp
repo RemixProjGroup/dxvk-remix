@@ -446,6 +446,36 @@ namespace fork_hooks {
         RemixGui::SetTooltipToLastWidgetOnHover("How much overcast cover dims ground and atmosphere lighting.");
         RemixGui::DragFloat("Anisotropy", &RtxOptions::cloudAnisotropyObject(), 0.01f, 0.0f, 0.99f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Henyey-Greenstein g for forward-scatter silver lining.");
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Volumetric");
+        RemixGui::DragInt("View Samples", &RtxOptions::cloudViewSamplesObject(), 1.0f, 1, 32, "%d", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Ray-march steps through the cloud slab. Higher = better quality, more cost. Default 5.");
+        RemixGui::DragFloat("Thickness", &RtxOptions::cloudThicknessObject(), 0.05f, 0.1f, 4.0f, "%.2f km", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Vertical depth of the cloud layer in km.");
+        RemixGui::DragFloat("Detail Weight", &RtxOptions::cloudDetailWeightObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Strength of high-frequency detail. Auto-fades at low Scale to avoid visible noise.");
+        RemixGui::DragFloat("Vertical Profile", &RtxOptions::cloudVerticalProfileObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("0 = flat 2D extrusion. 1 = rounded cumulus bottoms with wispy tops + wind-shear lateral shift. Integral normalized so opacity stays consistent.");
+        RemixGui::DragFloat("Curvature", &RtxOptions::cloudCurvatureObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Sky-dome curvature: 0 = real-planet radius (nearly flat ceiling), 1 = tight dome. Only affects cloud sphere geometry — atmosphere math is untouched.");
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Color polish");
+        RemixGui::DragFloat3("Shadow Tint", &RtxOptions::cloudShadowTintObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Sky-blue bounce color applied to the shadow side of clouds.");
+        RemixGui::DragFloat("Shadow Tint Strength", &RtxOptions::cloudShadowTintStrengthObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("How strongly the shadow tint contributes.");
+        RemixGui::DragFloat("Sunset Warmth", &RtxOptions::cloudSunsetWarmthObject(), 0.05f, 0.0f, 2.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Strength of low-sun warm tint on the sunward side. 0 = disabled.");
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Variance");
+        RemixGui::DragFloat("Variance", &RtxOptions::cloudVarianceObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Density variation across the sky. 0 = uniform, 1 = patchy clouds.");
+        RemixGui::DragFloat("Variance Scale", &RtxOptions::cloudVarianceScaleObject(), 0.001f, 0.001f, 0.5f, "%.4f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Scale of variance noise. Smaller = bigger cloud groups.");
+
         ImGui::TreePop();
       }
     }

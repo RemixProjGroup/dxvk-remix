@@ -290,6 +290,20 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudAnisotropy = RtxOptions::cloudAnisotropy();
   }
 
+  // Cloud volumetric / appearance enhancements
+  {
+    args.cloudShadowTint = RtxOptions::cloudShadowTint();
+    args.cloudShadowTintStrength = RtxOptions::cloudShadowTintStrength();
+    args.cloudThickness = RtxOptions::cloudThickness();
+    args.cloudDetailWeight = RtxOptions::cloudDetailWeight();
+    args.cloudSunsetWarmth = RtxOptions::cloudSunsetWarmth();
+    args.cloudViewSamples = RtxOptions::cloudViewSamples();
+    args.cloudVariance = RtxOptions::cloudVariance();
+    args.cloudVarianceScale = RtxOptions::cloudVarianceScale();
+    args.cloudVerticalProfile = RtxOptions::cloudVerticalProfile();
+    args.cloudCurvature = RtxOptions::cloudCurvature();
+  }
+
   return args;
 }
 

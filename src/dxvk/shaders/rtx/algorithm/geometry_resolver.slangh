@@ -29,6 +29,9 @@
 #include "rtx/utility/gbuffer_helpers.slangh"
 #include "rtx/utility/debug_view_helpers.slangh"
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
+#ifdef ATMOSPHERE_AVAILABLE
+#include "rtx/pass/atmosphere/atmosphere_sky.slangh"
+#endif
 #include "rtx/concept/camera/camera.slangh"
 #include "rtx/concept/ray/ray.slangh"
 #include "rtx/concept/surface/surface.slangh"

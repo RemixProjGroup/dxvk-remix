@@ -512,8 +512,8 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `RtxOptions` class body (skyMode RTX_OPTION) — ~2 LOC.
   *Declares `RTX_OPTION("rtx", SkyMode, skyMode, SkyMode::SkyboxRasterization, ...)` immediately after the existing sky-related options block. Consumed by `fork_hooks::updateAtmosphereConstants` in `rtx_fork_atmosphere.cpp`.*
 
-- **Inline tweak** at `RtxOptions` class body (atmosphere RTX_OPTIONs block) — ~25 LOC for the original 17 options + ~5 LOC for night-sky + ~52 LOC for the `DECLARE_MOON_OPTIONS(N)` macro and 4 invocations + ~11 LOC for the cloud block. `sunElevation` and `sunRotation` flipped from `RTX_OPTION` → `RTX_OPTION_FLAG` with `NoSave` so the game can drive them per-frame without polluting the user config.
-  *Declares the original 17 atmosphere tuning options under the `rtx.atmosphere` prefix (`sunDisc`, `sunSize`, `sunIntensity`, `sunElevation`, `sunRotation`, `altitude`, `airDensity`, `aerosolDensity`, `ozoneDensity`, `planetRadius`, `atmosphereThickness`, `mieAnisotropy`, `rayleighScattering`, `mieScattering`, `ozoneAbsorption`, `ozoneLayerAltitude`, `ozoneLayerWidth`, `sunIlluminance`), plus the night-sky block (`starBrightness`, `starDensity`, `starTwinkleSpeed`, `nightSkyBrightness`, `nightSkyColor`), plus a per-moon block declared via the `DECLARE_MOON_OPTIONS(N)` macro for `N` in `0..MAX_MOONS-1` (each block: `enabledN`, `angularRadiusN`, `brightnessN`, `colorN`, `surfaceStyleN`, `craterDensityN`, `surfaceContrastN`, `surfaceNoiseScaleN`, `darkSideBrightnessN`, `roughnessAmountN`, plus NoSave-flagged `elevationN`/`rotationN`/`phaseN`), plus a cloud block (`cloudEnabled`, `cloudDensity`, `cloudAltitude`, `cloudScale`, `cloudColor`, `cloudWindSpeed`, `cloudWindDirection`, `cloudShadowStrength`, `cloudAnisotropy`, plus NoSave-flagged `cloudCoverage` for game-driven weather). All consumed by `RtxAtmosphere::getAtmosphereArgs()` and the atmosphere UI hook in `rtx_fork_atmosphere.cpp`.*
+- **Inline tweak** at `RtxOptions` class body (atmosphere RTX_OPTIONs block) — ~25 LOC for the original 17 options + ~5 LOC for night-sky + ~52 LOC for the `DECLARE_MOON_OPTIONS(N)` macro and 4 invocations + ~11 LOC for the cloud block + ~13 LOC for the cloud-enhancement block (including `cloudVerticalProfile`, `cloudCurvature`). `sunElevation` and `sunRotation` flipped from `RTX_OPTION` → `RTX_OPTION_FLAG` with `NoSave` so the game can drive them per-frame without polluting the user config. Cloud defaults tuned from artist iteration.
+  *Declares the original 17 atmosphere tuning options under the `rtx.atmosphere` prefix (`sunDisc`, `sunSize`, `sunIntensity`, `sunElevation`, `sunRotation`, `altitude`, `airDensity`, `aerosolDensity`, `ozoneDensity`, `planetRadius`, `atmosphereThickness`, `mieAnisotropy`, `rayleighScattering`, `mieScattering`, `ozoneAbsorption`, `ozoneLayerAltitude`, `ozoneLayerWidth`, `sunIlluminance`), plus the night-sky block (`starBrightness`, `starDensity`, `starTwinkleSpeed`, `nightSkyBrightness`, `nightSkyColor`), plus a per-moon block declared via the `DECLARE_MOON_OPTIONS(N)` macro for `N` in `0..MAX_MOONS-1` (each block: `enabledN`, `angularRadiusN`, `brightnessN`, `colorN`, `surfaceStyleN`, `craterDensityN`, `surfaceContrastN`, `surfaceNoiseScaleN`, `darkSideBrightnessN`, `roughnessAmountN`, plus NoSave-flagged `elevationN`/`rotationN`/`phaseN`), plus a cloud block (`cloudEnabled`, `cloudDensity`, `cloudAltitude`, `cloudScale`, `cloudColor`, `cloudWindSpeed`, `cloudWindDirection`, `cloudShadowStrength`, `cloudAnisotropy`, plus NoSave-flagged `cloudCoverage` for game-driven weather), plus a cloud-enhancement block (`cloudViewSamples`, `cloudThickness`, `cloudDetailWeight`, `cloudShadowTint`, `cloudShadowTintStrength`, `cloudSunsetWarmth`, `cloudVariance`, `cloudVarianceScale`, `cloudVerticalProfile`, `cloudCurvature`) for volumetric ray-march tuning, color polish, vertical-shape character, and sky-dome curvature. All consumed by `RtxAtmosphere::getAtmosphereArgs()` and the atmosphere UI hook in `rtx_fork_atmosphere.cpp`.*
 
 - **Inline tweak** — remove `rtx.useLegacyACES` + `rtx.showLegacyACESOption` RtxOptions (superseded by `TonemapOperator::ACESLegacy` enum value).
   *Both options live at the `rtx` namespace (not `rtx.tonemap`); removed in the enum refactor.*
@@ -774,8 +774,8 @@ initializer list and can't be lifted into a separate TU.
 - **Block** at `geometryPSRResolverVertex` (PSR hit — occluder comment block) — ~45 LOC (fully commented out), planned target `fork_hooks::geoResolverPsrOccluder` in `rtx_fork_atmosphere.slangh`.
   *Same occluder design-preservation comment block for the PSR path.*
 
-- **Block** at `(file scope)` (atmosphere include) — ~1 LOC, planned target `fork_hooks::atmosphereInclude` in `rtx_fork_atmosphere.slangh`.
-  *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"` at the top of the file.*
+- **Block** at `(file scope)` (atmosphere include) — ~4 LOC, planned target `fork_hooks::atmosphereInclude` in `rtx_fork_atmosphere.slangh`.
+  *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"` at the top of the file, plus `#include "rtx/pass/atmosphere/atmosphere_sky.slangh"` gated by `#ifdef ATMOSPHERE_AVAILABLE` for the sky-radiance evaluation paths.*
 
 ---
 
@@ -808,8 +808,8 @@ initializer list and can't be lifted into a separate TU.
 
 **Category:** migrate
 
-- **Block** at `(file scope)` (atmosphere include) — ~1 LOC, planned target `fork_hooks::atmosphereInclude` in `rtx_fork_atmosphere.slangh`.
-  *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"`.*
+- **Block** at `(file scope)` (atmosphere include) — ~4 LOC, planned target `fork_hooks::atmosphereInclude` in `rtx_fork_atmosphere.slangh`.
+  *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"`, plus `#include "rtx/pass/atmosphere/atmosphere_sky.slangh"` gated by `#ifdef ATMOSPHERE_AVAILABLE` for the sky-radiance evaluation in the indirect-path miss handler.*
 
 - **Block** at `evalAtmosphereSunNEESecondary` (full function) — ~100 LOC, planned target `fork_hooks::evalAtmosphereSunNEEIndirect` in `rtx_fork_atmosphere.slangh`.
   *Secondary-bounce variant of the atmosphere sun NEE function: uses half the sample count for performance, otherwise identical structure to the direct-path version.*

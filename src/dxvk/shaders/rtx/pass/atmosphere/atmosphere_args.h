@@ -116,4 +116,18 @@ struct AtmosphereArgs {
   vec2 cloudWindOffset;     // Accumulated wind-driven UV offset (km)
   float cloudShadowStrength;// How strongly clouds dim ground/atmosphere lighting [0..1]
   float cloudAnisotropy;    // HG g for cloud sun forward-scatter (silver lining)
+
+  // ----- Cloud volumetric / appearance enhancements (fork) -----
+  vec3 cloudShadowTint;        // RGB sky-bounce tint on shadow side
+  float cloudShadowTintStrength;
+
+  float cloudThickness;        // Cloud-slab vertical depth, km
+  float cloudDetailWeight;     // Pre-fade detail FBM weight [0..1]
+  float cloudSunsetWarmth;     // Strength of low-sun warm tint
+  uint cloudViewSamples;       // Ray-march steps through cloud slab
+
+  float cloudVariance;         // 0..1
+  float cloudVarianceScale;    // Variance noise scale
+  float cloudVerticalProfile;  // 0 = flat extrude, 1 = bell + perturb
+  float cloudCurvature;        // 0 = Earth-scale dome, 1 = tight dome
 };
