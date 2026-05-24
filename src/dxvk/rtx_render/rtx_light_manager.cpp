@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cassert>
 
+#include "rtx_fork_hooks.h"
 #include "rtx_light_manager.h"
 #include "rtx_context.h"
 #include "rtx_options.h"
@@ -236,57 +237,7 @@ namespace dxvk {
   void LightManager::prepareSceneData(Rc<DxvkContext> ctx, CameraManager const& cameraManager) {
     ScopedCpuProfileZone();
     // Ensure external light updates/removals are applied before we linearize and draw UI
-    {
-      // Erase first
-      for (auto h : m_pendingExternalLightErases) {
-        auto it = m_externalLights.find(h);
-        if (it != m_externalLights.end()) {
-          // Ensure any replacement ownership is cleared before destruction
-          it->second.getPrimInstanceOwner().setReplacementInstance(nullptr, ReplacementInstance::kInvalidReplacementIndex, &it->second, PrimInstance::Type::Light);
-          m_externalLights.erase(it);
-        }
-        m_externalDomeLights.erase(h);
-        m_externalActiveLightList.erase(h);
-        if (m_externalActiveDomeLight == h) {
-          m_externalActiveDomeLight = nullptr;
-        }
-      }
-      m_pendingExternalLightErases.clear();
-
-      // Apply updates/creates; erase then emplace to safely handle union types
-      for (auto& upd : m_pendingExternalLightUpdates) {
-        auto it = m_externalLights.find(upd.first);
-        if (it != m_externalLights.end()) {
-          // Clear replacement links on the old light before replacing
-          it->second.getPrimInstanceOwner().setReplacementInstance(nullptr, ReplacementInstance::kInvalidReplacementIndex, &it->second, PrimInstance::Type::Light);
-          m_externalLights.erase(it);
-        }
-        auto [it_new, success] = m_externalLights.emplace(upd.first, upd.second);
-        it_new->second.setFrameLastTouched(m_device->getCurrentFrameId());
-      }
-      m_pendingExternalLightUpdates.clear();
-
-      // Apply active instances registration
-      for (auto h : m_pendingExternalActiveLights) {
-        if (m_externalLights.find(h) != m_externalLights.end()) {
-          m_externalActiveLightList.insert(h);
-        } else if (m_externalDomeLights.find(h) != m_externalDomeLights.end() && m_externalActiveDomeLight == nullptr) {
-          m_externalActiveDomeLight = h;
-        }
-      }
-      m_pendingExternalActiveLights.clear();
-
-      // Auto-instance any persistent external lights (idempotent within frame)
-      for (auto h : m_persistentExternalLights) {
-        if (m_externalLights.find(h) != m_externalLights.end()) {
-          m_externalActiveLightList.insert(h);
-        } else if (m_externalDomeLights.find(h) != m_externalDomeLights.end() && m_externalActiveDomeLight == nullptr) {
-          m_externalActiveDomeLight = h;
-        }
-      }
-
-      // Note: Do not auto-instance all external lights here; activation is driven by API per-frame
-    }
+    fork_hooks::flushPendingLightMutations(*this);
     // Note: Early outing in this function (via returns) should be done carefully (or not at all ideally) as it may skip important
     // logic such as swapping the current/previous frame light buffer, updating light count information or allocating/updating the
     // light buffer which may cause issues in some cases (or rather already has, which is why this warning exists).
@@ -764,31 +715,8 @@ namespace dxvk {
     }
     assert(light->getExternallyTrackedLightId() != kInvalidExternallyTrackedLightId && " light passed to updateExternallyTrackedLight is not actually externally tracked.");
 
-    uint16_t bufferIdx = light->getBufferIdx();
-    uint64_t externalId = light->getExternallyTrackedLightId();
-
-    // For static lights, preserve temporal data by only updating when needed
-    if (!newLight.isDynamic && !suppressLightKeeping()) {
-      const uint32_t isStaticCount = light->isStaticCount;
-
-      // If this light hasn't moved for N frames, put it to sleep to preserve temporal data
-      if (isStaticCount < RtxOptions::getNumFramesToPutLightsToSleep()) {
-        *light = newLight;
-        light->setBufferIdx(bufferIdx);
-        light->setExternallyTrackedLightId(externalId);
-        light->isStaticCount = isStaticCount + 1;  // Preserve and increment counter
-      } else {
-        // Light is asleep - don't update, just increment counter
-        light->isStaticCount = isStaticCount + 1;
-      }
-    } else {
-      // Dynamic lights always update
-      *light = newLight;
-      light->setBufferIdx(bufferIdx);
-      light->setExternallyTrackedLightId(externalId);
-    }
-
-    light->setFrameLastTouched(m_device->getCurrentFrameId());
+    const uint64_t externalId = light->getExternallyTrackedLightId();
+    fork_hooks::updateLightStaticSleep(light, newLight, m_device, externalId);
   }
 
 
@@ -796,41 +724,16 @@ namespace dxvk {
     auto found = m_externalLights.find(handle);
     if (found != m_externalLights.end()) {
       // Existing light - preserve temporal data for static lights
-      RtLight& existingLight = found->second;
-      uint16_t bufferIdx = existingLight.getBufferIdx();
-
-      // For static lights, preserve temporal data by only updating when needed
-      if (!rtlight.isDynamic && !suppressLightKeeping()) {
-        const uint32_t isStaticCount = existingLight.isStaticCount;
-
-        // If this light hasn't moved for N frames, put it to sleep to preserve temporal data
-        if (isStaticCount < RtxOptions::getNumFramesToPutLightsToSleep()) {
-          existingLight = rtlight;
-          existingLight.setBufferIdx(bufferIdx);
-          existingLight.isStaticCount = isStaticCount + 1;  // Preserve and increment counter
-        } else {
-          // Light is asleep - don't update, just increment counter
-          existingLight.isStaticCount = isStaticCount + 1;
-        }
-      } else {
-        // Dynamic lights always update
-        existingLight = rtlight;
-        existingLight.setBufferIdx(bufferIdx);
-      }
-
-      existingLight.setFrameLastTouched(m_device->getCurrentFrameId());
+      fork_hooks::updateLightStaticSleep(
+        &found->second, rtlight, m_device, kInvalidExternallyTrackedLightId);
     } else {
       // New light - copy it and set initial frame
-      auto [it, inserted] = m_externalLights.emplace(handle, rtlight);
-      if (inserted) {
-        it->second.setFrameLastTouched(m_device->getCurrentFrameId());
-      }
+      fork_hooks::setExternalLightEmplace(*this, handle, rtlight);
     }
   }
 
   void LightManager::removeExternalLight(remixapi_LightHandle handle) {
-    // Queue erase to be applied at frame start
-    m_pendingExternalLightErases.push_back(handle);
+    fork_hooks::disableExternalLightQueue(*this, handle);
   }
 
   bool LightManager::getActiveDomeLight(DomeLight& domeLightOut) {
@@ -867,21 +770,15 @@ namespace dxvk {
   }
 
   void LightManager::registerPersistentExternalLight(remixapi_LightHandle handle) {
-    if (handle) {
-      m_persistentExternalLights.insert(handle);
-    }
+    fork_hooks::registerPersistentLight(*this, handle);
   }
 
   void LightManager::unregisterPersistentExternalLight(remixapi_LightHandle handle) {
-    if (handle) {
-      m_persistentExternalLights.erase(handle);
-    }
+    fork_hooks::unregisterPersistentLight(*this, handle);
   }
 
   void LightManager::queueAutoInstancePersistent() {
-    for (auto h : m_persistentExternalLights) {
-      m_pendingExternalActiveLights.insert(h);
-    }
+    fork_hooks::queueAutoInstancePersistent(*this);
   }
 
   void LightManager::setRaytraceArgs(RaytraceArgs& raytraceArgs, uint32_t rtxdiInitialLightSamples, uint32_t volumeRISInitialLightSamples, uint32_t risLightSamples) const

@@ -34,13 +34,36 @@
 #include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/raytrace_args.h"
 
+#ifndef REMIXAPI_LIGHTHANDLE_DEFINED
+#define REMIXAPI_LIGHTHANDLE_DEFINED
 using remixapi_LightHandle = struct remixapi_LightHandle_T*;
+#endif
 
 struct RaytraceArgs;
 
 namespace dxvk {
 class DxvkContext;
 class DxvkDevice;
+struct RtLight;
+struct LightManager;
+
+// Forward declarations of fork_hooks functions that require friend access to
+// LightManager private members. Implementations live in rtx_fork_light.cpp.
+namespace fork_hooks {
+  void flushPendingLightMutations(LightManager& mgr);
+  void updateLightStaticSleep(RtLight* light, const RtLight& newLight,
+                              DxvkDevice* device, uint64_t externalId);
+  void setExternalLightEmplace(LightManager& mgr,
+                               remixapi_LightHandle handle,
+                               const RtLight& rtlight);
+  void disableExternalLightQueue(LightManager& mgr,
+                                 remixapi_LightHandle handle);
+  void registerPersistentLight(LightManager& mgr,
+                               remixapi_LightHandle handle);
+  void unregisterPersistentLight(LightManager& mgr,
+                                 remixapi_LightHandle handle);
+  void queueAutoInstancePersistent(LightManager& mgr);
+} // namespace fork_hooks
 
 struct LightRange {
   uint32_t offset;
@@ -48,6 +71,19 @@ struct LightRange {
 };
 
 struct LightManager : public CommonDeviceObject {
+  // Grant fork_hooks functions access to private members used from
+  // rtx_fork_light.cpp (m_externalLights, m_externalDomeLights,
+  // m_externalActiveLightList, m_externalActiveDomeLight,
+  // m_pendingExternalLightErases, m_pendingExternalLightUpdates,
+  // m_pendingExternalActiveLights, m_persistentExternalLights).
+  friend void fork_hooks::flushPendingLightMutations(LightManager&);
+  friend void fork_hooks::updateLightStaticSleep(RtLight*, const RtLight&, DxvkDevice*, uint64_t);
+  friend void fork_hooks::setExternalLightEmplace(LightManager&, remixapi_LightHandle, const RtLight&);
+  friend void fork_hooks::disableExternalLightQueue(LightManager&, remixapi_LightHandle);
+  friend void fork_hooks::registerPersistentLight(LightManager&, remixapi_LightHandle);
+  friend void fork_hooks::unregisterPersistentLight(LightManager&, remixapi_LightHandle);
+  friend void fork_hooks::queueAutoInstancePersistent(LightManager&);
+
 public:
   enum class FallbackLightMode : int {
     Never = 0,
