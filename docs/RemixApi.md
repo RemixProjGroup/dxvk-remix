@@ -525,8 +525,8 @@ independently of the typed C API.
 
 | Namespace | Channel | Reference |
 | :-- | :-- | :-- |
-| `__weather.*` | `SetGameValue` / `GetGameValue` | [`RemixWeatherAPI.md`](RemixWeatherAPI.md) |
-| `rtx.weather.preset.*` | `SetConfigVariable` | [`RemixWeatherAPI.md`](RemixWeatherAPI.md) |
+| `__weather.*`, `__sky.*` | `SetGameValue` / `GetGameValue` | [`RemixSkyAPI.md`](RemixSkyAPI.md) |
+| `rtx.weather.preset.*` | `SetConfigVariable` | [`RemixSkyAPI.md`](RemixSkyAPI.md) |
 
 When a new fork-side subsystem starts publishing a `__<ns>.*`
 GameStateStore convention or a `rtx.<ns>.*` ConfigVariable namespace
@@ -559,4 +559,4 @@ For the dated change log, see
 - [`RemixApiChangelog.md`](RemixApiChangelog.md) — dated API change log.
 - [`RemixConfig.md`](RemixConfig.md) — `RtxOptions` config-layer architecture.
 - [`RtxOptions.md`](../RtxOptions.md) — auto-generated complete `rtx.*` reference.
-- [`RemixWeatherAPI.md`](RemixWeatherAPI.md) — `__weather.*` + `rtx.weather.preset.*` conventions.
+- [`RemixSkyAPI.md`](RemixSkyAPI.md) — Sky / atmosphere plugin surface (sun, stars, moons, clouds) plus weather preset blender.

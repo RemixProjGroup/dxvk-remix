@@ -85,7 +85,7 @@ Doc files to keep in sync:
 - **Spoke pages** — when adding a new `__<ns>.*` GameStateStore
   convention or fork-side `rtx.<ns>.*` namespace, add a matching
   `docs/Remix<Ns>API.md` page (use
-  [`docs/RemixWeatherAPI.md`](docs/RemixWeatherAPI.md) as the
+  [`docs/RemixSkyAPI.md`](docs/RemixSkyAPI.md) as the
   template) and add a row to the
   [Convention namespaces](docs/RemixApi.md#convention-namespaces) table.
 
@@ -95,6 +95,11 @@ Auto-generated docs (do not hand-edit):
   `DXVK_DOCUMENTATION_WRITE_RTX_OPTIONS_MD=1` set in the environment.
   Re-run after adding any new `RTX_OPTION` and commit the regenerated
   file.
+- [`RemixApiSurface.md`](RemixApiSurface.md) is auto-generated from
+  [`public/include/remix/remix_c.h`](public/include/remix/remix_c.h)
+  by [`scripts-common/generate_remix_api_md.py`](scripts-common/generate_remix_api_md.py).
+  Regenerate by running `scripts/regen-docs.ps1` from the repo root.
+  Do not hand-edit.
 
 The audit script does not currently enforce API-doc updates —
 discipline is on the author and the reviewer.
