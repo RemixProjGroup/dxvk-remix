@@ -89,6 +89,22 @@ Texture2D<float4> TerrainTexture;
 // Visualized by DEBUG_VIEW_CLOUD_SKY_TRANSMITTANCE_LUT.
 [[vk::binding(DEBUG_VIEW_BINDING_CLOUD_SKY_TRANSMITTANCE_LUT_INPUT)]]
 Texture2D<float> CloudSkyTransmittanceLut;
+
+// Fork: Nubis Cubed sun-direction optical-depth voxel grid (R16F 3D).
+// Visualized by DEBUG_VIEW_CLOUD_D_SUN.
+[[vk::binding(DEBUG_VIEW_BINDING_CLOUD_D_SUN_INPUT)]]
+Texture3D<float> DebugViewCloudDSun;
+
+// Fork: Nubis Cubed zenith optical-depth voxel grid (R16F 3D).
+// Visualized by DEBUG_VIEW_CLOUD_D_AMBIENT.
+[[vk::binding(DEBUG_VIEW_BINDING_CLOUD_D_AMBIENT_INPUT)]]
+Texture3D<float> DebugViewCloudDAmbient;
+
+// Fork: Nubis Cubed screen-space cloud render RT (RGBA16F, premultiplied
+// radiance in rgb + cloud transmittance in alpha). Visualized by
+// DEBUG_VIEW_CLOUD_RENDER_RT (enum 876).
+[[vk::binding(DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT)]]
+Texture2D<float4> DebugViewCloudRenderRT;
 [[vk::binding(DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT)]]
 Texture3D<uint4> VolumeReservoirs;
 
@@ -149,6 +165,15 @@ SamplerState LinearSampler;
 #include "rtx/utility/packing.slangh"
 #include "rtx/utility/noise.slangh"
 #include "rtx/external/NRD.slangh"
+
+// Fork: atmosphere helpers for cloud-diagnostic debug views (enum 875).
+// Pulled in WITHOUT defining ATMOSPHERE_AVAILABLE — the helpers we need
+// (sampleCloudGroundShadow_OptionB_explicit) take their D_sun texture +
+// sampler as explicit parameters, so they don't rely on common-bindings
+// globals. The ATMOSPHERE_AVAILABLE-gated sampleDSun / sampleDAmbient
+// fall back to safe no-op stubs in this translation unit, which is
+// correct — the enum-875 case uses the explicit-parameter variant.
+#include "rtx/pass/atmosphere/atmosphere_common.slangh"
 
 float4 sampleTexture(Texture2D<float4> texture, ivec2 threadId)
 {
@@ -367,6 +392,93 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
       const float trans = CloudSkyTransmittanceLut.SampleLevel(LinearSampler, uv, 0).r;
       const float occlusion = saturate(1.0f - trans);
       value = vec4(occlusion, 0.0f, 0.0f, 1.0f);
+    }
+    break;
+  case DEBUG_VIEW_CLOUD_D_SUN:
+    {
+      // Sample the Nubis Cubed D_sun voxel grid at the mid-Z slice (w = 0.5);
+      // map pixel UV directly to the horizontal grid UV. Grayscale: bright =
+      // high sun-direction optical depth (deep cloud cover above this voxel),
+      // dark = clear sky between voxel and sun. Cumulus cells should be
+      // visible as cellular patterns.
+      const vec2 uv = (vec2(threadId) + 0.5f) / vec2(cb.debugViewResolution);
+      const vec3 uvw = vec3(uv, 0.5f);
+      const float opticalDepth = DebugViewCloudDSun.SampleLevel(LinearSampler, uvw, 0).r;
+      // Scale for visibility: typical optical depth in cumulus is 0..5.
+      const float intensity = saturate(opticalDepth * 0.2f);
+      value = vec4(intensity, intensity, intensity, 1.0f);
+    }
+    break;
+  case DEBUG_VIEW_CLOUD_D_AMBIENT:
+    {
+      // Sample the Nubis Cubed D_ambient (zenith) voxel grid at the mid-Z
+      // slice. Mostly uniform brightness expected: the zenith path is mostly
+      // empty air above the cloud slab. Some banding where the slab is dense.
+      const vec2 uv = (vec2(threadId) + 0.5f) / vec2(cb.debugViewResolution);
+      const vec3 uvw = vec3(uv, 0.5f);
+      const float opticalDepth = DebugViewCloudDAmbient.SampleLevel(LinearSampler, uvw, 0).r;
+      const float intensity = saturate(opticalDepth * 0.2f);
+      value = vec4(intensity, intensity, intensity, 1.0f);
+    }
+    break;
+  case DEBUG_VIEW_CLOUD_GROUND_SHADOW_PRODSHAPE:
+    {
+      // Production-call-shape diagnostic for sampleCloudGroundShadow_OptionB.
+      // This case calls the helper with the EXACT per-pixel call shape that
+      // the upcoming NEE wiring (Task 6) will use: worldPos from the
+      // G-buffer hit position, sunDir from atmosphereArgs.sunDirection,
+      // and cb.isZUp != 0u for the coordinate-frame flag. The D_sun
+      // texture and its sampler are plumbing parameters (the same pointer
+      // for every pixel) — they are passed explicitly because the debug
+      // view binds D_sun at a different slot from the production global,
+      // but the call shape that varies per pixel (worldPos, sunDir, args,
+      // isZUp) is identical to what production will use.
+      //
+      // Visual gate: compare against DEBUG_VIEW_CLOUD_D_SUN (enum 873) at
+      // the same scene. If the cumulus patterns spatially agree, the
+      // isZUp handling is correct. If they disagree, isZUp is mismatched
+      // between the debug call path and the production call path — fix
+      // before wiring NEE.
+
+      // G-buffer worldPos at this pixel — same source the production NEE
+      // entry points use (minimalSurfaceInteraction.position).
+      GBufferMemoryMinimalSurfaceInteraction memory;
+      memory.encodedWorldPositionWorldTriangleTBN =
+          PreviousWorldPosition_WorldTriangleNormal[threadId];
+      memory.positionError = 0;
+      const MinimalSurfaceInteraction si = minimalSurfaceInteractionCreate(memory);
+      const vec3 worldPos = si.position;
+
+      // Sun direction sourced from the atmosphere CB — same as production.
+      const vec3 sunDir = normalize(cb.atmosphereArgs.sunDirection);
+
+      // CRITICAL: match production NEE call shape exactly.
+      //   (worldPos, sunDir, atmosphereArgs, isZUp != 0u)
+      // Any divergence here defeats the purpose of the diagnostic.
+      const float shadow = sampleCloudGroundShadow_OptionB_explicit(
+          worldPos, sunDir, cb.atmosphereArgs, cb.isZUp != 0u,
+          DebugViewCloudDSun, LinearSampler);
+
+      value = vec4(shadow, shadow, shadow, 1.0f);
+    }
+    break;
+  case DEBUG_VIEW_CLOUD_RENDER_RT:
+    {
+      // Fork diagnostic. Visualizes the Nubis Cubed cloud render RT
+      // produced by cloud_render.comp.slang (C4 of the 2026-05-12
+      // workstream). The RT is at downscale extent; map pixel UV directly
+      // to the texture via Load. Premultiplied radiance is shown as-is;
+      // alpha (cloud transmittance) is ignored for the debug case — what
+      // matters here is the per-pixel cloud color from the Nubis Cubed
+      // lighting equations (top-bright / bottom-dark cumulus gradient,
+      // silver lining at backlit edges, less-flat shadow side).
+      //
+      // Compare against the live sky (debug view off) to A/B this against
+      // the existing analytical evalClouds rendering. The cloud-render RT
+      // value is the same scene as the live sky's cloud layer minus the
+      // sky-miss composite (which still uses analytical clouds in C4).
+      vec4 cloudSample = DebugViewCloudRenderRT.Load(int3(threadId, 0));
+      value = vec4(cloudSample.rgb, 1.0f);
     }
     break;
   case DEBUG_VIEW_NRC_UPDATE_RADIANCE:

@@ -51,3 +51,18 @@ Texture2D<float4> AtmosphereCloudHistoryPrev;
 
 layout(rgba16f, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR)
 RWTexture2D<float4> AtmosphereCloudHistoryCurr;
+
+// Cloud history frame-id ping-pong (fork). R16_UINT companion textures
+// carrying the frame index at which each pixel of the color buffer above was
+// last written by the sky-miss path. Read at lookup time to reject stale
+// history from pixels that were foreground-occluded last frame — those
+// pixels' color slots retain pre-occlusion radiance because the sky-miss
+// path didn't run there, so the alpha-only disocclusion guard would
+// otherwise treat a multi-frame-old bright cloud as valid history and
+// produce long bright trails when the foreground moves away. Cleared to
+// 0xFFFF (UINT16_MAX) at allocation as a "never-written" sentinel.
+layout(r16ui, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_PREV)
+Texture2D<uint> AtmosphereCloudHistoryFrameIdPrev;
+
+layout(r16ui, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_CURR)
+RWTexture2D<uint> AtmosphereCloudHistoryFrameIdCurr;

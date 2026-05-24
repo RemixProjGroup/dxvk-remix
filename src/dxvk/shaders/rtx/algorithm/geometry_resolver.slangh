@@ -1901,7 +1901,8 @@ void geometryResolverVertex(
                                      cb.isZUp != 0,
                                      /*enableCloudTemporalSmoothing=*/ true,
                                      cloudMotion,
-                                     cloudHistoryRes);
+                                     cloudHistoryRes,
+                                     /*isPrimaryRay=*/ true);
     }
 #endif
     else

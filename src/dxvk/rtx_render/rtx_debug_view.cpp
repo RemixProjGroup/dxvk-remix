@@ -145,6 +145,40 @@ namespace dxvk {
                                 "black = clear sky in that direction.\n"
                                 "X axis = azimuth [0, 360 deg], Y axis = elevation [-90, +90 deg]\n"
                                 "(bottom half = below horizon, always clear)."},
+        {DEBUG_VIEW_CLOUD_D_SUN, "Atmosphere: Cloud D_sun Voxel Grid",
+                                "Fork diagnostic. Visualizes the Nubis Cubed sun-direction optical-\n"
+                                "depth voxel grid (mid-Z slice). Grayscale: bright = thick cloud\n"
+                                "between voxel and sun, dark = clear sky path. Cumulus cells should\n"
+                                "appear as cellular patterns. Move the sun to verify the pattern\n"
+                                "shifts. Scaling: intensity = saturate(opticalDepth * 0.2)."},
+        {DEBUG_VIEW_CLOUD_D_AMBIENT, "Atmosphere: Cloud D_ambient Voxel Grid",
+                                "Fork diagnostic. Visualizes the Nubis Cubed zenith optical-depth\n"
+                                "voxel grid (mid-Z slice). Expected: mostly uniform brightness\n"
+                                "(zenith path is mostly empty air above the slab); some banding\n"
+                                "where the slab is dense. Scaling: intensity = saturate(opticalDepth * 0.2)."},
+        {DEBUG_VIEW_CLOUD_GROUND_SHADOW_PRODSHAPE, "Atmosphere: Cloud Ground Shadow (Production Call Shape)",
+                                "Fork diagnostic - CRITICAL GATE for the Nubis Cubed cloud-on-terrain\n"
+                                "shadow workstream. Paints sampleCloudGroundShadow_OptionB output at\n"
+                                "each G-buffer pixel using the EXACT per-pixel call shape\n"
+                                "(worldPos, sunDir, args, isZUp) the upcoming NEE wiring will use.\n"
+                                "Grayscale: white = sun unoccluded by clouds, black = full shadow.\n"
+                                "Visual gate: stand on flat terrain at sunset and compare with the\n"
+                                "Cloud D_sun Voxel Grid view (873). Cumulus shadow patches in this\n"
+                                "view should spatially match the D_sun cumulus pattern. If they\n"
+                                "disagree on cumulus position, isZUp handling is mismatched between\n"
+                                "the debug-view call path and the production NEE call path - fix\n"
+                                "before wiring NEE in Task 6."},
+        {DEBUG_VIEW_CLOUD_RENDER_RT, "Atmosphere: Cloud Render RT (Nubis Cubed)",
+                                "Fork diagnostic. Visualizes the Nubis Cubed cloud render RT produced\n"
+                                "by cloud_render.comp.slang (C4 of the 2026-05-12 workstream). Per-\n"
+                                "pixel cloud radiance from the page-137 two-HG-lobe direct term +\n"
+                                "page-142 ambient pow(1 - dim_profile, 0.5) * exp(-D_ambient).\n"
+                                "Visual gate: toggle this debug view off and on with Sky Mode = Physical\n"
+                                "Atmosphere active to A/B against the existing analytical evalClouds\n"
+                                "rendering. Expected improvements: top-bright / bottom-dark cumulus\n"
+                                "gradient, less-flat shadow side, stronger silver lining at backlit\n"
+                                "edges. Tune via the Atmosphere -> Clouds -> Nubis Cubed Lighting\n"
+                                "ImGui block (six magic-constant sliders)."},
         {DEBUG_VIEW_CASCADE_LEVEL, "Terrain: Cascade Level"},
 
         {DEBUG_VIEW_VIRTUAL_HIT_DISTANCE, "Virtual Hit Distance"},
@@ -577,6 +611,9 @@ namespace dxvk {
         TEXTURE2D(DEBUG_VIEW_BINDING_ALTERNATE_DISOCCLUSION_THRESHOLD_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_PREV_WORLD_POSITION_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_CLOUD_SKY_TRANSMITTANCE_LUT_INPUT)
+        TEXTURE3D(DEBUG_VIEW_BINDING_CLOUD_D_SUN_INPUT)
+        TEXTURE3D(DEBUG_VIEW_BINDING_CLOUD_D_AMBIENT_INPUT)
+        TEXTURE2D(DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT)
 
         RW_TEXTURE2D(DEBUG_VIEW_BINDING_ACCUMULATED_DEBUG_VIEW_INPUT_OUTPUT)
 
@@ -1188,6 +1225,13 @@ namespace dxvk {
     debugViewArgs.debugKnob = m_debugKnob;
     debugViewArgs.camera = rtOutput.m_raytraceArgs.camera;
     debugViewArgs.volumeArgs = rtOutput.m_raytraceArgs.volumeArgs;
+    // Fork: mirror atmosphere + isZUp from RaytraceArgs so cloud
+    // diagnostic debug views (DEBUG_VIEW_CLOUD_GROUND_SHADOW_PRODSHAPE)
+    // can call production atmosphere helpers with the production
+    // call shape. These fields are populated unconditionally - debug
+    // views that don't need them simply ignore the values.
+    debugViewArgs.atmosphereArgs = rtOutput.m_raytraceArgs.atmosphereArgs;
+    debugViewArgs.isZUp = rtOutput.m_raytraceArgs.isZUp;
 
     if (displayType() == DebugViewDisplayType::Standard) {
       debugViewArgs.pseudoColorMode = pseudoColorMode();
@@ -1344,6 +1388,45 @@ namespace dxvk {
         DEBUG_VIEW_BINDING_CLOUD_SKY_TRANSMITTANCE_LUT_INPUT,
         cloudSkyTransLut.view,
         nullptr);
+    }
+
+    // Fork: Nubis Cubed cloud voxel grid diagnostic bindings (D_sun + D_ambient).
+    // The fork hooks lazy-initialize the atmosphere; the grids are allocated
+    // unconditionally inside the atmosphere init path so the resources are
+    // valid even when no cumulus geometry is active.
+    {
+      Resources::Resource cloudDSun = fork_hooks::getCloudDSun(*ctx);
+      if (cloudDSun.isValid()) {
+        ctx->bindResourceView(
+          DEBUG_VIEW_BINDING_CLOUD_D_SUN_INPUT,
+          cloudDSun.view,
+          nullptr);
+      }
+    }
+    {
+      Resources::Resource cloudDAmbient = fork_hooks::getCloudDAmbient(*ctx);
+      if (cloudDAmbient.isValid()) {
+        ctx->bindResourceView(
+          DEBUG_VIEW_BINDING_CLOUD_D_AMBIENT_INPUT,
+          cloudDAmbient.view,
+          nullptr);
+      }
+    }
+    // Fork: Nubis Cubed screen-space cloud render RT (C4, 2026-05-12).
+    // Resource becomes valid after the first updateAtmosphereConstants pass
+    // has run ensureCloudRenderRT; before that, leave the binding unbound —
+    // the debug view case (876) tolerates a missing texture by returning
+    // zeros (the default Load behavior on an unbound texture). The
+    // ATMOSPHERE_AVAILABLE-gated binding declaration in the shader is
+    // independent of skyMode, so the binding-state remains consistent.
+    {
+      Resources::Resource cloudRenderRT = fork_hooks::getCloudRenderRT(*ctx);
+      if (cloudRenderRT.isValid()) {
+        ctx->bindResourceView(
+          DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT,
+          cloudRenderRT.view,
+          nullptr);
+      }
     }
 
     ctx->bindResourceView(DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT, globalVolumetrics.getPreviousVolumeReservoirs().view, nullptr);

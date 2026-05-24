@@ -39,6 +39,9 @@
 *.log
 .build-venv/
 .venv/
+# Local-only design docs (specs / plans / scratch notes) that explicitly
+# stay off the canonical repo per author preference. Not for canonical history.
+docs/superpowers/
 metrics.txt
 nrc_session_log.txt
 python.dxvk-cache

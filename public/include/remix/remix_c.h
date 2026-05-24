@@ -730,6 +730,9 @@ extern "C" {
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_SetGameValue)(
     const char*               key,
     const char*               value);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetGameValue(
+    const char*               key,
+    const char*               value);
 
   // Plugin-driven game-state read. Looks up `key` in the fork-owned
   // thread-safe string/string map populated by remixapi_SetGameValue and graph
@@ -748,6 +751,11 @@ extern "C" {
   //   if in_buffer_size >= *out_actual_size: out_buffer is filled with value + '\0'
   //   if in_buffer_size <  *out_actual_size: out_buffer is left untouched
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_GetGameValue)(
+    const char* key,
+    char*       out_buffer,
+    uint32_t    in_buffer_size,
+    uint32_t*   out_actual_size);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_GetGameValue(
     const char* key,
     char*       out_buffer,
     uint32_t    in_buffer_size,

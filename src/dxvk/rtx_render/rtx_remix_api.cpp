@@ -1626,57 +1626,6 @@ namespace {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_SetGameValue(
-    const char* key,
-    const char* value) {
-    if (!key || key[0] == '\0' || !value) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-
-    // The game-state store owns its own mutex. s_mutex is deliberately NOT
-    // taken here: funnelling high-frequency plugin writes through the same
-    // lock as the rest of the API has no benefit and would add contention.
-    dxvk::fork_game_state::GameStateStore::get().set(
-      std::string{ key }, std::string{ value });
-
-    return REMIXAPI_ERROR_CODE_SUCCESS;
-  }
-
-  remixapi_ErrorCode REMIXAPI_CALL remixapi_GetGameValue(
-    const char* key,
-    char*       out_buffer,
-    uint32_t    in_buffer_size,
-    uint32_t*   out_actual_size) {
-    if (key == nullptr || key[0] == '\0') {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-    if (out_actual_size == nullptr) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-    if (in_buffer_size > 0 && out_buffer == nullptr) {
-      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
-    }
-
-    // Like SetGameValue, rely on GameStateStore's internal mutex.
-    // s_mutex is deliberately NOT taken here to avoid contention on
-    // high-frequency reads from plugin threads.
-    std::string value;
-    if (!dxvk::fork_game_state::GameStateStore::get().tryGet(std::string{ key }, value)) {
-      *out_actual_size = 0;
-      return REMIXAPI_ERROR_CODE_SUCCESS;
-    }
-
-    const uint32_t needed = static_cast<uint32_t>(value.size()) + 1u;
-    *out_actual_size = needed;
-
-    if (in_buffer_size >= needed) {
-      memcpy(out_buffer, value.data(), value.size());
-      out_buffer[value.size()] = '\0';
-    }
-
-    return REMIXAPI_ERROR_CODE_SUCCESS;
-  }
-
   remixapi_ErrorCode REMIXAPI_CALL remixapi_RequestVramCompaction() {
     return dxvk::fork_hooks::requestVramCompaction(tryAsDxvk());
   }
@@ -2495,6 +2444,57 @@ extern "C"
     }
     std::lock_guard lock { s_mutex };
     return dxvk::fork_hooks::drawScreenOverlay(remixDevice, pPixelData, width, height, format, opacity);
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_SetGameValue(
+    const char* key,
+    const char* value) {
+    if (!key || key[0] == '\0' || !value) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // The game-state store owns its own mutex. s_mutex is deliberately NOT
+    // taken here: funnelling high-frequency plugin writes through the same
+    // lock as the rest of the API has no benefit and would add contention.
+    dxvk::fork_game_state::GameStateStore::get().set(
+      std::string{ key }, std::string{ value });
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  remixapi_ErrorCode REMIXAPI_CALL remixapi_GetGameValue(
+    const char* key,
+    char*       out_buffer,
+    uint32_t    in_buffer_size,
+    uint32_t*   out_actual_size) {
+    if (key == nullptr || key[0] == '\0') {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    if (out_actual_size == nullptr) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    if (in_buffer_size > 0 && out_buffer == nullptr) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // Like SetGameValue, rely on GameStateStore's internal mutex.
+    // s_mutex is deliberately NOT taken here to avoid contention on
+    // high-frequency reads from plugin threads.
+    std::string value;
+    if (!dxvk::fork_game_state::GameStateStore::get().tryGet(std::string{ key }, value)) {
+      *out_actual_size = 0;
+      return REMIXAPI_ERROR_CODE_SUCCESS;
+    }
+
+    const uint32_t needed = static_cast<uint32_t>(value.size()) + 1u;
+    *out_actual_size = needed;
+
+    if (in_buffer_size >= needed) {
+      memcpy(out_buffer, value.data(), value.size());
+      out_buffer[value.size()] = '\0';
+    }
+
+    return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(const remixapi_InitializeLibraryInfo* info,

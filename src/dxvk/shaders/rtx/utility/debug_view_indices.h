@@ -271,6 +271,20 @@
 
 // Fork: atmosphere / cloud diagnostics
 #define DEBUG_VIEW_CLOUD_SKY_TRANSMITTANCE_LUT 870
+#define DEBUG_VIEW_CLOUD_D_SUN              873
+#define DEBUG_VIEW_CLOUD_D_AMBIENT          874
+// Production-call-shape diagnostic for sampleCloudGroundShadow_OptionB.
+// Paints the helper's output at each G-buffer pixel using the EXACT
+// per-pixel call shape (worldPos, sunDir, args, isZUp) that the upcoming
+// NEE wiring will use. CRITICAL GATE: spatially compare against
+// DEBUG_VIEW_CLOUD_D_SUN (873). If they disagree on cumulus position,
+// isZUp handling is mismatched between debug and production paths.
+#define DEBUG_VIEW_CLOUD_GROUND_SHADOW_PRODSHAPE 875
+// Nubis Cubed 2023 cloud render RT (fork — 2026-05-12, C4). Visualizes the
+// screen-space cloud RT produced by cloud_render.comp.slang. RGB = per-pixel
+// cloud radiance (premultiplied) accumulated through the Nubis Cubed lighting
+// equations. Alpha (view-ray transmittance) is ignored by this debug case.
+#define DEBUG_VIEW_CLOUD_RENDER_RT 876
 
 
 enum class CompositeDebugView : uint32_t {

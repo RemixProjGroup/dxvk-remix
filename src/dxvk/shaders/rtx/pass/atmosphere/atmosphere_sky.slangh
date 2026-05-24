@@ -1038,14 +1038,31 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args, uint2 pixelCoord, uint frameI
 // otherwise produces. The blend uses a fixed history weight (0.92) which
 // matches the volumetric system's age-EMA settled state after ~10 frames.
 //
-// History rejection: pixels whose reprojected previous coordinate falls
-// off-screen, OR whose previous-alpha is near zero (treated as a
-// disocclusion / no-cloud-history-here), reset to the raw current value.
+// History rejection: a history sample is discarded — and the raw current
+// value used in its place — when ANY of the following hold:
+//   1. The reprojected previous coordinate falls off-screen.
+//   2. The history slot's frame-id (companion R16_UINT ping-pong) does not
+//      equal `(frameIdx - 1) & 0xFFFFu`. This catches stale history at
+//      pixels that were foreground-occluded last frame and so were not
+//      refreshed by the sky-miss path — the cause of the bright trailing
+//      ghosts addressed in the 2026-05-13 follow-up.
+//   3. Previous-alpha is near zero (no cloud history at this position).
 //
 // Pass true ONLY from the primary view ray (geometry_resolver miss path).
 // PSR / indirect / NRC paths must pass false — they call evalSkyRadiance with
 // non-primary directions, so the screen-space history at their pixelCoord
 // would be visually wrong (would smear primary cloud into reflections).
+//
+// `isPrimaryRay` (fork — 2026-05-12, C5) — when true AND
+// args.cloudRenderRTEnable != 0, the cloud layer is read from the prerendered
+// AtmosphereCloudRender RT (written each frame by cloud_render.comp.slang
+// with Nubis Cubed 2023 lighting) instead of calling analytical evalClouds.
+// The RT is at primary-ray pixel coordinates — sampling it from a PSR /
+// indirect / reflection ray would return the wrong cloud (different view
+// direction at the same pixel), so non-primary call sites pass false and
+// fall through to evalClouds. The temporal-smoothing path applies on top of
+// either source uniformly because both produce the same (rgb-pre-step,
+// opacity) shape; see the alpha-convention note at the branch.
 vec3 evalSkyRadiance(
   vec3 viewDir,
   AtmosphereArgs args,
@@ -1054,7 +1071,8 @@ vec3 evalSkyRadiance(
   bool isZUp = false,
   bool enableCloudTemporalSmoothing = false,
   vec2 motionVectorPixels = vec2(0.0f, 0.0f),
-  uint2 historyResolution = uint2(0u, 0u)
+  uint2 historyResolution = uint2(0u, 0u),
+  bool isPrimaryRay = false
 ) {
   // Transform view direction to Y-up space if needed
   vec3 viewDirYUp = isZUp ? vec3(viewDir.x, viewDir.z, viewDir.y) : viewDir;
@@ -1149,7 +1167,22 @@ vec3 evalSkyRadiance(
 
   // Clouds render on top of everything (atmosphere + stars + moons). They
   // occlude whatever is behind them based on their alpha.
-  vec4 cloudLayer = evalClouds(viewDirYUp, args, pixelCoord, frameIdx);
+  //
+  // C5 (fork — 2026-05-12): primary-ray-only branch reads the prerendered
+  // AtmosphereCloudRender RT instead of calling analytical evalClouds. The RT
+  // stores vec4(premultiplied_rgb, view_transmittance) — alpha is
+  // TRANSMITTANCE. evalClouds returns vec4(rgb, opacity) — alpha is OPACITY.
+  // We invert the RT alpha (opacity = 1 - transmittance) so the downstream
+  // temporal-smoothing / mix composite operations apply uniformly to either
+  // source: both paths are accumulated as `radiance += stepRadiance * T_so_far`,
+  // so the rgb-channel semantics match once the alpha convention is reconciled.
+  vec4 cloudLayer;
+  if (args.cloudRenderRTEnable != 0u && isPrimaryRay) {
+    vec4 cloudRT = AtmosphereCloudRender.Load(int3(pixelCoord, 0));
+    cloudLayer = vec4(cloudRT.rgb, 1.0f - cloudRT.a);
+  } else {
+    cloudLayer = evalClouds(viewDirYUp, args, pixelCoord, frameIdx);
+  }
 
   // Temporal cloud smoothing (fork). Per-frame FAST-noise jitter on the cloud
   // ray-march (commits 148e3fa5 / d327f3d8) creates brightness variance that
@@ -1159,9 +1192,9 @@ vec3 evalSkyRadiance(
   // jitter's anti-banding benefits.
   //
   // Algorithm shape mirrors the volumetric system's age-EMA (see
-  // submodules/rtxdi/.../volume_integrator.slangh:125-142). v1 uses a fixed
-  // history weight (0.92) which matches the volumetric EMA's settled state
-  // after ~10 frames; explicit age tracking is a follow-up if needed.
+  // submodules/rtxdi/.../volume_integrator.slangh:125-142). Fixed history
+  // weight (0.92) matches the volumetric EMA's settled state after ~10
+  // frames.
   //
   // Storage convention: AtmosphereCloudHistory stores
   //   (rgb = cloudLayer.rgb * cloudLayer.a, a = cloudLayer.a)
@@ -1171,6 +1204,22 @@ vec3 evalSkyRadiance(
   // `mix(radiance, smoothed.rgb / max(smoothed.a, eps), smoothed.a)` for
   // smoothed.a > 0 and `radiance` otherwise. We use the additive form to
   // skip the divide.
+  //
+  // Age-channel disocclusion (fork — 2026-05-13). The color slot above is
+  // ONLY written from the sky-miss branch — when a pixel is occluded by
+  // foreground geometry the slot retains pre-occlusion radiance for as long
+  // as the occlusion lasts, because nothing else writes there. The legacy
+  // alpha-only disocclusion guard could not distinguish "valid sky cloud
+  // from last frame" from "stale bright cloud from N frames ago, currently
+  // occluded but uncovered this frame" — both have alpha > 0 — and so
+  // produced ~30-frame bright ghost trails when foreground moved through
+  // bright sky or near emissive surfaces. The companion R16_UINT
+  // AtmosphereCloudHistoryFrameId{Prev,Curr} pair carries the frame index
+  // at which each slot was last refreshed; the read site below rejects any
+  // history whose stored frame-id != `(frameIdx - 1) & 0xFFFFu`. Sentinel
+  // 0xFFFF is cleared into the buffer at allocation; the wrap once every
+  // 65536 frames and frame-0 startup both collide harmlessly with the
+  // sentinel for a single one-frame rejection (~18 min cadence at 60fps).
   vec4 smoothedCloud = cloudLayer;  // default: no smoothing
   if (enableCloudTemporalSmoothing && all(historyResolution > uint2(0u, 0u))) {
     vec4 currentPremul = vec4(cloudLayer.rgb * cloudLayer.a, cloudLayer.a);
@@ -1187,12 +1236,23 @@ vec3 evalSkyRadiance(
     if (reprojValid) {
       vec4 history = AtmosphereCloudHistoryPrev[prevPixel];
 
-      // Disocclusion guard: if the previous-frame alpha at this pixel was
-      // essentially zero (no cloud was there last frame), don't blend — we'd
-      // just be averaging against noise / a different surface. Treat as a
-      // fresh sample. The 0.001 threshold matches the early-exit gate inside
-      // evalClouds itself.
-      bool historyValid = (history.a > 0.001f) || (currentPremul.a < 0.001f);
+      // Age check (fork — 2026-05-13). Reject history whose stored frame-id
+      // doesn't match the immediately previous frame. The sentinel 0xFFFF
+      // collides with the underflow of `0u - 1u` at startup (correct: no
+      // history exists yet) and once per 16-bit wrap (~18 min at 60fps,
+      // a single rejected blend on affected pixels — imperceptible).
+      uint historyFrameId = AtmosphereCloudHistoryFrameIdPrev[prevPixel];
+      uint expectedPrevFrameId = (frameIdx - 1u) & 0xFFFFu;
+      bool ageValid = (historyFrameId == expectedPrevFrameId)
+                   && (historyFrameId != 0xFFFFu);
+
+      // Disocclusion guard: stale-age short-circuits to "use raw current
+      // sample." Past that, the legacy alpha-based gate handles the
+      // "no cloud here either way" case (both lerp terms zero, blend is
+      // zero — still valid). The 0.001 threshold matches the early-exit
+      // gate inside evalClouds itself.
+      bool historyValid = ageValid
+                       && ((history.a > 0.001f) || (currentPremul.a < 0.001f));
       if (historyValid) {
         // Fixed history weight. Higher = smoother but slower to respond to
         // genuine sky changes (sun motion, weather preset changes); lower =
@@ -1209,8 +1269,12 @@ vec3 evalSkyRadiance(
       smoothedCloud = currentPremul;
     }
 
-    // Write current frame's premultiplied accumulator for next frame to read.
+    // Write current frame's premultiplied accumulator + frame-id for next
+    // frame to read. The frame-id write is what makes the age check above
+    // work: any pixel that does NOT reach this write site this frame keeps
+    // its old (or sentinel) frame-id and will fail next-frame's age check.
     AtmosphereCloudHistoryCurr[pixelCoord] = smoothedCloud;
+    AtmosphereCloudHistoryFrameIdCurr[pixelCoord] = frameIdx & 0xFFFFu;
 
     // Composite: smoothedCloud is premultiplied, so the standard "over" op
     // is `radiance * (1 - alpha) + premul.rgb`.

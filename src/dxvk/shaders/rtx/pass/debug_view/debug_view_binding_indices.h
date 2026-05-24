@@ -47,6 +47,16 @@
 // Fork: per-frame cloud-occluded sky-ambient transmittance LUT (32x16 R16F)
 #define DEBUG_VIEW_BINDING_CLOUD_SKY_TRANSMITTANCE_LUT_INPUT                                34
 
+// Fork: Nubis Cubed cloud voxel grids (D_sun = sun-direction optical depth,
+// D_ambient = zenith optical depth). Sampled by DEBUG_VIEW_CLOUD_D_SUN /
+// DEBUG_VIEW_CLOUD_D_AMBIENT debug views.
+#define DEBUG_VIEW_BINDING_CLOUD_D_SUN_INPUT                                                35
+#define DEBUG_VIEW_BINDING_CLOUD_D_AMBIENT_INPUT                                            36
+
+// Fork: Nubis Cubed screen-space cloud render RT (2026-05-12, C4). Sampled
+// by DEBUG_VIEW_CLOUD_RENDER_RT (enum 876).
+#define DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT                                            37
+
 #define DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT                                         19
 #define DEBUG_VIEW_BINDING_VOLUME_AGE_INPUT                                                20
 #define DEBUG_VIEW_BINDING_VOLUME_RADIANCE_Y_INPUT                                         21

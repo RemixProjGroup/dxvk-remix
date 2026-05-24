@@ -181,4 +181,83 @@ struct AtmosphereArgs {
   float cloudSkyAmbientStrength;                 // Overall multiplier on the sky-ambient term [0..3]. 0 = feature off.
   float cloudSkyAmbientCloudOcclusionStrength;   // Strength of cloud occlusion of sky ambient [0..1]. 1 = physical.
   float padCloudC2;
+
+  // ----- Cloud voxel grid (Nubis Cubed 2023, fork — 2026-05-12) -----
+  // 256x256x32 R16F precomputed grids storing summed optical depth along the
+  // sun direction (D_sun) and zenith (D_ambient), camera-centered with
+  // horizontal tile-wrap. Baked round-robin every 8 frames by
+  // cloud_sun_density_grid.comp.slang / cloud_ambient_density_grid.comp.slang.
+  // No consumer in this commit; the Nubis Cubed cloud-lighting rewrite (C4-C6)
+  // samples them at shade time via sampleDSun / sampleDAmbient.
+  float cloudVoxelGridExtentKm;     // Horizontal extent of camera-centered grid (default 12.0 km)
+  float cloudVoxelGridVerticalKm;   // Vertical extent — populated CPU-side from cloudThickness
+  float cloudVoxelGridFrameOffset;  // For round-robin cadence; CPU-side scalar (informational)
+  uint  cloudVoxelGridSunDirty;     // 1 when D_sun was (re)baked this frame
+  uint  cloudVoxelGridAmbientDirty; // 1 when D_ambient was (re)baked this frame
+  float pad_cloudVoxel0;
+  float pad_cloudVoxel1;
+  float pad_cloudVoxel2;
+
+  // ----- Nubis Cubed 2023 lighting params (fork — 2026-05-12, C4) -----
+  // Consumed by cloud_render.comp.slang via evalNubisCubedSample.
+  float cloudPhaseG1;              // Primary HG asymmetry (silver-lining peak)
+  float cloudPhaseG2;              // Secondary HG asymmetry (broader envelope)
+  float cloudMsSunDotMax;          // sigma_ms remap upper bound on sun_dot (page-137 magic constant)
+  float cloudMsSigmaShallow;       // sigma_ms at cloud surface / shallow penetration
+
+  float cloudMsSigmaDeep;          // sigma_ms deep inside cloud (saturated)
+  float cloudMsSdfDepth;           // SDF depth in meters at which sigma_ms saturates to deep
+  uint  cloudRenderFrameIdx;       // Frame counter for fastJitter() in cloud_render.comp.slang
+  float pad_nubisCubed0;           // 16-byte alignment
+
+  // ----- Cloud render camera basis (fork — 2026-05-12, C4) -----
+  // Pre-computed Y-up basis vectors (camera at origin). Per-pixel view direction
+  // is reconstructed in cloud_render.comp.slang as:
+  //   viewDirYUp = normalize(forward + ndc.x * rightScaled + ndc.y * upScaled)
+  // The `Right` and `Up` vectors are pre-multiplied by tan(halfFovX/Y) so the
+  // shader doesn't need fov/aspect knowledge. All in Y-up world (cloud math
+  // convention — camera at origin).
+  vec3  cloudRenderForwardYUp;
+  float pad_cr0;
+
+  vec3  cloudRenderRightYUp;       // Pre-scaled by tan(halfFovX) * aspectRatio
+  float pad_cr1;
+
+  vec3  cloudRenderUpYUp;          // Pre-scaled by tan(halfFovY)
+  float pad_cr2;
+
+  // ----- Nubis Cubed sky-miss composite gate (fork — 2026-05-12, C5) -----
+  // When 1, the primary-ray branch in evalSkyRadiance reads the prerendered
+  // AtmosphereCloudRender RT instead of calling analytical evalClouds. PSR,
+  // indirect, and reflection rays continue to use evalClouds regardless of
+  // this gate — the cloud RT is at primary-ray pixel coords, sampling it for
+  // a different ray direction at the same pixel would return the wrong cloud.
+  uint  cloudRenderRTEnable;       // 0 or 1
+  uint  pad_c5_0;                  // 16-byte alignment
+  uint  pad_c5_1;
+  uint  pad_c5_2;
+
+  // ----- Voxel-grid cloud-on-terrain shadows at NEE (fork — 2026-05-12, C6) -----
+  // Plumbing for sampleCloudGroundShadow_OptionB, called from the surface and
+  // volumetric NEE entry points via a ratio correction that replaces the
+  // legacy evalCloudGroundShadow uniform dimmer with the 3D D_sun grid lookup.
+  //   * cloudVoxelShadowsEnable — master gate (default 0 / off).
+  //   * cloudShadowMarchStrength — multiplier on the Beer-Lambert exponent in
+  //     transmittance = exp(-D_sun * cloudDensity * cloudShadowMarchStrength).
+  //     1.0 = physical baseline.
+  //   * worldUnitsPerKm — game-units per kilometer, derived CPU-side from
+  //     RtxOptions::sceneScale (which is cm per game unit). 1 km = 100000 cm
+  //     and 1 cm = sceneScale game units, so 1 km = 100000 * sceneScale game
+  //     units. Used by sampleCloudGroundShadow_OptionB to convert
+  //     G-buffer worldPos (game units) into km for the slab + voxel-grid math.
+  //   * cameraWorldPosYUpKm — camera world position in Y-up km, used to
+  //     express the surface worldPos as camera-relative for cloudVoxelWorldToUVW
+  //     (the voxel grid is camera-centered with horizontal tile-wrap).
+  uint  cloudVoxelShadowsEnable;   // 0 or 1
+  float cloudShadowMarchStrength;  // Beer-Lambert exponent multiplier
+  float worldUnitsPerKm;           // game units per km
+  float pad_c6_0;                  // 16-byte alignment
+
+  vec3  cameraWorldPosYUpKm;       // Camera position in Y-up km, world-absolute
+  float pad_c6_1;                  // 16-byte alignment
 };

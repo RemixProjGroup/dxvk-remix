@@ -23,6 +23,7 @@
 #include "imgui/imgui.h"              // ImGui::Button, ImGui::Text, etc. (showAtmosphereUI)
 #include "rtx_imgui.h"                // RemixGui::DragFloat, ComboWithKey (showAtmosphereUI)
 #include <cstdio>                     // std::snprintf (renderMoonUI label)
+#include <cmath>                      // std::tan (cloud render camera basis)
 
 namespace dxvk {
 namespace fork_hooks {
@@ -89,6 +90,73 @@ namespace fork_hooks {
         ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
       }
       ctx.m_atmosphere->initialize(&ctx);
+
+      // Cloud render compute pass setup (Nubis Cubed 2023, fork — 2026-05-12, C4).
+      // Push the per-frame camera basis and ensure the screen-space RT is
+      // allocated at the downscale extent BEFORE computeLuts dispatches the
+      // cloud render compute. The basis vectors are in Y-up world space (cloud
+      // math convention, camera at origin) and the Right/Up vectors are
+      // pre-scaled by tan(halfFovX/Y) + aspect ratio so the shader does just
+      // a weighted sum to reconstruct viewDir per pixel.
+      {
+        const RtCamera& camera = ctx.getSceneManager().getCamera();
+        const Vector3 forward = camera.getDirection(/*freecam=*/true);
+        const Vector3 right   = camera.getRight(/*freecam=*/true);
+        const Vector3 up      = camera.getUp(/*freecam=*/true);
+
+        const bool isZUp = RtxOptions::zUp();
+        // Swap (x, y, z) -> (x, z, y) when the game is Z-up. Mirrors the
+        // existing isZUp swap inside `evalSkyRadiance` in atmosphere_sky.slangh.
+        auto toYUp = [isZUp](const Vector3& v) -> Vector3 {
+          if (isZUp) {
+            return Vector3(v.x, v.z, v.y);
+          }
+          return v;
+        };
+
+        const Vector3 forwardYUp = toYUp(forward);
+        const Vector3 rightYUp   = toYUp(right);
+        const Vector3 upYUp      = toYUp(up);
+
+        // tan(halfFovY) and aspect. halfFov is fov/2 (RtCamera::getFov() is
+        // the full vertical FOV). Pre-scale the basis vectors so the shader
+        // simply does forward + ndc.x*right + ndc.y*up.
+        const float fovYRad = camera.getFov();
+        const float halfFovY = 0.5f * fovYRad;
+        const float tanHalfFovY = std::tan(halfFovY);
+        const float aspect = camera.getAspectRatio();
+        const float tanHalfFovX = tanHalfFovY * aspect;
+
+        const Vector3 rightScaled = rightYUp * tanHalfFovX;
+        const Vector3 upScaled    = upYUp    * tanHalfFovY;
+
+        const uint32_t frameIdx = static_cast<uint32_t>(ctx.m_device->getCurrentFrameId());
+        ctx.m_atmosphere->setCloudRenderCameraBasis(forwardYUp, rightScaled, upScaled, frameIdx);
+
+        // Push the camera world position (Y-up km) for the C6 voxel-grid
+        // cloud-on-terrain shadow plumbing. The G-buffer worldPos that the
+        // helper consumes is in engine game units; the helper converts to
+        // km internally via worldUnitsPerKm. We do the matching conversion
+        // here CPU-side: km = gameUnits / worldUnitsPerKm. The isZUp swap
+        // mirrors the basis-vector swap above so the helper's camera-relative
+        // subtraction lands in the right frame.
+        {
+          const Vector3 cameraPosWorldUnits = camera.getPosition(/*freecam=*/false);
+          const Vector3 cameraPosWorldUnitsYUp = toYUp(cameraPosWorldUnits);
+          const float sceneScaleSafe = std::max(RtxOptions::sceneScale(), 1e-5f);
+          const float worldUnitsPerKm = 100000.0f * sceneScaleSafe;
+          const float kmPerWorldUnit = 1.0f / worldUnitsPerKm;
+          const Vector3 cameraPosYUpKm = cameraPosWorldUnitsYUp * kmPerWorldUnit;
+          ctx.m_atmosphere->setCloudShadowCameraPosition(cameraPosYUpKm);
+        }
+
+        // Allocate the cloud render RT at the downscale extent (the resolution
+        // the geometry resolver raygen writes to and DLSS sees as its input).
+        const VkExtent3D downscaledExtent3D = ctx.getResourceManager().getDownscaleDimensions();
+        const VkExtent2D downscaleExtent = { downscaledExtent3D.width, downscaledExtent3D.height };
+        ctx.m_atmosphere->ensureCloudRenderRT(&ctx, downscaleExtent);
+      }
+
       ctx.m_atmosphere->computeLuts(&ctx);
       constants.atmosphereArgs = ctx.m_atmosphere->getAtmosphereArgs();
     }
@@ -120,6 +188,9 @@ namespace fork_hooks {
     auto cloudNoise3D             = ctx.m_atmosphere->getCloudNoise3D();  // Stage C
     auto fastNoiseView            = ctx.m_atmosphere->getFastNoiseView();  // EA importance-sampled FAST noise
     auto cloudSkyTransmittanceLut = ctx.m_atmosphere->getCloudSkyTransmittanceLut();  // Fork: per-frame cloud occlusion of sky-ambient
+    auto cloudDSun                = ctx.m_atmosphere->getCloudDSun();      // Fork: Nubis Cubed sun-direction optical depth grid
+    auto cloudDAmbient            = ctx.m_atmosphere->getCloudDAmbient();  // Fork: Nubis Cubed zenith optical depth grid
+    auto cloudRenderRT            = ctx.m_atmosphere->getCloudRenderRT();  // Fork: Nubis Cubed screen-space cloud render (C4)
 
     // Always bind the LUTs (they're declared in shaders unconditionally)
     if (transmittanceLut.isValid()) {
@@ -139,6 +210,15 @@ namespace fork_hooks {
     }
     if (cloudSkyTransmittanceLut.isValid()) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT, cloudSkyTransmittanceLut.view, nullptr);
+    }
+    if (cloudDSun.isValid()) {
+      ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_D_SUN, cloudDSun.view, nullptr);
+    }
+    if (cloudDAmbient.isValid()) {
+      ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_D_AMBIENT, cloudDAmbient.view, nullptr);
+    }
+    if (cloudRenderRT.isValid()) {
+      ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_RENDER_RT, cloudRenderRT.view, nullptr);
     }
 
     // Cloud history (fork). Allocate at the current downscaled render extent
@@ -162,6 +242,18 @@ namespace fork_hooks {
       }
       if (cloudCurr.isValid()) {
         ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR, cloudCurr.view, nullptr);
+      }
+
+      // R16_UINT frame-id companion (fork — 2026-05-13). Same lifecycle as the
+      // color pair; carries last-refresh frame index per pixel so the shader's
+      // age check can reject stale history at foreground-occluded slots.
+      auto cloudFrameIdPrev = ctx.m_atmosphere->getPreviousCloudHistoryFrameId();
+      auto cloudFrameIdCurr = ctx.m_atmosphere->getCurrentCloudHistoryFrameId();
+      if (cloudFrameIdPrev.isValid()) {
+        ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_PREV, cloudFrameIdPrev.view, nullptr);
+      }
+      if (cloudFrameIdCurr.isValid()) {
+        ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_HISTORY_FRAME_ID_CURR, cloudFrameIdCurr.view, nullptr);
       }
     }
 
@@ -204,6 +296,55 @@ namespace fork_hooks {
     }
     ctx.m_atmosphere->initialize(&ctx);
     return ctx.m_atmosphere->getCloudSkyTransmittanceLut();
+  }
+
+  // ---------------------------------------------------------------------------
+  // getCloudDSun / getCloudDAmbient
+  //
+  // Public accessors for the Nubis Cubed cloud voxel grids. D_sun stores
+  // sun-direction optical depth (used by cloud-on-terrain shadow lookups);
+  // D_ambient stores zenith optical depth (used for sky-ambient occlusion of
+  // the cloud volume itself). Returns an invalid Resources::Resource if the
+  // atmosphere has not been initialized yet. Used by the debug view to bind
+  // the grids into its pass-local descriptor set so the user can visually
+  // verify the bake content before any production consumer reads from it.
+  //
+  // ACCESS NOTE: reads m_atmosphere (private). Friend declarations required
+  // in RtxContext.
+  // ---------------------------------------------------------------------------
+  Resources::Resource getCloudDSun(RtxContext& ctx) {
+    if (!ctx.m_atmosphere) {
+      ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
+    }
+    ctx.m_atmosphere->initialize(&ctx);
+    return ctx.m_atmosphere->getCloudDSun();
+  }
+
+  Resources::Resource getCloudDAmbient(RtxContext& ctx) {
+    if (!ctx.m_atmosphere) {
+      ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
+    }
+    ctx.m_atmosphere->initialize(&ctx);
+    return ctx.m_atmosphere->getCloudDAmbient();
+  }
+
+  // ---------------------------------------------------------------------------
+  // getCloudRenderRT
+  //
+  // Public accessor for the per-frame Nubis Cubed cloud render RT (C4 of the
+  // 2026-05-12 workstream). Returns an invalid Resource until the first
+  // updateAtmosphereConstants pass has run ensureCloudRenderRT — the debug
+  // view (enum 876) tolerates this by clearing to zero in that case.
+  //
+  // ACCESS NOTE: reads m_atmosphere (private). Friend declaration required
+  // in RtxContext.
+  // ---------------------------------------------------------------------------
+  Resources::Resource getCloudRenderRT(RtxContext& ctx) {
+    if (!ctx.m_atmosphere) {
+      ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
+    }
+    ctx.m_atmosphere->initialize(&ctx);
+    return ctx.m_atmosphere->getCloudRenderRT();
   }
 
   // ---------------------------------------------------------------------------
@@ -627,6 +768,78 @@ namespace fork_hooks {
         RemixGui::SetTooltipToLastWidgetOnHover("Strength of cloud-occluded sky-ambient illumination of the volumetric fog. 0 = feature off (baseline rendering). 1 = physical baseline; higher brightens shadowed fog with sky-tinted ambient. Requires Sky Mode = Physical Atmosphere.");
         RemixGui::DragFloat("Sky Ambient Cloud Occlusion", &RtxOptions::cloudSkyAmbientCloudOcclusionStrengthObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("How strongly clouds attenuate the sky-ambient term. 1 = full physical occlusion (overcast scenes have darker volumetric ambient). 0 = ambient ignores clouds (debug only, visually inverted).");
+
+        // Nubis Cubed 2023 lighting (fork — 2026-05-12, C4). Tuning knobs for
+        // the per-sample lighting equations in cloud_render.comp.slang. Six
+        // sliders mirroring the six RTX_OPTIONs added in rtx_options.h.
+        // The cloud render RT is visualized standalone via the debug view
+        // "Atmosphere: Cloud Render RT (Nubis Cubed)" (enum 876) before the
+        // sky-miss composite lands in C5.
+        ImGui::Separator();
+        if (ImGui::CollapsingHeader("Nubis Cubed Lighting (fork — 2026-05-12)")) {
+          ImGui::TextDisabled("Per-sample lighting equations from Nubis Cubed 2023 paper.");
+          ImGui::TextDisabled("Visualize via debug view: Atmosphere: Cloud Render RT (Nubis Cubed).");
+
+          ImGui::Separator();
+          ImGui::TextDisabled("Phase function (two HG lobes)");
+          RemixGui::DragFloat("Cloud Phase G1", &RtxOptions::cloudPhaseG1Object(), 0.01f, 0.0f, 0.99f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover("Primary HG asymmetry; strong forward-scatter, drives silver lining at backlit edges. Default 0.8.");
+          RemixGui::DragFloat("Cloud Phase G2", &RtxOptions::cloudPhaseG2Object(), 0.01f, 0.0f, 0.99f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover("Secondary HG asymmetry; mild forward-scatter, broader in-scatter envelope. Default 0.3.");
+
+          ImGui::Separator();
+          ImGui::TextDisabled("sigma_ms remap (paper page 137 magic constants)");
+          RemixGui::DragFloat("MS Sun Dot Max", &RtxOptions::cloudMsSunDotMaxObject(), 0.01f, 0.05f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover("Upper bound on sun_dot used in the sigma_ms remap. Lower = wider 'shallow extinction' zone. Default 0.9.");
+          RemixGui::DragFloat("MS Sigma Shallow", &RtxOptions::cloudMsSigmaShallowObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover("sigma_ms at cloud surface / shallow penetration. Default 0.25.");
+          RemixGui::DragFloat("MS Sigma Deep", &RtxOptions::cloudMsSigmaDeepObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover("sigma_ms deep inside cloud (saturated). Default 0.05.");
+          RemixGui::DragFloat("MS SDF Depth (m)", &RtxOptions::cloudMsSdfDepthObject(), 1.0f, 1.0f, 1024.0f, "%.0f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover("SDF depth in meters at which sigma_ms saturates to deep value. Default 128.");
+
+          // Sky-miss composite master gate (fork — 2026-05-12, C5).
+          // When checked, the primary-ray sky-miss path reads from
+          // AtmosphereCloudRender (Nubis Cubed) instead of calling analytical
+          // evalClouds. Indirect/PSR/reflection rays continue to use the
+          // analytical path regardless. Default off — flip after in-game
+          // visual confirmation.
+          ImGui::Separator();
+          ImGui::TextDisabled("Master gate (C5)");
+          RemixGui::Checkbox("Composite cloud RT at sky-miss",
+                             &RtxOptions::cloudRenderRTEnableObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "When on, the primary-ray sky-miss path reads from the prerendered "
+              "AtmosphereCloudRender RT (Nubis Cubed) instead of calling analytical "
+              "evalClouds. PSR / indirect / reflection rays continue to use "
+              "analytical clouds regardless. Default off until visual confirmation.");
+
+          // Cloud-on-terrain shadow gate (fork — 2026-05-12, C6).
+          // When checked, sampleAtmosphereSunLight / sampleAtmosphereSunLightVolume
+          // ratio-correct the legacy evalCloudGroundShadow uniform-dimmer with
+          // the 3D D_sun voxel-grid lookup (sampleCloudGroundShadow_OptionB).
+          // Terrain shows cumulus-shaped drifting shadow patches.
+          ImGui::Separator();
+          ImGui::TextDisabled("Cloud-on-terrain shadows (C6)");
+          RemixGui::Checkbox("Voxel-grid cloud shadows (NEE)",
+                             &RtxOptions::cloudVoxelShadowsEnableObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "When on, sampleAtmosphereSunLight + sampleAtmosphereSunLightVolume "
+              "apply a ratio correction that replaces the 2D coverage-proxy "
+              "evalCloudGroundShadow with the 3D D_sun voxel-grid lookup "
+              "(sampleCloudGroundShadow_OptionB). Terrain gets cumulus-shaped "
+              "drifting shadow patches. Default off until visual confirmation.");
+          RemixGui::DragFloat("Cloud Shadow March Strength",
+                              &RtxOptions::cloudShadowMarchStrengthObject(),
+                              0.05f, 0.0f, 4.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Multiplier on the Beer-Lambert exponent inside "
+              "sampleCloudGroundShadow_OptionB: "
+              "transmittance = exp(-D_sun * cloudDensity * strength). "
+              "1.0 = physical baseline; higher values darken cloud-on-terrain "
+              "shadows, lower values lighten them. Only consumed when "
+              "voxel-grid cloud shadows are on.");
+        }
 
         ImGui::Separator();
         ImGui::TextDisabled("Color polish");
