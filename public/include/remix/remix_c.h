@@ -731,6 +731,28 @@ extern "C" {
     const char*               key,
     const char*               value);
 
+  // Plugin-driven game-state read. Looks up `key` in the fork-owned
+  // thread-safe string/string map populated by remixapi_SetGameValue and graph
+  // components.
+  //
+  // Returns:
+  //   REMIXAPI_ERROR_CODE_SUCCESS — read attempt completed (whether or not the
+  //     key existed). The caller checks *out_actual_size == 0 to detect missing
+  //     keys, and compares it against in_buffer_size to detect buffer
+  //     truncation.
+  //   REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS — null/empty key, null
+  //     out_actual_size, or in_buffer_size > 0 with null out_buffer.
+  //
+  // On success when the key exists:
+  //   *out_actual_size = strlen(value) + 1 (incl. null terminator)
+  //   if in_buffer_size >= *out_actual_size: out_buffer is filled with value + '\0'
+  //   if in_buffer_size <  *out_actual_size: out_buffer is left untouched
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_GetGameValue)(
+    const char* key,
+    char*       out_buffer,
+    uint32_t    in_buffer_size,
+    uint32_t*   out_actual_size);
+
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_AddTextureHash)(
     const char* textureCategory,
     const char* textureHash);
@@ -1003,6 +1025,7 @@ extern "C" {
     PFN_remixapi_RequestVramCompaction      RequestVramCompaction;
     PFN_remixapi_GetVramStats               GetVramStats;
     PFN_remixapi_RequestTextureVramFree     RequestTextureVramFree;
+    PFN_remixapi_GetGameValue               GetGameValue;
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(
