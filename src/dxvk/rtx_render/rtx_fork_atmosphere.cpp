@@ -560,18 +560,26 @@ namespace fork_hooks {
                       ? Vector3(v.x / magnitude, v.y / magnitude, v.z / magnitude)
                       : Vector3(1.0f, 1.0f, 1.0f);
 
-      bool changed = false;
+      bool colorChanged = false;
       if (ImGui::ColorEdit3(colorLabel, &color.x, ImGuiColorEditFlags_NoAlpha)) {
-        changed = true;
+        colorChanged = true;
       }
       if (colorTooltip) RemixGui::SetTooltipToLastWidgetOnHover(colorTooltip);
 
+      bool magChanged = false;
       if (ImGui::DragFloat(magLabel, &magnitude, magSpeed, 0.0f, magMax, magFormat, sliderFlags)) {
-        changed = true;
+        magChanged = true;
       }
       if (magTooltip) RemixGui::SetTooltipToLastWidgetOnHover(magTooltip);
 
-      if (changed) {
+      if (colorChanged || magChanged) {
+        // If the user picks a color while magnitude is zero, color * 0 = (0,0,0)
+        // erases the chromaticity entirely — next frame the picker resets to
+        // white and the choice can't be recovered. Nudge magnitude to magSpeed
+        // so the color choice becomes visible and tunable from there.
+        if (colorChanged && magnitude <= 1e-9f) {
+          magnitude = magSpeed;
+        }
         // Clamp normalized color into [0,1] in case the picker returned an
         // out-of-gamut value (shouldn't happen with ColorEdit3 default flags).
         color.x = std::max(0.0f, std::min(1.0f, color.x));
