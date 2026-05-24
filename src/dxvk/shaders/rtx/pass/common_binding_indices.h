@@ -55,6 +55,17 @@
 #define BINDING_ATMOSPHERE_SKY_VIEW_LUT          202
 #define BINDING_ATMOSPHERE_CLOUD_NOISE_3D        203
 #define BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER   204
+#define BINDING_ATMOSPHERE_FAST_NOISE            205
+// Cloud history textures (fork): screen-space ping-pong for temporal smoothing
+// of the per-frame FAST-noise jitter on the cloud ray-march. The PREV slot is
+// the read view of last frame's accumulated cloud (rgb = premultiplied
+// radiance, a = alpha). The CURR slot is the RW write target this frame.
+// Allocated full-screen at downscale dimensions; ping-pong handled in
+// RtxAtmosphere. Consumed only when evalSkyRadiance is called from the
+// primary view ray (geometry_resolver miss path); PSR/indirect callers see
+// the raw cloud value.
+#define BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV    206
+#define BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR    207
 
 #define COMMON_MAX_BINDING                       BINDING_SAMPLER_READBACK_BUFFER
 #define COMMON_NUM_BINDINGS                      (COMMON_MAX_BINDING + 1)
@@ -103,6 +114,9 @@
   TEXTURE2D(BINDING_ATMOSPHERE_MULTISCATTERING_LUT)                 \
   TEXTURE2D(BINDING_ATMOSPHERE_SKY_VIEW_LUT)                        \
   TEXTURE3D(BINDING_ATMOSPHERE_CLOUD_NOISE_3D)                      \
-  SAMPLER(BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER)
+  SAMPLER(BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER)                   \
+  TEXTURE2DARRAY(BINDING_ATMOSPHERE_FAST_NOISE)                     \
+  TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV)                  \
+  RW_TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR)
 
 #endif

@@ -1890,8 +1890,18 @@ void geometryResolverVertex(
 #ifdef ATMOSPHERE_AVAILABLE
     else if (cb.skyMode == 1)
     {
+      // Primary view ray — enable cloud temporal smoothing. The motion vector
+      // for sky misses comes from calcMotionVectorForRayMiss (already used
+      // below to write PrimaryScreenSpaceMotionVector), and historyResolution
+      // is the downscaled render extent (where this raygen writes).
+      const vec2 cloudMotion = calcMotionVectorForRayMiss(geometryResolverState.pixelCoordinate);
+      const uint2 cloudHistoryRes = cb.camera.resolution;
       skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
-                                     cb.isZUp != 0);
+                                     geometryResolverState.pixelCoordinate, cb.frameIdx,
+                                     cb.isZUp != 0,
+                                     /*enableCloudTemporalSmoothing=*/ true,
+                                     cloudMotion,
+                                     cloudHistoryRes);
     }
 #endif
     else
@@ -2541,6 +2551,7 @@ void geometryPSRResolverVertex(
     {
       // Physical atmosphere mode
       vec3 skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+                                          geometryPSRResolverState.pixelCoordinate, cb.frameIdx,
                                           cb.isZUp != 0);
       emissiveRadiance += skyRadiance * radianceAttenuation;
     }

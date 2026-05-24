@@ -574,6 +574,7 @@ void integratePathVertex(
     {
       // Physical atmosphere mode
       skyRadiance = evalSkyRadiance(pathState.direction, cb.atmosphereArgs,
+                                     pathState.pixelCoordinate, cb.frameIdx,
                                      cb.isZUp != 0);
     }
 #endif

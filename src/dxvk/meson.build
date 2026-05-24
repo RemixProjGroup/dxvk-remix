@@ -223,6 +223,8 @@ dxvk_src = files([
   'rtx_render/rtx_dust_particles.h',
   'rtx_render/rtx_env.cpp',
   'rtx_render/rtx_env.h',
+  'rtx_render/rtx_fast_noise.cpp',
+  'rtx_render/rtx_fast_noise.h',
   'rtx_render/rtx_file_watch.cpp',
   'rtx_render/rtx_file_watch.h',
   'rtx_render/rtx_fork_api_entry.cpp',
@@ -492,6 +494,36 @@ rtx_shaders = custom_target(
   command: [ python_interpreter ] + rtx_shaders_command_arguments
 )
 
+# EA FAST-noise jitter texture: pack the 32 source PNGs into a static
+# byte array compiled directly into d3d9.dll. The PNG inputs and the
+# packer script both live outside src/dxvk, so we pass them as absolute
+# paths via meson.global_source_root() rather than a files() list.
+fast_noise_pngs = []
+foreach i : [
+  '0',  '1',  '2',  '3',  '4',  '5',  '6',  '7',
+  '8',  '9',  '10', '11', '12', '13', '14', '15',
+  '16', '17', '18', '19', '20', '21', '22', '23',
+  '24', '25', '26', '27', '28', '29', '30', '31',
+]
+  fast_noise_pngs += files(
+    '../../data/ea-fast-noise/uniform_jitter/vector2_uniform_gauss1_0_Gauss10_separate05_' + i + '.png'
+  )
+endforeach
+
+rtx_fast_noise_data = custom_target(
+  'rtx_fast_noise_data',
+  build_by_default: true,
+  input: fast_noise_pngs,
+  output: ['rtx_fast_noise_data.h', 'rtx_fast_noise_data.cpp'],
+  command: [
+    python_interpreter,
+    join_paths(global_src_root_norm, 'scripts/embed_fast_noise.py'),
+    join_paths(global_src_root_norm, 'data/ea-fast-noise/uniform_jitter'),
+    '@OUTPUT0@',
+    '@OUTPUT1@',
+  ],
+)
+
 dxvk_embedded_data_files = files([
   '../../external/fonts/NVIDIASans/NVIDIASansMd.ttf',
   '../../external/fonts/NVIDIASans/NVIDIASansBd.ttf',
@@ -516,7 +548,7 @@ delayimp_dep = declare_dependency(
 	dependencies : [ lib_delayimp])
 dxvk_deps += delayimp_dep
 
-dxvk_lib = static_library('dxvk', dxvk_src, dxvk_version, [generated_dxvk_shaders, rtx_shaders, dxvk_generated_embedded_files],
+dxvk_lib = static_library('dxvk', dxvk_src, dxvk_version, [generated_dxvk_shaders, rtx_shaders, rtx_fast_noise_data, dxvk_generated_embedded_files],
   link_with           : [ util_lib, spirv_lib, usd_plugins ], 
   dependencies        : [ dxvk_deps ],
   include_directories : [ dxvk_include_path, dxvk_shader_include_path, rtxdi_include_path, remix_api_include_path, rtxcr_include_path, submodules_include_path  ],

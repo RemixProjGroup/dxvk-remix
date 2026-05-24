@@ -118,6 +118,7 @@ namespace fork_hooks {
     auto multiscatteringLut = ctx.m_atmosphere->getMultiscatteringLut();
     auto skyViewLut         = ctx.m_atmosphere->getSkyViewLut();
     auto cloudNoise3D       = ctx.m_atmosphere->getCloudNoise3D();  // Stage C
+    auto fastNoiseView      = ctx.m_atmosphere->getFastNoiseView();  // EA importance-sampled FAST noise
 
     // Always bind the LUTs (they're declared in shaders unconditionally)
     if (transmittanceLut.isValid()) {
@@ -131,6 +132,33 @@ namespace fork_hooks {
     }
     if (cloudNoise3D.isValid()) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_NOISE_3D, cloudNoise3D.view, nullptr);
+    }
+    if (fastNoiseView != nullptr) {
+      ctx.bindResourceView(BINDING_ATMOSPHERE_FAST_NOISE, fastNoiseView, nullptr);
+    }
+
+    // Cloud history (fork). Allocate at the current downscaled render extent
+    // (where the geometry resolver raygen writes the per-pixel sky radiance),
+    // advance the ping-pong index once per frame, then bind PREV (read) and
+    // CURR (write) at their respective slots. Both slots are declared in
+    // common_bindings.slangh and so must always be bound for any pass to
+    // compile/dispatch — on the first frame, both slices are zero-cleared
+    // and the shader's disocclusion guard treats history as invalid.
+    {
+      ctx.m_atmosphere->onFrameAdvanceForCloudHistory(
+        static_cast<uint32_t>(ctx.m_device->getCurrentFrameId()));
+
+      const VkExtent3D downscaledExtent = ctx.getResourceManager().getDownscaleDimensions();
+      ctx.m_atmosphere->ensureCloudHistoryResources(&ctx, downscaledExtent);
+
+      auto cloudPrev = ctx.m_atmosphere->getPreviousCloudHistory();
+      auto cloudCurr = ctx.m_atmosphere->getCurrentCloudHistory();
+      if (cloudPrev.isValid()) {
+        ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV, cloudPrev.view, nullptr);
+      }
+      if (cloudCurr.isValid()) {
+        ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR, cloudCurr.view, nullptr);
+      }
     }
 
     // Bind a linear/REPEAT sampler for the cloud noise volume.

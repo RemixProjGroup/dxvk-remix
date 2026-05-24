@@ -332,27 +332,29 @@
   X(Vector3, singleScatteringAlbedo,                    Vector3(0.97f, 0.97f, 0.98f))                  \
   X(float,   volumetricAnisotropy,                      0.10f)
 
-// thunderstorm — heaviest, bruised tone
+// thunderstorm — heaviest, bruised tone (retuned 2026-05-09 by in-game
+// tuning against the post-FAST-noise + temporal-smoother + Jensen-revert
+// pipeline at cloudAltitude=1.5 km, cloudScale=0.015, cloudCurvature=0.38)
 #define WEATHER_PRESET_VALUES_thunderstorm(X)                                                          \
-  X(float,   cloudDensity,                              3.5f)                                          \
+  X(float,   cloudDensity,                              2.65f)                                         \
   X(float,   cloudCoverageMean,                         0.95f)                                         \
   X(float,   cloudCoverageSpread,                       0.10f)                                         \
   X(float,   cloudCoverageNoiseScale,                   0.0033f)                                       \
-  X(float,   cloudTypeMean,                             0.7f)                                          \
-  X(float,   cloudTypeSpread,                           0.3f)                                          \
+  X(float,   cloudTypeMean,                             0.54f)                                         \
+  X(float,   cloudTypeSpread,                           0.28f)                                         \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                       \
   X(float,   cloudAnvilBias,                            0.7f)                                          \
   X(float,   cloudWindShearStrength,                    0.5f)                                          \
-  X(Vector3, cloudColor,                                Vector3(0.50f, 0.52f, 0.58f))                  \
+  X(Vector3, cloudColor,                                Vector3(0.61f, 0.63f, 0.69f))                  \
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
-  X(float,   cloudShadowStrength,                       0.60f)                                         \
+  X(float,   cloudShadowStrength,                       0.44f)                                         \
   X(float,   cloudAnisotropy,                           0.6f)                                          \
-  X(float,   cloudThickness,                            5.0f)                                          \
+  X(float,   cloudThickness,                            4.13f)                                         \
   X(float,   cloudDetailWeight,                         1.0f)                                          \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
   X(float,   cloudShadowTintStrength,                   1.0f)                                          \
-  X(float,   cloudSunsetWarmth,                         0.10f)                                         \
+  X(float,   cloudSunsetWarmth,                         0.21f)                                         \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            1.3f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(4.0f, 4.0f, 6.0f))                     \

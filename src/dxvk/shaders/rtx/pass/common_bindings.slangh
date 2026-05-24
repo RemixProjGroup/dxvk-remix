@@ -134,3 +134,13 @@ Texture3D<float> AtmosphereCloudNoise3D;
 
 layout(binding = BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER)
 SamplerState AtmosphereCloudNoise3DSampler;
+
+layout(binding = BINDING_ATMOSPHERE_FAST_NOISE)
+Texture2DArray<float2> AtmosphereFastNoise;
+
+// Cloud history textures (fork). See atmosphere_bindings.slangh for full notes.
+layout(rgba16f, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV)
+Texture2D<float4> AtmosphereCloudHistoryPrev;
+
+layout(rgba16f, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR)
+RWTexture2D<float4> AtmosphereCloudHistoryCurr;

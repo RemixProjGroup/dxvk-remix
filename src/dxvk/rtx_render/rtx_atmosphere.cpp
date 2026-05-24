@@ -429,6 +429,11 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
     VkClearColorValue{}, // clearValue
     1 // mipLevels
   );
+
+  // EA Importance-Sampled FAST noise (128x128x32 RG8 Texture2DArray) used for
+  // cloud ray-march jitter. One-shot upload of the embedded byte data; no-op on
+  // subsequent calls.
+  m_fastNoise.initialize(ctx);
 }
 
 void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
@@ -600,6 +605,59 @@ void RtxAtmosphere::dispatchCloudNoise3DBake(Rc<DxvkContext> ctx) {
   ctx->dispatch(groupCount, groupCount, groupCount);
 }
 
+void RtxAtmosphere::onFrameAdvanceForCloudHistory(uint32_t currentFrameId) {
+  if (currentFrameId == m_cloudHistoryLastFrameId) {
+    return;  // already advanced this frame
+  }
+  // Don't swap on the very first observation — leaves swap = false so the
+  // initial frame writes to slot 0 and reads slot 1 (uninitialized -> zero ->
+  // disocclusion fallback). Subsequent frames toggle.
+  if (m_cloudHistoryLastFrameId != UINT32_MAX) {
+    m_cloudHistorySwap = !m_cloudHistorySwap;
+  }
+  m_cloudHistoryLastFrameId = currentFrameId;
+}
+
+void RtxAtmosphere::ensureCloudHistoryResources(Rc<DxvkContext> ctx, const VkExtent3D& downscaledExtent) {
+  // Bail on degenerate extents (can happen during early frames before resize
+  // events have settled) — we'll allocate on a later frame.
+  if (downscaledExtent.width == 0u || downscaledExtent.height == 0u) {
+    return;
+  }
+
+  const bool extentsMatch = (m_cloudHistoryExtent.width == downscaledExtent.width)
+                         && (m_cloudHistoryExtent.height == downscaledExtent.height);
+  if (extentsMatch && m_cloudHistory[0].isValid() && m_cloudHistory[1].isValid()) {
+    return;
+  }
+
+  // (Re)create both ping-pong slices at the requested screen extent.
+  // RGBA16F: rgb = premultiplied cloud radiance, a = cloud alpha. STORAGE bit
+  // for the RW write path; the read path uses the same view as a sampled image.
+  const VkExtent3D extent = { downscaledExtent.width, downscaledExtent.height, 1u };
+  for (uint32_t i = 0u; i < 2u; ++i) {
+    const char* names[2] = {
+      "Atmosphere Cloud History 0",
+      "Atmosphere Cloud History 1",
+    };
+    m_cloudHistory[i] = Resources::createImageResource(
+      ctx,
+      names[i],
+      extent,
+      VK_FORMAT_R16G16B16A16_SFLOAT,
+      1, // numLayers
+      VK_IMAGE_TYPE_2D,
+      VK_IMAGE_VIEW_TYPE_2D,
+      0, // imageCreateFlags
+      VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
+      VkClearColorValue{}, // clearValue (zero -- treated as "no history" by shader disocclusion guard)
+      1 // mipLevels
+    );
+  }
+
+  m_cloudHistoryExtent = extent;
+}
+
 void RtxAtmosphere::bindResources(Rc<DxvkContext> ctx, VkPipelineBindPoint pipelineBindPoint) {
   // Bind atmosphere LUT resources to the pipeline.
   // Note: The active call site for runtime binding is bindAtmosphereLuts in
@@ -616,6 +674,12 @@ void RtxAtmosphere::bindResources(Rc<DxvkContext> ctx, VkPipelineBindPoint pipel
   if (m_cloudNoise3D.isValid()) {
     ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_NOISE_3D, m_cloudNoise3D.view, nullptr);
   }
+  if (m_fastNoise.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_FAST_NOISE, m_fastNoise.getView(), nullptr);
+  }
+  // Cloud history bindings are wired in fork_hooks::bindAtmosphereLuts (the
+  // active call site) and depend on the downscaled-extent ensure step. Left
+  // unbound here to keep this method's contract minimal.
 }
 
 } // namespace dxvk

@@ -38,3 +38,16 @@ Texture3D<float> AtmosphereCloudNoise3D;
 
 layout(binding = BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER)
 SamplerState AtmosphereCloudNoise3DSampler;
+
+layout(binding = BINDING_ATMOSPHERE_FAST_NOISE)
+Texture2DArray<float2> AtmosphereFastNoise;
+
+// Cloud history textures (fork). Read view is the previous frame's accumulated
+// cloud (rgb = premultiplied radiance, a = alpha); write view is the current
+// frame's accumulator. Used by the temporal-smoothing path inside
+// evalSkyRadiance to kill DLSS-perceived flatness from per-frame FAST jitter.
+layout(rgba16f, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_PREV)
+Texture2D<float4> AtmosphereCloudHistoryPrev;
+
+layout(rgba16f, binding = BINDING_ATMOSPHERE_CLOUD_HISTORY_CURR)
+RWTexture2D<float4> AtmosphereCloudHistoryCurr;
