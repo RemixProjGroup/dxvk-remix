@@ -589,8 +589,13 @@ vec3 evalMoonDisk(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float dis
 // evalSkyRadiance at the bottom of this file.
 
 // Sample cloud density along the sun direction from a cloud hit point.
-// Used to self-shadow the clouds.
-float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir, AtmosphereArgs args) {
+// Used to self-shadow the clouds. Reuses the main-sample's typeLocal /
+// coverageLocal across all 4 sun-shadow taps — spec rationale: noise
+// wavelength (~2km at default scale) is large compared to the 1.6km tap
+// span, so the approximation is visually adequate.
+float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir,
+                                  float typeLocal, float coverageLocal,
+                                  AtmosphereArgs args) {
   if (sunDir.y <= 0.01f) return 1.0f;  // Sun near/below horizon: no meaningful shadow
 
   const int kTaps = 4;
@@ -602,7 +607,8 @@ float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir, AtmosphereArgs 
     // Project to horizontal plane and compute heightFraction at the tap.
     // Taps that march above the slab top get hf=1 → bell→0 → density=0,
     // which is correct (no clouds outside the slab).
-    float d = sampleCloudDensity(vec2(p.x, p.z), computeCloudHeightFraction(p, args), args);
+    float d = sampleCloudDensity(vec2(p.x, p.z), computeCloudHeightFraction(p, args),
+                                  typeLocal, coverageLocal, args);
     opticalDepth += d;
   }
 
@@ -628,7 +634,7 @@ float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir, AtmosphereArgs 
 //  5. Night moonlight contribution is constant per ray (computed outside
 //     the sample loop, applied at each step).
 vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
-  if (args.cloudEnabled < 0.5f || args.cloudCoverage < 0.01f || args.cloudViewSamples == 0u) {
+  if (args.cloudEnabled < 0.5f || args.cloudCoverageMean < 0.01f || args.cloudViewSamples == 0u) {
     return vec4(0.0f);
   }
 
@@ -653,15 +659,10 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
   // tEntry can be negative if camera is already above cloud base; clamp to start march at the camera.
   tEntry = max(tEntry, 0.0f);
 
-  // Variance mask sampled once per ray
-  vec3 entryPos = viewDir * tEntry;
-  vec2 entryXZ = vec2(entryPos.x, entryPos.z);
-  float varianceN = fbmNoise2D(entryXZ * args.cloudVarianceScale, 2, 130.0f);
-  float variance = mix(1.0f, varianceN, args.cloudVariance);
-
-  // Build local args copy with modified coverage for sampling
-  AtmosphereArgs sampleArgs = args;
-  sampleArgs.cloudCoverage = saturate(args.cloudCoverage * variance);
+  // Spatial variation: type and coverage are independent low-freq noise fields
+  // sampled per main march step inside the loop below (Nubis weather-texture
+  // style). The crude "variance" mechanism that lived here previously is
+  // subsumed by cloudCoverageSpread.
 
   // Pre-compute lighting terms invariant per sample
   vec3 sunDir = normalize(args.sunDirection);
@@ -672,8 +673,12 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
   const float kPhaseGain   = 0.20f;
   float lightResponse = kDiffuseGain * lambert + kPhaseGain * phase;
 
-  // Pre-compute warm tint (constant per ray)
-  float lowSunFactor = saturate(1.0f - sunDir.y * 3.0f);
+  // Pre-compute warm tint (constant per ray). lowSunFactor peaks near the
+  // horizon and fades on both sides — the below-horizon smoothstep gate
+  // prevents warmAdd from persisting at night (directLight/ambient already
+  // fade via airTrans's twilightFade, but warmAdd has no airTrans gate).
+  float lowSunFactor = saturate(1.0f - sunDir.y * 3.0f)
+                     * smoothstep(-0.10f, -0.02f, sunDir.y);
   float warmFactor = max(cosTheta, 0.0f);
   vec3 warmAdd = args.sunIlluminance * lowSunFactor * warmFactor * 0.3f * args.cloudSunsetWarmth;
 
@@ -713,13 +718,21 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     float t = tEntry + stepLen * (float(i) + jitter);
     vec3 samplePos = viewDir * t;
 
-    float hf = computeCloudHeightFraction(samplePos, sampleArgs);
-    float density = sampleCloudDensity(vec2(samplePos.x, samplePos.z), hf, sampleArgs);
+    // Sample local type and coverage from the two independent low-freq
+    // control noises (separate seeds so type and coverage are decorrelated).
+    vec2 sampleXZ = vec2(samplePos.x, samplePos.z);
+    float typeNoise     = smoothNoise2D(sampleXZ * args.cloudTypeNoiseScale,     200.0f);
+    float coverageNoise = smoothNoise2D(sampleXZ * args.cloudCoverageNoiseScale, 250.0f);
+    float typeLocal     = saturate(args.cloudTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
+    float coverageLocal = saturate(args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
+
+    float hf = computeCloudHeightFraction(samplePos, args);
+    float density = sampleCloudDensity(sampleXZ, hf, typeLocal, coverageLocal, args);
     density *= horizonFade;
     if (density < 0.001f) continue;
 
     // Per-sample lighting
-    float sunTransmittance = sampleCloudSunTransmittance(samplePos, sunDir, sampleArgs);
+    float sunTransmittance = sampleCloudSunTransmittance(samplePos, sunDir, typeLocal, coverageLocal, args);
     vec3 airTrans = getTransmittanceToSun(samplePos, args, false);
     vec3 directLight = args.sunIlluminance * airTrans * sunTransmittance * lightResponse;
     vec3 ambient = args.sunIlluminance * airTrans * 0.04f;

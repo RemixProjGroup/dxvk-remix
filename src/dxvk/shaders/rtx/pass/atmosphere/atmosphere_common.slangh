@@ -478,35 +478,41 @@ float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args) {
   return saturate((altitudeAboveSea - args.cloudAltitude) / max(args.cloudThickness, 0.001f));
 }
 
-// Asymmetric vertical density profile: rounded cumulus bottom (sharp rise
-// from base), wispy top (gradual taper). Mixed with constant 1.0 by the
-// cloudVerticalProfile strength so 0 = no-op (current extrusion behavior),
-// 1 = full bell. Integral over [0,1] is 0.60, normalized by 1.67 so total
-// opacity stays roughly constant across the strength range.
-float cloudVerticalProfileMultiplier(float hf, AtmosphereArgs args) {
-  float bellRise = smoothstep(0.0f, 0.20f, hf);
-  float bellFall = 1.0f - smoothstep(0.40f, 1.0f, hf);
-  float bell = bellRise * bellFall;
-  const float kIntegralNorm = 1.67f;
-  return mix(1.0f, bell * kIntegralNorm, args.cloudVerticalProfile);
+// Nubis sliding-keypoint vertical density profile. Type slides the rise/peak/fall
+// keypoints from stratus values (narrow band low in slab) to cumulus values (full
+// vertical extent). Stratocumulus emerges naturally at type=0.5.
+//   stratus  (type=0):   rise 0..0.10, peak 0.10..0.20, fall 0.20..0.30
+//   cumulus  (type=1):   rise 0..0.20, peak 0.20..0.40, fall 0.40..0.95
+// No integral normalization across types -- cumulus is naturally ~3x denser
+// than stratus, matching reality (cumulus carries more total water).
+float cloudTypeProfile(float hf, float type) {
+  float riseEnd   = mix(0.10f, 0.20f, type);
+  float fallStart = mix(0.20f, 0.40f, type);
+  float fallEnd   = mix(0.30f, 0.95f, type);
+  float rise = saturate(hf / max(riseEnd, 1e-4f));
+  float fall = saturate((fallEnd - hf) / max(fallEnd - fallStart, 1e-4f));
+  return saturate(rise * fall);
 }
 
 // Sample cloud density (procedural FBM) at a given horizontal world position
-// (km) and a normalized height fraction within the cloud slab. Returns
-// density in [0, 1]. heightFraction is used for: (a) UV perturbation along
-// wind direction (wind-shear effect — different altitudes sample displaced
-// XZ patterns), and (b) vertical density profile (bell-shaped multiplier).
-// Both effects are gated by args.cloudVerticalProfile; at strength 0 the
-// function is bit-for-bit equivalent to the old XZ-only behavior.
-float sampleCloudDensity(vec2 worldPosKm, float heightFraction, AtmosphereArgs args) {
-  // UV perturbation along wind direction (zero at strength 0). cloudWindOffset
-  // is accumulated drift (direction × speed × time), so its normalized form
-  // gives the wind direction. At zero wind, fall back to a fixed diagonal so
-  // the perturb still breaks vertical extrusion.
+// (km), normalized height fraction within the cloud slab, and per-XZ local
+// type/coverage values from the spatial-variation control noises. Returns
+// density in [0, 1].
+//
+// Vertical structure comes from cloudTypeProfile (Nubis sliding keypoints).
+// Coverage modulation includes the Nubis anvil pow trick at the slab top so
+// cumulus tops inflate outward. Wind-shear UV perturbation along wind
+// direction is gated by typeLocal so puffier cumulus shears more than
+// flat stratus.
+float sampleCloudDensity(vec2 worldPosKm, float heightFraction,
+                         float typeLocal, float coverageLocal,
+                         AtmosphereArgs args) {
+  // UV perturbation along wind direction. Strength scales with type so cumulus
+  // (puffier, more turbulent) shears more than stratus (flat, calm).
   vec2 windOffset = args.cloudWindOffset;
   float windLen = length(windOffset);
   vec2 windDir = (windLen > 0.0001f) ? (windOffset / windLen) : vec2(0.7071f, 0.7071f);
-  vec2 perturb = windDir * (heightFraction * args.cloudThickness * args.cloudVerticalProfile);
+  vec2 perturb = windDir * (heightFraction * args.cloudThickness * typeLocal * args.cloudWindShearStrength);
 
   // Base cloud shape — large slowly moving clumps
   vec2 uv = (worldPosKm + perturb) * args.cloudScale + args.cloudWindOffset * args.cloudScale;
@@ -515,21 +521,25 @@ float sampleCloudDensity(vec2 worldPosKm, float heightFraction, AtmosphereArgs a
   float base   = fbmNoise2D(uv,             4, 90.0f);
   float detail = fbmNoise2D(uv * 4.0f + vec2(5.3f, 2.1f), 3, 95.0f);
 
-  // Combine base and detail. Base dominates the overall shape; detail
-  // roughens the edges without creating noisy isolated puffs. Detail term
-  // also fades when cloudScale is small (large clouds) — at low scales the
-  // detail layer just adds visible grain, so we drop it.
   float detailFade = smoothstep(0.005f, 0.05f, args.cloudScale);
   float shape = base * 0.75f + detail * args.cloudDetailWeight * detailFade;
 
-  // Coverage threshold: low coverage keeps clouds sparse; high coverage
-  // (overcast) pushes everything above the threshold so the sky fills in.
-  // Remap [coverageThreshold .. 1] -> [0 .. 1].
-  float coverageThreshold = mix(0.80f, 0.15f, args.cloudCoverage);
+  // Anvil top: raise effective coverage at high height-fraction so cumulus
+  // tops inflate outward (Nubis pow-with-reduced-exponent trick). Kick-in
+  // starts at hf=0.4 (around the cumulus density peak) so the inflation
+  // overlaps actual density — sampling above hf=0.7 hits already-attenuated
+  // tail density and the visible widening collapses.
+  float anvilExponent = mix(1.0f, mix(1.0f, 0.3f, args.cloudAnvilBias),
+                            smoothstep(0.4f, 0.7f, heightFraction));
+  float coverageAnvil = pow(coverageLocal, anvilExponent);
+
+  // Coverage threshold — overcast pockets push above threshold, sparse
+  // pockets thin out.
+  float coverageThreshold = mix(0.80f, 0.15f, coverageAnvil);
   float density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, shape);
 
-  // Apply vertical profile (no-op at strength 0).
-  density *= cloudVerticalProfileMultiplier(heightFraction, args);
+  // Type-driven vertical profile (replaces the old cloudVerticalProfile bell).
+  density *= cloudTypeProfile(heightFraction, typeLocal);
 
   return saturate(density);
 }
@@ -569,7 +579,7 @@ bool intersectCloudLayer(vec3 rayDir, AtmosphereArgs args, out float t, out vec3
 // and shadowed. Used by getTransmittanceToSun to darken ground/atmosphere
 // lighting under heavy cloud cover.
 float evalCloudGroundShadow(vec3 sunDir, AtmosphereArgs args) {
-  if (args.cloudEnabled < 0.5f || args.cloudCoverage < 0.01f) return 1.0f;
+  if (args.cloudEnabled < 0.5f || args.cloudCoverageMean < 0.01f) return 1.0f;
   if (args.cloudShadowStrength < 0.01f) return 1.0f;
 
   float t;
@@ -578,14 +588,24 @@ float evalCloudGroundShadow(vec3 sunDir, AtmosphereArgs args) {
     return 1.0f;  // Sun direction doesn't pierce the cloud layer (below horizon etc.)
   }
 
-  // Sample density where the sun ray pierces the cloud layer above us.
-  // Use heightFraction=0.5 — representative middle-of-slab density for a
-  // single-sample shadow integral; integral normalization keeps brightness
-  // close to the pre-vertical-profile value at strength 1.
-  float density = sampleCloudDensity(vec2(hitPos.x, hitPos.z), 0.5f, args);
+  // Compute local type and coverage at the cloud-hit point. Independent
+  // smoothNoise2D evals with separate seeds so the two fields are
+  // spatially decorrelated (Nubis weather-texture style).
+  vec2 hitXZ = vec2(hitPos.x, hitPos.z);
+  float typeNoise     = smoothNoise2D(hitXZ * args.cloudTypeNoiseScale,     200.0f);
+  float coverageNoise = smoothNoise2D(hitXZ * args.cloudCoverageNoiseScale, 250.0f);
+  float typeLocal     = saturate(args.cloudTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
+  float coverageLocal = saturate(args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
+
+  // Sample at the type-aware peak height of the bell, not mid-slab. The new
+  // cloudTypeProfile peaks at (riseEnd + fallStart) / 2 — sliding from 0.15
+  // (stratus) to 0.30 (cumulus). Sampling at hf=0.5 falls past fallEnd for
+  // stratus (zero density) and well into the fall band for stratocumulus
+  // (~0.39x peak), making shadows ~3x weaker than intended.
+  float hfPeak = 0.15f + 0.15f * typeLocal;
+  float density = sampleCloudDensity(hitXZ, hfPeak, typeLocal, coverageLocal, args);
   float transmittance = exp(-density * args.cloudDensity * 2.0f);
 
-  // Strength slider attenuates the effect so it can be tuned.
   return mix(1.0f, transmittance, args.cloudShadowStrength);
 }
 

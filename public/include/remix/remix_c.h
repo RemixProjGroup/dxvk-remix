@@ -985,8 +985,14 @@ extern "C" {
 
     PFN_remixapi_Startup            Startup;
     PFN_remixapi_Present            Present;
-    remixapi_UIState                (*GetUIState)(void);
-    remixapi_ErrorCode              (*SetUIState)(remixapi_UIState state);
+    // NOTE: REMIXAPI_PTR is required so the calling convention matches the
+    // actual remixapi_GetUIState / remixapi_SetUIState entry functions
+    // (which are __stdcall via REMIXAPI_CALL). On x64 this is moot — there's
+    // a single calling convention — but on x86 (bridge client) the bare
+    // `(*Fn)(...)` syntax defaulted to __cdecl and silently corrupted the
+    // stack when callers invoked the __stdcall entry through the field.
+    remixapi_UIState                (REMIXAPI_PTR *GetUIState)(void);
+    remixapi_ErrorCode              (REMIXAPI_PTR *SetUIState)(remixapi_UIState state);
 
     // Optional extension functions (present starting in v0.5.1+)
     PFN_remixapi_RegisterCallbacks          RegisterCallbacks;
