@@ -21,6 +21,7 @@
 */
 #include "rtx/pass/tonemap/tonemapping.slangh"
 #include "rtx/pass/tonemap/tonemapping_noise.slangh"
+#include "rtx/pass/tonemap/fork_tonemap_operators.slangh"
 #include "rtx/utility/math.slangh"
 #include "rtx/utility/color.slangh"
 
@@ -128,13 +129,28 @@ float3 applyToneMapping(float3 color, uint2 pixelPosition)
   {
     if (cb.debugMode == 0) 
     {
-      // Normal tone mapping
-      color = dynamicToneMapper(color);
-      
-      if (cb.finalizeWithACES)
+      // Normal tone mapping. Direct mode (cb.directOperatorMode == 1) skips
+      // the dynamic curve and applies only the selected operator.
+      if (cb.directOperatorMode == 0)
       {
-        color = ACESFilm(color, cb.useLegacyACES);
+        color = dynamicToneMapper(color);
       }
+      color = applyTonemapOperator(cb.tonemapOperator, color, /*suppressBlackLevelClamp=*/false,
+                                   cb.hableExposureBias,
+                                   cb.hableShoulderStrength,
+                                   cb.hableLinearStrength,
+                                   cb.hableLinearAngle,
+                                   cb.hableToeStrength,
+                                   cb.hableToeNumerator,
+                                   cb.hableToeDenominator,
+                                   cb.hableWhitePoint,
+                                   cb.agxGamma,
+                                   cb.agxSaturation,
+                                   cb.agxExposureOffset,
+                                   cb.agxLook,
+                                   cb.agxContrast,
+                                   cb.agxSlope,
+                                   cb.agxPower);
     } 
     else
     {

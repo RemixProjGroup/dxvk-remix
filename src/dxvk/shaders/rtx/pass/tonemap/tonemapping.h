@@ -53,6 +53,16 @@ static const uint32_t ditherModeNone = 0;
 static const uint32_t ditherModeSpatialOnly = 1;
 static const uint32_t ditherModeSpatialTemporal = 2;
 
+// Tonemap operator constants. Mirror the TonemapOperator enum in
+// rtx_fork_tonemap.h; the populateTonemapOperatorArgs hook is the single
+// place that casts the C++ enum into this uint.
+static const uint32_t tonemapOperatorNone        = 0;
+static const uint32_t tonemapOperatorACES        = 1;
+static const uint32_t tonemapOperatorACESLegacy  = 2;
+static const uint32_t tonemapOperatorHableFilmic = 3;  // Commit 3.
+static const uint32_t tonemapOperatorAgX         = 4;  // Commit 4.
+static const uint32_t tonemapOperatorLottes      = 5;  // Commit 5 (shares Hable's param slots).
+
 // Constant buffers
 
 struct ToneMappingAutoExposureArgs {
@@ -116,13 +126,55 @@ struct ToneMappingApplyToneMappingArgs {
   float saturation;
   float toneCurveMinStops;
   float toneCurveMaxStops;
-  uint finalizeWithACES;
+  uint tonemapOperator;       // One of tonemapOperator* constants. Populated by fork_hooks::populateTonemapOperatorArgs.
 
   uint ditherMode;
   uint frameIndex;
-  uint useLegacyACES;
-  uint pad1;
+  uint directOperatorMode;    // 1 = operator-only (skip dynamic curve). Wired to TonemappingMode::Direct in Commit 3.
+  uint pad1;                  // Unused; kept for 16-byte alignment of the Hable block below.
+
+  // Hable Filmic parameters (op == tonemapOperatorHableFilmic) and Lottes
+  // 2016 parameters (op == tonemapOperatorLottes) share these slots — the
+  // two operators are mutually exclusive, so overlaying preserves the
+  // struct size. Populate hooks branch on the selected operator to write
+  // the correct parameter set.
+  //
+  // Lottes parameter mapping (op == tonemapOperatorLottes):
+  //   hableExposureBias     -> lottesHdrMax
+  //   hableShoulderStrength -> lottesContrast
+  //   hableLinearStrength   -> lottesShoulder
+  //   hableLinearAngle      -> lottesMidIn
+  //   hableToeStrength      -> lottesMidOut
+  //   (hableToeNumerator / hableToeDenominator / hableWhitePoint unused)
+  float hableExposureBias;
+  float hableShoulderStrength;   // A
+  float hableLinearStrength;     // B
+  float hableLinearAngle;        // C
+
+  float hableToeStrength;        // D
+  float hableToeNumerator;       // E
+  float hableToeDenominator;     // F
+  float hableWhitePoint;         // W
+
+  // AgX parameters (op == tonemapOperatorAgX). Appended after Hable; AgX is
+  // a distinct operator so no slot sharing.
+  float agxGamma;
+  float agxSaturation;
+  float agxExposureOffset;
+  uint  agxLook;
+
+  float agxContrast;
+  float agxSlope;
+  float agxPower;
+  float agxPad;                  // Reserved for 16-byte alignment.
 };
+
+#ifdef __cplusplus
+// Workstream 2 commit 4 appends 32 bytes of AgX params onto commit 3's
+// Hable block. Commit 5 overlays Lottes on Hable's slots (no growth).
+static_assert(sizeof(ToneMappingApplyToneMappingArgs) == 144,
+              "ToneMappingApplyToneMappingArgs size: commit 4 added 32 bytes for AgX params.");
+#endif
 
 
 #endif  // TONEMAPPING_H

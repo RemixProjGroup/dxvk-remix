@@ -63,7 +63,7 @@ struct LuminanceArgs
   float highlights;
   uint debugView;
 
-  uint useLegacyACES;
+  uint tonemapOperator;       // One of tonemapOperator* constants from tonemapping.h. Luminance pass only uses the enum to distinguish ACES from ACES Legacy for its weighting calculation.
   uint pad1;
   uint pad2;
   uint enableAutoExposure;
@@ -98,16 +98,44 @@ struct FinalCombineArgs
   float exposure;
   uint debugView;
 
-  uint finalizeWithACES;
+  uint tonemapOperator;       // One of tonemapOperator* constants from tonemapping.h. Populated by fork_hooks::populateLocalTonemapOperatorArgs.
   uint performSRGBConversion;
   uint enableAutoExposure;
   uint pad0;
 
   uint ditherMode;
   uint frameIndex;
-  uint useLegacyACES;
+  uint directOperatorMode;    // 1 = operator-only (skip the local-pyramid weighting). Wired to TonemappingMode::Direct in Commit 3.
   uint pad2;
+
+  // Hable Filmic parameters (op == tonemapOperatorHableFilmic). Commit 5
+  // overlays Lottes 2016 params on these same slots.
+  float hableExposureBias;
+  float hableShoulderStrength;   // A
+  float hableLinearStrength;     // B
+  float hableLinearAngle;        // C
+
+  float hableToeStrength;        // D
+  float hableToeNumerator;       // E
+  float hableToeDenominator;     // F
+  float hableWhitePoint;         // W
+
+  // AgX parameters (op == tonemapOperatorAgX).
+  float agxGamma;
+  float agxSaturation;
+  float agxExposureOffset;
+  uint  agxLook;
+
+  float agxContrast;
+  float agxSlope;
+  float agxPower;
+  float agxPad;
 };
+
+#ifdef __cplusplus
+static_assert(sizeof(LuminanceArgs)    == 32,  "LuminanceArgs size preserved by the operator-enum refactor.");
+static_assert(sizeof(FinalCombineArgs) == 128, "FinalCombineArgs size: commit 4 added 32 bytes for AgX params.");
+#endif
 
 
 #endif  // LOCAL_TONEMAPPING_H

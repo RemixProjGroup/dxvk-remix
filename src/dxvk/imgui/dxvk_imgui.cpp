@@ -3920,21 +3920,20 @@ namespace dxvk {
         RemixGui::SliderInt("User Brightness", &RtxOptions::userBrightnessObject(), 0, 100, "%d");
         RemixGui::DragFloat("User Brightness EV Range", &RtxOptions::userBrightnessEVRangeObject(), 0.5f, 0.f, 10.f, "%.1f");
         RemixGui::Separator();
-        RemixGui::Combo("Tonemapping Mode", &RtxOptions::tonemappingModeObject(), "Global\0Local\0");
-        if (RtxOptions::tonemappingMode() == TonemappingMode::Global) {
-          common->metaToneMapping().showImguiSettings();
-        } else {
+        RemixGui::Combo("Tonemapping Mode", &RtxOptions::tonemappingModeObject(), "Global\0Local\0Direct\0");
+        if (RtxOptions::tonemappingMode() == TonemappingMode::Local) {
           common->metaLocalToneMapping().showImguiSettings();
+        } else {
+          // Global and Direct both use the global tonemapper's UI panel.
+          // Direct skips the dynamic tone curve at dispatch time via
+          // fork_hooks::shouldSkipToneCurve() but is otherwise configured
+          // through the same sliders as Global.
+          common->metaToneMapping().showImguiSettings();
         }
-        if (RtxOptions::showLegacyACESOption()) {
-          RemixGui::Separator();
-          RemixGui::Checkbox("Use Legacy ACES", &RtxOptions::useLegacyACESObject());
-          if (!RtxOptions::useLegacyACES()) {
-            ImGui::Indent();
-            ImGui::TextWrapped("WARNING: Non-legacy ACES is currently experimental and the implementation is a subject to change.");
-            ImGui::Unindent();
-          }
-        }
+        // The standalone "Use Legacy ACES" checkbox (and its showLegacyACESOption
+        // gating RtxOption) was removed in Workstream 2 commit 2 — Legacy ACES is
+        // now selectable per-path via the Tonemapping Operator combo rendered
+        // inside the global/local tonemapper panels above.
       }
 
       if (RemixGui::CollapsingHeader("Post FX", collapsingHeaderClosedFlags))

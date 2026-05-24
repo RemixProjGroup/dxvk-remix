@@ -74,7 +74,10 @@ namespace dxvk {
     RTX_OPTION("rtx.localtonemap", int, displayMip, 0, "Bottom mip level of tone map pyramid.");
     RTX_OPTION("rtx.localtonemap", bool, boostLocalContrast, false, "Boosts contrast on local features.");
     RTX_OPTION("rtx.localtonemap", bool, useGaussian, true, "Uses gaussian kernel to generate tone map pyramid.");
-    RTX_OPTION("rtx.localtonemap", bool, finalizeWithACES, true, "Applies ACES tone mapping on final result.");
+    // `finalizeWithACES` RtxOption removed under the TonemapOperator enum refactor
+    // (Workstream 2 commit 2). Replacement: rtx.localtonemap.tonemapOperator in
+    // RtxForkLocalTonemap (rtx_fork_tonemap.h). Default is ACESLegacy there to
+    // preserve the pre-refactor finalizeWithACES=true, useLegacyACES=true behavior.
     RTX_OPTION("rtx.localtonemap", float, exposure, 0.75, "Exposure factor applied on average exposure.");
     RTX_OPTION("rtx.localtonemap", float, shadows, 2.0, "Shadow area strength. Higher values cause brighter shadows.");
     RTX_OPTION("rtx.localtonemap", float, highlights, 4.0, "Highlight area strength. Higher values cause darker highlight.");

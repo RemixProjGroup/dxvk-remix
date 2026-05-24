@@ -232,6 +232,7 @@ dxvk_src = files([
   'rtx_render/rtx_fork_light.cpp',
   'rtx_render/rtx_fork_overlay.cpp',
   'rtx_render/rtx_fork_submit.cpp',
+  'rtx_render/rtx_fork_tonemap.cpp',
   'rtx_render/rtx_game_capturer.cpp',
   'rtx_render/rtx_game_capturer.h',
   'rtx_render/rtx_game_capturer_utils.h',
