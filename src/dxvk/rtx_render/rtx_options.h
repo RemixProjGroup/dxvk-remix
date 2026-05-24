@@ -1539,6 +1539,29 @@ namespace dxvk {
                "values darken cloud-on-terrain shadows, lower values lighten "
                "them. Only consumed when cloudVoxelShadowsEnable is on.");
 
+    // Post-denoise shadow-strength knob applied at composite time. The
+    // per-pixel cloud shadow factor written by integrate_direct is in [0, 1],
+    // where 1.0 means "no occlusion" and 0.0 means "fully shadowed". Composite
+    // applies `pow(factor, cloudShadowFactorStrength)` before multiplying it
+    // into the denoised direct radiance. Exponent rather than linear so the
+    // factor=1 (no-cloud) invariant is preserved at any strength value:
+    //   1.0 = unchanged (matches the raw factor from the wire-in)
+    //   > 1 = darker shadows (factor^2 at strength=2 → cumulus pixels at
+    //         factor=0.5 read as 0.25, a 2x deepening)
+    //   < 1 = fainter shadows (factor^0.5 at strength=0.5)
+    // Independent of cloudShadowMarchStrength (which acts pre-denoise inside
+    // the exp(-OD * density * march) call); this is a perception-side knob.
+    RTX_OPTION("rtx.atmosphere", float, cloudShadowFactorStrength, 4.0f,
+               "Post-denoise pow exponent applied to the per-pixel cloud "
+               "shadow factor in composite. 1.0 = unchanged, higher values "
+               "deepen cumulus-on-terrain shadows, lower values fade them. "
+               "Default 4.0 chosen against the FNV reference scene on "
+               "2026-05-19 after the ratio->newShadow simplification — the "
+               "raw newShadow alone reads too faint, strength=4 lands the "
+               "cumulus-shadow contrast in the visible-but-not-aggressive "
+               "range. Lets the shadow strength be tuned independently of "
+               "the bake magnitude (cloudShadowMarchStrength) without re-baking.");
+
     // Cloud Height LUT (slide 3 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
     // 64x128 R8 lookup table indexed by (cloud type slice, height fraction).
     // Replaces the 3-keypoint procedural trapezoid in cloudTypeProfile() with a

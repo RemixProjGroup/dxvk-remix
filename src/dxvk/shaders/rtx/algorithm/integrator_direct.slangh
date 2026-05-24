@@ -61,11 +61,20 @@ bool evalAtmosphereSunNEE(
     opaqueSurfaceMaterialInteraction.shadingNormal,
     atmosphereArgs,
     isZUp);
-  
+
+  // Stash the per-pixel cumulus shadow ratio for the post-denoise composite
+  // pass (fork — 2026-05-18). sampleAtmosphereSunLight intentionally does NOT
+  // multiply this into sunSample.radiance — the radiance carries only the
+  // smooth legacy uniform shadow so the denoiser sees a clean signal, and the
+  // high-frequency cumulus pattern rides this separate screen-space texture
+  // around the denoiser to land on the post-denoise primary direct radiance.
+  // Defaults to 1.0 when the wire-in is disabled / sun is below horizon.
+  PrimaryCloudShadowFactor[pixelCoordinate] = sunSample.cloudShadowFactor;
+
   if (!sunSample.valid) {
     return false;
   }
-  
+
   // Check NdotL for surface
   float NdotL = dot(opaqueSurfaceMaterialInteraction.shadingNormal, sunSample.direction);
   if (NdotL <= 0.0f) {

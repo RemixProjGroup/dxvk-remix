@@ -264,6 +264,14 @@ namespace dxvk
       Resource m_primaryPositionError;
       AliasedResource m_primaryRtxdiIlluminance[2];
       AliasedResource m_primaryRtxdiTemporalPosition;
+      // Per-pixel cumulus shadow factor (fork — 2026-05-18). Written by
+      // integrate_direct's surface sun NEE (ratio newShadow / oldShadow against
+      // the legacy uniform shadow that is already baked into the radiance via
+      // getTransmittanceToSun), consumed by composite to modulate the
+      // post-denoise primary direct radiance. Carries the high-frequency
+      // cumulus pattern around the denoiser so NRD/DLSS-RR cannot smooth the
+      // per-cloud variation away. 1.0 = no modulation.
+      Resource m_primaryCloudShadowFactor;
       Resource m_primarySurfaceFlags;
       Resource m_primaryDisocclusionThresholdMix;
       AliasedResource m_primaryDisocclusionMaskForRR;

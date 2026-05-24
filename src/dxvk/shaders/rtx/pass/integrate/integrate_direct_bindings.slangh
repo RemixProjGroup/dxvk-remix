@@ -141,6 +141,9 @@ RWTexture2D<float4> SecondaryCombinedSpecularLobeRadianceHitDistance;
 [[vk::binding(INTEGRATE_DIRECT_BINDING_INDIRECT_THROUGHPUT_CONE_RADIUS_OUTPUT)]]
 RWTexture2D<float4> IndirectThroughputConeRadius;
 
+[[vk::binding(INTEGRATE_DIRECT_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_OUTPUT)]]
+RWTexture2D<float> PrimaryCloudShadowFactor;
+
 // Aliased Inputs / Outputs
 
 [[vk::binding(INTEGRATE_DIRECT_BINDING_ALIASED_DATA_0)]]

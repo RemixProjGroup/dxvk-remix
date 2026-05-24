@@ -50,6 +50,7 @@
 
 #define COMPOSITE_BSDF_FACTOR_INPUT                                 17
 #define COMPOSITE_BSDF_FACTOR2_INPUT                                18
+#define COMPOSITE_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT                 19
 
 #define COMPOSITE_VOLUME_FILTERED_RADIANCE_AGE_INPUT                20
 #define COMPOSITE_VOLUME_FILTERED_RADIANCE_Y_INPUT                  21

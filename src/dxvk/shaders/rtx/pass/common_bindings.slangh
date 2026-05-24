@@ -185,3 +185,11 @@ Texture3D<float> AtmosphereCloudDSun;
 
 layout(binding = BINDING_ATMOSPHERE_CLOUD_D_AMBIENT)
 Texture3D<float> AtmosphereCloudDAmbient;
+
+// Linear sampler bound alongside the sky-view LUT (REPEAT-U / CLAMP-V).
+// Consumed by the sky-miss path in evalSkyRadiance to replace the live
+// atmosphere march with a bilinear tap of AtmosphereSkyViewLut. See
+// atmosphere_bindings.slangh for the same declaration used by compute
+// passes that include only the atmosphere binding header.
+layout(binding = BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER)
+SamplerState AtmosphereSkyViewSampler;

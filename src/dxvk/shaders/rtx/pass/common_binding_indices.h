@@ -105,6 +105,17 @@
 #define BINDING_ATMOSPHERE_CLOUD_D_SUN 210
 #define BINDING_ATMOSPHERE_CLOUD_D_AMBIENT 211
 
+// Sky-view LUT sampler (fork). Linear, REPEAT in azimuth (U) and CLAMP in
+// elevation (V) so the wraparound at uv.x=0/1 is seamless and the poles
+// don't smear horizon values across zenith/nadir. Consumed by the sky-miss
+// path in evalSkyRadiance to replace the ~50-step live atmosphere march
+// with one bilinear LUT tap; the LUT bake already integrates the exact
+// same math evalAtmosphereRadiance does (cameraPos = origin, 32 samples,
+// same multiscattering), so the swap is a pure cache hit with no behavioral
+// change. Cloud-render uses its own pass-local sampler (binding 122) for
+// the same texture.
+#define BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER 214
+
 #define COMMON_MAX_BINDING                       BINDING_SAMPLER_READBACK_BUFFER
 #define COMMON_NUM_BINDINGS                      (COMMON_MAX_BINDING + 1)
 
@@ -161,6 +172,7 @@
   TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_SKY_TRANSMITTANCE_LUT)          \
   TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_RENDER_RT)                     \
   TEXTURE3D(BINDING_ATMOSPHERE_CLOUD_D_SUN)                         \
-  TEXTURE3D(BINDING_ATMOSPHERE_CLOUD_D_AMBIENT)
+  TEXTURE3D(BINDING_ATMOSPHERE_CLOUD_D_AMBIENT)                     \
+  SAMPLER(BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER)
 
 #endif

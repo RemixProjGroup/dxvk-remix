@@ -73,6 +73,9 @@ Texture2D<float2> BSDFFactor;
 layout(binding = COMPOSITE_BSDF_FACTOR2_INPUT)
 Texture2D<float2> BSDFFactor2;
 
+layout(binding = COMPOSITE_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT)
+Texture2D<float> PrimaryCloudShadowFactor;
+
 layout(binding = COMPOSITE_VOLUME_FILTERED_RADIANCE_AGE_INPUT)
 Sampler3D<float> VolumeFilteredRadianceAge;
 layout(binding = COMPOSITE_VOLUME_FILTERED_RADIANCE_Y_INPUT)

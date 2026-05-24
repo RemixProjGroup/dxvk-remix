@@ -33,6 +33,12 @@ Texture2D AtmosphereMultiscatteringLut;
 layout(binding = BINDING_ATMOSPHERE_SKY_VIEW_LUT)
 Texture2D AtmosphereSkyViewLut;
 
+// Linear sampler matched to the sky-view LUT parameterization:
+// REPEAT-U for azimuth wrap at 0/2π, CLAMP-V for elevation so the bilinear
+// at the pole rows doesn't mix horizon values across zenith/nadir.
+layout(binding = BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER)
+SamplerState AtmosphereSkyViewSampler;
+
 layout(binding = BINDING_ATMOSPHERE_CLOUD_NOISE_3D)
 Texture3D<float> AtmosphereCloudNoise3D;
 

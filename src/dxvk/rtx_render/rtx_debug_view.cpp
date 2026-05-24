@@ -179,6 +179,32 @@ namespace dxvk {
                                 "gradient, less-flat shadow side, stronger silver lining at backlit\n"
                                 "edges. Tune via the Atmosphere -> Clouds -> Nubis Cubed Lighting\n"
                                 "ImGui block (six magic-constant sliders)."},
+        {DEBUG_VIEW_CLOUD_GROUND_SHADOW_RAW_OD, "Atmosphere: Cloud Ground Shadow RAW OD (Sibling of 875)",
+                                "Fork diagnostic (2026-05-17). Sibling of enum 875: same per-pixel\n"
+                                "call shape but the math stops at the dSunTex.SampleLevel call - NO\n"
+                                "exp(), NO mix(cloudShadowStrength). Exists because 875 paints solid\n"
+                                "white in-game and we need the pre-exp/mix truth.\n"
+                                "Channels:\n"
+                                "  R = saturate(OD * 0.2)   matches 873's vis scale; direct A/B vs bake\n"
+                                "  G = saturate(OD)         raw magnitude; distinguishes amplified-tiny\n"
+                                "                           from actually-visible-sized\n"
+                                "  B = uvw.x at the consumer's lookup position\n"
+                                "Sentinels:\n"
+                                "  magenta = surface above slab; blue = sun below horizon / unreachable\n"
+                                "Discrimination (stand on flat terrain at midday):\n"
+                                "  R uniform AND B uniform   -> SCENE-SCALE bug (every pixel reads same\n"
+                                "                                UVW; fix cloudVoxelGridExtentKm or the\n"
+                                "                                worldPosKm -> UVW conversion)\n"
+                                "  R patterned, matches 873  -> consumer works; exp+mix is killing it\n"
+                                "  R patterned but unrelated -> world-anchoring / slab-bottom bug\n"
+                                "  R dark, G even darker     -> magnitude underflow (bake OD tiny)"},
+        {DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW, "Atmosphere: Cloud Shadow Factor (Post-Denoise Diagnostic)",
+                                "Fork diagnostic. After the 2026-05-19 ratio->newShadow simplification,\n"
+                                "the texture holds raw newShadow in [0, 1] from sampleCloudGroundShadow_OptionB\n"
+                                "(integrate_direct line 72). This view is now a direct grayscale equivalent\n"
+                                "of enum 875 -- they should show the SAME pattern at the SAME brightness.\n"
+                                "If they diverge, suspect a path regression (sampler / binding mismatch\n"
+                                "between the production raygen pass and the debug-view pass)."},
         {DEBUG_VIEW_CASCADE_LEVEL, "Terrain: Cascade Level"},
 
         {DEBUG_VIEW_VIRTUAL_HIT_DISTANCE, "Virtual Hit Distance"},
@@ -614,6 +640,7 @@ namespace dxvk {
         TEXTURE3D(DEBUG_VIEW_BINDING_CLOUD_D_SUN_INPUT)
         TEXTURE3D(DEBUG_VIEW_BINDING_CLOUD_D_AMBIENT_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT)
+        TEXTURE2D(DEBUG_VIEW_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT)
 
         RW_TEXTURE2D(DEBUG_VIEW_BINDING_ACCUMULATED_DEBUG_VIEW_INPUT_OUTPUT)
 
@@ -1428,6 +1455,15 @@ namespace dxvk {
           nullptr);
       }
     }
+
+    // Fork: post-denoise cumulus shadow factor texture (2026-05-18). Always
+    // allocated alongside the other raytracing-output resources, so the view
+    // is unconditionally bindable here. Sampled by DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW
+    // (enum 878) to verify the saturate-clamp hypothesis in composite.
+    ctx->bindResourceView(
+      DEBUG_VIEW_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT,
+      rtOutput.m_primaryCloudShadowFactor.view,
+      nullptr);
 
     ctx->bindResourceView(DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT, globalVolumetrics.getPreviousVolumeReservoirs().view, nullptr);
     ctx->bindResourceView(DEBUG_VIEW_BINDING_VOLUME_AGE_INPUT, globalVolumetrics.getCurrentVolumeAccumulatedRadianceAge().view, nullptr);

@@ -105,6 +105,15 @@ Texture3D<float> DebugViewCloudDAmbient;
 // DEBUG_VIEW_CLOUD_RENDER_RT (enum 876).
 [[vk::binding(DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT)]]
 Texture2D<float4> DebugViewCloudRenderRT;
+
+// Fork: post-denoise cumulus shadow factor (R16F screen-extent, 2026-05-18).
+// Visualized by DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW (enum 878). Texture is
+// written by integrate_direct's evalAtmosphereSunNEE as newShadow / oldShadow
+// and read by composite through saturate() + pow() — this debug view inspects
+// the value before those operations collapse the > 1 ratio amplification.
+[[vk::binding(DEBUG_VIEW_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT)]]
+Texture2D<float> DebugViewPrimaryCloudShadowFactor;
+
 [[vk::binding(DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT)]]
 Texture3D<uint4> VolumeReservoirs;
 
@@ -449,14 +458,28 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
       const MinimalSurfaceInteraction si = minimalSurfaceInteractionCreate(memory);
       const vec3 worldPos = si.position;
 
-      // Sun direction sourced from the atmosphere CB — same as production.
-      const vec3 sunDir = normalize(cb.atmosphereArgs.sunDirection);
+      // Sun direction. CRITICAL FRAME NOTE: cb.atmosphereArgs.sunDirection
+      // is stored in CANONICAL Y-UP space (rtx_atmosphere.cpp:321-323:
+      // sunDirection.y = sin(elevation)). Production NEE at
+      // sampleAtmosphereSunLight pre-swaps Y-up → Z-up caller frame
+      // (atmosphere_common.slangh:941) BEFORE calling the helper, which
+      // re-swaps back to Y-up via its isZUp flag. Pre-swap to match;
+      // skipping this was the cause of this case painting solid-white
+      // in-game (helper bailed at slab-bottom intersect because a Y-up
+      // vector was being treated as Z-up and double-swapped).
+      const bool isZUpFlag = (cb.isZUp != 0u);
+      const vec3 sunDirCallerFrame = isZUpFlag
+          ? vec3(cb.atmosphereArgs.sunDirection.x,
+                 cb.atmosphereArgs.sunDirection.z,
+                 cb.atmosphereArgs.sunDirection.y)
+          : cb.atmosphereArgs.sunDirection;
+      const vec3 sunDir = normalize(sunDirCallerFrame);
 
       // CRITICAL: match production NEE call shape exactly.
       //   (worldPos, sunDir, atmosphereArgs, isZUp != 0u)
       // Any divergence here defeats the purpose of the diagnostic.
       const float shadow = sampleCloudGroundShadow_OptionB_explicit(
-          worldPos, sunDir, cb.atmosphereArgs, cb.isZUp != 0u,
+          worldPos, sunDir, cb.atmosphereArgs, isZUpFlag,
           DebugViewCloudDSun, LinearSampler);
 
       value = vec4(shadow, shadow, shadow, 1.0f);
@@ -479,6 +502,112 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
       // sky-miss composite (which still uses analytical clouds in C4).
       vec4 cloudSample = DebugViewCloudRenderRT.Load(int3(threadId, 0));
       value = vec4(cloudSample.rgb, 1.0f);
+    }
+    break;
+  case DEBUG_VIEW_CLOUD_GROUND_SHADOW_RAW_OD:
+    {
+      // Fork diagnostic (2026-05-17). Sibling of enum 875 — same per-pixel
+      // call shape (G-buffer worldPos + atmosphereArgs.sunDirection + cb.isZUp)
+      // but the math stops at the dSunTex.SampleLevel call. NO exp(), NO mix.
+      // Exists because 875 paints solid white in-game, and the post-exp/mix
+      // collapse hides which of {OD~=0, cloudShadowStrength=0, sun below horizon,
+      // surface above slab} is responsible. RGB encodes three independent
+      // signals so one screenshot answers the question.
+      //
+      // Discrimination key (compare on flat terrain at midday):
+      //   R uniform + B uniform        → scene-scale: every pixel reads same UVW
+      //                                  (fix cloudVoxelGridExtentKm or
+      //                                  worldPosKm → UVW conversion)
+      //   R patterned, matches 873     → consumer works; exp/mix is killing it
+      //                                  (raise cloudShadowMarchStrength or
+      //                                  the bake's OD scale)
+      //   R patterned but unrelated    → world-anchoring / slab-bottom bug
+      //                                  (probe intersectCloudSlabBottomFromBelow
+      //                                  and cloudVoxelWorldToUVW)
+      //   R dark, G even darker        → magnitude underflow: bake OD tiny
+      //
+      // Math is duplicated (not refactored from sampleCloudGroundShadow_OptionB_impl)
+      // so the diagnostic carries zero risk to the production helper it inspects.
+
+      // G-buffer worldPos at this pixel — same source the production NEE
+      // entry points use (minimalSurfaceInteraction.position).
+      GBufferMemoryMinimalSurfaceInteraction memory;
+      memory.encodedWorldPositionWorldTriangleTBN =
+          PreviousWorldPosition_WorldTriangleNormal[threadId];
+      memory.positionError = 0;
+      const MinimalSurfaceInteraction si = minimalSurfaceInteractionCreate(memory);
+      const vec3 worldPos = si.position;
+
+      // Sun direction sourced from the atmosphere CB. CRITICAL FRAME NOTE:
+      // args.sunDirection is stored in CANONICAL Y-UP space
+      // (rtx_atmosphere.cpp:321-323: sunDirection.y = sin(elevation)). The
+      // production NEE call at sampleAtmosphereSunLight pre-swaps Y-up →
+      // Z-up caller frame (line 941) BEFORE passing it to the helper, which
+      // then re-swaps back to Y-up via its isZUp flag. We skip that
+      // round-trip here: sunDir is consumed in Y-up directly, so the
+      // isZUp swap below applies to worldPos ONLY. Mishandling this was
+      // the cause of enum 875 painting solid-white in-game (helper bailed
+      // at the slab-bottom intersection because a Y-up vector was being
+      // re-interpreted as Z-up and double-swapped).
+      const bool isZUpFlag = (cb.isZUp != 0u);
+      const vec3 sunDirYUp = normalize(cb.atmosphereArgs.sunDirection);
+
+      // Replicates sampleCloudGroundShadow_OptionB_impl up through the
+      // dSunTex.SampleLevel call. worldPos comes from the G-buffer in
+      // caller's frame; swap to Y-up only if engine is Z-up.
+      const vec3 worldPosYUp = isZUpFlag
+          ? vec3(worldPos.x, worldPos.z, worldPos.y)
+          : worldPos;
+      const float kmPerWorldUnit = 1.0f / max(cb.atmosphereArgs.worldUnitsPerKm, 1e-6f);
+      const vec3 worldPosKm = worldPosYUp * kmPerWorldUnit;
+      const float slabTopY = cb.atmosphereArgs.cloudAltitude
+                            + cb.atmosphereArgs.cloudVoxelGridVerticalKm;
+
+      vec3 outColor;
+      if (worldPosKm.y > slabTopY) {
+        // Surface above slab — paint magenta so this branch is visually
+        // distinct from "lookup ran but returned ~zero."
+        outColor = vec3(1.0f, 0.0f, 1.0f);
+      } else {
+        float tToEntry;
+        const bool reached = intersectCloudSlabBottomFromBelow(
+            worldPosKm, sunDirYUp, cb.atmosphereArgs, tToEntry);
+        if (!reached) {
+          // Sun below horizon or otherwise unreachable — paint blue.
+          outColor = vec3(0.0f, 0.0f, 1.0f);
+        } else {
+          const vec3 cloudEntryPosKm = worldPosKm + tToEntry * sunDirYUp;
+          const vec3 uvw = cloudVoxelWorldToUVW(cloudEntryPosKm,
+                                                 cb.atmosphereArgs,
+                                                 /*isZUp=*/false);
+          const float opticalDepth = DebugViewCloudDSun.SampleLevel(LinearSampler, uvw, 0).r;
+          outColor.r = saturate(opticalDepth * 0.2f);
+          outColor.g = saturate(opticalDepth);
+          outColor.b = uvw.x;
+        }
+      }
+      value = vec4(outColor, 1.0f);
+    }
+    break;
+  case DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW:
+    {
+      // Fork diagnostic (2026-05-18). Visualizes the raw post-denoise cumulus
+      // shadow factor texture written by integrate_direct's evalAtmosphereSunNEE
+      // as newShadow / safeOldShadow. Composite reads this through saturate()
+      // + pow() — this view inspects the value before that collapse. The
+      // central hypothesis being tested is that saturate() clamps clear-pixel
+      // factors (~7.4 at FNV defaults) down to 1.0, erasing the distinction
+      // between clear pixels and light-cumulus pixels and leaving only heavy-
+      // cumulus pixels visible.
+      const float factor = DebugViewPrimaryCloudShadowFactor.Load(int3(threadId, 0)).r;
+      // Iteration #4 (2026-05-19, post-fix): pure grayscale, NO scaling.
+      // After the getTransmittanceToSun split, integrate_direct writes the
+      // raw newShadow ∈ [0, 1] into this texture (not the ratio). This view
+      // is now a direct grayscale equivalent of enum 875 — they should show
+      // the SAME pattern at the SAME brightness; mismatch indicates a path
+      // divergence regression.
+      const float displayValue = saturate(factor);
+      value = vec4(displayValue, displayValue, displayValue, 1.0f);
     }
     break;
   case DEBUG_VIEW_NRC_UPDATE_RADIANCE:

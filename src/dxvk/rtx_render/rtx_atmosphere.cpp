@@ -288,6 +288,25 @@ namespace {
     m.darkSideBrightness = darkSide;
     m.roughnessAmount    = roughness;
   }
+
+  // Zero the AtmosphereArgs fields that animate every frame but feed only
+  // cloud / runtime-miss shaders — never the transmittance / multiscattering
+  // / sky-view LUT bakes. Used to derive a sky-LUT cache key so those LUTs
+  // only rebuild when their actual inputs change. Without this, timeSeconds
+  // + cloudWindOffset + the per-frame frame indices and camera basis cause
+  // the memcmp gate to fire every frame.
+  void normalizeForSkyLutCache(AtmosphereArgs& args) {
+    args.timeSeconds                 = 0.0f;
+    args.cloudWindOffset             = vec2(0.0f, 0.0f);
+    args.cloudRenderFrameIdx         = 0u;
+    args.cloudRenderForwardYUp       = vec3(0.0f, 0.0f, 0.0f);
+    args.cloudRenderRightYUp         = vec3(0.0f, 0.0f, 0.0f);
+    args.cloudRenderUpYUp            = vec3(0.0f, 0.0f, 0.0f);
+    args.cameraWorldPosYUpKm         = vec3(0.0f, 0.0f, 0.0f);
+    args.cloudVoxelGridSunDirty      = 0u;
+    args.cloudVoxelGridAmbientDirty  = 0u;
+    args.cloudVoxelGridFrameOffset   = 0.0f;
+  }
 } // anonymous namespace
 
 AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
@@ -560,10 +579,14 @@ bool RtxAtmosphere::needsLutRecompute() const {
     return true;
   }
 
-  // Check if any parameters have changed
+  // Compare a normalized snapshot against the normalized cached snapshot.
+  // normalizeForSkyLutCache zeroes per-frame-animated fields (timeSeconds,
+  // cloudWindOffset, cloud render frame index + camera basis, camera world
+  // pos, voxel-grid dirty flags) that feed only cloud / runtime-miss
+  // shaders — they don't gate sky-LUT validity. Without normalization the
+  // memcmp fires every frame even when no real sky parameter changed.
   AtmosphereArgs currentArgs = getAtmosphereArgs();
-  
-  // Compare with cached args (simple memcmp would work for POD types)
+  normalizeForSkyLutCache(currentArgs);
   return memcmp(&currentArgs, &m_cachedArgs, sizeof(AtmosphereArgs)) != 0;
 }
 
@@ -720,78 +743,85 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
 }
 
 void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
-  if (!needsLutRecompute()) {
+  if (!m_initialized) {
     return;
   }
 
-  // Update cached args
-  m_cachedArgs = getAtmosphereArgs();
+  // Sky LUTs (transmittance / multiscattering / sky-view) only rebake when
+  // their inputs actually change. Animated fields that feed only cloud and
+  // runtime-miss shaders are excluded from the cache key by
+  // normalizeForSkyLutCache, so this gate stays false on frames where only
+  // wind / time / camera / frame-index advanced — saving the ~0.5 ms of
+  // dispatches + barriers per frame that the old memcmp burned.
+  if (needsLutRecompute()) {
+    dispatchTransmittanceLut(ctx);
 
-  // Dispatch compute shaders to generate LUTs
-  // Note: Barriers are needed between dispatches since each LUT depends on previous ones
-  dispatchTransmittanceLut(ctx);
-  
-  // Barrier: Ensure transmittance LUT is written before reading in subsequent passes
-  ctx->emitMemoryBarrier(0,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_WRITE_BIT,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_READ_BIT);
-  
-  dispatchMultiscatteringLut(ctx);
-  
-  // Barrier: Ensure multiscattering LUT is written before reading in sky view pass
-  ctx->emitMemoryBarrier(0,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_WRITE_BIT,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_READ_BIT);
-  
-  dispatchSkyViewLut(ctx);
+    // Barrier: Ensure transmittance LUT is written before reading in subsequent passes
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
 
-  // Barrier: ensure sky-view bake is complete before the cloud-sky-transmittance
-  // bake runs (independent dispatches but we want clean ordering for profilers).
-  ctx->emitMemoryBarrier(0,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_WRITE_BIT,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_READ_BIT);
+    dispatchMultiscatteringLut(ctx);
+
+    // Barrier: Ensure multiscattering LUT is written before reading in sky view pass
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+
+    dispatchSkyViewLut(ctx);
+
+    // Barrier: order sky-view writes ahead of the cloud-sky-transmittance
+    // bake below when the sky-view LUT actually changed this frame.
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+
+    // Cache the normalized snapshot for next frame's gate.
+    m_cachedArgs = getAtmosphereArgs();
+    normalizeForSkyLutCache(m_cachedArgs);
+    m_lutsNeedRecompute = false;
+  }
 
   dispatchCloudSkyTransmittanceLut(ctx);
 
-  // Round-robin cloud voxel grid bake (Nubis Cubed 2023, fork — 2026-05-12).
-  // Each grid is rebaked every 8 frames at offset 0 (D_sun) / 4 (D_ambient).
-  // Round-robin amortizes the bake cost across frames and ensures the two
-  // dispatches never race for compute units in the same frame.
+  // Full-rate cloud voxel grid bake (Nubis Cubed 2023, fork — 2026-05-12;
+  // full-rate flip 2026-05-19). The original implementation amortized each
+  // grid's bake across 8 frames at staggered offsets (D_sun on frame%8==0,
+  // D_ambient on frame%8==4). Once the saturate-clamp fix landed and the
+  // cumulus-on-terrain shadows became visible, the 8-frame cadence read as
+  // a ~2 Hz update stutter on the terrain shadow pattern at 16 fps gameplay.
+  // The user asked for full-frame-rate updates — "no shortcuts here" — so
+  // both grids are now dispatched every frame.
   //
-  // computeLuts() runs every frame in practice because getAtmosphereArgs()
-  // varies frame-to-frame via timeSeconds + cloudWindOffset, so the
-  // memcmp-based needsLutRecompute() returns true continuously. The
-  // (frameId % 8) gate therefore samples the actual device frame counter.
-  const uint32_t cloudFrameId =
-      static_cast<uint32_t>(m_device->getCurrentFrameId());
-  if ((cloudFrameId % 8u) == 0u) {
-    ctx->emitMemoryBarrier(0,
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-      VK_ACCESS_SHADER_WRITE_BIT,
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-      VK_ACCESS_SHADER_READ_BIT);
-    dispatchCloudSunDensityGrid(ctx);
-  }
-  if ((cloudFrameId % 8u) == 4u) {
-    ctx->emitMemoryBarrier(0,
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-      VK_ACCESS_SHADER_WRITE_BIT,
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-      VK_ACCESS_SHADER_READ_BIT);
-    dispatchCloudAmbientDensityGrid(ctx);
-  }
+  // The two bakes run sequentially in the command buffer (not in parallel),
+  // separated by the existing write→read barriers, so they don't race for
+  // compute units. Cost is ~8× the prior amortized bake; profile if it
+  // becomes a frame-time bottleneck and revisit (a smaller grid resolution
+  // or per-tile dispatch would be the first cuts to consider).
+  ctx->emitMemoryBarrier(0,
+    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+    VK_ACCESS_SHADER_WRITE_BIT,
+    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+    VK_ACCESS_SHADER_READ_BIT);
+  dispatchCloudSunDensityGrid(ctx);
+  ctx->emitMemoryBarrier(0,
+    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+    VK_ACCESS_SHADER_WRITE_BIT,
+    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+    VK_ACCESS_SHADER_READ_BIT);
+  dispatchCloudAmbientDensityGrid(ctx);
 
   // Cloud render compute pass (Nubis Cubed 2023, fork — 2026-05-12, C4).
   // Runs every frame after the voxel grid bakes so it reads up-to-date
-  // D_sun / D_ambient. The grids are baked round-robin every 8 frames; the
-  // render reads whatever's currently in them, which is at most 7 frames
-  // stale — acceptable for the cumulus-scale features the grids encode.
+  // D_sun / D_ambient. As of the full-rate flip 2026-05-19, both grids
+  // are rebaked every frame above, so the render reads zero-frame-stale
+  // data.
   //
   // NOTE: m_cloudRenderRT is allocated/resized externally via
   // ensureCloudRenderRT() before this dispatch fires. dispatchCloudRender
@@ -811,8 +841,6 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
     VK_ACCESS_SHADER_WRITE_BIT,
     VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
     VK_ACCESS_SHADER_READ_BIT);
-
-  m_lutsNeedRecompute = false;
 }
 
 void RtxAtmosphere::dispatchTransmittanceLut(Rc<DxvkContext> ctx) {

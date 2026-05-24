@@ -1111,19 +1111,16 @@ vec3 evalSkyRadiance(
   // Transform view direction to Y-up space if needed
   vec3 viewDirYUp = isZUp ? vec3(viewDir.x, viewDir.z, viewDir.y) : viewDir;
   viewDirYUp = normalize(viewDirYUp);
-  vec3 sunDir = args.sunDirection;
 
-  // Compute atmosphere directly with fixed step size
-  vec3 cameraPos = vec3(0.0f, 0.0f, 0.0f);  // Ground level in Y-up space
-
-  // Compute scattered sky radiance with multiscattering
-  vec3 radiance = evalAtmosphereRadiance(
-    cameraPos,
-    viewDirYUp,
-    sunDir,
-    args,
-    32  // numSamples hint (now using fixed physical step size)
-  );
+  // Sample the pre-baked sky-view LUT instead of marching the atmosphere live.
+  // sky_view_lut.comp.slang bakes evalAtmosphereRadiance from cameraPos =
+  // (0,0,0) with identical args and identical 32-sample step shape — and we
+  // were calling evalAtmosphereRadiance with cameraPos = (0,0,0) here too, so
+  // the LUT result equals the live march to within bilinear filter precision.
+  // The cache gate in RtxAtmosphere covers every arg that feeds the integral;
+  // sun / atmosphere / moon-coupling changes invalidate the LUT same-frame
+  // before raygen samples it.
+  vec3 radiance = sampleSkyViewLutForRay(viewDirYUp, AtmosphereSkyViewLut, AtmosphereSkyViewSampler);
 
   // Suppress residual atmosphere glow at deep night.
   // The ray marching and multiscattering approximation produce small non-zero

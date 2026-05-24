@@ -792,9 +792,23 @@ vec3 getAtmosphericTransmittanceForDir(vec3 dirYUp, AtmosphereArgs args) {
 // Compute transmittance from a point to the sun (simplified for ground-level surfaces).
 // Adds cloud-layer occlusion on top of the pure atmospheric term — used by NEE
 // surface/volume sampling so that overcast skies darken ground shading.
-vec3 getTransmittanceToSun(vec3 worldPos, AtmosphereArgs args, bool isZUp = false) {
+//
+// skipCloudShadow lets callers opt out of the analytical evalCloudGroundShadow
+// multiplier. The voxel-grid cloud-on-terrain shadow path (fork — 2026-05-12)
+// uses this so the surface / volume NEE entry points can carry a per-pixel
+// newShadow from sampleCloudGroundShadow_OptionB without double-counting the
+// analytical's uniform-per-frame dimmer. Callers that read this function with
+// the sentinel (0,0,0) worldPos (sun disk render, multiscatter analytical
+// ground reflection) must leave the flag at its default — those paths
+// LOAD-BEAR on the analytical cloud shadow staying applied and would lose
+// cloud occlusion entirely if migrated to the voxel-grid sentinel-poisoned
+// lookup.
+vec3 getTransmittanceToSun(vec3 worldPos, AtmosphereArgs args,
+                            bool isZUp = false, bool skipCloudShadow = false) {
   vec3 transmittance = getAtmosphericTransmittanceForDir(args.sunDirection, args);
-  transmittance *= evalCloudGroundShadow(normalize(args.sunDirection), args);
+  if (!skipCloudShadow) {
+    transmittance *= evalCloudGroundShadow(normalize(args.sunDirection), args);
+  }
   return transmittance;
 }
 
@@ -842,6 +856,35 @@ vec3 sampleSkyAmbientForVolume(vec3 dirYUp,
   return skyRadiance * cloudFactor;
 }
 
+// Sample the full-sphere sky-view LUT for the sky-miss radiance path. The LUT
+// is baked by sky_view_lut.comp.slang from cameraPos = (0,0,0) with the same
+// 32-sample march, same analytical-multiscattering, same moon-coupling and
+// same args as the runtime path used to compute live in evalSkyRadiance — so
+// this swap is a pure cache hit on identical inputs (the cache gate in
+// RtxAtmosphere::needsLutRecompute already covers every arg that affects the
+// integral, normalized for time / wind / camera basis which the integral does
+// not depend on).
+//
+// Differs from sampleSkyAmbientForVolume in two ways: no cloud-transmittance
+// multiplication, and no below-horizon clamp — the sky-miss path needs the
+// full sphere because the atmosphereFade ramp in evalSkyRadiance multiplies
+// the result down to zero at deep night for any direction. Both halves of the
+// LUT are populated by the bake (uv.y ∈ [0, 1] maps elevation [-π/2, +π/2]).
+//
+// dirYUp must be normalized and in Y-up space; caller does the isZUp swap.
+vec3 sampleSkyViewLutForRay(vec3 dirYUp,
+                            Texture2D<float4> skyViewLut,
+                            SamplerState lutSampler) {
+  // Direction -> (azimuth, elevation) UV. Mirrors sky_view_lut.comp.slang:52-53
+  // exactly so the bake and the lookup agree on the parameterization.
+  float elevation = asin(clamp(dirYUp.y, -1.0f, 1.0f));
+  float azimuth = atan2(dirYUp.z, dirYUp.x);
+  if (azimuth < 0.0f) azimuth += 2.0f * kPi;
+  vec2 uv = vec2(azimuth / (2.0f * kPi), elevation / kPi + 0.5f);
+
+  return skyViewLut.SampleLevel(lutSampler, uv, 0).rgb;
+}
+
 // Structure for direct sun lighting sample (NEE)
 struct AtmosphereSunSample {
   vec3 direction;       // Direction TO the sun (normalized), in world space
@@ -850,6 +893,13 @@ struct AtmosphereSunSample {
   bool valid;           // True if sun is above horizon
   float coneAngle;      // Half-angle of the sun cone for soft shadows (radians)
   int numSamples;       // Number of shadow samples to take for soft shadows
+  // Per-pixel cumulus shadow (fork — 2026-05-18, simplified 2026-05-19).
+  // Raw newShadow ∈ [0, 1] from sampleCloudGroundShadow_OptionB at this
+  // pixel. sampleAtmosphereSunLight intentionally does NOT multiply this
+  // into result.radiance — the cumulus pattern rides the separate
+  // PrimaryCloudShadowFactor texture so NRD/DLSS-RR cannot smear it away.
+  // 1.0 = no per-cumulus modulation (clear voxel grid or wire-in disabled).
+  float cloudShadowFactor;
 };
 
 // Get the sun cone angle and sample count based on Mie anisotropy
@@ -901,7 +951,12 @@ vec3 getJitteredSunDirection(vec3 sunDir, float coneAngle, float u1, float u2) {
 // Sample direct sun lighting for NEE at a surface point
 AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal, AtmosphereArgs args, bool isZUp = false) {
   AtmosphereSunSample result;
-  
+  // Default the cumulus-shadow factor to 1.0 (no per-pixel modulation). Only
+  // the voxel-grid wire-in below overwrites it. Caller is responsible for
+  // writing the factor into PrimaryCloudShadowFactor for the post-denoise
+  // composite to consume.
+  result.cloudShadowFactor = 1.0f;
+
   // Get sun direction in world space
   // args.sunDirection is in Y-up space, convert if needed
   if (isZUp) {
@@ -923,8 +978,15 @@ AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal
     return result;
   }
   
-  // Compute transmittance from surface to sun
-  vec3 transmittance = getTransmittanceToSun(surfacePos, args, isZUp);
+  // Compute transmittance from surface to sun. When the voxel-grid cloud
+  // shadow is enabled, skip the analytical cloud shadow inside the helper
+  // and carry the per-pixel newShadow separately via cloudShadowFactor
+  // (written into PrimaryCloudShadowFactor below). This avoids the prior
+  // ratio-correction pattern where composite had to UN-DO an analytical
+  // bake — saturate(factor) clamped the > 1 un-do values at clear pixels
+  // and erased the per-cumulus contrast.
+  vec3 transmittance = getTransmittanceToSun(surfacePos, args, isZUp,
+      /*skipCloudShadow=*/(args.cloudVoxelShadowsEnable != 0u));
   
   // Apply Mie anisotropy to simulate atmospheric scattering effects
   // High anisotropy = sharp, concentrated sun (forward scattering dominant)
@@ -955,31 +1017,42 @@ AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal
   result.valid = any(transmittance > vec3(0.0f));
 
 #ifdef ATMOSPHERE_AVAILABLE
-  // Voxel-grid cloud-on-terrain shadow wire-in (fork — 2026-05-12, C6).
-  // Replaces the multiplicative shadow contribution baked into
-  // result.radiance by getTransmittanceToSun -> evalCloudGroundShadow with
-  // the position-aware 3D D_sun grid lookup. Ratio correction (not a path
-  // rewrite) is intentional: getTransmittanceToSun is also called with the
-  // sentinel position vec3(0,0,0) from computeGroundReflectionAnalytical,
-  // and feeding that sentinel into the voxel-grid lookup would poison the
-  // multiscattering analytical path globally. By correcting at the NEE
-  // entry point only, the surface direct-lighting path sees the voxel-grid
-  // shadow while the analytical multiscatter continues to consume the
-  // legacy uniform-dimmer shadow — preserving the cloud-shadow-map post-
-  // mortem's hard-won correctness invariant.
+  // Voxel-grid cloud-on-terrain shadow wire-in (fork — 2026-05-12, C6;
+  // post-denoise split-out 2026-05-18; ratio→newShadow simplification 2026-05-19).
+  //
+  // Per-pixel newShadow from sampleCloudGroundShadow_OptionB lands directly
+  // in result.cloudShadowFactor. The integrator routes it into
+  // PrimaryCloudShadowFactor, and the composite pass multiplies it onto
+  // post-denoise primary direct radiance with the user-tunable
+  // pow(factor, cloudShadowFactorStrength) curve.
+  //
+  // Why a separate texture (not multiplied into result.radiance here): the
+  // per-cumulus signal is high-frequency edges on terrain. If multiplied
+  // into pre-denoise radiance, NRD / DLSS-RR smear the shadow boundaries
+  // away — the denoiser has no motion vectors or geometry edges to anchor
+  // bilateral filtering on a cumulus shadow. Routing newShadow around the
+  // denoiser preserves the per-pixel detail.
+  //
+  // Why no ratio-correction math anymore: getTransmittanceToSun was called
+  // above with skipCloudShadow=true, so result.radiance has NO analytical
+  // cloud darkening baked in. cloudShadowFactor is plain newShadow ∈ [0, 1];
+  // composite's saturate() is harmless and pow() does what the strength
+  // knob promises. The prior ratio newShadow / safeOldShadow existed to
+  // un-do the analytical bake at clear pixels — composite's saturate() then
+  // clamped the > 1 ratios at clear pixels back to 1.0, erasing the per-
+  // cumulus contrast (diagnosed by enum 878 + the user's "binary white-black
+  // moves with clouds" observation on 2026-05-19).
+  //
+  // Sentinel-position protection: the multiscatter analytical path
+  // (computeGroundReflectionAnalytical with vec3(0,0,0)) calls
+  // getTransmittanceToSun with skipCloudShadow LEFT AT DEFAULT (false), so
+  // it continues to see the analytical dimmer and never feeds the sentinel
+  // into the voxel-grid lookup. That invariant is what the prior ratio-
+  // correction was protecting; the conditional skip preserves it without
+  // the saturate-clamp side effect.
   if (args.cloudVoxelShadowsEnable != 0u) {
-    // evalCloudGroundShadow takes the Y-up sun direction; result.direction
-    // has already been isZUp-swapped above, so pass it as the Y-up vector
-    // by un-swapping when needed.
-    const vec3 sunDirYUpForLegacy = isZUp
-        ? vec3(result.direction.x, result.direction.z, result.direction.y)
-        : result.direction;
-    const float oldShadow = evalCloudGroundShadow(sunDirYUpForLegacy, args);
-    const float newShadow = sampleCloudGroundShadow_OptionB(
+    result.cloudShadowFactor = sampleCloudGroundShadow_OptionB(
         surfacePos, result.direction, args, isZUp);
-    if (oldShadow > 0.001f) {
-      result.radiance *= (newShadow / oldShadow);
-    }
   }
 #endif
 
@@ -1169,8 +1242,11 @@ AtmosphereVolumeSunSample sampleAtmosphereSunLightVolume(vec3 volumePos, vec3 vi
     return result;
   }
   
-  // Get transmittance to sun (simplified for atmosphere)
-  vec3 transmittance = getTransmittanceToSun(volumePos, args, isZUp);
+  // Get transmittance to sun (simplified for atmosphere). Skip the
+  // analytical cloud shadow when the voxel-grid path is on — newShadow is
+  // applied directly to result.radiance below, no ratio correction needed.
+  vec3 transmittance = getTransmittanceToSun(volumePos, args, isZUp,
+      /*skipCloudShadow=*/(args.cloudVoxelShadowsEnable != 0u));
   
   // Sun visibility based on Mie anisotropy (same as surface lighting)
   const float kSunFullyVisible = 0.80f;
@@ -1193,20 +1269,19 @@ AtmosphereVolumeSunSample sampleAtmosphereSunLightVolume(vec3 volumePos, vec3 vi
 
 #ifdef ATMOSPHERE_AVAILABLE
   // Voxel-grid cloud-on-terrain shadow wire-in for volumetric NEE
-  // (fork — 2026-05-12, C6). Same ratio-correction pattern as the surface
-  // sampleAtmosphereSunLight path above. The volumePos is in engine game
-  // units (same frame as the surface worldPos); sampleCloudGroundShadow_OptionB
-  // handles the units conversion + camera-relative reframe internally.
+  // (fork — 2026-05-12, C6; ratio→newShadow simplification 2026-05-19).
+  //
+  // getTransmittanceToSun above was called with skipCloudShadow=true, so
+  // result.radiance has NO analytical cloud darkening baked in. Multiply
+  // the per-cumulus newShadow directly onto the radiance — the volumetric
+  // path has no post-denoise factor texture because the volumetric denoiser
+  // tolerates the high-frequency signal better than NRD does on flat
+  // surfaces (different bilateral domain). Same surface-path simplification
+  // applies: dropping the ratio + cliff-guard + strength-floor math.
   if (args.cloudVoxelShadowsEnable != 0u) {
-    const vec3 sunDirYUpForLegacy = isZUp
-        ? vec3(result.direction.x, result.direction.z, result.direction.y)
-        : result.direction;
-    const float oldShadow = evalCloudGroundShadow(sunDirYUpForLegacy, args);
     const float newShadow = sampleCloudGroundShadow_OptionB(
         volumePos, result.direction, args, isZUp);
-    if (oldShadow > 0.001f) {
-      result.radiance *= (newShadow / oldShadow);
-    }
+    result.radiance *= newShadow;
   }
 #endif
 
@@ -1933,7 +2008,24 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
   // Sample coverage / type noise once at the start position (the cumulus
   // wavelength is much longer than the tap span along the sun ray, so the
   // reuse is harmless and saves 2×kSamples FBM evaluations).
-  vec2 sampleXZKm = vec2(worldPosYUpKm.x, worldPosYUpKm.z);
+  //
+  // World-anchor the 2D field sample (fork — 2026-05-17). The cloud-noise
+  // 3D texture is tile-periodic at cloudNoiseTileKm == cloudVoxelGridExtentKm
+  // (12 km default), so the bake's per-step samplePos in the [-6, +6] world
+  // frame produces frac-equivalent texcoords for any consumer world position
+  // that maps to the same voxel — the 3D noise is already world-anchored via
+  // tile-period math. But the 2D coverage/type fields are at ~300 km
+  // wavelength (cloudCoverageNoiseScale ≈ 0.0033 cycles/km), so they do NOT
+  // tile-wrap within the 12 km voxel grid. Sampling them at the bake's
+  // [-6, +6] world frame reads coverage/type at the world ORIGIN region,
+  // not at the player's location — which means the coverage gate that
+  // decides where cumulus appears was being evaluated in the wrong place,
+  // and the bake produced OD patches that didn't correlate with the
+  // cumulus the runtime actually renders overhead. Add cameraWorldPosYUpKm
+  // to the 2D sample so the bake's coverage/type field matches what
+  // cloud_render and the consumer see at the player's actual position.
+  vec2 sampleXZKm = vec2(worldPosYUpKm.x + args.cameraWorldPosYUpKm.x,
+                         worldPosYUpKm.z + args.cameraWorldPosYUpKm.z);
   float typeNoise     = smoothNoise2D(sampleXZKm * args.cloudTypeNoiseScale,     200.0f);
   float coverageNoise = smoothNoise2D(sampleXZKm * args.cloudCoverageNoiseScale, 250.0f);
   float typeLocal     = saturate(args.cloudTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
@@ -1971,7 +2063,10 @@ float sampleCloudAmbientOpticalDepthAtWorld(vec3 worldPosYUpKm,
   const float stepLen = distanceToTop / float(kSamples);
 
   // Same single-position coverage/type sample as the sun integral.
-  vec2 sampleXZKm = vec2(worldPosYUpKm.x, worldPosYUpKm.z);
+  // World-anchor the 2D field sample (fork — 2026-05-17); see the matching
+  // helper sampleCloudSunOpticalDepthAtWorld above for the full rationale.
+  vec2 sampleXZKm = vec2(worldPosYUpKm.x + args.cameraWorldPosYUpKm.x,
+                         worldPosYUpKm.z + args.cameraWorldPosYUpKm.z);
   float typeNoise     = smoothNoise2D(sampleXZKm * args.cloudTypeNoiseScale,     200.0f);
   float coverageNoise = smoothNoise2D(sampleXZKm * args.cloudCoverageNoiseScale, 250.0f);
   float typeLocal     = saturate(args.cloudTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);

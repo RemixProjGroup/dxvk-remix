@@ -285,6 +285,35 @@
 // cloud radiance (premultiplied) accumulated through the Nubis Cubed lighting
 // equations. Alpha (view-ray transmittance) is ignored by this debug case.
 #define DEBUG_VIEW_CLOUD_RENDER_RT 876
+// Raw D_sun optical-depth diagnostic at the production NEE call shape
+// (fork — 2026-05-17). Sibling of 875: same per-pixel inputs (G-buffer
+// worldPos + atmosphereArgs.sunDirection + cb.isZUp), but stops at the
+// dSunTex.SampleLevel call — NO exp(), NO mix(cloudShadowStrength). Three
+// signals encoded in RGB so one screenshot discriminates all hypotheses:
+//   R = saturate(OD * 0.2)  — matches 873's vis scale (direct A/B vs bake)
+//   G = saturate(OD)        — raw magnitude (distinguishes amplified-tiny
+//                              from actually-visible-sized)
+//   B = uvw.x from cloudVoxelWorldToUVW — consumer's lookup position
+//                              (uniform B across screen = scene-scale bug)
+// Sentinels: magenta = surface above slab top; blue = sun below horizon
+// or otherwise unreachable. Black would be ambiguous, so we paint instead.
+#define DEBUG_VIEW_CLOUD_GROUND_SHADOW_RAW_OD 877
+// Raw post-denoise cloud-shadow factor texture diagnostic (fork — 2026-05-18,
+// iteration #3 grayscale 2026-05-19). Visualizes PrimaryCloudShadowFactor as
+// integrate_direct writes it, BEFORE composite's saturate() + pow() collapse
+// the > 1 ratio amplification at clear pixels. Encoded as PURE GRAYSCALE
+// (factor / 10 clamped to [0, 1]) for direct A/B comparison with enum 875.
+// Iteration history: #1 linear /10 saturated too early; #2 log10 compressed
+// foreground variation behind cyan; #3 grayscale mirrors 875's encoding so
+// shapes can be compared by eye.
+// Discrimination (toggle 875 <-> 878 in same outdoor cell):
+//   878 shows same shapes as 875 but brighter -> wire-in correct, fix saturate
+//   878 uniform foreground while 875 varies   -> writer-reader divergence
+//                                                (likely sampler / binding mismatch
+//                                                 between production and debug-view)
+//   878 uniform mid-gray everywhere           -> factor stuck at default 1.0;
+//                                                texture not being written
+#define DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW 878
 
 
 enum class CompositeDebugView : uint32_t {

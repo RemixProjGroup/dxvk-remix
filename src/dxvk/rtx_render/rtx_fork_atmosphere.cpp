@@ -272,6 +272,23 @@ namespace fork_hooks {
       Rc<DxvkSampler> cloudNoiseSampler = ctx.m_device->createSampler(samplerInfo);
       ctx.bindResourceSampler(BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER, cloudNoiseSampler);
     }
+
+    // Sky-view LUT sampler: linear, REPEAT in azimuth (U), CLAMP in elevation
+    // (V). Consumed by evalSkyRadiance to replace the per-ray ~50-step
+    // atmosphere march with a single bilinear tap of AtmosphereSkyViewLut.
+    // CLAMP-V avoids the pole rows mixing horizon values into zenith / nadir
+    // at uv.y = 0 or 1; REPEAT-U handles the azimuth wraparound at uv.x = 0/1.
+    {
+      DxvkSamplerCreateInfo samplerInfo = {};
+      samplerInfo.magFilter    = VK_FILTER_LINEAR;
+      samplerInfo.minFilter    = VK_FILTER_LINEAR;
+      samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+      samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+      samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+      samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+      Rc<DxvkSampler> skyViewSampler = ctx.m_device->createSampler(samplerInfo);
+      ctx.bindResourceSampler(BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER, skyViewSampler);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -839,6 +856,16 @@ namespace fork_hooks {
               "1.0 = physical baseline; higher values darken cloud-on-terrain "
               "shadows, lower values lighten them. Only consumed when "
               "voxel-grid cloud shadows are on.");
+          RemixGui::DragFloat("Cloud Shadow Strength (post-denoise)",
+                              &RtxOptions::cloudShadowFactorStrengthObject(),
+                              0.05f, 0.0f, 8.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "pow() exponent applied to the per-pixel cloud shadow factor in "
+              "composite, after NRD/DLSS-RR denoising. 1.0 = unchanged; >1 "
+              "deepens cumulus-on-terrain shadow darkness, <1 fades it. The "
+              "factor=1 (no-cloud) invariant is preserved at any strength, so "
+              "clear pixels stay at full sun regardless. Tune this for visible "
+              "shadow contrast without changing the bake-side March Strength.");
         }
 
         ImGui::Separator();
