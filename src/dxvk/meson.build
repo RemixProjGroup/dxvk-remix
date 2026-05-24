@@ -269,8 +269,6 @@ dxvk_src = files([
   'rtx_render/rtx_lights_data.h',
   'rtx_render/rtx_light_utils.cpp',
   'rtx_render/rtx_light_utils.h',
-  'rtx_render/rtx_local_tone_mapping.cpp',
-  'rtx_render/rtx_local_tone_mapping.h',
   'rtx_render/rtx_materials.cpp',
   'rtx_render/rtx_materials.h',
   'rtx_render/rtx_material_data.h',

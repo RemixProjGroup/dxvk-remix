@@ -1769,23 +1769,12 @@ namespace dxvk {
     // but the reset of denoised buffers causes wide tone curve differences
     // until it converges and thus making comparison of raytracing mode outputs more difficult
     setFramePassStage(RtxFramePassStage::ToneMapping);
-    // Direct mode (Workstream 2 commit 3 / gmod baad5e79) dispatches the
-    // global tonemapper but skips its dynamic tone curve — the apply shader
-    // gates on cb.directOperatorMode and applies the operator alone.
-    if (RtxOptions::tonemappingMode() == TonemappingMode::Global ||
-        RtxOptions::tonemappingMode() == TonemappingMode::Direct) {
+    // Operator-only tonemapping (dynamic tone curve removed in the 2026-05-13 refactor).
+    {
       DxvkToneMapping& toneMapper = m_common->metaToneMapping();
       toneMapper.dispatch(this,
-        getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER),
         autoExposure.getExposureTexture().view,
-        rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion, autoExposure.enabled());
-    }
-    DxvkLocalToneMapping& localTonemapper = m_common->metaLocalToneMapping();
-    if (localTonemapper.isActive()) {
-      localTonemapper.dispatch(this,
-        getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
-        autoExposure.getExposureTexture().view,
-        rtOutput, GlobalTime::get().deltaTimeMs(), performSRGBConversion, autoExposure.enabled());
+        rtOutput, performSRGBConversion, autoExposure.enabled());
     }
   }
 

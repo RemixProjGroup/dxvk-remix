@@ -3,8 +3,8 @@
 // rtx_fork_tonemap.h — fork-owned declarations for the tonemap operator
 // enum and per-operator parameter plumbing. The operator logic itself
 // lives in rtx_fork_tonemap.cpp and in the fork-owned shader headers
-// under src/dxvk/shaders/rtx/pass/tonemap/fork_tonemap_operators.slangh
-// (plus AgX.hlsl and Lottes.hlsl).
+// under src/dxvk/shaders/rtx/pass/tonemap/ (aces.slangh, agx.slangh,
+// lottes.slangh, psycho17.slangh, hable.slangh, fork_tonemap_operators.slangh).
 //
 // See docs/fork-touchpoints.md for the index of upstream files that
 // call into fork_hooks::... for tonemap operator dispatch and UI.
@@ -15,48 +15,38 @@
 
 namespace dxvk {
 
-  // Tonemapping operator applied after the dynamic tone curve.
-  // Shader-side constants live in shaders/rtx/pass/tonemap/tonemapping.h
-  // as `tonemapOperator*` uints; these two enumerations MUST stay in
-  // lockstep. The populateTonemapOperatorArgs hook is the single place
-  // that casts between them.
+  // Tonemapping operator. Shader-side constants live in
+  // shaders/rtx/pass/tonemap/tonemapping.h as `tonemapOperator*` uints;
+  // these two enumerations MUST stay in lockstep. The
+  // populateTonemapOperatorArgs hook is the single place that casts
+  // between them.
   enum class TonemapOperator : uint32_t {
-    None        = 0, // Dynamic curve only; no additional operator.
-    ACES        = 1,
-    ACESLegacy  = 2,
-    HableFilmic = 3,
-    AgX         = 4,
-    Lottes      = 5,
+    None          = 0, // Identity / passthrough.
+    ACESHill      = 1, // Stephen Hill ACES fit.
+    ACESNarkowicz = 2, // Krzysztof Narkowicz ACES approximation.
+    HableFilmic   = 3,
+    AgX           = 4,
+    Lottes        = 5,
+    Psycho17      = 6, // Renodx Psycho Test 17 (UI label: PsychoV17_Beta).
+    GT7           = 7, // Gran Turismo 7 (Polyphony Digital / MIT). SDR, peak 1.0, ICtCp UCS.
+    Neutwo        = 8, // Renodx Neutwo per-channel saturation curve (Carlos Lopez Jr. / MIT). Parameterless.
   };
 
-  // NOTE: the existing TonemappingMode enum in rtx_options.h (values Global,
-  // Local) is extended with a third value `Direct` (operator-only, no tone
-  // curve) in Commit 3 of this workstream. The extension is an inline tweak
-  // to that enum, tracked in docs/fork-touchpoints.md. No separate enum is
-  // defined here; the hooks read the existing RtxOptions::tonemappingMode().
-
-  // Global-tonemapper operator selection. Defaults to None to preserve the
-  // upstream port's pre-refactor `finalizeWithACES = false` behavior — the
-  // global tonemapper rendered the dynamic curve without a final ACES pass
-  // by default.
+  // Global-tonemapper operator selection. Defaults to None (identity); the
+  // dynamic tone curve and local tonemapper were both removed in the
+  // 2026-05-13 / 2026-05-15 refactors and the apply pass now dispatches
+  // directly to the operator selected here.
   class RtxForkGlobalTonemap {
     RTX_OPTION_ENV("rtx.tonemap", TonemapOperator, tonemapOperator, TonemapOperator::None, "DXVK_TONEMAP_OPERATOR",
-                   "Tonemapping operator applied after the dynamic tone curve.\n"
-                   "Supported values: 0 = None (dynamic curve only), 1 = ACES, 2 = ACES (Legacy), "
-                   "3 = Hable Filmic, 4 = AgX, 5 = Lottes 2016.");
+                   "Tonemapping operator applied to the post-exposure color buffer.\n"
+                   "Supported values: 0 = None (saturate-only identity), 1 = Hill ACES, 2 = Narkowicz ACES, "
+                   "3 = Hable Filmic, 4 = AgX, 5 = Lottes 2016, 6 = PsychoV17_Beta, "
+                   "7 = Gran Turismo 7 (SDR), 8 = Neutwo (per-channel).");
   };
 
-  // Local-tonemapper operator selection. Defaults to ACESLegacy because the
-  // port's pre-refactor local tonemapper had `finalizeWithACES = true` and
-  // `useLegacyACES = true` by default — preserving both flags under the enum
-  // refactor requires ACESLegacy as the default. Separate from the global
-  // option so tuning one path does not drift the other.
-  class RtxForkLocalTonemap {
-    RTX_OPTION("rtx.localtonemap", TonemapOperator, tonemapOperator, TonemapOperator::ACESLegacy,
-               "Tonemapping operator applied at the local tonemapper's final combine stage.\n"
-               "Defaults to ACES (Legacy) to preserve the port's pre-refactor behavior.\n"
-               "Supported values: 0 = None, 1 = ACES, 2 = ACES (Legacy), 3 = Hable Filmic, 4 = AgX, 5 = Lottes 2016.");
-  };
+  // Local-tonemapper operator selection was removed; the local path now shares
+  // RtxForkGlobalTonemap::tonemapOperator() to eliminate duplicated UI / config
+  // knobs (rtx.localtonemap.tonemapOperator + per-operator local param sets).
 
   // Hable Filmic (Uncharted 2) operator parameters. Shared between the global
   // and local tonemap paths (the operator is per-selection, not per-path).
@@ -73,15 +63,11 @@ namespace dxvk {
     RTX_OPTION("rtx.tonemap.hable", float, whitePoint,       4.00f, "Hable Filmic: W — linear-scene white point. Defaults to 4.0 (Half-Life: Alyx); Uncharted 2 reference is 11.2.");
   };
 
-  // AgX operator parameters. Defaults from gmod f3501d46.
+  // AgX operator parameters — uses the AgX Minimal (Benjamin Wrensch / MIT)
+  // reference implementation. Look ordering: 0 = None, 1 = Golden, 2 = Punchy.
   class RtxForkAgX {
-    RTX_OPTION("rtx.tonemap.agx", float, gamma,          2.0f, "AgX gamma adjustment for contrast control. Lower values increase contrast. Range [0.5, 3.0].");
-    RTX_OPTION("rtx.tonemap.agx", float, saturation,     1.1f, "AgX saturation multiplier. Higher values increase color saturation. Range [0.5, 2.0].");
-    RTX_OPTION("rtx.tonemap.agx", float, exposureOffset, 0.0f, "AgX exposure offset in EV stops. Positive values brighten the image. Range [-2.0, 2.0].");
-    RTX_OPTION("rtx.tonemap.agx", int,   look,           0,    "AgX look preset: 0 = None, 1 = Punchy, 2 = Golden, 3 = Greyscale.");
-    RTX_OPTION("rtx.tonemap.agx", float, contrast,       1.0f, "AgX contrast adjustment. Range [0.5, 2.0].");
-    RTX_OPTION("rtx.tonemap.agx", float, slope,          1.0f, "AgX slope adjustment for highlight rolloff. Range [0.5, 2.0].");
-    RTX_OPTION("rtx.tonemap.agx", float, power,          1.0f, "AgX power adjustment for midtone response. Range [0.5, 2.0].");
+    RTX_OPTION("rtx.tonemap.agx", float, saturation, 1.0f, "AgX saturation multiplier. Range [0.0, 2.0].");
+    RTX_OPTION("rtx.tonemap.agx", int,   look,       0,    "AgX look preset: 0 = None, 1 = Golden, 2 = Punchy.");
   };
 
   // Lottes 2016 operator parameters. Defaults from gmod cdf2c723.
@@ -90,39 +76,35 @@ namespace dxvk {
   // write the correct param set.
   class RtxForkLottes {
     RTX_OPTION("rtx.tonemap.lottes", float, hdrMax,   16.0f, "Lottes: peak HDR white value. Higher values preserve more highlight detail. Range [1.0, 64.0].");
-    RTX_OPTION("rtx.tonemap.lottes", float, contrast,  2.0f, "Lottes: contrast control (also drives saturation / crosstalk). Range [1.0, 3.0].");
+    RTX_OPTION("rtx.tonemap.lottes", float, contrast,  1.2f, "Lottes: contrast control (also drives saturation / crosstalk). Range [1.0, 3.0].");
     RTX_OPTION("rtx.tonemap.lottes", float, shoulder,  1.0f, "Lottes: shoulder strength (highlight compression). Range [0.5, 2.0].");
     RTX_OPTION("rtx.tonemap.lottes", float, midIn,    0.18f, "Lottes: mid-grey input (scene linear). Range [0.01, 1.0].");
     RTX_OPTION("rtx.tonemap.lottes", float, midOut,   0.18f, "Lottes: mid-grey output. Range [0.01, 1.0].");
   };
 
-  // Local-tonemapper AgX operator parameters. Separate from RtxForkAgX
-  // because gmod tunes the local tonemapper's AgX differently from the
-  // global path — the local tonemapper operates on a different dynamic
-  // range, so lower gamma / lower contrast / higher slope land better.
-  // Defaults and docstring ranges match gmod's rtx_local_tone_mapping.h
-  // at cdf2c723; the UI exposes min-value 0.0 for Gamma / Saturation /
-  // Contrast / Slope / Power (gmod's local-path range).
-  class RtxForkLocalAgX {
-    RTX_OPTION("rtx.localtonemap.agx", float, gamma,          0.45f, "AgX gamma adjustment (local path). Lower values increase contrast. Range [0.0, 3.0].");
-    RTX_OPTION("rtx.localtonemap.agx", float, saturation,     1.0f,  "AgX saturation multiplier (local path). Range [0.0, 2.0].");
-    RTX_OPTION("rtx.localtonemap.agx", float, exposureOffset, 0.0f,  "AgX exposure offset (local path) in EV stops. Range [-2.0, 2.0].");
-    RTX_OPTION("rtx.localtonemap.agx", int,   look,           0,     "AgX look preset (local path): 0 = None, 1 = Punchy, 2 = Golden, 3 = Greyscale.");
-    RTX_OPTION("rtx.localtonemap.agx", float, contrast,       0.8f,  "AgX contrast adjustment (local path). Range [0.0, 2.0].");
-    RTX_OPTION("rtx.localtonemap.agx", float, slope,          1.2f,  "AgX slope adjustment for highlight rolloff (local path). Range [0.0, 2.0].");
-    RTX_OPTION("rtx.localtonemap.agx", float, power,          1.0f,  "AgX power adjustment for midtone response (local path). Range [0.0, 2.0].");
-  };
+  // Local-tonemapper AgX / Lottes / Psycho17 operator parameter sets were
+  // removed along with rtx.localtonemap.tonemapOperator — the local tonemapper
+  // now shares RtxForkAgX / RtxForkLottes / RtxForkPsycho17 with the global path.
 
-  // Local-tonemapper Lottes operator parameters. Separate from RtxForkLottes
-  // for architectural symmetry with the AgX split; gmod's local Lottes
-  // defaults happen to match global but are independently tunable via the
-  // rtx.localtonemap.lottes.* keys.
-  class RtxForkLocalLottes {
-    RTX_OPTION("rtx.localtonemap.lottes", float, hdrMax,   16.0f, "Lottes: peak HDR white value (local path). Range [1.0, 64.0].");
-    RTX_OPTION("rtx.localtonemap.lottes", float, contrast,  2.0f, "Lottes: contrast control (local path). Range [1.0, 3.0].");
-    RTX_OPTION("rtx.localtonemap.lottes", float, shoulder,  1.0f, "Lottes: shoulder strength (local path). Range [0.5, 2.0].");
-    RTX_OPTION("rtx.localtonemap.lottes", float, midIn,    0.18f, "Lottes: mid-grey input (local path). Range [0.01, 1.0].");
-    RTX_OPTION("rtx.localtonemap.lottes", float, midOut,   0.18f, "Lottes: mid-grey output (local path). Range [0.01, 1.0].");
+  // Psycho Test 17 operator parameters (PsychoV17_Beta in the UI).
+  // Self-contained port of renodx Psycho Test 17 — see
+  // src/dxvk/shaders/rtx/pass/tonemap/psycho17.slangh for the MIT attribution
+  // (Copyright (c) 2025 Carlos Lopez Jr.). Defaults track the renodx reference.
+  class RtxForkPsycho17 {
+    // peakValue is hardcoded to 1.0 in the populate hook (rtx_fork_tonemap.cpp) — no UI, no RTX_OPTION.
+    RTX_OPTION("rtx.tonemap.psycho17", float, exposure,             1.0f,         "Psycho17: pre-operator exposure multiplier.");
+    RTX_OPTION("rtx.tonemap.psycho17", float, highlights,           1.0f,         "Psycho17: highlight compression strength. Values > 1 compress highlights more aggressively.");
+    RTX_OPTION("rtx.tonemap.psycho17", float, shadows,              1.0f,         "Psycho17: shadow lifting strength. Values > 1 lift shadows.");
+    RTX_OPTION("rtx.tonemap.psycho17", float, contrast,             1.0f,         "Psycho17: contrast adjustment applied before tone mapping.");
+    RTX_OPTION("rtx.tonemap.psycho17", float, purityScale,          1.0f,         "Psycho17: chromatic purity (saturation) scale factor.");
+    RTX_OPTION("rtx.tonemap.psycho17", float, bleachingIntensity,   1.0f,         "Psycho17: Hunt-effect bleaching intensity. 0 = disabled, 1 = full bleach.");
+    RTX_OPTION("rtx.tonemap.psycho17", float, clipPoint,          100.0f,         "Psycho17: accepted for parity with psycho11; unused by the psycho17 reference.");
+    RTX_OPTION("rtx.tonemap.psycho17", float, hueRestore,           1.0f,         "Psycho17: source-hue restoration after adaptation (0 = none, 1 = full).");
+    RTX_OPTION("rtx.tonemap.psycho17", float, adaptationContrast,   1.0f,         "Psycho17: accepted for parity with psycho11; unused by the psycho17 reference.");
+    RTX_OPTION("rtx.tonemap.psycho17", int,   whiteCurveMode,       0,            "Psycho17: accepted for parity with psycho11; unused by the psycho17 reference.");
+    RTX_OPTION("rtx.tonemap.psycho17", float, coneResponseExponent, 1.0f,         "Psycho17: cone response exponent for the Naka-Rushton stage.");
+    RTX_OPTION("rtx.tonemap.psycho17", float, gamutCompression,     1.0f,         "Psycho17: output gamut compression strength. 0 = off, 1 = full.");
+    RTX_OPTION("rtx.tonemap.psycho17", int,   gamutCompressionMode, 1,            "Psycho17: target gamut for output compression. 0 = BT.709, 1 = BT.2020.");
   };
 
 } // namespace dxvk

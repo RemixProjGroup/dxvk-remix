@@ -1,15 +1,16 @@
 // rtx_fork_tonemap.cpp
 //
 // Fork-owned implementations of the tonemap operator hooks declared in
-// rtx_fork_hooks.h. Populated incrementally across Workstream 2 commits:
-//   - Commit 1: scaffold only.
-//   - Commit 2: TonemapOperator enum + ACES-through-dispatcher. Two
-//                tonemapOperator RtxOptions (rtx.tonemap default None,
-//                rtx.localtonemap default ACESLegacy) preserve each path's
-//                pre-refactor visual default.
-//   - Commit 3 (this commit): Hable Filmic operator + Direct mode + sliders.
-//   - Commit 4: AgX operator + AgX sliders.
-//   - Commit 5: Lottes 2016 operator + Lottes sliders.
+// rtx_fork_hooks.h. Hosts:
+//   - writeOperatorParams: copies the per-operator RtxOption values
+//     (Hable / AgX / Lottes / Psycho17) into the shared shader args
+//     struct. When Lottes is the selected operator, its 5 params overlay
+//     the 8 Hable push-constant slots — slot mapping is documented at
+//     the struct definition in shaders/rtx/pass/tonemap/tonemapping.h.
+//   - populateTonemapOperatorArgs: the global hook called from the
+//     apply-tonemapping pass to populate the args struct.
+//   - showTonemapOperatorUI: the operator-dropdown + per-operator
+//     parameter panels rendered inside the global tonemap ImGui section.
 //
 // See docs/fork-touchpoints.md for the catalogue of fork hooks and which
 // upstream files call each one.
@@ -17,8 +18,6 @@
 #include "rtx_fork_hooks.h"
 #include "rtx_fork_tonemap.h"
 #include "rtx_imgui.h"    // RemixGui::Combo, RemixGui::DragFloat, RemixGui::Checkbox
-#include "rtx_options.h"  // RtxOptions::tonemappingMode / TonemappingMode
-
 #include "../imgui/imgui.h"
 
 namespace dxvk {
@@ -32,7 +31,7 @@ namespace dxvk {
     // uses global Hable params on the local path). When Lottes is the
     // selected operator, its 5 params overlay the 8 Hable push-constant
     // slots — see tonemapping.h for the documented slot mapping.
-    template<typename AgXClass, typename LottesClass, typename ArgsT>
+    template<typename AgXClass, typename LottesClass, typename Psycho17Class, typename ArgsT>
     static void writeOperatorParams(ArgsT& args, TonemapOperator op) {
       if (op == TonemapOperator::Lottes) {
         args.hableExposureBias     = LottesClass::hdrMax();
@@ -53,31 +52,37 @@ namespace dxvk {
         args.hableToeDenominator   = RtxForkHableFilmic::toeDenominator();
         args.hableWhitePoint       = RtxForkHableFilmic::whitePoint();
       }
-      args.agxGamma          = AgXClass::gamma();
-      args.agxSaturation     = AgXClass::saturation();
-      args.agxExposureOffset = AgXClass::exposureOffset();
-      args.agxLook           = static_cast<uint32_t>(AgXClass::look());
-      args.agxContrast       = AgXClass::contrast();
-      args.agxSlope          = AgXClass::slope();
-      args.agxPower          = AgXClass::power();
+      args.agxSaturation = AgXClass::saturation();
+      args.agxLook       = static_cast<uint32_t>(AgXClass::look());
+      args.agxPad0       = 0.0f;
+      args.agxPad1       = 0.0f;
+      args.psycho17PeakValue            = 1.0f; // Hardcoded per design: peak luminance pinned at 1.0 (no UI / RTX_OPTION).
+      args.psycho17Exposure             = Psycho17Class::exposure();
+      args.psycho17Highlights           = Psycho17Class::highlights();
+      args.psycho17Shadows              = Psycho17Class::shadows();
+      args.psycho17Contrast             = Psycho17Class::contrast();
+      args.psycho17PurityScale          = Psycho17Class::purityScale();
+      args.psycho17BleachingIntensity   = Psycho17Class::bleachingIntensity();
+      args.psycho17ClipPoint            = Psycho17Class::clipPoint();
+      args.psycho17HueRestore           = Psycho17Class::hueRestore();
+      args.psycho17AdaptationContrast   = Psycho17Class::adaptationContrast();
+      args.psycho17WhiteCurveMode       = static_cast<uint32_t>(Psycho17Class::whiteCurveMode());
+      args.psycho17ConeResponseExponent = Psycho17Class::coneResponseExponent();
+      args.psycho17GamutCompression     = Psycho17Class::gamutCompression();
+      args.psycho17GamutCompressionMode = static_cast<uint32_t>(Psycho17Class::gamutCompressionMode());
+      args.psycho17Pad0                 = 0.f;
+      args.psycho17Pad1                 = 0.f;
     }
 
     void populateTonemapOperatorArgs(ToneMappingApplyToneMappingArgs& args) {
       const TonemapOperator op = RtxForkGlobalTonemap::tonemapOperator();
       args.tonemapOperator    = static_cast<uint32_t>(op);
-      args.directOperatorMode = (RtxOptions::tonemappingMode() == TonemappingMode::Direct) ? 1u : 0u;
-      writeOperatorParams<RtxForkAgX, RtxForkLottes>(args, op);
+      writeOperatorParams<RtxForkAgX, RtxForkLottes, RtxForkPsycho17>(args, op);
     }
 
-    void populateLocalTonemapOperatorArgs(FinalCombineArgs& args) {
-      const TonemapOperator op = RtxForkLocalTonemap::tonemapOperator();
-      args.tonemapOperator    = static_cast<uint32_t>(op);
-      args.directOperatorMode = (RtxOptions::tonemappingMode() == TonemappingMode::Direct) ? 1u : 0u;
-      writeOperatorParams<RtxForkLocalAgX, RtxForkLocalLottes>(args, op);
-    }
-
-    // Combo items string uses ImGui's \0-separated format.
-    static const char* k_operatorItems = "None\0ACES\0ACES (Legacy)\0Hable Filmic\0AgX\0Lottes\0\0";
+    // Combo items string uses ImGui's \0-separated format. User-requested
+    // dropdown label for the Psycho operator is `PsychoV17_Beta`.
+    static const char* k_operatorItems = "None\0Hill ACES\0Narkowicz ACES\0Hable Filmic\0AgX\0Lottes\0PsychoV17_Beta\0Gran Turismo 7\0Neutwo\0\0";
 
     // Shared slider rendering for per-operator parameter panels.
     static void showHableFilmicSliders() {
@@ -115,29 +120,18 @@ namespace dxvk {
       ImGui::Unindent();
     }
 
-    // The AgX min-value arg parameterizes the lower bound for Gamma /
-    // Saturation / Contrast / Slope / Power — gmod's global AgX sliders
-    // clamp at 0.5, gmod's local AgX sliders clamp at 0.0.
     template<typename AgXClass>
     static void showAgXSlidersImpl(float minValue) {
       ImGui::Indent();
       ImGui::Text("AgX Controls:");
       ImGui::Separator();
-      RemixGui::DragFloat("AgX Gamma",           &AgXClass::gammaObject(),          0.01f, minValue,  3.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("AgX Saturation",      &AgXClass::saturationObject(),     0.01f, minValue,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("AgX Exposure Offset", &AgXClass::exposureOffsetObject(), 0.01f, -2.0f,     2.0f, "%.3f EV", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Saturation", &AgXClass::saturationObject(), 0.01f, 0.0f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
       ImGui::Separator();
-      RemixGui::Combo(    "AgX Look",            &AgXClass::lookObject(),           "None\0Punchy\0Golden\0Greyscale\0\0");
-      ImGui::Separator();
-      ImGui::Text("Advanced:");
-      RemixGui::DragFloat("AgX Contrast",        &AgXClass::contrastObject(),       0.01f, minValue,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("AgX Slope",           &AgXClass::slopeObject(),          0.01f, minValue,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("AgX Power",           &AgXClass::powerObject(),          0.01f, minValue,  2.0f, "%.3f",    ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::Combo(    "Look",       &AgXClass::lookObject(),        "None\0Golden\0Punchy\0\0");
       ImGui::Unindent();
     }
 
-    static void showGlobalAgXSliders() { showAgXSlidersImpl<RtxForkAgX>     (0.5f); }
-    static void showLocalAgXSliders()  { showAgXSlidersImpl<RtxForkLocalAgX>(0.0f); }
+    static void showGlobalAgXSliders() { showAgXSlidersImpl<RtxForkAgX>(0.0f); }
 
     template<typename LottesClass>
     static void showLottesSlidersImpl() {
@@ -153,7 +147,26 @@ namespace dxvk {
     }
 
     static void showGlobalLottesSliders() { showLottesSlidersImpl<RtxForkLottes>     (); }
-    static void showLocalLottesSliders()  { showLottesSlidersImpl<RtxForkLocalLottes>(); }
+
+    template<typename Psycho17Class>
+    static void showPsycho17SlidersImpl() {
+      ImGui::Indent();
+      ImGui::Text("PsychoV17_Beta Parameters:");
+      ImGui::Separator();
+      RemixGui::DragFloat("Exposure",               &Psycho17Class::exposureObject(),             0.01f,  0.01f,  10.f, "%.3f",  ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Highlights",             &Psycho17Class::highlightsObject(),           0.01f,  0.0f,    5.f, "%.3f",  ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Shadows",                &Psycho17Class::shadowsObject(),              0.01f,  0.0f,    5.f, "%.3f",  ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Contrast",               &Psycho17Class::contrastObject(),             0.01f,  0.0f,    5.f, "%.3f",  ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Purity Scale",           &Psycho17Class::purityScaleObject(),          0.01f,  0.0f,    5.f, "%.3f",  ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Bleaching Intensity",    &Psycho17Class::bleachingIntensityObject(),   0.01f,  0.0f,    1.f, "%.3f",  ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Hue Restore",            &Psycho17Class::hueRestoreObject(),           0.01f,  0.0f,    1.f, "%.3f",  ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Cone Response Exponent", &Psycho17Class::coneResponseExponentObject(), 0.01f,  0.01f,  10.f, "%.3f",  ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Gamut Compression",      &Psycho17Class::gamutCompressionObject(),     0.01f,  0.0f,    1.f, "%.3f",  ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::Combo(    "Gamut Compression Mode", &Psycho17Class::gamutCompressionModeObject(), "BT.709\0BT.2020\0\0");
+      ImGui::Unindent();
+    }
+
+    static void showGlobalPsycho17Sliders() { showPsycho17SlidersImpl<RtxForkPsycho17>     (); }
 
     void showTonemapOperatorUI() {
       RemixGui::Combo("Tonemapping Operator",
@@ -161,24 +174,10 @@ namespace dxvk {
                       k_operatorItems);
 
       const TonemapOperator op = RtxForkGlobalTonemap::tonemapOperator();
-      if (op == TonemapOperator::HableFilmic) { showHableFilmicSliders(); }
-      if (op == TonemapOperator::AgX)         { showGlobalAgXSliders();    }
-      if (op == TonemapOperator::Lottes)      { showGlobalLottesSliders(); }
-    }
-
-    void showLocalTonemapOperatorUI() {
-      RemixGui::Combo("Tonemapping Operator",
-                      &RtxForkLocalTonemap::tonemapOperatorObject(),
-                      k_operatorItems);
-
-      const TonemapOperator op = RtxForkLocalTonemap::tonemapOperator();
-      if (op == TonemapOperator::HableFilmic) { showHableFilmicSliders(); }
-      if (op == TonemapOperator::AgX)         { showLocalAgXSliders();    }
-      if (op == TonemapOperator::Lottes)      { showLocalLottesSliders(); }
-    }
-
-    bool shouldSkipToneCurve() {
-      return RtxOptions::tonemappingMode() == TonemappingMode::Direct;
+      if (op == TonemapOperator::HableFilmic)  { showHableFilmicSliders();   }
+      if (op == TonemapOperator::AgX)          { showGlobalAgXSliders();     }
+      if (op == TonemapOperator::Lottes)       { showGlobalLottesSliders();  }
+      if (op == TonemapOperator::Psycho17)     { showGlobalPsycho17Sliders(); }
     }
 
   } // namespace fork_hooks

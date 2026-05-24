@@ -1145,7 +1145,7 @@ vec3 evalSkyRadiance(
   // fade in during twilight. Each moon disk REPLACES the background where
   // it covers (so dark-side stars don't bleed through). Loop over moons in
   // array order: later array indices render on top of earlier ones.
-  float moonFade = smoothstep(0.02f, -0.05f, args.sunDirection.y);
+  float moonFade = smoothstep(0.0f, -0.09f, args.sunDirection.y);
   if (moonFade > 0.001f) {
     // Moon glow/halo: soft radial Gaussian falloff around each enabled moon,
     // additive. Rendered before the opaque disks so each disk cleanly

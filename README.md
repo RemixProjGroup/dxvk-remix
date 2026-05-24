@@ -3,8 +3,9 @@
 [![Build Status](https://github.com/RemixProjGroup/dxvk-remix/actions/workflows/build.yml/badge.svg)](https://github.com/RemixProjGroup/dxvk-remix/actions/workflows/build.yml)
 
 **Remix Plus** is a community-maintained fork of NVIDIA's
-[`dxvk-remix`](https://github.com/NVIDIAGameWorks/dxvk-remix) that
-extends the Remix SDK API for modern-game plugin integrations. It
+[`dxvk-remix`](https://github.com/NVIDIAGameWorks/dxvk-remix) — created
+and led by [Kim2091](https://github.com/Kim2091) — that extends the
+Remix SDK API for modern-game plugin integrations. It
 brings the SDK extensions developed in the gmod-rtx community fork —
 batched mesh and light creation, plugin-injected game state, UI state
 plumbing, VRAM control, additional tonemap operators, the Hillaire
@@ -47,16 +48,30 @@ runtime.
 - **`InstanceCategoryBit` ABI** synced to the gmod/plugin layout so
   category bits round-trip correctly across the API boundary.
 
-### Tonemapping (gmod parity)
+### Tonemapping & auto-exposure
 
-- **Three new operators**: AgX, Lottes 2016, and Hable Filmic — alongside
-  upstream's existing ACES and reinhard variants.
-- **Direct mode** surfaced in the top-level operator combo.
+- **Eight tonemap operators** in the UI dropdown: Hill ACES, Narkowicz
+  ACES, Hable Filmic, AgX Minimal, Lottes 2016, PsychoV17_Beta, Gran
+  Turismo 7 (SDR), and Neutwo. Each operator has its own parameter
+  panel — controls are visible at a glance instead of buried.
+- **AgX Minimal** (Benjamin Wrensch / MIT) replaces the older
+  multi-knob AgX surface. Look presets: None / Golden / Punchy.
+- **PsychoV17_Beta** — Slang port of renodx Psycho Test 17 (Carlos
+  Lopez Jr. / MIT). Stockman-Sharpe LMS + Naka-Rushton cone response
+  + gamut compression.
+- **Gran Turismo 7 reference** — Slang port of Polyphony Digital's
+  SIGGRAPH 2025 GT7 tone-mapping reference (MIT). SDR mode, ICtCp UCS.
 - **Hable presets** (Hejl, Uncharted 2) with the original parameters.
-- **Slider precision, ranges, and clamping** match the gmod-rtx
-  reference build, so existing tonemap presets ported directly.
-- **Operator panels** are flattened so each operator's controls are
-  visible at a glance instead of buried in nested headers.
+- **Perceptual auto-exposure** — Stockman-Sharpe Yf histogram +
+  geometric-mean adaptation + first-site cone-contrast law. Asymmetric
+  in log-exposure space: cone-bleach is fast (~0.10–0.20 s),
+  rod-recovery is slow (~0.50–1.50 s). Two tau sliders replace the old
+  Adaptation Speed / EV-Min / EV-Max / Average Mode controls.
+
+The legacy Tonemapping Mode (Global / Local / Direct) combo, the local
+tonemapper, the dynamic tone curve / Tuning Mode sliders, the User
+Brightness slider, and the exposure-compensation curve are removed —
+the apply pass always runs in operator-only mode.
 
 ### Atmosphere
 
@@ -175,6 +190,13 @@ documentation.
 - [Rtx Options](RtxOptions.md)
 - [Terrain System](docs/TerrainSystem.md)
 - [Unit Test](docs/UnitTest.md)
+
+## Team
+
+- [Kim2091](https://github.com/Kim2091) — project lead and lead maintainer
+- [CR](https://github.com/sambow23) — maintainer
+- [TheGreatHMMMM](https://github.com/TheGreatHMMMM) — contributor
+- [Gokuwashere](https://github.com/BrunchyChineapple) — contributor
 
 ## Credits
 
