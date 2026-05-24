@@ -70,7 +70,8 @@ namespace fork_hooks {
   // assumption fails in the plugin-API case: when the plugin HUD pulls focus,
   // raw-input delivery to overlayWndProc also stops (the same root cause
   // that broke keyboard), and mouse events disappear. This function now
-  // forwards both.
+  // forwards both — keyboard unconditionally, mouse only when raw input
+  // has gone silent (see the in-case comment for the gate rationale).
   //
   // Coordinate translation: mouse WM_MOUSEMOVE and WM_{L,R,M,X}BUTTON*
   // messages carry CLIENT-AREA coordinates in lParam. When the overlay is a
@@ -99,14 +100,33 @@ namespace fork_hooks {
       ImGui_ImplWin32_WndProcHandler(targetHwnd, msg, wParam, lParam);
       break;
 
-    // Mouse motion + buttons: lParam has game-client coords; translate to
-    // overlay-client coords when the overlay is a distinct HWND.
+    // Mouse motion + buttons + wheels: gated on Path B liveness.
+    //
+    // Path B (raw input via overlayWndProc::WM_INPUT) is the primary mouse
+    // delivery path and uses imgui-display-space coords (scaled by the
+    // overlay-client/imgui-DisplaySize ratio). Path A (this block, the game
+    // wnd proc fallback) uses unscaled overlay-client coords. When both
+    // fire concurrently they fight for io.MousePos and produce a visible
+    // dual-cursor jitter (the imgui software cursor alternates between
+    // Path A and Path B positions frame-to-frame).
+    //
+    // The gate: only forward via Path A when raw input has been silent for
+    // longer than kRawInputRecencyMs (~100ms). Path B stamps its recency on
+    // every WM_INPUT it receives (see rtx_overlay_window.cpp:WM_INPUT). In
+    // the normal case Path B fires concurrently with Path A on every real
+    // input event, so isRawInputRecent() is always true and Path A skips.
+    // In the plugin-HUD-pulls-focus case Path B goes silent, recency lapses,
+    // and Path A picks up — preserving the original behavior of commit
+    // 3c8fac75 (forward mouse on legacy wnd proc fallback).
     case WM_MOUSEMOVE:
     case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
     case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
     case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
     case WM_XBUTTONDOWN: case WM_XBUTTONUP: case WM_XBUTTONDBLCLK:
     {
+      if (overlay.isRawInputRecent()) {
+        break;
+      }
       LPARAM translated = lParam;
       if (overlayHwnd && overlayHwnd != gameHwnd) {
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
@@ -118,9 +138,12 @@ namespace fork_hooks {
       break;
     }
 
-    // Wheel: lParam already in screen coords, pass through.
+    // Wheel: gated together with mouse motion/buttons (same Path A/B race).
     case WM_MOUSEWHEEL:
     case WM_MOUSEHWHEEL:
+      if (overlay.isRawInputRecent()) {
+        break;
+      }
       ImGui_ImplWin32_WndProcHandler(targetHwnd, msg, wParam, lParam);
       break;
 

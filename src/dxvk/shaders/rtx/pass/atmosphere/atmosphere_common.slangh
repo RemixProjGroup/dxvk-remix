@@ -2271,7 +2271,7 @@ struct NubisCubedLighting {
 NubisCubedLighting evalNubisCubedSample(
     vec3 samplePos, float heightFraction, float density,
     vec3 viewDir, vec3 sunDir,
-    vec3 sunRadiance, vec3 skyRadiance,
+    vec3 sunRadiance, vec3 skyRadianceWarm, vec3 skyRadianceCool,
     AtmosphereArgs args, bool isZUp) {
 
   // === Input samples ===
@@ -2298,6 +2298,19 @@ NubisCubedLighting evalNubisCubedSample(
   float L_direct = T_primary * HG1 + M * HG2;
 
   // === Ambient scattering (paper p. 142) ===
+  // Per-sample warm/cool ambient blend (fork — 2026-05-21). Warm color is
+  // sky-view LUT sampled toward the sun (the page-142 forward-scatter choice);
+  // cool color is the LUT sampled at the anti-sun horizon. The blend signal
+  // uses D_sun (already sampled above for L_direct, so this costs only one
+  // lerp per sample) shaped as 1 - exp(-D_sun * reach), which mimics
+  // Beer-Lambert and naturally saturates. Effect ramps off above
+  // cloudSunsetAmbientRampHighSun so midday clouds are byte-identical to the
+  // pre-2026-05-21 behavior. cloudSunsetAmbientStrength = 0 disables entirely.
+  float coolReachCurve = 1.0f - exp(-D_sun * args.cloudSunsetAmbientReachInvKm);
+  float sunsetFactor   = 1.0f - smoothstep(0.0f, args.cloudSunsetAmbientRampHighSun, sunDir.y);
+  float coolMix        = saturate(coolReachCurve * sunsetFactor * args.cloudSunsetAmbientStrength);
+  vec3  skyRadiance    = lerp(skyRadianceWarm, skyRadianceCool, coolMix);
+
   float ambient_shape = pow(1.0f - dim_profile, 0.5f);
   float L_ambient = ambient_shape * exp(-D_ambient);
 

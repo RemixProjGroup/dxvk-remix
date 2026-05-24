@@ -370,4 +370,15 @@ struct AtmosphereArgs {
   uint  cloudWorleyOctaves;        // FBM octave count (clamped 1..4 in shader)
   float cloudAerialHazePerKm;      // Aerial-perspective HAZE on cloud radiance (1/km). Dims distant
                                    // cloud samples toward atmospheric color. Visual softness control.
+
+  // ----- Sunset ambient warm/cool blend (fork — 2026-05-21) -----
+  // At low sun elevations, lerp the per-sample ambient sky color between the
+  // sun-direction sky LUT sample (warm) and the anti-sun-horizon sky LUT
+  // sample (cool), driven by the D_sun voxel grid so shadowed cloud interiors
+  // read cool while sun-lit edges stay warm. Ramped off above rampHighSun so
+  // midday clouds are unaffected. Consumed by evalNubisCubedSample.
+  float cloudSunsetAmbientStrength;   // Master multiplier on cool blend (0 = feature off, 1 = baseline)
+  float cloudSunsetAmbientReachInvKm; // D_sun reach in 1/km — higher = clouds turn cool faster with shadow depth
+  float cloudSunsetAmbientRampHighSun;// sin(sun elevation) at which the effect smooth-fades to zero
+  float pad_cloudSunsetAmbient0;      // 16-byte alignment
 };

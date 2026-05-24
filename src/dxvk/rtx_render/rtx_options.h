@@ -1590,6 +1590,23 @@ namespace dxvk {
     RTX_OPTION("rtx.atmosphere", float, cloudMsSdfDepth, 128.0f,
                "Nubis Cubed SDF depth in meters at which sigma_ms saturates to deep value.");
 
+    // Sunset ambient warm/cool blend (fork — 2026-05-21).
+    // At low sun, the ambient sky color used for cloud volumetric scattering is
+    // sampled both in the sun direction (warm) and the anti-sun horizon (cool),
+    // and per-sample blended by the D_sun voxel grid so shadowed cloud interiors
+    // pick up the cool side while sun-lit edges stay warm. The effect smoothly
+    // ramps off above cloudSunsetAmbientRampHighSun so daytime clouds are
+    // unaffected. cloudSunsetAmbientStrength = 0 disables the feature entirely.
+    RTX_OPTION("rtx.atmosphere", float, cloudSunsetAmbientStrength, 1.0f,
+               "Master strength of the sunset warm/cool ambient blend. 0 = feature off, "
+               "1 = baseline contrast, >1 = exaggerated cool side.");
+    RTX_OPTION("rtx.atmosphere", float, cloudSunsetAmbientReachInvKm, 1.0f,
+               "How aggressively D_sun (self-shadow optical depth, km) penetrates the cool blend. "
+               "Higher = clouds turn cool faster with shadow depth.");
+    RTX_OPTION("rtx.atmosphere", float, cloudSunsetAmbientRampHighSun, 0.4f,
+               "sin(sun elevation) at which the sunset ambient effect smooth-fades to zero. "
+               "Default 0.4 (~24 degrees above horizon). Effect is at full strength when sun is at the horizon.");
+
     // Nubis Cubed sky-miss composite gate (fork — 2026-05-12, C5).
     // When true, the primary-ray sky-miss path samples the AtmosphereCloudRender
     // RT (written by cloud_render.comp.slang each frame) instead of calling

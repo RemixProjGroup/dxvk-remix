@@ -520,6 +520,11 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudMsSdfDepth      = RtxOptions::cloudMsSdfDepth();
     args.cloudRenderFrameIdx  = m_cloudRenderFrameIdx;
     args.pad_nubisCubed0      = 0.0f;
+
+    args.cloudSunsetAmbientStrength    = RtxOptions::cloudSunsetAmbientStrength();
+    args.cloudSunsetAmbientReachInvKm  = RtxOptions::cloudSunsetAmbientReachInvKm();
+    args.cloudSunsetAmbientRampHighSun = RtxOptions::cloudSunsetAmbientRampHighSun();
+    args.pad_cloudSunsetAmbient0       = 0.0f;
   }
 
   // Cloud render camera basis (fork — 2026-05-12, C4). Pushed from

@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include <atomic>
 #include "../../util/rc/util_rc.h"
 #include "../../util/rc/util_rc_ptr.h"
 #include "rtx_common_object.h"
@@ -54,6 +55,23 @@ namespace fork_hooks {
 
     void gameWndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
     LRESULT overlayWndProc(HWND, UINT, WPARAM, LPARAM);
+
+    // Recency check for raw-input delivery. Used by overlayInputForward to
+    // gate mouse forwarding via the game wnd proc fallback: when Path B
+    // (WM_INPUT on the overlay HWND) is actively delivering, Path A must
+    // skip mouse so two coord-systems don't fight for io.MousePos. When
+    // raw input stops (e.g., plugin HUD pulls focus and our raw-input
+    // registration goes silent), Path A picks up after the threshold lapses.
+    // Threshold deliberately generous (~100ms) — Path B fires concurrently
+    // with Path A on every real input event, so a tight window is fine and
+    // a longer one avoids false-positive "Path B dead" on sporadic activity.
+    bool isRawInputRecent() const {
+      const uint64_t last = m_lastRawInputTickMs.load(std::memory_order_relaxed);
+      if (last == 0) {
+        return false;
+      }
+      return (GetTickCount64() - last) < kRawInputRecencyMs;
+    }
 
     void setDebugDraw(bool enable, BYTE alpha = 96) {
       m_debugDraw = enable;
@@ -88,5 +106,9 @@ namespace fork_hooks {
     bool  m_debugDraw = false;
     BYTE  m_debugAlpha = 96;
     RECT  m_lastRect { 0,0,0,0 };
+
+    // Raw-input liveness gate (see isRawInputRecent() above).
+    static constexpr uint64_t kRawInputRecencyMs = 100;
+    std::atomic<uint64_t> m_lastRawInputTickMs { 0 };
   };
 }
