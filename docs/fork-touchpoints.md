@@ -269,6 +269,9 @@ initializer list and can't be lifted into a separate TU.
 - **[pending commit 1]** Inline tweak — register `src/dxvk/rtx_render/rtx_fork_tonemap.cpp` in the rtx_render source list. Subsequent commits add `fork_tonemap_operators.slangh` (commit 2), `AgX.hlsl` (commit 4), `Lottes.hlsl` (commit 5).
   *Fork-owned tonemap module and shader source files.*
 
+- **Inline tweak** at `dxvk_src` files list (rtx_render block) — 2-line addition registering weather sources.
+  *Registers `'rtx_render/rtx_fork_weather.cpp'` and `'rtx_render/rtx_fork_weather.h'` in the DXVK build source list.*
+
 ---
 
 ## src/dxvk/rtx_render/graph/rtx_component_list.h
@@ -318,6 +321,15 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `RtxContext::dispatchTonemapping` (~line 1727) — global-tonemap dispatch gate widened to include `TonemappingMode::Direct` (`if (mode == Global || mode == Direct)`). In Direct mode, the global tonemapper runs but the apply shader's `cb.directOperatorMode` gate skips the dynamic curve and applies only the selected operator.
   *Direct tonemapping mode (operator-only, no curve) dispatches through the global path.*
 
+- **Inline tweak** at `(file scope)` (weather header include) — 1-line addition near the existing `rtx_fork_*.h` includes.
+  *Adds `#include "rtx_fork_weather.h"` so `WeatherBlender` and the `fork_weather` namespace are available in this translation unit.*
+
+- **Inline tweak** at `RtxContext::RtxContext` constructor (weather blender init) — ~1 LOC.
+  *Adds `m_weatherBlender = std::make_unique<fork_weather::WeatherBlender>();` so the blender is constructed alongside the atmosphere object.*
+
+- **Hook** at `RtxContext` per-frame entry (weather blender update) — `fork_hooks::updateWeatherBlender` in `rtx_fork_weather.cpp`.
+  *Calls `fork_hooks::updateWeatherBlender(*this, GlobalTime::get().deltaTime())` once per frame so the blender can read trigger keys, advance the lerp timeline, and write blended values to the Derived RTX_OPTION layer.*
+
 ---
 
 ## src/dxvk/rtx_render/rtx_context.h
@@ -336,6 +348,15 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** at `RtxContext` class body (just before closing `};`) — 4-line block of `friend` declarations plus a forward-declaration block above the class.
   *Grants `fork_hooks::initAtmosphere`, `fork_hooks::updateAtmosphereConstants`, `fork_hooks::bindAtmosphereLuts`, and `fork_hooks::dispatchScreenOverlay` access to private members.*
+
+- **Inline tweak** at `(file scope)` (weather forward declarations) — ~2 LOC above the class definition.
+  *Adds `namespace fork_weather { class WeatherBlender; }` forward declaration and a `void updateWeatherBlender(class RtxContext& ctx, float deltaTimeSeconds)` forward declaration inside the `fork_hooks` namespace block, so the private member and friend declaration below can reference the type.*
+
+- **Inline tweak** at `RtxContext` class body (private member declarations — weather) — ~1 LOC.
+  *Adds `std::unique_ptr<fork_weather::WeatherBlender> m_weatherBlender;` as a private member of `RtxContext`.*
+
+- **Inline tweak** at `RtxContext` class body (friend declarations block) — ~1 LOC addition to the existing friend block.
+  *Adds `friend void fork_hooks::updateWeatherBlender(RtxContext&, float);` so the hook can access the private `m_weatherBlender` member.*
 
 ---
 
@@ -522,7 +543,13 @@ initializer list and can't be lifted into a separate TU.
   *Phase 1 (2026-05-07) added `moonNeeStrength` (world-side master, default 1.0) and `moonAtmosphericCouplingStrength` (sky-side, default 1.0) RTX_OPTIONs. Phase 3 Task 1 (2026-05-08) added per-path stylistic multipliers: `surfaceMoonBrightness` (default 50.0), `cloudMoonBrightness` (default 2.0), `haloMoonBrightness` (default 15.0) — empirically tuned by in-game testing on 2026-05-08 against the Fallout: New Vegas test scene at `m.brightness=1.0`. Setting all three to 1.0 reverts to architecturally-pure physical-baseline output. Phase 3 Task 2 (2026-05-08) exposed five cloud-look + halo shape constants previously hardcoded in `atmosphere_sky.slangh`: `moonCloudDiffuseGain` (0.10), `moonCloudPhaseGain` (0.30), `moonCloudAnisotropy` (0.85), `moonHaloMagnitude` (0.0015), `moonAmbientAirglow` (0.0015). Defaults preserved; exposure is for in-game tuning without shader rebuilds. All consumed across `evalAtmosphereRadiance`, `evalClouds`, `evalMoonDisk`'s halo, and `sampleAtmosphereMoonLight`.*
 
 - **Inline tweak** at `RtxOptions` class body (Phase 2 default migration) — net 0 LOC, value/text changes only.
-  *Phase 2 (2026-05-08) shifts the per-moon `brightness##N` default from 4.0 → 1.0 (physical neutral; was magic-number magnitude-cheat) and the per-moon `color##N` default from (0.85, 0.87, 0.92) → (0.12, 0.12, 0.12) (neutral lunar Bond albedo; the prior cool-blue tint was magnitude-cheating). Retires the `cloudMoonBrightness` RTX_OPTION (its job — scaling the cloud path's magic-number magnitude — was eliminated by the Phase 2 unified physical irradiance scaffold). See `2026-05-08-moon-physical-irradiance-design.md`.*
+  *Phase 2 (2026-05-08) shifts the per-moon `brightness##N` default from 4.0 → 1.0 (physical neutral; was magic-number magnitude-cheat) and the per-moon `color##N` default from (0.85, 0.87, 0.92) → (0.12, 0.12, 0.12) (neutral lunar Bond albedo; the prior cool-blue tint was magnitude-cheating). Retires the `cloudMoonBrightness` RTX_OPTION (its job -- scaling the cloud path's magic-number magnitude -- was eliminated by the Phase 2 unified physical irradiance scaffold). See `2026-05-08-moon-physical-irradiance-design.md`.*
+
+- **Inline tweak** at `(file scope)` (weather header include) -- 1-line addition near the existing `rtx_fork_*.h` includes.
+  *Adds `#include "rtx_fork_weather.h"` so the `DECLARE_ALL_WEATHER_PRESETS()` macro is in scope before it is used inside the `RtxOptions` class body.*
+
+- **Inline tweak** at `RtxOptions` class body (weather preset RTX_OPTION block) -- 1-line macro invocation + 14-line undef block.
+  *Invokes `DECLARE_ALL_WEATHER_PRESETS()` inside the `RtxOptions` struct body to expand all 348 RTX_OPTION declarations (12 presets x 29 fields). The 14 `#undef` lines immediately following clean up the binder macros so they do not leak into downstream includes.*
 
 - **Inline tweak** — remove `rtx.useLegacyACES` + `rtx.showLegacyACESOption` RtxOptions (superseded by `TonemapOperator::ACESLegacy` enum value).
   *Both options live at the `rtx` namespace (not `rtx.tonemap`); removed in the enum refactor.*
@@ -1059,5 +1086,31 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** at `applyToneMapping` — replace `if (cb.finalizeWithACES) { color = ACESFilm(color, cb.useLegacyACES); }` with `color = applyTonemapOperator(cb.tonemapOperator, color, false);`. Add `#include "rtx/pass/tonemap/fork_tonemap_operators.slangh"`.
   *Global apply pass routes through the fork dispatcher for operator selection.*
+
+---
+
+## src/dxvk/rtx_render/rtx_fork_atmosphere.cpp
+
+**Category:** fork-owned (modifications by weather preset workstream)
+
+**Note:** This is a fork-owned file. It is listed here because the weather
+preset workstream added a call site inside `showAtmosphereUI()`, extending
+the fork-owned ImGui surface.
+
+- **Inline tweak** at `fork_hooks::showAtmosphereUI` (weather UI call site) — ~1 LOC.
+  *Calls `fork_hooks::showWeatherUI()` between the Moons and Clouds collapsing-header tree blocks so the Weather Presets panel appears in the correct visual position in the Atmosphere dev menu.*
+
+---
+
+## src/dxvk/rtx_render/rtx_fork_hooks.h
+
+**Category:** fork-owned (forward declaration additions)
+
+**Note:** This is a fork-owned file. It is listed here because the weather
+preset workstream added two new forward declarations to the `fork_hooks`
+namespace block.
+
+- **Inline tweak** at `fork_hooks` namespace block (forward declarations) — ~2 LOC.
+  *Adds `void updateWeatherBlender(class RtxContext& ctx, float deltaTimeSeconds)` and `void showWeatherUI()` forward declarations. These allow `rtx_context.cpp` and `rtx_fork_atmosphere.cpp` to call the weather hook without including the full `rtx_fork_weather.h` header at those call sites.*
 
 ---

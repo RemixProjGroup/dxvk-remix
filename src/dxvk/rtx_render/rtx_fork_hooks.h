@@ -212,6 +212,15 @@ namespace dxvk {
       DxvkDevice* device,
       uint64_t externalId);
 
+    // Per-frame weather preset blender update. Reads __weather.target and
+    // __weather.blend_seconds from the GameStateStore and writes blended weather
+    // params to the Derived layer of their underlying RTX_OPTIONs. Dormant when
+    // no target is set — zero behavioural change vs upstream.
+    // NOTE: requires RtxContext to declare this as a friend for access to the
+    // private m_weatherBlender member. See rtx_context.h. (Wired in Task 3.)
+    // Implementation in rtx_fork_weather.cpp.
+    void updateWeatherBlender(class RtxContext& ctx, float deltaTimeSeconds);
+
     // Emplaces a new external light into m_externalLights and stamps
     // frameLastTouched. Called from the "new light" branch of addExternalLight.
     // NOTE: requires LightManager to declare this as a friend for access to
@@ -499,6 +508,13 @@ namespace dxvk {
     // No private-member access.
     // Implementation in rtx_fork_tonemap.cpp.
     bool shouldSkipToneCurve();
+
+    // Renders the weather preset UI inside the existing atmosphere ImGui tree.
+    // Includes preset dropdown, blend duration slider, current/target/progress
+    // display, "Pause Weather Blender" toggle, and per-preset slider sub-trees.
+    // No private-member access. (Wired in Task 4.)
+    // Implementation in rtx_fork_weather.cpp.
+    void showWeatherUI();
 
   } // namespace fork_hooks
 

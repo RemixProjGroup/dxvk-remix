@@ -536,6 +536,9 @@ namespace fork_hooks {
         ImGui::TreePop();
       }
 
+      // ----- Weather Presets panel (fork) -----
+      fork_hooks::showWeatherUI();
+
       // ----- Clouds tree (fork) -----
       if (ImGui::TreeNode("Clouds")) {
         RemixGui::Checkbox("Enabled", &RtxOptions::cloudEnabledObject());

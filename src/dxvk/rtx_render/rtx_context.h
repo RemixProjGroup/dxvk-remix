@@ -61,11 +61,15 @@ namespace dxvk {
   // above; RtxContext is forward-declared here so the fork_hooks signatures compile
   // before the class definition is encountered.
   class RtxContext;
+  namespace fork_weather {
+    class WeatherBlender;
+  } // namespace fork_weather
   namespace fork_hooks {
     void initAtmosphere(RtxContext&);
     void updateAtmosphereConstants(RtxContext&, RaytraceArgs&);
     void bindAtmosphereLuts(RtxContext&);
     void dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
+    void updateWeatherBlender(RtxContext& ctx, float deltaTimeSeconds);
   } // namespace fork_hooks
 
   /**
@@ -254,6 +258,7 @@ namespace dxvk {
     SkyMode m_lastSkyMode = SkyMode::SkyboxRasterization;
 
     std::unique_ptr<RtxAtmosphere> m_atmosphere;
+    std::unique_ptr<fork_weather::WeatherBlender> m_weatherBlender;
 
     bool shouldUseDLSS() const;
     bool shouldUseRayReconstruction() const;
@@ -337,5 +342,6 @@ namespace dxvk {
     friend void fork_hooks::updateAtmosphereConstants(RtxContext&, RaytraceArgs&);
     friend void fork_hooks::bindAtmosphereLuts(RtxContext&);
     friend void fork_hooks::dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
+    friend void fork_hooks::updateWeatherBlender(RtxContext& ctx, float deltaTimeSeconds);
   };
 } // namespace dxvk

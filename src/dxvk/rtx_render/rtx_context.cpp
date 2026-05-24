@@ -75,6 +75,7 @@
 #include "../util/util_fastops.h"
 
 #include "rtx_fork_hooks.h"
+#include "rtx_fork_weather.h"
 
 // Destructor requires the struct definitions
 #include "rtx_sky.h"
@@ -204,6 +205,7 @@ namespace dxvk {
     GlobalTime::get().setAdvanceTime(RtxOptions::advanceTime());
 
     fork_hooks::initAtmosphere(*this);
+    m_weatherBlender = std::make_unique<fork_weather::WeatherBlender>();
   }
 
   RtxContext::~RtxContext() {
@@ -826,6 +828,7 @@ namespace dxvk {
 
     // Update time on the frame end so all other systems can benefit from a global time
     GlobalTime::get().update();
+    fork_hooks::updateWeatherBlender(*this, GlobalTime::get().deltaTime());
   }
 
   // Called right before D3D9 present
