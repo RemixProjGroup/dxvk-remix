@@ -219,6 +219,19 @@ check will enforce it if discipline slips.
 
 ---
 
+## src/dxvk/imgui/dxvk_imgui_about.cpp
+
+**Category:** index-only
+
+**Rationale:** Fork additions are string-literal entries in the in-game
+About panel's "GitHub Contributors" list — they live inside a curly-braced
+initializer list and can't be lifted into a separate TU.
+
+- **Inline tweak** at `ImGuiAbout::Credits::Credits` constructor (GitHub Contributors string list, ~lines 91-107) — one string literal per fork contributor, sorted alphabetically per the inline comment. Per CONTRIBUTING.md, contributors add their own entry when their PR adds something visible. Tracked here per the fridge-list invariant.
+  *Each entry is in the format `"FirstName 'Handle' LastName"` or handle-only (`"BrunchyChineapple"`, `"Dayton 'watbulb'"`). The list is the canonical record of community contributors visible in the About panel.*
+
+---
+
 ## src/dxvk/imgui/dxvk_imgui.h
 
 **Pre-refactor fork footprint:** +2 / -1 LOC (audit 2026-04-18)
@@ -499,8 +512,8 @@ check will enforce it if discipline slips.
 - **Inline tweak** at `RtxOptions` class body (skyMode RTX_OPTION) — ~2 LOC.
   *Declares `RTX_OPTION("rtx", SkyMode, skyMode, SkyMode::SkyboxRasterization, ...)` immediately after the existing sky-related options block. Consumed by `fork_hooks::updateAtmosphereConstants` in `rtx_fork_atmosphere.cpp`.*
 
-- **Inline tweak** at `RtxOptions` class body (atmosphere RTX_OPTIONs block) — ~25 LOC.
-  *Declares all 17 atmosphere tuning options under the `rtx.atmosphere` prefix: `sunDisc`, `sunSize`, `sunIntensity`, `sunElevation`, `sunRotation`, `altitude`, `airDensity`, `aerosolDensity`, `ozoneDensity`, `planetRadius`, `atmosphereThickness`, `mieAnisotropy`, `rayleighScattering`, `mieScattering`, `ozoneAbsorption`, `ozoneLayerAltitude`, `ozoneLayerWidth`, and `sunIlluminance`. All consumed by `RtxAtmosphere` and the atmosphere hooks in `rtx_fork_atmosphere.cpp`.*
+- **Inline tweak** at `RtxOptions` class body (atmosphere RTX_OPTIONs block) — ~25 LOC for the original 17 options + ~5 LOC for night-sky + ~52 LOC for the `DECLARE_MOON_OPTIONS(N)` macro and 4 invocations. `sunElevation` and `sunRotation` flipped from `RTX_OPTION` → `RTX_OPTION_FLAG` with `NoSave` so the game can drive them per-frame without polluting the user config.
+  *Declares the original 17 atmosphere tuning options under the `rtx.atmosphere` prefix (`sunDisc`, `sunSize`, `sunIntensity`, `sunElevation`, `sunRotation`, `altitude`, `airDensity`, `aerosolDensity`, `ozoneDensity`, `planetRadius`, `atmosphereThickness`, `mieAnisotropy`, `rayleighScattering`, `mieScattering`, `ozoneAbsorption`, `ozoneLayerAltitude`, `ozoneLayerWidth`, `sunIlluminance`), plus the night-sky block (`starBrightness`, `starDensity`, `starTwinkleSpeed`, `nightSkyBrightness`, `nightSkyColor`), plus a per-moon block declared via the `DECLARE_MOON_OPTIONS(N)` macro for `N` in `0..MAX_MOONS-1` (each block: `enabledN`, `angularRadiusN`, `brightnessN`, `colorN`, `surfaceStyleN`, `craterDensityN`, `surfaceContrastN`, `surfaceNoiseScaleN`, `darkSideBrightnessN`, `roughnessAmountN`, plus NoSave-flagged `elevationN`/`rotationN`/`phaseN`). All consumed by `RtxAtmosphere::getAtmosphereArgs()` and the atmosphere UI hook in `rtx_fork_atmosphere.cpp`.*
 
 - **Inline tweak** — remove `rtx.useLegacyACES` + `rtx.showLegacyACESOption` RtxOptions (superseded by `TonemapOperator::ACESLegacy` enum value).
   *Both options live at the `rtx` namespace (not `rtx.tonemap`); removed in the enum refactor.*
