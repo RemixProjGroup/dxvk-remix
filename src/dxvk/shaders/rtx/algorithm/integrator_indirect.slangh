@@ -135,7 +135,105 @@ bool evalAtmosphereSunNEESecondary(
   vec3 sunThroughput = avgAttenuation * avgVisibility;
   diffuseLight += sunSample.radiance * vec3(splitWeight.diffuseReflectionWeight + splitWeight.diffuseTransmissionWeight) * sunThroughput;
   specularLight += sunSample.radiance * vec3(splitWeight.specularReflectionWeight) * sunThroughput;
-  
+
+  return true;
+}
+
+// Evaluate direct moon lighting for secondary bounces (atmosphere mode) with
+// soft shadows (fork). Mirror of evalAtmosphereSunNEESecondary. One enabled,
+// above-horizon moon picked per ray via importance sampling; accumulated
+// contribution divided by discrete pick PDF.
+bool evalAtmosphereMoonNEESecondary(
+  Ray ray,
+  MinimalRayInteraction rayInteraction,
+  MinimalSurfaceInteraction surfaceInteraction,
+  OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction,
+  uint8_t rayMask,
+  PortalSpace2BitsType portalSpace,
+  bool pomOpaqueSurfaceEncountered,
+  uint16_t surfaceIndex,
+  float2 texcoords,
+  AtmosphereArgs atmosphereArgs,
+  bool isZUp,
+  inout RNG randomState,
+  inout vec3 diffuseLight,
+  inout vec3 specularLight)
+{
+  float u_pick = getNextSampleBlueNoise(randomState);
+  AtmosphereMoonSample moonSample = sampleAtmosphereMoonLight(
+    surfaceInteraction.position,
+    opaqueSurfaceMaterialInteraction.shadingNormal,
+    atmosphereArgs,
+    u_pick,
+    isZUp);
+
+  if (!moonSample.valid) {
+    return false;
+  }
+
+  float NdotL = dot(opaqueSurfaceMaterialInteraction.shadingNormal, moonSample.direction);
+  if (NdotL <= 0.0f) {
+    return false;
+  }
+
+  uint8_t shadowMask = OBJECT_MASK_OPAQUE | (rayMask & OBJECT_MASK_ALL_DYNAMIC);
+  shadowMask |= (cb.enableIndirectTranslucentShadows) ? OBJECT_MASK_TRANSLUCENT : 0;
+  shadowMask |= (cb.enableIndirectAlphaBlendShadows) ? OBJECT_MASK_ALPHA_BLEND : 0;
+
+  const bool isThinOpaqueSubsurface = isThinOpaqueSubsurfaceMaterial(opaqueSurfaceMaterialInteraction);
+  const bool isViewModel = rayMask & OBJECT_MASK_ALL_VIEWMODEL;
+
+  // Soft shadows: half the samples for indirect (matches the sun path).
+  const float moonRayLength = 1000000.0f;
+
+  float visibilitySum = 0.0f;
+  vec3 attenuationSum = vec3(0.0f);
+  int numSamples = max(1, moonSample.numSamples / 2);
+
+  for (int i = 0; i < numSamples; i++) {
+    float u1 = getNextSampleBlueNoise(randomState);
+    float u2 = getNextSampleBlueNoise(randomState);
+    vec3 jitteredDir = getJitteredSunDirection(moonSample.direction, moonSample.coneAngle, u1, u2);
+
+    float jitteredNdotL = dot(opaqueSurfaceMaterialInteraction.shadingNormal, jitteredDir);
+    if (jitteredNdotL <= 0.0f) {
+      continue;
+    }
+
+    vec3 moonTargetPos = surfaceInteraction.position + jitteredDir * moonRayLength;
+
+    VisibilityResult visibility = traceVisibilityRay<visibilityModeEnablePom | visibilityModeEnableTranslucentMaterials>(
+      surfaceInteraction,
+      moonTargetPos, shadowMask,
+      invalidRayPortalIndex, portalSpace, pomOpaqueSurfaceEncountered,
+      rayInteraction.coneRadius, ray.spreadAngle, 1.0, isViewModel, false,
+      surfaceIndex, texcoords,
+      isThinOpaqueSubsurface,
+      opaqueSurfaceMaterialInteraction.shadingNormal);
+
+    if (!visibility.hasOpaqueHit) {
+      visibilitySum += 1.0f;
+      attenuationSum += vec3(visibility.attenuation);
+    }
+  }
+
+  if (visibilitySum <= 0.0f) {
+    return false;
+  }
+
+  float avgVisibility = visibilitySum / float(numSamples);
+  vec3 avgAttenuation = attenuationSum / float(numSamples);
+
+  const SurfaceMaterialInteractionSplitWeight splitWeight =
+    opaqueSurfaceMaterialInteractionCalcProjectedWeight(
+      opaqueSurfaceMaterialInteraction, rayInteraction, f16vec3(moonSample.direction));
+
+  // Divide by discrete pick PDF (see evalAtmosphereMoonNEE for rationale).
+  vec3 moonThroughput = avgAttenuation * avgVisibility;
+  float invPickPdf = 1.0f / max(moonSample.solidAnglePdf, 1e-6f);
+  diffuseLight += moonSample.radiance * vec3(splitWeight.diffuseReflectionWeight + splitWeight.diffuseTransmissionWeight) * moonThroughput * invPickPdf;
+  specularLight += moonSample.radiance * vec3(splitWeight.specularReflectionWeight) * moonThroughput * invPickPdf;
+
   return true;
 }
 
@@ -898,7 +996,7 @@ void integratePathVertex(
     {
       vec3 sunDiffuse = vec3(0.0f);
       vec3 sunSpecular = vec3(0.0f);
-      
+
       if (evalAtmosphereSunNEESecondary(
             ray, rayInteraction, surfaceInteraction, opaqueSurfaceMaterialInteraction,
             pathState.rayMask, pathState.portalSpace, pomOpaqueSurfaceEncountered,
@@ -909,6 +1007,22 @@ void integratePathVertex(
       {
         vec3 sunLight = sunDiffuse + sunSpecular;
         accumulateRadiance(pathState, sunLight);
+      }
+
+      // Moon NEE alongside sun NEE for secondary bounces (fork).
+      vec3 moonDiffuse = vec3(0.0f);
+      vec3 moonSpecular = vec3(0.0f);
+
+      if (evalAtmosphereMoonNEESecondary(
+            ray, rayInteraction, surfaceInteraction, opaqueSurfaceMaterialInteraction,
+            pathState.rayMask, pathState.portalSpace, pomOpaqueSurfaceEncountered,
+            rayInteraction.surfaceIndex, surfaceInteraction.textureCoordinates,
+            cb.atmosphereArgs, cb.isZUp != 0,
+            randomState,
+            moonDiffuse, moonSpecular))
+      {
+        vec3 moonLight = moonDiffuse + moonSpecular;
+        accumulateRadiance(pathState, moonLight);
       }
     }
 

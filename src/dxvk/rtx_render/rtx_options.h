@@ -1281,10 +1281,12 @@ namespace dxvk {
                "Enable moon " #N " rendering.");                                                \
     RTX_OPTION("rtx.atmosphere.moon" #N, float, angularRadius##N, 3.5f,                         \
                "Moon " #N " angular diameter in degrees.");                                     \
-    RTX_OPTION("rtx.atmosphere.moon" #N, float, brightness##N, 4.0f,                            \
-               "Moon " #N " brightness multiplier.");                                           \
-    RTX_OPTION("rtx.atmosphere.moon" #N, Vector3, color##N, Vector3(0.85f, 0.87f, 0.92f),       \
-               "Moon " #N " base color/albedo.");                                               \
+    RTX_OPTION("rtx.atmosphere.moon" #N, float, brightness##N, 1.0f,                            \
+               "Moon " #N " brightness multiplier. Default 1.0 = physical neutral; "            \
+               ">1 brightens for stylized scenes (e.g. 4.0 reproduces pre-Phase-2 look).");     \
+    RTX_OPTION("rtx.atmosphere.moon" #N, Vector3, color##N, Vector3(0.12f, 0.12f, 0.12f),       \
+               "Moon " #N " surface albedo. Default (0.12, 0.12, 0.12) ≈ Earth's lunar Bond "   \
+               "albedo; raise per-channel for tinted moons (blood-red, sulfur-yellow, etc.).");\
     RTX_OPTION("rtx.atmosphere.moon" #N, uint32_t, surfaceStyle##N, 0u,                         \
                "Moon " #N " surface preset: 0 = Rocky, 1 = Volcanic.");                         \
     RTX_OPTION("rtx.atmosphere.moon" #N, float, craterDensity##N, 1.0f,                         \
@@ -1309,6 +1311,64 @@ namespace dxvk {
     DECLARE_MOON_OPTIONS(2);
     DECLARE_MOON_OPTIONS(3);
 #undef DECLARE_MOON_OPTIONS
+
+    // ----- Moon NEE / atmospheric-coupling strengths (fork) -----
+    RTX_OPTION("rtx.atmosphere", float, moonNeeStrength, 1.0f,
+               "World-side master multiplier on direct moon lighting (surface NEE + clouds + future volumetric). "
+               "0 = moon does not light the world; 1 = default physical-baseline magnitude; "
+               ">1 = brighten across all world-side paths simultaneously. Per-path fine-tuning available "
+               "via surfaceMoonBrightness / cloudMoonBrightness / haloMoonBrightness.");
+    RTX_OPTION("rtx.atmosphere", float, moonAtmosphericCouplingStrength, 1.0f,
+               "Sky-side multiplier on the moon's contribution to atmospheric scattering. "
+               "0 = no blue-dome around the moon (sky stays pure black); 1 = default physical-baseline; "
+               ">1 = exaggerated for stylized scenes.");
+
+    // ----- Per-path moon stylistic multipliers (fork, Phase 3) -----
+    // These are tonemapper-correction stylistic axes layered on top of the unified
+    // physical irradiance scaffold from Phase 2. Defaults are empirically tuned by
+    // in-game testing on 2026-05-08 against the Fallout: New Vegas test scene at
+    // m.brightness=1.0 (the new physical-neutral default). Set all three to 1.0
+    // for architecturally-pure physical baseline; the shipped defaults represent
+    // the offset between physical-correct and what the FNV tonemapper makes
+    // visually readable.
+    RTX_OPTION("rtx.atmosphere", float, surfaceMoonBrightness, 50.0f,
+               "Per-path stylistic multiplier on surface NEE (ground moonlight). "
+               "Default 50.0 = user-tested baseline for visible ground under FNV tonemapper "
+               "at m.brightness=1.0; 1.0 = physically-pure (very dim under typical tonemappers); "
+               "raise for brighter ground.");
+    RTX_OPTION("rtx.atmosphere", float, cloudMoonBrightness, 2.0f,
+               "Per-path stylistic multiplier on cloud-moon directional lighting + ambient airglow. "
+               "Default 2.0 = user-tested baseline for cloud silver-lining under FNV tonemapper "
+               "at m.brightness=1.0; 1.0 = physically-pure; 0 = no moon-cloud illumination. "
+               "Higher values produce a stronger silver-lining peak on the cloud directly in front "
+               "of the moon.");
+    RTX_OPTION("rtx.atmosphere", float, haloMoonBrightness, 15.0f,
+               "Per-path stylistic multiplier on disk halo Gaussian glow. "
+               "Default 15.0 = user-tested baseline for visible halo glow under FNV tonemapper "
+               "at m.brightness=1.0; 1.0 = physically-pure; 0 = no halo.");
+
+    // ----- Moon cloud-look + halo shape constants (fork, Phase 3 Task 2) -----
+    // Tunable shape parameters for cloud-moon silver-lining contrast and halo glow.
+    // Defaults preserve current calibrated values; exposed for in-game tuning.
+    RTX_OPTION("rtx.atmosphere", float, moonCloudDiffuseGain, 0.10f,
+               "Cloud-moon Lambert diffuse weight controlling off-axis cloud illumination. "
+               "Lower = stronger contrast (off-axis clouds dimmer relative to peak). "
+               "Higher = more uniform cloud lighting. Default 0.10.");
+    RTX_OPTION("rtx.atmosphere", float, moonCloudPhaseGain, 0.30f,
+               "Cloud-moon HG phase weight controlling peak silver-lining intensity. "
+               "Higher = brighter cloud directly in front of moon. Default 0.30.");
+    RTX_OPTION("rtx.atmosphere", float, moonCloudAnisotropy, 0.85f,
+               "Henyey-Greenstein anisotropy for cloud-moon forward scatter. Higher = "
+               "sharper silver-lining peak (concentrated on cloud directly in front of "
+               "moon); lower = softer falloff. Default 0.85.");
+    RTX_OPTION("rtx.atmosphere", float, moonHaloMagnitude, 0.0015f,
+               "Disk halo Gaussian strength multiplier. Tuned alongside haloMoonBrightness; "
+               "use this for the underlying SHAPE strength and haloMoonBrightness for the "
+               "tonemapper-correction multiplier. Default 0.0015.");
+    RTX_OPTION("rtx.atmosphere", float, moonAmbientAirglow, 0.0015f,
+               "Ambient airglow per-moon strength contribution to nightLight. The cloud "
+               "volume gets a uniform sky-bounce from each enabled moon scaled by this "
+               "constant. Default 0.0015.");
 
     // Cloud parameters (procedural FBM cloud layer)
     RTX_OPTION("rtx.atmosphere", bool, cloudEnabled, true, "Enable procedural cloud rendering.");
@@ -1359,12 +1419,6 @@ namespace dxvk {
                "Lateral cloud-top displacement along wind direction, scaled by cloud type [0,1+]. "
                "0=cloud tops vertical above base, 1=tops offset by ~thickness*type along wind. "
                "Reduces the visible per-cumulus 45-degree lean at default settings.");
-    RTX_OPTION("rtx.atmosphere", float, cloudMoonBrightness, 0.3f,
-               "Strength of directional moon lighting on clouds [0,1+]. "
-               "0=moonlit-cloud feature off (only nightSkyColor airglow + per-moon ambient remain), "
-               "1=full strength. Each enabled, above-horizon moon contributes Lambert+HG response "
-               "scaled by its phaseGlow (full at full moon, zero at new moon). No per-sample shadow "
-               "march — single-bounce only.");
     RTX_OPTION("rtx.atmosphere", float, cloudNoiseTileKm, 12.0f,
                "World-space tile period (km) for the prebaked 3D cloud noise texture. "
                "Smaller = more visible repetition; larger = lower-frequency cloud detail. "

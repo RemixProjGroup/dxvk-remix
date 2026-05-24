@@ -209,6 +209,32 @@ vec3 uvToSkyViewLutParams(vec2 uv, vec3 viewDir, vec3 sunDir, vec3 cameraPos, At
   return normalize(dir);
 }
 
+// ============================================================================
+// Per-moon physical irradiance scaffold (fork) — shared across all moon-
+// lighting consumers (disk, cloud, atmospheric coupling, surface NEE, halo).
+//
+// Returns: args.sunIlluminance × albedo × moonAirTrans × m.brightness / π
+//
+// Units: radiance (W/m²/sr equivalent in shader-normalized units). Represents
+// the surface radiance of the moon's lit hemisphere as seen through atmosphere.
+// Callers multiply per-path geometric / phase factors on top:
+//   Disk (per-pixel):   × surfaceDetail × diffuse × limbDarkening
+//   Cloud / NEE / atm:  × phaseGlow × moonSolidAngleSr × <strength slider>
+//   Halo:               × phaseGlow × glow × kHaloMagnitude
+//
+// `albedo` is parameterized so disk paths can pass per-pixel `surfaceColor`
+// (perturbed by surface noise) while uniform-albedo paths pass `m.color`.
+//
+// `moonAirTrans` (Kasten-Young + ozone + twilight) is computed internally via
+// getAtmosphericTransmittanceForDir; same atmospheric-extinction model the
+// sun NEE path uses. Forward-references that helper (defined later in this
+// file, line ~648); slang permits forward references to top-level functions.
+// ============================================================================
+vec3 computeMoonSharedFactor(MoonParams m, AtmosphereArgs args, vec3 albedo) {
+  vec3 moonAirTrans = getAtmosphericTransmittanceForDir(normalize(m.direction), args);
+  return args.sunIlluminance * albedo * moonAirTrans * m.brightness / kPi;
+}
+
 // Evaluate atmosphere radiance along a ray with multiscattering
 // This is used in direct evaluation
 vec3 evalAtmosphereRadiance(
@@ -263,6 +289,48 @@ vec3 evalAtmosphereRadiance(
   float phaseR = rayleighPhase(cosTheta);
   float phaseM = hgPhase(cosTheta, args.mieAnisotropy);
   
+  // Combined-moon direction + irradiance precompute (Lever-4 style — fork).
+  // Brightness-weighted average direction across enabled, above-horizon moons,
+  // and summed irradiance across the same. One scattering term per sample
+  // instead of N per-moon terms; visual delta is near-zero at moon magnitudes
+  // and the perf saving is real (no per-moon dot/phase/exp inside the loop).
+  //
+  // Phase 2 (2026-05-08): per-moon irradiance is now the unified physical
+  // scaffold — args.sunIlluminance × m.color × moonAirTrans × m.brightness × π⁻¹
+  // × phaseGlow × moonSolidAngleSr — replacing the prior kAtmosphereMoonIllumScale
+  // = 1e-4 magic-number scaling. Magnitude at default settings is within ~5%
+  // of the prior calibration; sun-following-ness is now correct.
+  vec3 combinedMoonDir        = vec3(0.0f, 1.0f, 0.0f);
+  vec3 combinedMoonIrradiance = vec3(0.0f);
+  if (args.moonAtmosphericCouplingStrength > 0.001f) {
+    float sunElev_local = sunDir.y;
+    float nightFactor   = smoothstep(0.02f, -0.05f, sunElev_local);
+    if (nightFactor > 0.001f) {
+      vec3  sumWeightedDir = vec3(0.0f);
+      float sumWeight      = 0.0f;
+      [unroll] for (uint mi = 0u; mi < MAX_MOONS; ++mi) {
+        MoonParams m = args.moons[mi];
+        if (m.enabled < 0.5f) continue;
+        vec3 moonDir = normalize(m.direction);
+        if (moonDir.y <= 0.01f) continue;
+        float phaseGlow = 0.5f - 0.5f * cos(m.phase * 2.0f * kPi);
+        if (phaseGlow <= 0.001f) continue;
+        vec3 sharedFactor = computeMoonSharedFactor(m, args, m.color);
+        float moonSolidAngleSr = 2.0f * kPi * (1.0f - cos(m.angularRadius));
+        vec3 moonIrradiance = sharedFactor * phaseGlow * moonSolidAngleSr
+                            * nightFactor * args.moonAtmosphericCouplingStrength;
+        float w = max(max(moonIrradiance.r, moonIrradiance.g), moonIrradiance.b);
+        if (w <= 0.0f) continue;
+        sumWeightedDir += moonDir * w;
+        sumWeight      += w;
+        combinedMoonIrradiance += moonIrradiance;
+      }
+      if (sumWeight > 0.0f && length(sumWeightedDir) > 0.001f) {
+        combinedMoonDir = normalize(sumWeightedDir);
+      }
+    }
+  }
+
   for (int i = 0; i < actualSamples && i < 512; ++i) {
     float t = t0 + (float(i) + 0.5f) * dt;
     vec3 samplePos = rayOrigin + rayDir * t;
@@ -355,9 +423,24 @@ vec3 evalAtmosphereRadiance(
     sunTransmittance *= twilightFactor;
     
     // Single scattering contribution
-    vec3 singleScatter = args.sunIlluminance * sunTransmittance * 
+    vec3 singleScatter = args.sunIlluminance * sunTransmittance *
                           (scatteringR * phaseR + scatteringM * phaseM);
-    
+
+    // Moon contribution to single scattering. Combined-moon direction +
+    // irradiance precomputed above the per-sample loop (Lever-4 style —
+    // brightness-weighted average across enabled, above-horizon moons).
+    // Per-sample we just dot the ray direction against the combined moon
+    // direction and apply the same Rayleigh + Mie phase functions used for
+    // the sun.
+    if (any(combinedMoonIrradiance > vec3(0.0f))) {
+      float moonCosTheta = dot(rayDir, combinedMoonDir);
+      float moonPhaseR = rayleighPhase(moonCosTheta);
+      float moonPhaseM = hgPhase(moonCosTheta, args.mieAnisotropy);
+      vec3 moonSingleScatter = combinedMoonIrradiance *
+                               (scatteringR * moonPhaseR + scatteringM * moonPhaseM);
+      singleScatter += moonSingleScatter;
+    }
+
     // Multiscattering contribution
     // Use high-accuracy analytical approximation instead of LUT
     vec3 multiScatter = getAnalyticalMultiscattering(altitude, sunZenithCosAngle, args);
@@ -751,7 +834,159 @@ AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal
   
   // Get soft shadow parameters based on Mie anisotropy
   getSunSoftShadowParams(args.mieAnisotropy, result.coneAngle, result.numSamples);
-  
+
+  return result;
+}
+
+// ============================================================================
+// Moon NEE — surface direct lighting from the moon (fork)
+// ============================================================================
+// Mirrors the sun-NEE structure above. One moon picked per ray via importance
+// sampling (weight = brightness * phaseGlow * max(direction.y, 0)); ReSTIR +
+// DLSS handle temporal averaging across frames. Shares getJitteredSunDirection
+// for soft-shadow cone jitter -- that helper is direction-agnostic despite the
+// name.
+
+// Structure for direct moon lighting sample (NEE) -- fork.
+struct AtmosphereMoonSample {
+  vec3 direction;       // Direction TO the picked moon (normalized), in world space
+  vec3 radiance;        // Moon radiance reaching the surface (with transmittance)
+  float solidAnglePdf;  // Discrete pick PDF over enabled moons; integrator divides into accumulation
+  bool valid;           // True if a moon was successfully picked and is above horizon
+  float coneAngle;      // Half-angle of the moon cone for soft shadows (radians)
+  int numSamples;       // Number of shadow samples to take for soft shadows
+  uint pickedMoonIdx;   // Diagnostic; MAX_MOONS if invalid
+};
+
+// Importance-pick a single enabled, above-horizon moon by a discrete CDF over
+// per-moon weight = m.brightness * phaseGlow * max(direction.y, 0). `u` is a
+// uniform [0,1) random; `outPickPdf` receives the discrete pick probability
+// (1.0 if only one moon contributes, fractional otherwise). Returns MAX_MOONS
+// if no moon qualifies (daytime, all moons disabled, all below horizon, or
+// all at new-moon phase).
+uint pickMoon(AtmosphereArgs args, float u, out float outPickPdf) {
+  outPickPdf = 0.0f;
+  float weights[MAX_MOONS];
+  float total = 0.0f;
+  [unroll] for (uint mi = 0u; mi < MAX_MOONS; ++mi) {
+    weights[mi] = 0.0f;
+    MoonParams m = args.moons[mi];
+    if (m.enabled < 0.5f) continue;
+    vec3 moonDir = normalize(m.direction);
+    if (moonDir.y <= 0.01f) continue;
+    float phaseGlow = 0.5f - 0.5f * cos(m.phase * 2.0f * kPi);
+    if (phaseGlow <= 0.001f) continue;
+    float w = m.brightness * phaseGlow * moonDir.y;
+    weights[mi] = w;
+    total += w;
+  }
+  if (total <= 0.0f) {
+    return MAX_MOONS;
+  }
+  float threshold = u * total;
+  float accum = 0.0f;
+  [unroll] for (uint mi2 = 0u; mi2 < MAX_MOONS; ++mi2) {
+    if (weights[mi2] <= 0.0f) continue;
+    accum += weights[mi2];
+    if (accum >= threshold) {
+      outPickPdf = weights[mi2] / total;
+      return mi2;
+    }
+  }
+  // Fallback for floating-point edge: return the last positive-weight moon.
+  [unroll] for (uint mi3 = 0u; mi3 < MAX_MOONS; ++mi3) {
+    uint idx = MAX_MOONS - 1u - mi3;
+    if (weights[idx] > 0.0f) {
+      outPickPdf = weights[idx] / total;
+      return idx;
+    }
+  }
+  return MAX_MOONS;
+}
+
+// Sample direct moon lighting for NEE at a surface point -- fork.
+// Mirrors sampleAtmosphereSunLight. One moon picked per call via the
+// importance helper above; integrator divides accumulated contribution by
+// solidAnglePdf to debias the pick.
+AtmosphereMoonSample sampleAtmosphereMoonLight(vec3 surfacePos, vec3 surfaceNormal,
+                                               AtmosphereArgs args, float u_pick,
+                                               bool isZUp = false) {
+  AtmosphereMoonSample result;
+  result.direction      = vec3(0.0f, 1.0f, 0.0f);
+  result.radiance       = vec3(0.0f);
+  result.solidAnglePdf  = 1.0f;
+  result.valid          = false;
+  result.coneAngle      = 0.05f;
+  result.numSamples     = 1;
+  result.pickedMoonIdx  = MAX_MOONS;
+
+  if (args.moonNeeStrength <= 0.0f) {
+    return result;
+  }
+
+  // Night-factor gate -- moon NEE only contributes once the sun has dropped
+  // past the twilight band. Same gate shape as cloud and atmospheric coupling.
+  float sunElev = args.sunDirection.y;
+  float nightFactor = smoothstep(0.02f, -0.05f, sunElev);
+  if (nightFactor < 0.001f) {
+    return result;
+  }
+
+  float pickPdf;
+  uint mIdx = pickMoon(args, u_pick, pickPdf);
+  if (mIdx >= MAX_MOONS) {
+    return result;
+  }
+
+  MoonParams m = args.moons[mIdx];
+  vec3 moonDirYUp = normalize(m.direction);
+
+  // Direction in caller's coordinate space (Y-up or Z-up).
+  result.direction = isZUp ? vec3(moonDirYUp.x, moonDirYUp.z, moonDirYUp.y) : moonDirYUp;
+
+  // Surface-facing check.
+  float NdotL = dot(surfaceNormal, result.direction);
+  if (NdotL <= 0.0f) {
+    return result;
+  }
+
+  vec3 transmittance = getAtmosphericTransmittanceForDir(moonDirYUp, args);
+  if (all(transmittance <= vec3(1e-6f))) {
+    return result;
+  }
+
+  float phaseGlow = 0.5f - 0.5f * cos(m.phase * 2.0f * kPi);
+
+  // Phase 2 (2026-05-08): physical irradiance via computeMoonSharedFactor.
+  // Replaces the prior kSurfaceMoonIllumScale = 1e-5 magic-number scaling.
+  //
+  // Magnitude analysis for FNV defaults (sunIlluminance ~20, m.color 0.12,
+  // m.brightness 1.0, full moon, zenith):
+  //   sharedFactor      = 20 × 0.12 × 0.97 × 1.0 / π ≈ 0.74 per channel
+  //   moonSolidAngleSr  = 2π × (1 - cos(0.0305 rad)) ≈ 2.93e-3 sr
+  //   result.radiance   = 0.74 × 1.0 × 2.93e-3 × 1.0 × 1.0 ≈ 2.17e-3 per channel
+  //
+  // Sun-to-moon ratio: 2.17e-3 / 20 ≈ 1.09e-4 — within 5% of the physical
+  // reference for a stylized 3.5° angular-diameter moon (Earth's 0.5° moon
+  // would yield ~2.5e-6, but the game's larger angular size scales solid
+  // angle ~46×). Tunable via args.moonNeeStrength at runtime if too bright
+  // under the FNV tonemapper.
+  vec3 sharedFactor = computeMoonSharedFactor(m, args, m.color);
+  float moonSolidAngleSr = 2.0f * kPi * (1.0f - cos(m.angularRadius));
+  // Phase 3 (2026-05-08): args.surfaceMoonBrightness is the per-path stylistic
+  // multiplier on surface NEE (default 8.0 = tonemapper-corrected baseline).
+  result.radiance = sharedFactor * phaseGlow * moonSolidAngleSr
+                  * args.moonNeeStrength * args.surfaceMoonBrightness * nightFactor;
+
+  result.solidAnglePdf = pickPdf;
+  result.valid         = any(result.radiance > vec3(0.0f));
+  result.pickedMoonIdx = mIdx;
+
+  // Soft-shadow cone: moons typically have ~3.5deg angular diameter (~6x sun),
+  // so the cone is bigger than the sun's. Cap to 0.6 rad (~34deg) for stability.
+  result.coneAngle  = clamp(m.angularRadius * 0.5f, 0.005f, 0.6f);
+  result.numSamples = 4;  // Constant; moon shadows are softer than sun's.
+
   return result;
 }
 

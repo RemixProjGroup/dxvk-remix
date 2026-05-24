@@ -518,8 +518,11 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `RtxOptions` class body (cloud spatial-variation block) — +21 / -11 net LOC.
   *Adds `cloudTypeMean`, `cloudTypeSpread`, `cloudTypeNoiseScale`, `cloudCoverageMean`, `cloudCoverageSpread`, `cloudCoverageNoiseScale`, `cloudAnvilBias`, `cloudWindShearStrength` RTX_OPTIONs (Nubis-style spatial variation, spec 2026-05-06; `cloudWindShearStrength` added as a tunable knob on the existing wind-shear UV perturbation in `sampleCloudDensity`). Replaces retired `cloudCoverage`, `cloudVariance`, `cloudVarianceScale`, `cloudVerticalProfile`.*
 
-- **Inline tweak** at `RtxOptions` class body (moon-lit cloud lighting) — +6 LOC.
-  *Adds `cloudMoonBrightness` RTX_OPTION controlling the strength of directional moon lighting on cloud volumes (Lambert + HG, single-bounce v1, no shadow march). Consumed by the `moonDirectLight` pre-compute in `evalClouds` (`atmosphere_sky.slangh`).*
+- **Inline tweak** at `RtxOptions` class body (moon-lighting strength sliders + cloud-look shape) — +10 LOC (Phase 1) + +18 LOC (Phase 3 Task 1) + +28 LOC (Phase 3 Task 2).
+  *Phase 1 (2026-05-07) added `moonNeeStrength` (world-side master, default 1.0) and `moonAtmosphericCouplingStrength` (sky-side, default 1.0) RTX_OPTIONs. Phase 3 Task 1 (2026-05-08) added per-path stylistic multipliers: `surfaceMoonBrightness` (default 50.0), `cloudMoonBrightness` (default 2.0), `haloMoonBrightness` (default 15.0) — empirically tuned by in-game testing on 2026-05-08 against the Fallout: New Vegas test scene at `m.brightness=1.0`. Setting all three to 1.0 reverts to architecturally-pure physical-baseline output. Phase 3 Task 2 (2026-05-08) exposed five cloud-look + halo shape constants previously hardcoded in `atmosphere_sky.slangh`: `moonCloudDiffuseGain` (0.10), `moonCloudPhaseGain` (0.30), `moonCloudAnisotropy` (0.85), `moonHaloMagnitude` (0.0015), `moonAmbientAirglow` (0.0015). Defaults preserved; exposure is for in-game tuning without shader rebuilds. All consumed across `evalAtmosphereRadiance`, `evalClouds`, `evalMoonDisk`'s halo, and `sampleAtmosphereMoonLight`.*
+
+- **Inline tweak** at `RtxOptions` class body (Phase 2 default migration) — net 0 LOC, value/text changes only.
+  *Phase 2 (2026-05-08) shifts the per-moon `brightness##N` default from 4.0 → 1.0 (physical neutral; was magic-number magnitude-cheat) and the per-moon `color##N` default from (0.85, 0.87, 0.92) → (0.12, 0.12, 0.12) (neutral lunar Bond albedo; the prior cool-blue tint was magnitude-cheating). Retires the `cloudMoonBrightness` RTX_OPTION (its job — scaling the cloud path's magic-number magnitude — was eliminated by the Phase 2 unified physical irradiance scaffold). See `2026-05-08-moon-physical-irradiance-design.md`.*
 
 - **Inline tweak** — remove `rtx.useLegacyACES` + `rtx.showLegacyACESOption` RtxOptions (superseded by `TonemapOperator::ACESLegacy` enum value).
   *Both options live at the `rtx` namespace (not `rtx.tonemap`); removed in the enum refactor.*
@@ -797,8 +800,14 @@ initializer list and can't be lifted into a separate TU.
 - **Block** at `evalAtmosphereSunNEE` (full function) — ~100 LOC, planned target `fork_hooks::evalAtmosphereSunNEEDirect` in `rtx_fork_atmosphere.slangh`.
   *Implements primary-bounce sun NEE for physical atmosphere: samples sun direction + cone angle, traces multiple jittered shadow rays for soft shadows, averages visibility, evaluates BRDF split-weight, and accumulates diffuse/specular sun radiance.*
 
+- **Block** at `evalAtmosphereMoonNEE` (full function) — ~100 LOC, planned target `fork_hooks::evalAtmosphereMoonNEEDirect` in `rtx_fork_atmosphere.slangh`.
+  *Primary-bounce moon NEE -- mirror of evalAtmosphereSunNEE for the moon. Calls `sampleAtmosphereMoonLight` with a u_pick blue-noise sample so one of the enabled, above-horizon moons is importance-picked per ray (weight = brightness × phaseGlow × elevation). Soft-shadow cone jitter via `getJitteredSunDirection` (direction-agnostic). Accumulated contribution divided by `moonSample.solidAnglePdf` (discrete pick PDF) so multi-moon importance sampling stays unbiased over many frames. Added by 2026-05-07 moon sun-parity workstream.*
+
 - **Block** at `integrateDirectPath` (atmosphere sun NEE call site) — ~14 LOC, planned target `fork_hooks::directPathAtmosphereSunCall` in `rtx_fork_atmosphere.slangh`.
   *Calls `evalAtmosphereSunNEE` in the direct-path integrator when `cb.skyMode == 1`.*
+
+- **Block** at `integrateDirectPath` (atmosphere moon NEE call site) — ~12 LOC, planned target `fork_hooks::directPathAtmosphereMoonCall` in `rtx_fork_atmosphere.slangh`.
+  *Calls `evalAtmosphereMoonNEE` immediately after `evalAtmosphereSunNEE` in the direct-path integrator when `cb.skyMode == 1`. Sun and moon NEE are independent samples -- both can be valid at twilight, both invalid during pure daytime / pure-night-with-no-moons; each early-outs cheaply when invalid. Added by 2026-05-07 moon sun-parity workstream.*
 
 - **Block** at `integrateDirectPath` (sky radiance miss branch) — ~8 LOC, planned target `fork_hooks::directPathAtmosphereMiss` in `rtx_fork_atmosphere.slangh`.
   *Adds `#ifdef ATMOSPHERE_AVAILABLE` branch in the miss sky-radiance evaluation to call `evalSkyRadiance` in physical atmosphere mode.*
@@ -819,6 +828,12 @@ initializer list and can't be lifted into a separate TU.
 
 - **Block** at `evalAtmosphereSunNEESecondary` (full function) — ~100 LOC, planned target `fork_hooks::evalAtmosphereSunNEEIndirect` in `rtx_fork_atmosphere.slangh`.
   *Secondary-bounce variant of the atmosphere sun NEE function: uses half the sample count for performance, otherwise identical structure to the direct-path version.*
+
+- **Block** at `evalAtmosphereMoonNEESecondary` (full function) — ~100 LOC, planned target `fork_hooks::evalAtmosphereMoonNEEIndirect` in `rtx_fork_atmosphere.slangh`.
+  *Secondary-bounce variant of the moon NEE function -- mirror of evalAtmosphereSunNEESecondary. Same structure as the direct-path moon NEE but with the indirect shadow-mask flags, half the sample count, and additive `diffuseLight` / `specularLight` accumulation (no throughput multiplier; caller folds throughput in). Added by 2026-05-07 moon sun-parity workstream.*
+
+- **Block** at `integratePathVertex` (atmosphere moon NEE call site) — ~16 LOC, planned target `fork_hooks::indirectPathAtmosphereMoonCall` in `rtx_fork_atmosphere.slangh`.
+  *Calls `evalAtmosphereMoonNEESecondary` after the existing sun call when `cb.skyMode == 1 && isNeeEnabledOnBounce`. Accumulates the returned diffuseLight + specularLight via accumulateRadiance. Added by 2026-05-07 moon sun-parity workstream.*
 
 - **Block** at `integratePathVertex` (atmosphere sky radiance in miss) — ~8 LOC, planned target `fork_hooks::indirectPathAtmosphereMiss` in `rtx_fork_atmosphere.slangh`.
   *Adds the `#ifdef ATMOSPHERE_AVAILABLE` sky-radiance branch in the indirect path miss handler.*

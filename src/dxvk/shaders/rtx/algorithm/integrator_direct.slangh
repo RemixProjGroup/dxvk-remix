@@ -135,7 +135,113 @@ bool evalAtmosphereSunNEE(
   const vec3 sunThroughput = avgAttenuation * avgVisibility;
   diffuseLobeRadiance += throughput * sunSample.radiance * vec3(splitWeight.diffuseReflectionWeight + splitWeight.diffuseTransmissionWeight) * sunThroughput;
   specularLobeRadiance += throughput * sunSample.radiance * vec3(splitWeight.specularReflectionWeight) * sunThroughput;
-  
+
+  return true;
+}
+
+// Evaluate direct moon lighting from physical atmosphere with soft shadows (fork).
+// Mirror of evalAtmosphereSunNEE. One enabled, above-horizon moon picked per
+// ray via importance sampling; accumulated contribution is divided by the
+// discrete pick PDF to debias the selection. ReSTIR + DLSS handle temporal
+// averaging across frames when multiple moons are enabled.
+//
+// Returns true if moon contribution was added (not fully occluded).
+bool evalAtmosphereMoonNEE(
+  vec3 throughput,
+  ivec2 pixelCoordinate,
+  inout vec3 diffuseLobeRadiance,
+  inout vec3 specularLobeRadiance,
+  GeometryFlags geometryFlags,
+  Ray viewRay,
+  MinimalRayInteraction minimalRayInteraction,
+  MinimalSurfaceInteraction minimalSurfaceInteraction,
+  OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction,
+  AtmosphereArgs atmosphereArgs,
+  bool isZUp,
+  inout RNG randomState)
+{
+  // Pick one moon via importance sampling. u_pick consumes one blue-noise
+  // sample so the pick is correlated with the rest of the path's RNG.
+  float u_pick = getNextSampleBlueNoise(randomState);
+  AtmosphereMoonSample moonSample = sampleAtmosphereMoonLight(
+    minimalSurfaceInteraction.position,
+    opaqueSurfaceMaterialInteraction.shadingNormal,
+    atmosphereArgs,
+    u_pick,
+    isZUp);
+
+  if (!moonSample.valid) {
+    return false;
+  }
+
+  float NdotL = dot(opaqueSurfaceMaterialInteraction.shadingNormal, moonSample.direction);
+  if (NdotL <= 0.0f) {
+    return false;
+  }
+
+  uint8_t rayMask = OBJECT_MASK_OPAQUE | (geometryFlags.objectMask & OBJECT_MASK_ALL_DYNAMIC);
+  rayMask |= (cb.enableDirectTranslucentShadows) ? OBJECT_MASK_TRANSLUCENT : 0;
+  rayMask |= (cb.enableDirectAlphaBlendShadows) ? OBJECT_MASK_ALPHA_BLEND : 0;
+
+  const bool isThinOpaqueSubsurface = isThinOpaqueSubsurfaceMaterial(opaqueSurfaceMaterialInteraction);
+  const bool pomOpaqueSurfaceEncountered = geometryFlags.pomOpaqueSurfaceEncountered && cb.pomEnableDirectLighting;
+  const uint16_t primarySurfaceIndex = pomOpaqueSurfaceEncountered ? uint16_t(SharedSurfaceIndex[pixelCoordinate]) : BINDING_INDEX_INVALID;
+
+  // Soft shadows: moonSample.numSamples shadow rays with direction jitter
+  // through getJitteredSunDirection (direction-agnostic helper despite the name).
+  const float moonRayLength = 1000000.0f;  // Effectively infinite
+
+  float visibilitySum = 0.0f;
+  vec3 attenuationSum = vec3(0.0f);
+  int numSamples = moonSample.numSamples;
+
+  for (int i = 0; i < numSamples; i++) {
+    float u1 = getNextSampleBlueNoise(randomState);
+    float u2 = getNextSampleBlueNoise(randomState);
+    vec3 jitteredDir = getJitteredSunDirection(moonSample.direction, moonSample.coneAngle, u1, u2);
+
+    float jitteredNdotL = dot(opaqueSurfaceMaterialInteraction.shadingNormal, jitteredDir);
+    if (jitteredNdotL <= 0.0f) {
+      continue;
+    }
+
+    vec3 moonTargetPos = minimalSurfaceInteraction.position + jitteredDir * moonRayLength;
+
+    VisibilityResult visibility = traceVisibilityRay<visibilityModeEnablePom | visibilityModeEnableTranslucentMaterials>(
+      minimalSurfaceInteraction,
+      moonTargetPos, rayMask,
+      invalidRayPortalIndex, geometryFlags.portalSpace, pomOpaqueSurfaceEncountered,
+      minimalRayInteraction.coneRadius, viewRay.spreadAngle, 1.0, geometryFlags.isViewModel, false,
+      primarySurfaceIndex, SharedTextureCoord[pixelCoordinate],
+      isThinOpaqueSubsurface,
+      opaqueSurfaceMaterialInteraction.shadingNormal);
+
+    if (!visibility.hasOpaqueHit) {
+      visibilitySum += 1.0f;
+      attenuationSum += vec3(visibility.attenuation);
+    }
+  }
+
+  if (visibilitySum <= 0.0f) {
+    return false;
+  }
+
+  float avgVisibility = visibilitySum / float(numSamples);
+  vec3 avgAttenuation = attenuationSum / float(numSamples);
+
+  const SurfaceMaterialInteractionSplitWeight splitWeight =
+    opaqueSurfaceMaterialInteractionCalcProjectedWeight(
+      opaqueSurfaceMaterialInteraction, minimalRayInteraction, f16vec3(moonSample.direction));
+
+  // Accumulate. Divide by the discrete pick PDF so importance sampling
+  // remains unbiased over many frames (with one moon, pickPdf=1.0 -> no
+  // effect; with N equally-bright moons, pickPdf=1/N -> contribution
+  // multiplied by N to compensate for sampling only one).
+  const vec3 moonThroughput = avgAttenuation * avgVisibility;
+  const float invPickPdf = 1.0f / max(moonSample.solidAnglePdf, 1e-6f);
+  diffuseLobeRadiance += throughput * moonSample.radiance * vec3(splitWeight.diffuseReflectionWeight + splitWeight.diffuseTransmissionWeight) * moonThroughput * invPickPdf;
+  specularLobeRadiance += throughput * moonSample.radiance * vec3(splitWeight.specularReflectionWeight) * moonThroughput * invPickPdf;
+
   return true;
 }
 
@@ -547,6 +653,19 @@ void integrateDirectPath(
     if (cb.skyMode == 1) // Physical atmosphere mode
     {
       evalAtmosphereSunNEE(
+        throughput, pixelCoordinate,
+        diffuseLobeRadiance, specularLobeRadiance,
+        geometryFlags,
+        primaryRay, primaryMinimalRayInteraction, primarySurfaceInteraction,
+        opaqueSurfaceMaterialInteraction,
+        cb.atmosphereArgs,
+        cb.isZUp != 0,
+        randomState);
+
+      // Moon NEE alongside sun NEE -- both can be valid at twilight, both
+      // invalid during pure daytime / pure-night-with-no-moons. Each early-
+      // outs cheaply on its own when invalid (fork).
+      evalAtmosphereMoonNEE(
         throughput, pixelCoordinate,
         diffuseLobeRadiance, specularLobeRadiance,
         geometryFlags,

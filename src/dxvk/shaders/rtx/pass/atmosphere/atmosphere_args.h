@@ -104,6 +104,31 @@ struct AtmosphereArgs {
   // ----- Per-moon parameters (fork) -----
   MoonParams moons[MAX_MOONS];
 
+  // ----- Moon NEE / atmospheric-coupling strength sliders (fork) -----
+  float moonNeeStrength;                  // World-side master multiplier (surface NEE + cloud + future volumetric)
+  float moonAtmosphericCouplingStrength;  // Sky-side multiplier (atmospheric scattering blue-dome)
+  float surfaceMoonBrightness;            // Per-path stylistic multiplier on surface NEE only (Phase 3, 2026-05-08)
+  float cloudMoonBrightness;             // Per-path stylistic multiplier on cloud-moon directional + ambient airglow (Phase 3)
+
+  float haloMoonBrightness;               // Per-path stylistic multiplier on disk halo Gaussian glow (Phase 3)
+  float padMoonNee0;                      // 16-byte alignment
+  float padMoonNee1;
+  float padMoonNee2;
+
+  // ----- Moon cloud-look + halo shape constants (fork, Phase 3 Task 2) -----
+  // Tunable shape parameters for cloud-moon silver-lining contrast and halo glow.
+  // Defaults preserve current calibrated values; exposed via RTX_OPTION + ImGui
+  // for in-game tuning of cloud-moon look without rebuilding shaders.
+  float moonCloudDiffuseGain;             // Cloud-moon Lambert diffuse weight (silver-lining off-axis darkening)
+  float moonCloudPhaseGain;               // Cloud-moon HG phase weight (silver-lining peak boost)
+  float moonCloudAnisotropy;              // HG g for cloud-moon forward scatter (silver-lining sharpness)
+  float moonHaloMagnitude;                // Disk halo Gaussian strength (was kHaloMagnitude in atmosphere_sky.slangh)
+
+  float moonAmbientAirglow;               // Ambient airglow per-moon strength (was 0.0015 literal in nightLight)
+  float padCloudLook0;                    // 16-byte alignment
+  float padCloudLook1;
+  float padCloudLook2;
+
   // ----- Cloud parameters (fork: procedural FBM cloud layer at fixed altitude) -----
   vec3 cloudColor;          // Cloud base color (typically white)
   float cloudDensity;       // Overall opacity/density multiplier
@@ -137,7 +162,7 @@ struct AtmosphereArgs {
   float cloudAnvilBias;            // [0,1] cumulus top inflation strength (Nubis anvil pow trick).
   float cloudWindShearStrength;    // [0,1+] lateral cloud-top displacement along wind, scaled by type.
 
-  float cloudMoonBrightness;       // [0,1+] strength of directional moon lighting on clouds (Lambert+HG).
+  float pad4;                      // (was cloudMoonBrightness; retired in Phase 2 — physical irradiance refactor)
   float pad5;                      // 16-byte alignment
   float pad6;
   float pad7;
