@@ -941,11 +941,13 @@ namespace fork_hooks {
             "Spatial variation around the Cloud Type mean. 0 = uniform type "
             "everywhere, 1 = full stratus-to-cumulus range across the sky.");
         RemixGui::DragFloat("Type Patch Size", &RtxOptions::cloudTypeNoiseScaleObject(),
-                            0.0001f, 0.0001f, 0.01f, "%.4f", sliderFlags);
+                            0.0001f, 0.0001f, 0.0034f, "%.4f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Spatial frequency of the cloud-type variation. SMALLER value = "
             "LARGER patches of one cloud type; larger value = finer mix. "
-            "Independent of Coverage Patch Size. Default 0.0034.");
+            "Capped at 0.0034 because faster variation puts visible 2D "
+            "cell structure at sub-cumulus scales. Independent of Coverage "
+            "Patch Size. Default 0.001.");
         RemixGui::DragFloat("Anvil Spread", &RtxOptions::cloudAnvilBiasObject(),
                             0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(

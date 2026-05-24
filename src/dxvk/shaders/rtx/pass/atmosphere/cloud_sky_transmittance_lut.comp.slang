@@ -105,7 +105,7 @@ void main(uint2 threadId : SV_DispatchThreadID) {
   // at the default coverage (0.64) and density (1.8). `exp(-cov * density)`
   // at those defaults = ~0.32 -- a visible ~3x darkening, not extinction.
   vec2 hitXZ = vec2(hitPos.x, hitPos.z);
-  float coverageNoise = smoothNoise2D(hitXZ * args.cloudCoverageNoiseScale, 250.0f);
+  float coverageNoise = cloudControlField2D(hitXZ * args.cloudCoverageNoiseScale, 250.0f);
   float coverageLocal = saturate(
     args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 

@@ -728,7 +728,7 @@ float evalCloudGroundShadow(vec3 sunDir, AtmosphereArgs args) {
   // coverage) and modulated by smooth 2D noise, so the shadow scales with
   // how cloudy the sky actually is and still drifts smoothly with wind.
   vec2 hitXZ = vec2(hitPos.x, hitPos.z);
-  float coverageNoise = smoothNoise2D(hitXZ * args.cloudCoverageNoiseScale, 250.0f);
+  float coverageNoise = cloudControlField2D(hitXZ * args.cloudCoverageNoiseScale, 250.0f);
   float coverageLocal = saturate(args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 
   float transmittance = exp(-coverageLocal * args.cloudDensity * 4.0f);
@@ -1386,9 +1386,11 @@ float2 fastJitter(uint2 pixelCoord, uint frameIdx) {
 }
 
 // Procedural noise utilities — shared by the cloud layer
-// (sampleCloudDensityTextured / evalClouds via fbmNoise2D below) and the sky-path
-// star / moon / night-sky shaders in atmosphere_sky.slangh. Based on integer
-// lattice hashing for stable, non-repeating patterns.
+// (cloudControlField2D for 2D coverage/type modulation; the worleyNoise3D* /
+// perlinNoise3D* helpers further down for the cloud-noise bake) and the
+// sky-path star / moon / night-sky shaders in atmosphere_sky.slangh (via
+// fbmNoise2D). All based on integer-lattice hashing for stable, non-repeating
+// patterns.
 float hash31(vec3 p) {
   // Integer hash — avoids sin() patterns
   uvec3 q = uvec3(int(p.x * 1597.0f), int(p.y * 2549.0f), int(p.z * 3571.0f));
@@ -1411,6 +1413,68 @@ float smoothNoise2D(vec2 p, float seed) {
   float d = hash31(vec3(i.x + 1.0f, i.y + 1.0f, seed));
 
   return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// 2D Worley feature-point hash. Returns a position in [0, 1)² inside the unit
+// cell `cellId`. Two xor-shift-multiply rounds (same pipeline as hash31 above,
+// with an extra round to decorrelate the second component) — sin-frac hashes
+// (used in the 3D Worley feature-point helper below, fine for one-shot bakes)
+// can show subtle directional bias at runtime sampling rates.
+vec2 worleyFeaturePoint2D(vec2 cellId, float seed) {
+  uvec3 q = uvec3(int(cellId.x * 1597.0f), int(cellId.y * 2549.0f), int(seed * 3571.0f));
+  uint n  = (q.x ^ q.y ^ q.z) * 2654435761u;
+  uint na = (n >> 16u) ^ n;
+  uint nb = na * 2654435761u + 1013904223u;
+  nb      = (nb >> 16u) ^ nb;
+  return vec2(float(na) / 4294967296.0f,
+              float(nb) / 4294967296.0f);
+}
+
+// 2D Worley F1 — distance to the nearest feature point across the 3×3 cell
+// neighborhood. Output is roughly [0, 1] (the theoretical max inside the
+// neighborhood is sqrt(2)/2 ≈ 0.707, but saturate clamps the rare overshoot).
+// Different `seed` values produce independent feature-point lattices.
+//
+// Unlike gradient/value noise, the local extrema sit at HASH-JITTERED RANDOM
+// POSITIONS inside each cell rather than at axis-aligned cell centers, so the
+// field has no regular grid of maxima at any scale.
+//
+// Cost: 9 hash evaluations (one per neighbor cell). Cheaper than the prior
+// 3-octave gradient FBM (24 hashes — 4 corners × 2 components × 3 octaves).
+float worleyNoise2D(vec2 p, float seed) {
+  // Input p is already in "lattice units" after the caller's frequency
+  // multiply. The ×100 scale and per-seed jittered origin match smoothNoise2D
+  // above so callers using a given cloudTypeNoiseScale / cloudCoverageNoiseScale
+  // see comparable feature scale.
+  vec2 sp = p * 100.0f + vec2(seed * 13.7f, seed * 7.3f);
+  vec2 pi = floor(sp);
+  vec2 pf = sp - pi;
+
+  float minDistSq = 4.0f;  // > max possible squared distance inside the 3×3 window
+
+  [unroll] for (int dy = -1; dy <= 1; ++dy) {
+    [unroll] for (int dx = -1; dx <= 1; ++dx) {
+      vec2 offset = vec2(float(dx), float(dy));
+      vec2 fp     = worleyFeaturePoint2D(pi + offset, seed);
+      vec2 d      = (offset + fp) - pf;
+      minDistSq   = min(minDistSq, dot(d, d));
+    }
+  }
+  return saturate(sqrt(minDistSq));
+}
+
+// Cumulus distribution control field. Returns [0, 1] where high values
+// correspond to "cluster center" regions (where cumulus should pack) and low
+// values to gap regions between clusters. Used at six sample sites as the
+// driver for typeLocal / coverageLocal in the cumulus march and shadow bakes.
+//
+// Backed by 2D Worley with the F1 distance inverted to (1 − F1), so the
+// natural Worley convention (low = near feature point, high = far) lines up
+// with downstream "higher noise → more presence" semantics. Mean of (1 − F1)
+// over the unit cell is ≈ 0.5 for jittered feature points, so the downstream
+// `mean + (noise − 0.5) × spread` math at the call sites stays balanced.
+float cloudControlField2D(vec2 p, float seed) {
+  return saturate(1.0f - worleyNoise2D(p, seed));
 }
 
 // Multi-octave FBM using smoothNoise2D
@@ -2026,8 +2090,8 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
   // cloud_render and the consumer see at the player's actual position.
   vec2 sampleXZKm = vec2(worldPosYUpKm.x + args.cameraWorldPosYUpKm.x,
                          worldPosYUpKm.z + args.cameraWorldPosYUpKm.z);
-  float typeNoise     = smoothNoise2D(sampleXZKm * args.cloudTypeNoiseScale,     200.0f);
-  float coverageNoise = smoothNoise2D(sampleXZKm * args.cloudCoverageNoiseScale, 250.0f);
+  float typeNoise     = cloudControlField2D(sampleXZKm * args.cloudTypeNoiseScale,     200.0f);
+  float coverageNoise = cloudControlField2D(sampleXZKm * args.cloudCoverageNoiseScale, 250.0f);
   float typeLocal     = saturate(args.cloudTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
   float coverageLocal = saturate(args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 
@@ -2067,8 +2131,8 @@ float sampleCloudAmbientOpticalDepthAtWorld(vec3 worldPosYUpKm,
   // helper sampleCloudSunOpticalDepthAtWorld above for the full rationale.
   vec2 sampleXZKm = vec2(worldPosYUpKm.x + args.cameraWorldPosYUpKm.x,
                          worldPosYUpKm.z + args.cameraWorldPosYUpKm.z);
-  float typeNoise     = smoothNoise2D(sampleXZKm * args.cloudTypeNoiseScale,     200.0f);
-  float coverageNoise = smoothNoise2D(sampleXZKm * args.cloudCoverageNoiseScale, 250.0f);
+  float typeNoise     = cloudControlField2D(sampleXZKm * args.cloudTypeNoiseScale,     200.0f);
+  float coverageNoise = cloudControlField2D(sampleXZKm * args.cloudCoverageNoiseScale, 250.0f);
   float typeLocal     = saturate(args.cloudTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
   float coverageLocal = saturate(args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 

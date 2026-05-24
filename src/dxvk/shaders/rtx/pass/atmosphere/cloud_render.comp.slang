@@ -267,8 +267,8 @@ void marchCloudSlab(vec3   viewDirYUp,
     // doesn't need its own spread knobs. Mean values are per-slab so layer 2
     // can pick a different baseline (cirrus typeMean ~= 0.05 vs cumulus 0.5).
     vec2 sampleXZ = vec2(samplePos.x, samplePos.z);
-    float typeNoise     = smoothNoise2D(sampleXZ * args.cloudTypeNoiseScale, 200.0f + slabNoiseSeedOffset);
-    float coverageNoise = smoothNoise2D(sampleXZ * args.cloudCoverageNoiseScale, 250.0f + slabNoiseSeedOffset);
+    float typeNoise     = cloudControlField2D(sampleXZ * args.cloudTypeNoiseScale, 200.0f + slabNoiseSeedOffset);
+    float coverageNoise = cloudControlField2D(sampleXZ * args.cloudCoverageNoiseScale, 250.0f + slabNoiseSeedOffset);
     float typeLocal     = saturate(slabTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
     float coverageLocal = saturate(slabCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 

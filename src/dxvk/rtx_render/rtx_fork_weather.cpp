@@ -954,7 +954,7 @@ namespace dxvk { namespace fork_weather {
       RemixGui::DragFloat("Coverage Patch Size",        &RtxOptions::P##_cloudCoverageNoiseScaleObject(),    0.0001f,0.0001f,0.01f,   "%.4f", sliderFlags); \
       RemixGui::DragFloat("Cloud Type",                 &RtxOptions::P##_cloudTypeMeanObject(),              0.01f,  0.0f,   1.0f,    "%.2f", sliderFlags); \
       RemixGui::DragFloat("Type Spread",                &RtxOptions::P##_cloudTypeSpreadObject(),            0.01f,  0.0f,   1.0f,    "%.2f", sliderFlags); \
-      RemixGui::DragFloat("Type Patch Size",            &RtxOptions::P##_cloudTypeNoiseScaleObject(),        0.0001f,0.0001f,0.01f,   "%.4f", sliderFlags); \
+      RemixGui::DragFloat("Type Patch Size",            &RtxOptions::P##_cloudTypeNoiseScaleObject(),        0.0001f,0.0001f,0.0034f, "%.4f", sliderFlags); \
       RemixGui::DragFloat("Anvil Spread",               &RtxOptions::P##_cloudAnvilBiasObject(),             0.01f,  0.0f,   1.0f,    "%.2f", sliderFlags); \
       ImGui::Separator(); ImGui::TextDisabled("Look");                                                                                                     \
       RemixGui::DragFloat("Density",                    &RtxOptions::P##_cloudDensityObject(),               0.05f,  0.0f,   10.0f,   "%.2f", sliderFlags); \

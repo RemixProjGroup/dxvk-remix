@@ -1060,8 +1060,8 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args, uint2 pixelCoord, uint frameI
     // Sample local type and coverage from the two independent low-freq
     // control noises (separate seeds so type and coverage are decorrelated).
     vec2 sampleXZ = vec2(samplePos.x, samplePos.z);
-    float typeNoise     = smoothNoise2D(sampleXZ * args.cloudTypeNoiseScale,     200.0f);
-    float coverageNoise = smoothNoise2D(sampleXZ * args.cloudCoverageNoiseScale, 250.0f);
+    float typeNoise     = cloudControlField2D(sampleXZ * args.cloudTypeNoiseScale,     200.0f);
+    float coverageNoise = cloudControlField2D(sampleXZ * args.cloudCoverageNoiseScale, 250.0f);
     float typeLocal     = saturate(args.cloudTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
     float coverageLocal = saturate(args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 
