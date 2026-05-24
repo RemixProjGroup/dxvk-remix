@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - remixapi_MaterialInfoOpaqueSubsurfaceEXT.subsurfaceRadius
 - remixapi_MaterialInfoOpaqueSubsurfaceEXT.subsurfaceRadiusScale
 - remixapi_MaterialInfoOpaqueSubsurfaceEXT.subsurfaceMaxSampleRadius
+- GameStateStore keys `__weather.drift_speed` and `__weather.drift_intensity` — plugin-controlled cloud-drift speed and intensity multipliers. Both default to 1.0 when unset. Smoothed inside the renderer with tau = 1.0s. See [`docs/integrators/weather-presets.md`](integrators/weather-presets.md) section 8 for the recommended per-preset values and integration pattern.
 
 ### Changed
 

@@ -14,6 +14,10 @@ Auto-generation of this table from RTX_OPTION metadata is a planned future
 enhancement. Until then this table is manually maintained; update it whenever
 `WEATHER_PRESET_VALUES_*` macros change.
 
+For recommended cloud-drift values per preset (set via the plugin-side
+`__weather.drift_speed` and `__weather.drift_intensity` GameStateStore keys),
+see the table at the end of this document.
+
 ---
 
 ## Cloud Bucket (19 parameters)
@@ -225,3 +229,30 @@ All presets: `1.0`
 | clear | partlyCloudy | overcast | hazy | foggy | drizzle | rainstorm | thunderstorm | snow | blizzard | sandstorm | smoggy |
 |-------|-------------|---------|------|-------|---------|-----------|-------------|------|----------|-----------|--------|
 | 0.0 | 0.05 | 0.05 | 0.30 | 0.0 | 0.10 | 0.10 | 0.0 | 0.0 | 0.0 | 0.60 | 0.20 |
+
+---
+
+## Recommended Cloud Drift Values
+
+Set these via the `__weather.drift_speed` and `__weather.drift_intensity`
+GameStateStore keys when transitioning to each preset. See
+[`weather-presets.md`](weather-presets.md) section 8 for the full integration
+guide.
+
+| Preset | drift_speed | drift_intensity |
+|---|---|---|
+| `clear`        | 0.6 | 0.5 |
+| `partlyCloudy` | 1.0 | 1.0 |
+| `overcast`     | 0.7 | 0.7 |
+| `hazy`         | 0.8 | 0.6 |
+| `foggy`        | 0.5 | 0.4 |
+| `drizzle`      | 1.2 | 1.1 |
+| `rainstorm`    | 1.6 | 1.4 |
+| `thunderstorm` | 2.0 | 1.6 |
+| `snow`         | 0.9 | 0.8 |
+| `blizzard`     | 1.8 | 1.5 |
+| `sandstorm`    | 1.5 | 1.6 |
+| `smoggy`       | 0.8 | 0.7 |
+
+The defaults (when unset) are 1.0 / 1.0. Both values are smoothed with a
+1-second time constant inside the renderer.

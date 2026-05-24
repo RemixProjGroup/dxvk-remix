@@ -293,3 +293,114 @@ Note that if the blender *is* active, it writes blended values to the Derived
 RTX_OPTION layer each frame, which will overwrite any values set by direct
 `SetConfigVariable` calls on the same frame. To restore manual control,
 write `__weather.target = ""` to put the blender back to dormant.
+
+---
+
+## 8. Cloud Drift
+
+Once a weather transition completes, the renderer holds the target preset's
+parameter values steady -- but real atmospheres are never frozen. The cloud
+drift system continuously modulates 9 of the 29 weather parameters with
+low-frequency noise so the sky feels alive even between transitions.
+
+The renderer ships the drift mechanism (which parameters drift, with what
+relative amplitude -- fixed per the design); the plugin owns the drift
+*personality* per preset by writing two GameStateStore keys.
+
+### Drift trigger keys
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `__weather.drift_speed`     | string (numeric) | 1.0 | Scales drift phase advance rate. Higher = faster evolution. |
+| `__weather.drift_intensity` | string (numeric) | 1.0 | Scales drift swing amplitude. 0.0 = drift fully off. |
+
+Both values are smoothed with a 1-second time constant, so plugin-side
+updates ease in alongside the weather transition that triggered them -- no
+visible step.
+
+### Recommended values per preset
+
+These values are starter recommendations. Tune per game using the dev menu's
+"Cloud Drift" sub-tree, then bake the values into your `setWeather` handler.
+
+| Preset | drift_speed | drift_intensity | Character |
+|---|---|---|---|
+| `clear`        | 0.6 | 0.5 | Calm, barely-perceptible drift on a mostly-clear sky |
+| `partlyCloudy` | 1.0 | 1.0 | Baseline; visible scattered-cloud evolution |
+| `overcast`     | 0.7 | 0.7 | Slow, calm overcast quilt -- shifts over minutes |
+| `hazy`         | 0.8 | 0.6 | Subtle haze movement |
+| `foggy`        | 0.5 | 0.4 | Almost still -- fog drifts slowly |
+| `drizzle`      | 1.2 | 1.1 | Active light-rain cloud cells |
+| `rainstorm`    | 1.6 | 1.4 | Visible heavy-rain turbulence |
+| `thunderstorm` | 2.0 | 1.6 | Fast and dramatic -- cells building and collapsing |
+| `snow`         | 0.9 | 0.8 | Steady snowfall sky |
+| `blizzard`     | 1.8 | 1.5 | Whiteout turbulence |
+| `sandstorm`    | 1.5 | 1.6 | Gusty, large-amplitude swings |
+| `smoggy`       | 0.8 | 0.7 | Slow industrial-haze drift |
+
+### Updated `setWeather` example
+
+Extends the example from Section 4 with drift:
+
+```cpp
+#include "remix/remix_c.h"
+#include <string>
+#include <unordered_map>
+
+static remixapi_Interface* s_remix = nullptr;
+
+// Per-preset drift recommendations (matches the table above).
+static const std::unordered_map<std::string, std::pair<float, float>> kDriftRecommendations = {
+    { "clear",        { 0.6f, 0.5f } },
+    { "partlyCloudy", { 1.0f, 1.0f } },
+    { "overcast",     { 0.7f, 0.7f } },
+    { "hazy",         { 0.8f, 0.6f } },
+    { "foggy",        { 0.5f, 0.4f } },
+    { "drizzle",      { 1.2f, 1.1f } },
+    { "rainstorm",    { 1.6f, 1.4f } },
+    { "thunderstorm", { 2.0f, 1.6f } },
+    { "snow",         { 0.9f, 0.8f } },
+    { "blizzard",     { 1.8f, 1.5f } },
+    { "sandstorm",    { 1.5f, 1.6f } },
+    { "smoggy",       { 0.8f, 0.7f } },
+};
+
+remixapi_ErrorCode setWeather(const std::string& presetName, float durationSec) {
+    if (!s_remix || !s_remix->SetGameValue) {
+        return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+
+    // Existing target + duration writes.
+    std::string durationStr = std::to_string(durationSec);
+    s_remix->SetGameValue("__weather.blend_seconds", durationStr.c_str());
+
+    // Drift personality. Look up recommended values; fall back to (1.0, 1.0)
+    // if the preset name is unknown (the renderer will reject the unknown
+    // name anyway, but we still want the drift writes to be coherent).
+    auto it = kDriftRecommendations.find(presetName);
+    float driftSpeed     = (it != kDriftRecommendations.end()) ? it->second.first  : 1.0f;
+    float driftIntensity = (it != kDriftRecommendations.end()) ? it->second.second : 1.0f;
+    s_remix->SetGameValue("__weather.drift_speed",     std::to_string(driftSpeed).c_str());
+    s_remix->SetGameValue("__weather.drift_intensity", std::to_string(driftIntensity).c_str());
+
+    return s_remix->SetGameValue("__weather.target", presetName.c_str());
+}
+```
+
+### Plugin-side opt-out
+
+If your plugin never writes the two drift keys, the renderer uses defaults
+of 1.0 / 1.0 across all presets. This produces visible-but-not-overwhelming
+drift on every preset -- degraded (no per-preset personality differentiation)
+but not broken. To disable drift entirely from the plugin side, write `0.0`
+to `__weather.drift_intensity` and the renderer's drift modulation pass
+short-circuits.
+
+### What drifts
+
+The renderer modulates 9 cloud-shape and dynamics parameters: coverage
+mean/spread, cloud-type mean/spread, density, thickness, wind speed/direction,
+and anvil bias. Color, optical, sky/moon, atmosphere, and volumetric fog
+parameters are intentionally NOT drifted (drift on color looks sickly; drift
+on physically-calibrated parameters breaks lighting; drift on noise-scale
+parameters re-tiles the entire cloud field).

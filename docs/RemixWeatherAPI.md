@@ -37,6 +37,8 @@ iface.SetGameValue("__weather.target",        "thunderstorm");
 | :-- | :-: | :-: | :-- |
 | `__weather.target` | string (preset name) | absent | Target preset to blend toward. Setting to an unknown name logs a warning and the blender goes dormant. Clear by setting to `""`. |
 | `__weather.blend_seconds` | float-as-string | `"1.0"` | Blend duration. Clamped to `>= 0.001`. |
+| `__weather.drift_speed` | float-as-string | `"1.0"` | Cloud-drift phase advance multiplier. Higher = faster evolution. `0` freezes drift. Smoothed inside the renderer with tau = 1.0s. |
+| `__weather.drift_intensity` | float-as-string | `"1.0"` | Cloud-drift swing amplitude multiplier. `0` disables drift entirely. Smoothed inside the renderer with tau = 1.0s. |
 
 Setting `target` mid-blend retargets cleanly: the partial blend state
 becomes the new "previous" snapshot, and the timer restarts toward the

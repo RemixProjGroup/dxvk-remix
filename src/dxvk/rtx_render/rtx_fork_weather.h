@@ -581,6 +581,14 @@ namespace dxvk { namespace fork_weather {
 
     bool m_paused = false;
 
+    // Drift state (cloud-drift modulation; spec 2026-05-09-cloud-drift-design).
+    // m_driftPhaseSeconds is monotonically advanced each frame by
+    // dt * m_driftSpeedSmoothed. Smoothed values are one-pole filtered toward
+    // the GameStateStore-supplied raw values with tau = 1.0s.
+    float m_driftPhaseSeconds      = 0.0f;
+    float m_driftSpeedSmoothed     = 1.0f;
+    float m_driftIntensitySmoothed = 1.0f;
+
     // Snapshot of renderer state at the moment the last blend began (or the
     // retarget mid-blend captured the partially-blended state).
     WeatherSnapshot m_previousSnapshot;

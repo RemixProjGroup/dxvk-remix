@@ -48,6 +48,23 @@ writes during active transitions).
 | `sandstorm` | Yellow-orange forward-scattering dust |
 | `smoggy` | Industrial dark grey-brown haze |
 
+---
+
+## Cloud Drift Customization
+
+Cloud drift mechanics (which parameters drift, with what relative amplitude)
+live renderer-side as a fixed in-code table; they are NOT exposed as
+RTX_OPTIONs in v1 and therefore cannot be customized via `user.conf`.
+
+What IS plugin-customizable: drift speed and intensity per preset, via the
+`__weather.drift_speed` and `__weather.drift_intensity` GameStateStore keys.
+See [`weather-presets.md`](weather-presets.md) section 8 for the recommended
+per-preset values and the integration pattern.
+
+If a per-game tuning need emerges that requires changing which fields drift
+or their relative amplitudes, those values can be promoted to RTX_OPTIONs
+in a follow-on spec.
+
 ### Example user.conf entries
 
 ```ini
