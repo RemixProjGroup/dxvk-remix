@@ -327,8 +327,19 @@ void marchCloudSlab(vec3   viewDirYUp,
     float effectiveDensity = density * args.cloudDensity;
     float stepTransmittance = exp(-effectiveDensity * stepLen);
     vec3 stepRadiance = sampleColor * (1.0f - stepTransmittance);
-    accumColor += stepRadiance * viewTransmittance;
-    viewTransmittance *= stepTransmittance;
+
+    // Aerial perspective: distant cloud samples attenuate per-step
+    // contribution AND viewTransmittance via atmospheric extinction over
+    // the camera-to-sample distance. Without this, horizon-grazing rays
+    // accumulate through 100+ km of cloud volume producing a solid white
+    // wall — physical clouds fade into atmospheric haze with distance.
+    // Both stepRadiance AND the cloud's own extinction must be attenuated:
+    // attenuating only stepRadiance leaves alpha intact, painting a faint
+    // white veil over distant geometry. Both factors keeps clouds opaque
+    // close to camera and progressively transparent into the haze.
+    float aerialT = exp(-args.cloudAerialExtinctionPerKm * t);
+    accumColor += stepRadiance * viewTransmittance * aerialT;
+    viewTransmittance *= mix(1.0f, stepTransmittance, aerialT);
   }
 }
 

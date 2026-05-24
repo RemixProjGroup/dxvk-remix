@@ -298,5 +298,5 @@ struct AtmosphereArgs {
   float cloudWorleyCarveStrength;  // [0, 1.5] amount of Worley subtracted from base Perlin
   float cloudWorleyFrequency;      // cycles/km of the first Worley octave (default 1.0 = cumulus scale)
   uint  cloudWorleyOctaves;        // FBM octave count (clamped 1..4 in shader)
-  float pad_cloudWorley_0;         // 16-byte alignment
+  float cloudAerialExtinctionPerKm; // Aerial-perspective extinction (1/km). Higher = more horizon fade
 };

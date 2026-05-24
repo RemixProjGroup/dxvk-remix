@@ -1486,6 +1486,19 @@ namespace dxvk {
                "Higher = more sub-scale detail on cell boundaries. Default 3. "
                "CHANGE APPLIES ON GAME RELAUNCH.");
 
+    // Cloud aerial perspective (fork — 2026-05-16). Distant cloud samples
+    // attenuate exponentially with march distance, mimicking real atmospheric
+    // extinction. Without this, horizon-grazing rays integrate through ~100 km
+    // of cloud volume and produce a solid white wall at the horizon. Live-
+    // tunable.
+    RTX_OPTION("rtx.atmosphere", float, cloudAerialExtinctionPerKm, 0.2f,
+               "Aerial-perspective extinction coefficient applied to cloud "
+               "samples per km of march distance. Higher = clouds fade to "
+               "atmosphere faster. 0 = no aerial perspective (legacy behavior). "
+               "Typical range: 0.05 (subtle) to 0.3 (heavy haze). Default 0.2 "
+               "tuned to hide horizon-grazing white wall at all weathers / "
+               "times of day.");
+
     // Nubis Cubed 2023 lighting (fork — 2026-05-12).
     // Tuning knobs for the per-sample lighting equations in cloud_render.comp.slang.
     // The paper's magic constants for the sigma_ms remap (page 137) are unexplained,
