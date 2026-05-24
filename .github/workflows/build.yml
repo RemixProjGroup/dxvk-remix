@@ -40,6 +40,9 @@ jobs:
     - name: Setup Meson
       run: pip install meson==1.1.0
 
+    - name: Install Pillow for FAST-noise embedder
+      run: pip install pillow
+
     - name: Build
       shell: pwsh
       run: |

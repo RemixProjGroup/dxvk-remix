@@ -1,4 +1,23 @@
-// AgX implementation based on https://github.com/MrLixm/AgXc
+// AgX display rendering transform.
+//
+// AgX is a display-rendering transform created by Troy Sobotka
+// (https://github.com/sobotka/AgX). The transform matrices and the
+// sigmoid response curve below implement the published AgX spec.
+// This HLSL implementation was developed by reference to MrLixm's
+// AgXc port: https://github.com/MrLixm/AgXc.
+//
+// Licensing status: Troy Sobotka publishes AgX without an explicit
+// license as a deliberate position; MrLixm inherits the same status
+// for AgXc. Per MrLixm's public reply on the AgXc repository
+// (2024-03-19), attribution-only is the appropriate posture for
+// open-source / non-commercial redistribution; commercial
+// productization would warrant a direct conversation with Troy.
+// dxvk-remix is open-source and freely distributed, so
+// attribution-only applies here.
+//
+// Credit:
+//   - Troy Sobotka — AgX creator and spec author.
+//   - MrLixm — HLSL/OCIO reference implementation used during this port.
 
 // AgX Base Transform (Rec.2020 primaries to AgX working space)
 static const float3x3 AgX_InputTransform = 

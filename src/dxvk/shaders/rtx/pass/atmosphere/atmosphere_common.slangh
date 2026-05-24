@@ -23,6 +23,41 @@
 
 // Hillaire Physically-Based Atmospheric Scattering
 // Based on "Physically Based Sky, Atmosphere and Cloud Rendering in Frostbite" by Sebastien Hillaire (2016)
+//
+// References for fork-side sky / atmosphere / cloud additions:
+//   - Hillaire, S. "Physically Based Sky, Atmosphere and Cloud Rendering in
+//     Frostbite." SIGGRAPH 2016 Courses.
+//     https://www.ea.com/frostbite/news/physically-based-sky-atmosphere-and-cloud-rendering
+//     Used for: atmosphere scattering pipeline, ozone (Section 3.4),
+//     energy-conserving in-scattering integration (Section 5.6.3 Eq. 17),
+//     cloud lighting approach.
+//   - Schneider, A.; Vos, N. "The Real-time Volumetric Cloudscapes of
+//     Horizon Zero Dawn." SIGGRAPH 2015 Advances in Real-Time Rendering.
+//     https://www.guerrilla-games.com/read/the-real-time-volumetric-cloudscapes-of-horizon-zero-dawn
+//     Used for: Nubis cloud density-via-noise raymarching approach and the
+//     single-scatter sun-ray lighting pattern that underlies evalClouds().
+//   - Schneider, A. "Nubis Cubed: Methods (and Madness) to Model and Render
+//     Immersive Real-Time Voxel-Based Clouds." SIGGRAPH 2023 Advances in
+//     Real-Time Rendering.
+//     https://advances.realtimerendering.com/s2023/Nubis%20Cubed%20(Advances%202023).pdf
+//     Used for: additional cloud-system techniques layered onto the 2015
+//     baseline.
+//   - Jensen, H.W.; Durand, F.; Stark, M.M.; Premozse, S.; Dorsey, J.;
+//     Shirley, P. "A Physically-Based Night Sky Model."
+//     SIGGRAPH 2001 Proceedings. https://graphics.stanford.edu/papers/nightsky/
+//     Used for: night sky composition (stars, moon illumination, airglow).
+//   - Henyey, L.G.; Greenstein, J.L. "Diffuse radiation in the galaxy."
+//     Astrophysical Journal 93:70-83, 1941. DOI 10.1086/144246.
+//     Used for: all anisotropic phase functions (Mie, clouds, volumetrics).
+//   - Kasten, F.; Young, A.T. "Revised optical air mass tables and
+//     approximation formula." Applied Optics 28(22):4735-4738, 1989.
+//     DOI 10.1364/AO.28.004735. Used for: analytical sun transmittance.
+//
+// Portions of this file (the "following Blender's approach" analytical
+// transmittance branch and computeGroundReflectionAnalytical) are
+// adapted from Blender's intern/sky/source/sky_multiple_scattering.cpp
+// (MIT, Fernando García Liñán + Blender Authors). See
+// multiscattering_lut.comp.slang for the full upstream MIT notice.
 
 #include "rtx/utility/common.slangh"
 #include "rtx/utility/math.slangh"
@@ -635,25 +670,20 @@ float evalCloudGroundShadow(vec3 sunDir, AtmosphereArgs args) {
     return 1.0f;  // Sun direction doesn't pierce the cloud layer (below horizon etc.)
   }
 
-  // Compute local type and coverage at the cloud-hit point. Independent
-  // smoothNoise2D evals with separate seeds so the two fields are
-  // spatially decorrelated (Nubis weather-texture style).
+  // Drive the shadow magnitude from coverageLocal (weather-anchored coverage
+  // with spatial noise jitter) rather than a per-voxel 3D-texture density
+  // sample at the single sun-direction hit point. The single-point sample
+  // made the shadow depth a lottery — a sparse noise spot at the hit
+  // returned near-zero density even when the camera was under thick
+  // overcast, so cloudShadowStrength had little visible effect. coverageLocal
+  // is anchored to args.cloudCoverageMean (the weather preset's overall
+  // coverage) and modulated by smooth 2D noise, so the shadow scales with
+  // how cloudy the sky actually is and still drifts smoothly with wind.
   vec2 hitXZ = vec2(hitPos.x, hitPos.z);
-  float typeNoise     = smoothNoise2D(hitXZ * args.cloudTypeNoiseScale,     200.0f);
   float coverageNoise = smoothNoise2D(hitXZ * args.cloudCoverageNoiseScale, 250.0f);
-  float typeLocal     = saturate(args.cloudTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
   float coverageLocal = saturate(args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 
-  // Sample at the type-aware peak height of the bell, not mid-slab. The
-  // cloudTypeProfile plateau midpoint slides as plateau widens with type:
-  // riseEnd = 0.10 + 0.10*type, fallStart = 0.20 + 0.55*type
-  // → midpoint = 0.15 + 0.325*type (stratus 0.15, stratocumulus 0.31, cumulus 0.475).
-  // Sampling at any hf in the plateau gives profile=1.0; midpoint is the
-  // most conservative choice given the noise sampling jitter at the call site.
-  float hfPeak = 0.15f + 0.325f * typeLocal;
-  float density = sampleCloudDensityTextured(hitPos, hfPeak, typeLocal, coverageLocal, args,
-                                              AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler);
-  float transmittance = exp(-density * args.cloudDensity * 2.0f);
+  float transmittance = exp(-coverageLocal * args.cloudDensity * 4.0f);
 
   return mix(1.0f, transmittance, args.cloudShadowStrength);
 #endif

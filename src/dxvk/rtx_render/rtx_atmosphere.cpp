@@ -340,8 +340,8 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudCoverageNoiseScale = RtxOptions::cloudCoverageNoiseScale();
     args.cloudAnvilBias = RtxOptions::cloudAnvilBias();
     args.cloudWindShearStrength = RtxOptions::cloudWindShearStrength();
-    args.pad4 = 0.0f;                // (was cloudMoonBrightness; retired in Phase 2)
-    args.pad5 = 0.0f;
+    args.cloudMultiScatterStrength = RtxOptions::cloudMultiScatterStrength();
+    args.cloudMultiScatterOctaves = RtxOptions::cloudMultiScatterOctaves();
     args.pad6 = 0.0f;
     args.pad7 = 0.0f;
     args.cloudNoiseTileKm = RtxOptions::cloudNoiseTileKm();

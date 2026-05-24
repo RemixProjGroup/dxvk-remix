@@ -19,6 +19,12 @@
 * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 * DEALINGS IN THE SOFTWARE.
 */
+
+// EA Importance-Sampled FAST noise — see rtx_fast_noise.h for full
+// attribution. Data vendored from
+// https://github.com/electronicarts/importance-sampled-FAST-noise under
+// the BSD-3-Clause-variant license in data/ea-fast-noise/LICENSE.txt.
+
 #include "rtx_fast_noise.h"
 #include "rtx_fast_noise_data.h"
 #include "../dxvk_context.h"

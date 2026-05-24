@@ -1426,6 +1426,21 @@ namespace dxvk {
                "to the horizon). Only affects cloud sphere intersections; "
                "atmospheric scattering still uses the real planet radius.");
 
+    // Wrenninge / Hillaire (Frostbite 2016) multi-scatter approximation for the
+    // sun-cloud interaction. Replaces the prior flat-Lambert + single-HG approximation
+    // with a sum of N octaves (each with reduced energy, extinction and phase
+    // asymmetry) plus an isotropic deep-scatter floor — collectively the
+    // "milky-bright bottom" look real cumulus has when viewed from below.
+    RTX_OPTION("rtx.atmosphere", float, cloudMultiScatterStrength, 1.0f,
+               "Master multiplier on the Wrenninge multi-scatter sun-light response. "
+               "1.0 = physical baseline (Hillaire/Frostbite coefficients); raise to "
+               "brighten cumulus tops + bottoms together, lower for muted look. "
+               "Operates on the sun path only; moon path is unaffected.");
+    RTX_OPTION("rtx.atmosphere", uint32_t, cloudMultiScatterOctaves, 3,
+               "Number of Wrenninge multi-scatter octaves summed per cloud sample. "
+               "3 is the standard cost/quality tradeoff. 1 disables multi-scatter "
+               "(single direct anisotropic term only). Range clamped to 1..4 in-shader.");
+
     // Cloud spatial variation (Nubis-style — spec 2026-05-06)
     RTX_OPTION("rtx.atmosphere", float, cloudTypeMean, 0.0f,
                "Mean cloud type across the sky [0,1]: 0=stratus, 0.5=stratocumulus, 1=cumulus.");

@@ -1005,6 +1005,33 @@ initializer list and can't be lifted into a separate TU.
 
 ---
 
+## src/dxvk/shaders/rtx/pass/integrate/integrate_direct.slang
+
+**Category:** index-only
+
+- **Inline tweak** at `(file scope)` (~line 36) — 1-line addition.
+  *Adds `#define ATMOSPHERE_AVAILABLE` so the direct-integration pass compiles against the real `evalCloudGroundShadow` body. The macro gates a binding-free fallback intended for atmosphere LUT compute shaders that lack the cloud-noise SRV; this pass already includes `common_bindings.slangh` (which declares `AtmosphereCloudNoise3D` + sampler), so the fallback over-suppresses cloud shadow on terrain surface NEE. Without this define, `evalAtmosphereSunNEE → sampleAtmosphereSunLight → getTransmittanceToSun → evalCloudGroundShadow` short-circuits to `1.0` and terrain never darkens under clouds regardless of `cloudShadowStrength`.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/integrate/integrate_indirect.slang
+
+**Category:** index-only
+
+- **Inline tweak** at `(file scope)` (~line 233) — 1-line addition.
+  *Adds `#define ATMOSPHERE_AVAILABLE` so the indirect-integration pass evaluates the real `evalCloudGroundShadow` for secondary-bounce surface NEE (`evalAtmosphereSunNEESecondary`). Same rationale as `integrate_direct.slang`: the cloud-noise SRV is bound via `common_bindings.slangh` here, so the binding-free fallback is unnecessary.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/integrate/integrate_indirect_closesthit.rchit.slang
+
+**Category:** index-only
+
+- **Inline tweak** at `(file scope)` (~line 241) — 1-line addition.
+  *Adds `#define ATMOSPHERE_AVAILABLE` so the closest-hit variant of indirect integration evaluates the real `evalCloudGroundShadow`. Same rationale as the sibling `integrate_indirect.slang` entry — `common_bindings.slangh` provides the cloud-noise SRV.*
+
+---
+
 ## src/dxvk/shaders/rtx/pass/integrate/integrate_indirect_miss.rmiss.slang
 
 **Pre-refactor fork footprint:** +1 / -0 LOC (audit 2026-04-18)

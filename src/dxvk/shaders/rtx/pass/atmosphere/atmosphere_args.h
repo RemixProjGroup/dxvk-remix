@@ -162,9 +162,9 @@ struct AtmosphereArgs {
   float cloudAnvilBias;            // [0,1] cumulus top inflation strength (Nubis anvil pow trick).
   float cloudWindShearStrength;    // [0,1+] lateral cloud-top displacement along wind, scaled by type.
 
-  float pad4;                      // (was cloudMoonBrightness; retired in Phase 2 — physical irradiance refactor)
-  float pad5;                      // 16-byte alignment
-  float pad6;
+  float cloudMultiScatterStrength; // Wrenninge multi-scatter master multiplier (1.0 = physical baseline).
+  uint  cloudMultiScatterOctaves;  // Number of Wrenninge octaves to sum (clamped 1..4 in shader).
+  float pad6;                      // 16-byte alignment
   float pad7;
 
   // ----- Stage C: 3D noise texture (fork) -----

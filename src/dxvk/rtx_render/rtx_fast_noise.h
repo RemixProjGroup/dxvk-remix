@@ -19,6 +19,20 @@
 * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 * DEALINGS IN THE SOFTWARE.
 */
+
+// EA Importance-Sampled FAST noise.
+//
+// The 128x128x32 RG8 noise data embedded into d3d9.dll (built from the
+// 32 PNG slices in data/ea-fast-noise/ via scripts/embed_fast_noise.py)
+// is vendored from EA's importance-sampled-FAST-noise repository:
+// https://github.com/electronicarts/importance-sampled-FAST-noise
+//
+// Copyright (c) 2025 Electronic Arts Inc. All rights reserved.
+// Used under the BSD-3-Clause-variant license in
+// data/ea-fast-noise/LICENSE.txt. Per that license, the EA copyright
+// notice + permission notice + disclaimer must accompany source and
+// binary redistributions.
+
 #pragma once
 
 #include "rtx_resources.h"
