@@ -28,6 +28,7 @@
 #include "rtx/utility/froxel.slangh"
 #include "rtx/utility/gbuffer_helpers.slangh"
 #include "rtx/utility/debug_view_helpers.slangh"
+#include "rtx/pass/atmosphere/atmosphere_common.slangh"
 #include "rtx/concept/camera/camera.slangh"
 #include "rtx/concept/ray/ray.slangh"
 #include "rtx/concept/surface/surface.slangh"
@@ -1874,6 +1875,29 @@ void geometryResolverVertex(
   // Output a miss
   if (!rayInteractionHasHit(rayInteraction))
   {
+    // Fork: sky-radiance accumulation on miss. Three paths:
+    //   1. dome-light texture if dome light is active
+    //   2. Hillaire atmosphere (ATMOSPHERE_AVAILABLE-gated) if skyMode == 1
+    //   3. legacy skybox rasterization probe otherwise
+    vec3 skyRadiance;
+    if (cb.domeLightArgs.active)
+    {
+      skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
+    }
+#ifdef ATMOSPHERE_AVAILABLE
+    else if (cb.skyMode == 1)
+    {
+      skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+                                     cb.isZUp != 0);
+    }
+#endif
+    else
+    {
+      skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
+    }
+
+    geometryResolverState.radiance += skyRadiance * vec3(geometryResolverState.attenuation);
+
     updateNrcOnGBufferMiss(geometryResolverState.pixelCoordinate);
 
     // Note: Always write to primary surface for initial misses,
@@ -2509,9 +2533,18 @@ void geometryPSRResolverVertex(
     {
        emissiveRadiance += cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform) * radianceAttenuation;
     }
+#ifdef ATMOSPHERE_AVAILABLE
+    else if (cb.skyMode == 1)
+    {
+      // Physical atmosphere mode
+      vec3 skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+                                          cb.isZUp != 0);
+      emissiveRadiance += skyRadiance * radianceAttenuation;
+    }
+#endif
     else
     {
-      // Output radiance from sky probe
+      // Skybox rasterization mode - output radiance from sky probe
        emissiveRadiance += cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0) * radianceAttenuation;
     }
   }
@@ -2551,6 +2584,50 @@ void geometryPSRResolverVertex(
 
     return;
   }
+
+  // NOTE: Deprecated feature - isOccluder property was removed from Surface struct
+  // Handle occluder surfaces in PSR path - they block geometry behind them but show the sky
+  // if (surface.isOccluder)
+  // {
+  //   // Get sky radiance
+  //   vec3 skyRadiance;
+  //   if (cb.domeLightArgs.active)
+  //   {
+  //     skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
+  //   }
+  // #ifdef ATMOSPHERE_AVAILABLE
+  //   else if (cb.skyMode == 1)
+  //   {
+  //     // Physical atmosphere mode
+  //     skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+  //                                    cb.isZUp != 0);
+  //   }
+  // #endif
+  //   else
+  //   {
+  //     // Skybox rasterization mode
+  //     skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
+  //   }
+  //   
+  //   // Apply sky radiance with accumulated attenuation
+  //   geometryPSRResolverState.radiance += skyRadiance * vec3(geometryPSRResolverState.attenuation);
+  //   
+  //   // NRC is only used for paths that are fully integrated
+  //   if (geometryPSRResolverState.selectedIntegrationSurface)
+  //   {
+  //     updateNrcOnGBufferMiss(geometryPSRResolverState.pixelCoordinate, cb.nrcArgs);
+  //   }
+  //   
+  //   // Output Miss
+  //   SharedRadianceRG[geometryPSRResolverState.pixelCoordinate] += geometryPSRResolverState.radiance.rg;
+  //   SharedRadianceB[geometryPSRResolverState.pixelCoordinate] += geometryPSRResolverState.radiance.b;
+  // 
+  //   geometryResolverOutputMiss(
+  //     geometryPSRResolverState.primarySurface, geometryPSRResolverState.selectedIntegrationSurface,
+  //     geometryPSRResolverState.pixelCoordinate);
+  // 
+  //   return;
+  // }
 
   // Now apply attenuation after dealing with the miss case (where attenuation is 0)
   geometryPSRResolverState.attenuation *= radianceAttenuation;

@@ -810,6 +810,24 @@ namespace dxvk {
     return m_skyProbe;
   }
 
+  Resources::Resource Resources::getAtmosphereTransmittanceLut(Rc<DxvkContext> ctx) {
+    // Atmosphere LUTs are managed by RtxAtmosphere class
+    // This method returns the cached resource
+    return m_atmosphereTransmittanceLut;
+  }
+
+  Resources::Resource Resources::getAtmosphereMultiscatteringLut(Rc<DxvkContext> ctx) {
+    // Atmosphere LUTs are managed by RtxAtmosphere class
+    // This method returns the cached resource
+    return m_atmosphereMultiscatteringLut;
+  }
+
+  Resources::Resource Resources::getAtmosphereSkyViewLut(Rc<DxvkContext> ctx) {
+    // Atmosphere LUTs are managed by RtxAtmosphere class
+    // This method returns the cached resource
+    return m_atmosphereSkyViewLut;
+  }
+
   Rc<DxvkImageView> Resources::getCompatibleViewForView(const Rc<DxvkImageView>& view, VkFormat format) {
     // Lazy GC
     static uint32_t lastGCFrame = 0;
