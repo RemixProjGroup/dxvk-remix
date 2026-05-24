@@ -79,6 +79,11 @@ public:
   Resources::Resource getSkyViewLut() const { return m_skyViewLut; }
 
   /**
+   * \brief Get cloud noise 3D texture resource (Stage C)
+   */
+  Resources::Resource getCloudNoise3D() const { return m_cloudNoise3D; }  // Stage C
+
+  /**
    * \brief Get current atmosphere parameters
    */
   AtmosphereArgs getAtmosphereArgs() const;
@@ -88,6 +93,7 @@ private:
   void dispatchTransmittanceLut(Rc<DxvkContext> ctx);
   void dispatchMultiscatteringLut(Rc<DxvkContext> ctx);
   void dispatchSkyViewLut(Rc<DxvkContext> ctx);
+  void dispatchCloudNoise3DBake(Rc<DxvkContext> ctx);  // Stage C: one-shot at init
 
   // LUT dimensions
   static constexpr uint32_t kTransmittanceLutWidth = 512;   // Increased from 256 for better precision
@@ -95,6 +101,7 @@ private:
   static constexpr uint32_t kMultiscatteringLutSize = 32;
   static constexpr uint32_t kSkyViewLutWidth = 512;   // Increased from 192 to eliminate aliasing artifacts
   static constexpr uint32_t kSkyViewLutHeight = 256;  // Increased from 108 to eliminate aliasing artifacts
+  static constexpr uint32_t kCloudNoise3DSize = 256;  // 3D R8, 16 MB VRAM (Stage C)
 
   // Scale heights for exponential density profiles (in km)
   static constexpr float kRayleighScaleHeight = 8.0f;
@@ -103,6 +110,7 @@ private:
   Resources::Resource m_transmittanceLut;
   Resources::Resource m_multiscatteringLut;
   Resources::Resource m_skyViewLut;
+  Resources::Resource m_cloudNoise3D;  // Stage C: prebaked 3D Perlin FBM
   
   Rc<DxvkBuffer> m_constantsBuffer;
 

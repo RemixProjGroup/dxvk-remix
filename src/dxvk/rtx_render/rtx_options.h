@@ -1312,46 +1312,46 @@ namespace dxvk {
 
     // Cloud parameters (procedural FBM cloud layer)
     RTX_OPTION("rtx.atmosphere", bool, cloudEnabled, true, "Enable procedural cloud rendering.");
-    RTX_OPTION("rtx.atmosphere", float, cloudDensity, 1.55f, "Cloud opacity/density multiplier.");
-    RTX_OPTION("rtx.atmosphere", float, cloudAltitude, 2.4f, "Cloud layer altitude in kilometers.");
+    RTX_OPTION("rtx.atmosphere", float, cloudDensity, 1.80f, "Cloud opacity/density multiplier.");
+    RTX_OPTION("rtx.atmosphere", float, cloudAltitude, 1.3f, "Cloud layer altitude in kilometers.");
     RTX_OPTION("rtx.atmosphere", float, cloudScale, 0.010f, "Horizontal noise scale — smaller values produce larger clouds.");
-    RTX_OPTION("rtx.atmosphere", Vector3, cloudColor, Vector3(1.0f, 1.0f, 1.0f), "Base cloud color (albedo).");
+    RTX_OPTION("rtx.atmosphere", Vector3, cloudColor, Vector3(0.89f, 0.92f, 1.0f), "Base cloud color (albedo).");
     RTX_OPTION("rtx.atmosphere", float, cloudWindSpeed, 0.02f, "Cloud drift speed in km/s. Clouds scroll with this velocity.");
     RTX_OPTION("rtx.atmosphere", float, cloudWindDirection, 45.0f, "Cloud wind direction in degrees (0 = +X, 90 = +Z).");
-    RTX_OPTION("rtx.atmosphere", float, cloudShadowStrength, 0.7f, "How strongly overcast clouds dim ground and atmosphere lighting [0..1].");
+    RTX_OPTION("rtx.atmosphere", float, cloudShadowStrength, 0.0f, "How strongly overcast clouds dim ground and atmosphere lighting [0..1].");
     RTX_OPTION("rtx.atmosphere", float, cloudAnisotropy, 0.6f, "Henyey-Greenstein g for cloud forward-scatter (silver lining).");
 
     // Cloud volumetric / appearance enhancements
-    RTX_OPTION("rtx.atmosphere", uint32_t, cloudViewSamples, 5,
+    RTX_OPTION("rtx.atmosphere", uint32_t, cloudViewSamples, 32,
                "Number of ray-march steps through the cloud slab. Higher = better quality, more cost. Range 1..32.");
-    RTX_OPTION("rtx.atmosphere", float, cloudThickness, 1.0f,
+    RTX_OPTION("rtx.atmosphere", float, cloudThickness, 3.05f,
                "Vertical depth of the cloud slab in km.");
     RTX_OPTION("rtx.atmosphere", float, cloudDetailWeight, 1.0f,
                "Weight of the high-frequency detail FBM term [0..1]. Auto-fades at low cloudScale to avoid visible noise.");
     RTX_OPTION("rtx.atmosphere", Vector3, cloudShadowTint, Vector3(0.55f, 0.65f, 0.85f),
                "Sky-blue bounce color applied on the shadow side of clouds.");
-    RTX_OPTION("rtx.atmosphere", float, cloudShadowTintStrength, 0.15f,
+    RTX_OPTION("rtx.atmosphere", float, cloudShadowTintStrength, 1.0f,
                "How strongly the shadow tint contributes [0..1].");
-    RTX_OPTION("rtx.atmosphere", float, cloudSunsetWarmth, 1.0f,
+    RTX_OPTION("rtx.atmosphere", float, cloudSunsetWarmth, 0.95f,
                "Strength of low-sun warm tint on sunward side. 0 = disabled.");
-    RTX_OPTION("rtx.atmosphere", float, cloudCurvature, 0.3f,
+    RTX_OPTION("rtx.atmosphere", float, cloudCurvature, 0.38f,
                "Sky-dome curvature for the cloud layer: 0 = real-planet radius "
                "(nearly flat ceiling), 1 = tight dome (clouds visibly curve down "
                "to the horizon). Only affects cloud sphere intersections; "
                "atmospheric scattering still uses the real planet radius.");
 
     // Cloud spatial variation (Nubis-style — spec 2026-05-06)
-    RTX_OPTION("rtx.atmosphere", float, cloudTypeMean, 0.5f,
+    RTX_OPTION("rtx.atmosphere", float, cloudTypeMean, 0.0f,
                "Mean cloud type across the sky [0,1]: 0=stratus, 0.5=stratocumulus, 1=cumulus.");
-    RTX_OPTION("rtx.atmosphere", float, cloudTypeSpread, 0.4f,
+    RTX_OPTION("rtx.atmosphere", float, cloudTypeSpread, 1.0f,
                "Spatial variation amplitude for cloud type [0,1]. 0=uniform, 1=full range across the sky.");
-    RTX_OPTION("rtx.atmosphere", float, cloudTypeNoiseScale, 0.0005f,
+    RTX_OPTION("rtx.atmosphere", float, cloudTypeNoiseScale, 0.0034f,
                "Region size frequency for type noise. Numerically smaller = larger spatial features.");
-    RTX_OPTION("rtx.atmosphere", float, cloudCoverageMean, 0.6f,
+    RTX_OPTION("rtx.atmosphere", float, cloudCoverageMean, 0.64f,
                "Mean cloud coverage across the sky [0,1]: 0=clear, 1=overcast.");
-    RTX_OPTION("rtx.atmosphere", float, cloudCoverageSpread, 0.4f,
+    RTX_OPTION("rtx.atmosphere", float, cloudCoverageSpread, 0.16f,
                "Spatial variation amplitude for coverage [0,1]. 0=uniform, 1=full range.");
-    RTX_OPTION("rtx.atmosphere", float, cloudCoverageNoiseScale, 0.0005f,
+    RTX_OPTION("rtx.atmosphere", float, cloudCoverageNoiseScale, 0.0033f,
                "Region size frequency for coverage noise. Independent from type noise scale.");
     RTX_OPTION("rtx.atmosphere", float, cloudAnvilBias, 0.3f,
                "Cumulus top inflation strength [0,1]. 0=flat tops, 1=fully spread mushroom-cap anvils.");
@@ -1365,6 +1365,10 @@ namespace dxvk {
                "1=full strength. Each enabled, above-horizon moon contributes Lambert+HG response "
                "scaled by its phaseGlow (full at full moon, zero at new moon). No per-sample shadow "
                "march — single-bounce only.");
+    RTX_OPTION("rtx.atmosphere", float, cloudNoiseTileKm, 12.0f,
+               "World-space tile period (km) for the prebaked 3D cloud noise texture. "
+               "Smaller = more visible repetition; larger = lower-frequency cloud detail. "
+               "Default 12.0; viable range 6-24.");
 
     // TODO (REMIX-656): Remove this once we can transition content to new hash
     RTX_OPTION("rtx", bool, logLegacyHashReplacementMatches, false, "");

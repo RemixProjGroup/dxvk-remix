@@ -484,7 +484,7 @@ float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args) {
 //   stratus  (type=0):   rise 0..0.10, plateau 0.10..0.20, fall 0.20..0.30
 //   cumulus  (type=1):   rise 0..0.20, plateau 0.20..0.75, fall 0.75..0.95
 // The cumulus plateau extends through the upper slab so the Nubis anvil pow
-// trick (gated 0.7..0.8 in sampleCloudDensity) lands on dense cloud rather
+// trick (gated 0.7..0.8 in sampleCloudDensityTextured) lands on dense cloud rather
 // than already-faded tail. Without the long plateau the anvil widening
 // applies to ~30% density and reads as "no visible change" on the silhouette.
 // No integral normalization across types -- cumulus is naturally denser than
@@ -496,93 +496,6 @@ float cloudTypeProfile(float hf, float type) {
   float rise = saturate(hf / max(riseEnd, 1e-4f));
   float fall = saturate((fallEnd - hf) / max(fallEnd - fallStart, 1e-4f));
   return saturate(rise * fall);
-}
-
-// Sample cloud density (procedural FBM) at a given horizontal world position
-// (km), normalized height fraction within the cloud slab, and per-XZ local
-// type/coverage values from the spatial-variation control noises. Returns
-// density in [0, 1].
-//
-// Vertical structure comes from cloudTypeProfile (Nubis sliding keypoints).
-// Coverage modulation includes the Nubis anvil pow trick at the slab top so
-// cumulus tops inflate outward. Wind-shear UV perturbation along wind
-// direction is gated by typeLocal so puffier cumulus shears more than
-// flat stratus.
-float sampleCloudDensity(vec2 worldPosKm, float heightFraction,
-                         float typeLocal, float coverageLocal,
-                         AtmosphereArgs args) {
-  // UV perturbation along wind direction. Strength scales with type so cumulus
-  // (puffier, more turbulent) shears more than stratus (flat, calm).
-  vec2 windOffset = args.cloudWindOffset;
-  float windLen = length(windOffset);
-  vec2 windDir = (windLen > 0.0001f) ? (windOffset / windLen) : vec2(0.7071f, 0.7071f);
-  vec2 perturb = windDir * (heightFraction * args.cloudThickness * typeLocal * args.cloudWindShearStrength);
-
-  // Base cloud shape — large slowly moving clumps
-  vec2 uv = (worldPosKm + perturb) * args.cloudScale + args.cloudWindOffset * args.cloudScale;
-
-  // Two-octave FBM with detail layer
-  float base   = fbmNoise2D(uv,             4, 90.0f);
-  float detail = fbmNoise2D(uv * 4.0f + vec2(5.3f, 2.1f), 3, 95.0f);
-
-  float detailFade = smoothstep(0.005f, 0.05f, args.cloudScale);
-  float shape = base * 0.75f + detail * args.cloudDetailWeight * detailFade;
-
-  // Anvil top: raise effective coverage at high height-fraction so cumulus
-  // tops inflate outward. Paper-faithful Nubis formula (SIGGRAPH 2017 slide 46):
-  //   coverage = pow(coverage, remap(height, 0.7, 0.8, 1.0, lerp(1.0, 0.5, anvil_bias)));
-  // Gated purely by height fraction (not type) — same line runs for all types,
-  // only tall (cumulus) clouds reach the zone. Pairs with the wind-direction
-  // skew in the perturb expression above (cloudWindShearStrength) to read as
-  // a leaning anvil top, matching slides 49-50 of the paper.
-  float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
-                            smoothstep(0.7f, 0.8f, heightFraction));
-  float coverageAnvil = pow(coverageLocal, anvilExponent);
-
-  // Coverage threshold — overcast pockets push above threshold, sparse
-  // pockets thin out.
-  float coverageThreshold = mix(0.80f, 0.15f, coverageAnvil);
-  float density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, shape);
-
-  // Type-driven vertical profile (replaces the old cloudVerticalProfile bell).
-  density *= cloudTypeProfile(heightFraction, typeLocal);
-
-  return saturate(density);
-}
-
-// Stripped-down cloud density for shadow-direction extinction taps. Identical
-// to sampleCloudDensity except: drops the 4×-frequency detail FBM call, and
-// reduces the base FBM from 4 octaves to 2. Used by sampleCloudSunTransmittance
-// (sun + combined-moon shadow march). Justification: high-frequency detail
-// integrates out along the 1.6km sun-direction shadow path -- the dominant
-// signal is the coverage-threshold-shaped large-scale shape, captured by 2
-// octaves. Saves ~20 hashes per shadow tap (28 → 8).
-float sampleCloudDensityShadow(vec2 worldPosKm, float heightFraction,
-                               float typeLocal, float coverageLocal,
-                               AtmosphereArgs args) {
-  // Wind-shear UV perturbation (identical to sampleCloudDensity)
-  vec2 windOffset = args.cloudWindOffset;
-  float windLen = length(windOffset);
-  vec2 windDir = (windLen > 0.0001f) ? (windOffset / windLen) : vec2(0.7071f, 0.7071f);
-  vec2 perturb = windDir * (heightFraction * args.cloudThickness * typeLocal * args.cloudWindShearStrength);
-
-  vec2 uv = (worldPosKm + perturb) * args.cloudScale + args.cloudWindOffset * args.cloudScale;
-
-  // 2-octave base only; no detail layer.
-  float base = fbmNoise2D(uv, 2, 90.0f);
-  float shape = base;
-
-  // Anvil pow + coverage threshold + vertical profile (identical to sampleCloudDensity).
-  float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
-                            smoothstep(0.7f, 0.8f, heightFraction));
-  float coverageAnvil = pow(coverageLocal, anvilExponent);
-
-  float coverageThreshold = mix(0.80f, 0.15f, coverageAnvil);
-  float density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, shape);
-
-  density *= cloudTypeProfile(heightFraction, typeLocal);
-
-  return saturate(density);
 }
 
 // Intersect view ray with the cloud shell. Returns true and the hit distance
@@ -620,6 +533,16 @@ bool intersectCloudLayer(vec3 rayDir, AtmosphereArgs args, out float t, out vec3
 // and shadowed. Used by getTransmittanceToSun to darken ground/atmosphere
 // lighting under heavy cloud cover.
 float evalCloudGroundShadow(vec3 sunDir, AtmosphereArgs args) {
+#ifndef ATMOSPHERE_AVAILABLE
+  // The cloud noise SRV/sampler globals (AtmosphereCloudNoise3D /
+  // AtmosphereCloudNoise3DSampler) are declared only in shaders that include a
+  // bindings file (common_bindings.slangh or atmosphere_bindings.slangh); the
+  // atmosphere LUT compute shaders pull in atmosphere_common.slangh without
+  // those bindings to access shared math helpers, so they need a binding-free
+  // fallback. Returning 1.0 here means no cloud occlusion in those passes,
+  // which is correct — the LUTs encode pure atmospheric scattering.
+  return 1.0f;
+#else
   if (args.cloudEnabled < 0.5f || args.cloudCoverageMean < 0.01f) return 1.0f;
   if (args.cloudShadowStrength < 0.01f) return 1.0f;
 
@@ -645,10 +568,12 @@ float evalCloudGroundShadow(vec3 sunDir, AtmosphereArgs args) {
   // Sampling at any hf in the plateau gives profile=1.0; midpoint is the
   // most conservative choice given the noise sampling jitter at the call site.
   float hfPeak = 0.15f + 0.325f * typeLocal;
-  float density = sampleCloudDensity(hitXZ, hfPeak, typeLocal, coverageLocal, args);
+  float density = sampleCloudDensityTextured(hitPos, hfPeak, typeLocal, coverageLocal, args,
+                                              AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler);
   float transmittance = exp(-density * args.cloudDensity * 2.0f);
 
   return mix(1.0f, transmittance, args.cloudShadowStrength);
+#endif
 }
 
 // Sun disk angular radius is now dynamic (args.sunAngularRadius)
@@ -960,7 +885,7 @@ vec3 getAnalyticalMultiscattering(float altitude, float sunZenithCosAngle, Atmos
 }
 
 // Procedural noise utilities — shared by the cloud layer
-// (sampleCloudDensity / evalClouds via fbmNoise2D below) and the sky-path
+// (sampleCloudDensityTextured / evalClouds via fbmNoise2D below) and the sky-path
 // star / moon / night-sky shaders in atmosphere_sky.slangh. Based on integer
 // lattice hashing for stable, non-repeating patterns.
 float hash31(vec3 p) {
@@ -998,5 +923,305 @@ float fbmNoise2D(vec2 p, int octaves, float seed) {
     amplitude *= 0.5f;
   }
   return value;
+}
+
+// 3D Perlin gradient noise utilities — used only by the cloud-noise bake
+// compute pass (rtx_cloud_noise_baker.comp.slang). Per-frame paths sample
+// the prebaked Texture3D instead. True gradient noise (Ken Perlin's 12
+// cube-edge gradients + dot products) distinct from the value-noise helpers
+// above (smoothNoise2D / fbmNoise2D).
+
+// Ken Perlin's 12 cube-edge gradient vectors. Each is one of (±1,±1,0),
+// (±1,0,±1), (0,±1,±1) — uniform magnitude (sqrt(2)), avoids axis-aligned
+// bias of random unit gradients.
+vec3 perlinGradient3D(vec3 ip) {
+  // hash31 returns [0, 1); bin into 12 buckets.
+  uint h = uint(hash31(ip) * 12.0f);
+  if      (h == 0u)  return vec3( 1.0f,  1.0f,  0.0f);
+  else if (h == 1u)  return vec3(-1.0f,  1.0f,  0.0f);
+  else if (h == 2u)  return vec3( 1.0f, -1.0f,  0.0f);
+  else if (h == 3u)  return vec3(-1.0f, -1.0f,  0.0f);
+  else if (h == 4u)  return vec3( 1.0f,  0.0f,  1.0f);
+  else if (h == 5u)  return vec3(-1.0f,  0.0f,  1.0f);
+  else if (h == 6u)  return vec3( 1.0f,  0.0f, -1.0f);
+  else if (h == 7u)  return vec3(-1.0f,  0.0f, -1.0f);
+  else if (h == 8u)  return vec3( 0.0f,  1.0f,  1.0f);
+  else if (h == 9u)  return vec3( 0.0f, -1.0f,  1.0f);
+  else if (h == 10u) return vec3( 0.0f,  1.0f, -1.0f);
+  else               return vec3( 0.0f, -1.0f, -1.0f); // h == 11u
+}
+
+// 3D Perlin gradient noise — single octave at the input frequency.
+// Output range approximately [-1, 1] (gradient noise's classic range —
+// different from value noise's [0, 1]; do NOT saturate or remap here).
+// Used only by the cloud-noise bake compute pass; per-frame paths sample
+// the prebaked Texture3D instead.
+float perlinNoise3D(vec3 p) {
+  vec3 pi = floor(p);
+  vec3 pf = p - pi;
+  vec3 f  = pf * pf * (3.0f - 2.0f * pf); // cubic-Hermite fade
+
+  // Dot product of gradient at each integer corner with the offset vector
+  // from that corner to the sample point.
+  float n000 = dot(perlinGradient3D(pi + vec3(0.0f, 0.0f, 0.0f)), pf - vec3(0.0f, 0.0f, 0.0f));
+  float n100 = dot(perlinGradient3D(pi + vec3(1.0f, 0.0f, 0.0f)), pf - vec3(1.0f, 0.0f, 0.0f));
+  float n010 = dot(perlinGradient3D(pi + vec3(0.0f, 1.0f, 0.0f)), pf - vec3(0.0f, 1.0f, 0.0f));
+  float n110 = dot(perlinGradient3D(pi + vec3(1.0f, 1.0f, 0.0f)), pf - vec3(1.0f, 1.0f, 0.0f));
+  float n001 = dot(perlinGradient3D(pi + vec3(0.0f, 0.0f, 1.0f)), pf - vec3(0.0f, 0.0f, 1.0f));
+  float n101 = dot(perlinGradient3D(pi + vec3(1.0f, 0.0f, 1.0f)), pf - vec3(1.0f, 0.0f, 1.0f));
+  float n011 = dot(perlinGradient3D(pi + vec3(0.0f, 1.0f, 1.0f)), pf - vec3(0.0f, 1.0f, 1.0f));
+  float n111 = dot(perlinGradient3D(pi + vec3(1.0f, 1.0f, 1.0f)), pf - vec3(1.0f, 1.0f, 1.0f));
+
+  // Trilinear interpolation using faded weights
+  float nx00 = mix(n000, n100, f.x);
+  float nx10 = mix(n010, n110, f.x);
+  float nx01 = mix(n001, n101, f.x);
+  float nx11 = mix(n011, n111, f.x);
+
+  float nxy0 = mix(nx00, nx10, f.y);
+  float nxy1 = mix(nx01, nx11, f.y);
+
+  return mix(nxy0, nxy1, f.z);
+}
+
+// 3D Perlin FBM. Mirrors fbmNoise2D's octave-loop shape (lacunarity 2.0,
+// gain 0.5, 6-octave cap, no amplitude normalization, per-octave seed
+// stride 17.31) but uses the gradient-noise primitive perlinNoise3D rather
+// than value noise. Frequency control via pre-scaling p: caller passes
+// p * baseFreq before calling. Output range approximately [-1, 1].
+float fbmNoise3D(vec3 p, int octaves, float seed) {
+  float value     = 0.0f;
+  float amplitude = 0.5f;
+
+  for (int i = 0; i < octaves && i < 6; i++) {
+    // Per-octave seed offset shifts the lattice to decorrelate octaves.
+    // Same stride (17.31) used in fbmNoise2D for cross-function consistency.
+    float seedOffset  = seed + float(i) * 17.31f;
+    vec3  octaveOff   = vec3(seedOffset * 1.7f, seedOffset * 2.3f, seedOffset * 3.1f);
+    value     += amplitude * perlinNoise3D(p + octaveOff);
+    p         *= 2.0f;
+    amplitude *= 0.5f;
+  }
+  return value;
+}
+
+// Periodic 3D Perlin gradient noise — same dot-product math as perlinNoise3D
+// but with each of the 8 corner lattice positions wrapped to `period` before
+// hashing. Sampling perlinNoise3DPeriodic(p, period) at p and at p + period
+// produces identical values, which is the precondition for a tilable bake:
+// the texture's left-edge voxel matches its right-edge voxel and the runtime
+// frac()-wraparound at tile boundaries reads as continuous, not seamed.
+//
+// `period` MUST be a positive integer vector. Non-integer periods break the
+// integer-lattice tilability invariant. The bake passes integer values
+// derived from cloudNoiseTileKm × the per-octave frequency pre-scale.
+//
+// Used only by the cloud-noise bake compute pass; per-frame paths sample the
+// prebaked Texture3D and do not touch this function.
+float perlinNoise3DPeriodic(vec3 p, vec3 period) {
+  vec3 pi = floor(p);
+  vec3 pf = p - pi;
+  vec3 f  = pf * pf * (3.0f - 2.0f * pf);
+
+  // Wrap each corner's lattice position into [0, period). The dot-product
+  // offset (pf - corner) stays in the original [0,1] cube — only the hash
+  // input is wrapped, so the gradient interpolation remains continuous.
+  vec3 c000 = mod(pi + vec3(0, 0, 0), period);
+  vec3 c100 = mod(pi + vec3(1, 0, 0), period);
+  vec3 c010 = mod(pi + vec3(0, 1, 0), period);
+  vec3 c110 = mod(pi + vec3(1, 1, 0), period);
+  vec3 c001 = mod(pi + vec3(0, 0, 1), period);
+  vec3 c101 = mod(pi + vec3(1, 0, 1), period);
+  vec3 c011 = mod(pi + vec3(0, 1, 1), period);
+  vec3 c111 = mod(pi + vec3(1, 1, 1), period);
+
+  float n000 = dot(perlinGradient3D(c000), pf - vec3(0, 0, 0));
+  float n100 = dot(perlinGradient3D(c100), pf - vec3(1, 0, 0));
+  float n010 = dot(perlinGradient3D(c010), pf - vec3(0, 1, 0));
+  float n110 = dot(perlinGradient3D(c110), pf - vec3(1, 1, 0));
+  float n001 = dot(perlinGradient3D(c001), pf - vec3(0, 0, 1));
+  float n101 = dot(perlinGradient3D(c101), pf - vec3(1, 0, 1));
+  float n011 = dot(perlinGradient3D(c011), pf - vec3(0, 1, 1));
+  float n111 = dot(perlinGradient3D(c111), pf - vec3(1, 1, 1));
+
+  float nx00 = mix(n000, n100, f.x);
+  float nx10 = mix(n010, n110, f.x);
+  float nx01 = mix(n001, n101, f.x);
+  float nx11 = mix(n011, n111, f.x);
+
+  float nxy0 = mix(nx00, nx10, f.y);
+  float nxy1 = mix(nx01, nx11, f.y);
+
+  return mix(nxy0, nxy1, f.z);
+}
+
+// Periodic 3D Perlin FBM. Octave loop matches fbmNoise3D's shape (lacunarity
+// 2.0, gain 0.5, 6-octave cap, seed-stride 17.31, no normalization), but each
+// octave's underlying noise is wrapped to a doubling period so the FBM as a
+// whole tiles cleanly at the input range basePeriod.
+//
+// `basePeriod` MUST equal the bake's input range at the FIRST octave (i.e.,
+// cloudNoiseTileKm × the caller's frequency pre-scale). Period doubles each
+// octave to track the implicit `p *= 2.0` so all octaves remain individually
+// tilable at multiples of basePeriod.
+float fbmNoise3DPeriodic(vec3 p, int octaves, float seed, vec3 basePeriod) {
+  float value     = 0.0f;
+  float amplitude = 0.5f;
+  vec3  period    = basePeriod;
+
+  for (int i = 0; i < octaves && i < 6; i++) {
+    float seedOffset = seed + float(i) * 17.31f;
+    vec3  octaveOff  = vec3(seedOffset * 1.7f, seedOffset * 2.3f, seedOffset * 3.1f);
+    value     += amplitude * perlinNoise3DPeriodic(p + octaveOff, period);
+    p         *= 2.0f;
+    period    *= 2.0f;
+    amplitude *= 0.5f;
+  }
+  return value;
+}
+
+// Sigg-Hadwiger 4-tap-per-axis B-spline tricubic. In 3D, separability gives
+// 8 hardware trilinear taps with C2 continuous filtering and no boxy
+// linear-filter artifact at close-up density gradients.
+//
+// Reference: GPU Gems 2, ch. 20.6, "Fast Third-Order Texture Filtering."
+//
+// Inputs:
+//   tex:     the Texture3D<float> to sample.
+//   s:       a linear (trilinear) sampler — the kernel does its own weighting
+//            via 8 trilinear taps; tex MUST be sampled with linear filtering
+//            for the math to work.
+//   uvw:     normalized texture coordinates in [0, 1].
+//   texSize: vec3 of texture dimensions (e.g. vec3(256.0)).
+//
+// Returns: the tricubic-interpolated scalar at uvw.
+float sampleTricubicBSpline(Texture3D<float> tex, SamplerState s,
+                            vec3 uvw, vec3 texSize) {
+  // Convert normalized uvw to texel space, offset by 0.5 to center on texels.
+  vec3 coord    = uvw * texSize - 0.5f;
+  vec3 fracPart = fract(coord);
+  vec3 intPart  = floor(coord);
+
+  // B-spline cubic weights per axis (4 weights w0..w3 each).
+  vec3 fp2 = fracPart * fracPart;
+  vec3 fp3 = fp2 * fracPart;
+
+  vec3 w0 = (1.0f / 6.0f) * (-fp3 + 3.0f * fp2 - 3.0f * fracPart + 1.0f);
+  vec3 w1 = (1.0f / 6.0f) * (3.0f * fp3 - 6.0f * fp2 + 4.0f);
+  vec3 w2 = (1.0f / 6.0f) * (-3.0f * fp3 + 3.0f * fp2 + 3.0f * fracPart + 1.0f);
+  vec3 w3 = (1.0f / 6.0f) * fp3;
+
+  // Combine pairs of weights to fold 4 weights into 2 trilinear-tap
+  // positions per axis (Sigg-Hadwiger separable optimization).
+  vec3 g0 = w0 + w1;
+  vec3 g1 = w2 + w3;
+
+  vec3 invTexSize = 1.0f / texSize;
+  vec3 h0 = (intPart - 1.0f + (w1 / g0) + 0.5f) * invTexSize;
+  vec3 h1 = (intPart + 1.0f + (w3 / g1) + 0.5f) * invTexSize;
+
+  // 8 trilinear taps (one per corner of a 2-cubed cube of merged samples).
+  float t000 = tex.SampleLevel(s, vec3(h0.x, h0.y, h0.z), 0).r;
+  float t100 = tex.SampleLevel(s, vec3(h1.x, h0.y, h0.z), 0).r;
+  float t010 = tex.SampleLevel(s, vec3(h0.x, h1.y, h0.z), 0).r;
+  float t110 = tex.SampleLevel(s, vec3(h1.x, h1.y, h0.z), 0).r;
+  float t001 = tex.SampleLevel(s, vec3(h0.x, h0.y, h1.z), 0).r;
+  float t101 = tex.SampleLevel(s, vec3(h1.x, h0.y, h1.z), 0).r;
+  float t011 = tex.SampleLevel(s, vec3(h0.x, h1.y, h1.z), 0).r;
+  float t111 = tex.SampleLevel(s, vec3(h1.x, h1.y, h1.z), 0).r;
+
+  // Combine via 7 lerps with the merged weights (3-axis separable).
+  float tx00 = mix(t100, t000, g0.x);
+  float tx10 = mix(t110, t010, g0.x);
+  float tx01 = mix(t101, t001, g0.x);
+  float tx11 = mix(t111, t011, g0.x);
+
+  float txy0 = mix(tx10, tx00, g0.y);
+  float txy1 = mix(tx11, tx01, g0.y);
+
+  return mix(txy1, txy0, g0.z);
+}
+
+// Stage C replacement for sampleCloudDensity AND sampleCloudDensityShadow.
+// Reads a tricubic sample of the prebaked 3D Perlin FBM, layers a small
+// per-frame analytic detail FBM for shape-jitter, and applies the same
+// per-frame coverage / anvil / cloud-type shaping logic the analytic
+// sampleCloudDensity used to do inline.
+//
+// Visual notes:
+//   - The 3D noise volume gives genuine top-to-bottom shape variation
+//     inside a cumulus body — a quality win over 2D-extruded noise.
+//   - Tricubic interpolation eliminates the boxy linear-filter artifact
+//     visible at close-up cloud detail.
+//   - The 1-octave detail layer (~10% weight) provides slow per-frame
+//     shape evolution so the cloud field doesn't read as frozen during
+//     static-camera shots.
+//
+// cloudNoise3D / cloudSampler are passed as parameters (instead of referenced
+// as globals) so this helper compiles in any translation unit that includes
+// atmosphere_common.slangh, regardless of whether the consumer pulled in
+// common_bindings.slangh or atmosphere_bindings.slangh. cloudSampler must be
+// a linear (trilinear) SamplerState — the tricubic kernel does its own
+// weighting via 8 trilinear taps and requires linear filtering to be correct.
+float sampleCloudDensityTextured(vec3 worldPosKm,
+                                 float heightFraction,
+                                 float typeLocal,
+                                 float coverageLocal,
+                                 AtmosphereArgs args,
+                                 Texture3D<float> cloudNoise3D,
+                                 SamplerState cloudSampler) {
+  // 1. Wind perturbation (translation only — texture is tilable).
+  //    The old analytic sampleCloudDensity also applied a height-dependent
+  //    shear (heightFraction * cloudThickness * typeLocal * cloudWindShearStrength).
+  //    That term is intentionally dropped here: the 3D volume already encodes
+  //    vertical structure, so a UV shear would fight the volume's own variation.
+  //    If a deliberate shear-skewed look is wanted later, layer it on the
+  //    texcoord here rather than in this helper's contract.
+  vec3 windOffset = vec3(args.cloudWindOffset.x, 0.0f, args.cloudWindOffset.y);
+  vec3 perturbed  = worldPosKm + windOffset;
+
+  // 2. World-pos → texcoord. Anisotropic mapping: horizontal axes use the
+  //    cloudNoiseTileKm period (multiple cumulus widths per tile, ~12 km),
+  //    vertical axis is mapped to the cloud-layer-relative span [0, 1] across
+  //    cloudThickness so the bake's full 6-cycle base-octave structure runs
+  //    across the cloud layer's 1 km vertical extent. A uniform (worldPos / 12)
+  //    mapping would compress the cloud layer into ~8% of the texture's Y
+  //    axis — too little base-octave variation, reading as "stacked 2D layers"
+  //    rather than true volumetric structure.
+  float yRelative = (perturbed.y - args.cloudAltitude) / max(args.cloudThickness, 0.01f);
+  vec3 texcoord = vec3(
+      frac(perturbed.x / args.cloudNoiseTileKm),
+      frac(yRelative),
+      frac(perturbed.z / args.cloudNoiseTileKm));
+
+  // 3. Tricubic 3D sample. Texture-size literal must match the baker's
+  //    dispatch resolution (RtxAtmosphere::kCloudNoise3DSize = 256). If the
+  //    bake resolution ever changes, update both sites in lockstep.
+  float texturedNoise = sampleTricubicBSpline(
+      cloudNoise3D, cloudSampler,
+      texcoord, vec3(256.0f));
+
+  // 4. Per-frame 1-octave analytic detail (shape jitter at ~10% weight).
+  //    Frequency tuned for sub-voxel-scale variation that the prebaked
+  //    texture cannot represent.
+  //    NOTE: perlinNoise3D returns gradient noise in [-1, 1]; the plan's
+  //    - 0.5f shift is preserved as-is per plan spec (Task 9 re-tuning will
+  //    address the asymmetry if visually problematic).
+  float detailWeight = 0.10f;  // tune in Task 9 re-tuning loop
+  float detail       = perlinNoise3D(perturbed * 720.0f) - 0.5f;
+  float density      = texturedNoise + detailWeight * detail;
+
+  // 5. Coverage threshold + anvil pow + cloud-type vertical profile.
+  //    Lifted verbatim from sampleCloudDensity.
+  float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
+                            smoothstep(0.7f, 0.8f, heightFraction));
+  float coverageAnvil = pow(coverageLocal, anvilExponent);
+
+  float coverageThreshold = mix(0.80f, 0.15f, coverageAnvil);
+  density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, density);
+
+  density *= cloudTypeProfile(heightFraction, typeLocal);
+
+  return saturate(density);
 }
 

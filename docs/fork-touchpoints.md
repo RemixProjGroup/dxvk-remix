@@ -899,6 +899,12 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `COMMON_BINDING_DEFINITION_LIST` macro (~line 96) — 3-line addition for common-binding list.
   *Adds `TEXTURE2D` entries for the three atmosphere LUT bindings to the common-binding definition macro so they appear in all passes that include common_bindings.*
 
+- **Inline tweak** at `(file scope)` (atmosphere binding index defines) (~line 56) and `COMMON_RAYTRACING_BINDINGS` macro (~line 103) — Stage C addition.
+  *Adds `BINDING_ATMOSPHERE_CLOUD_NOISE_3D = 203` and a corresponding `TEXTURE3D` entry in the macro list for the prebaked 3D cloud noise volume (256³ R8 Perlin). No consumer yet; resource and bake pass land in subsequent Stage C tasks.*
+
+- **Inline tweak** at `(file scope)` (atmosphere binding index defines, ~line 57) and `COMMON_RAYTRACING_BINDINGS` macro (~line 104) — Stage C Task 8a addition.
+  *Adds `BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER = 204` and a corresponding `SAMPLER` entry in the macro list. The linear/REPEAT sampler is bound alongside the cloud noise SRV in `bindAtmosphereLuts` and consumed by `sampleCloudDensityTextured` at call sites (Task 8b).*
+
 - **Inline tweak** at `COMMON_BINDING_DEFINITION_LIST` macro (~line 91) — 1-line addition for sampler readback buffer.
   *Adds `RW_STRUCTURED_BUFFER(BINDING_SAMPLER_READBACK_BUFFER)` to the common binding list (upstream omission fixed).*
 

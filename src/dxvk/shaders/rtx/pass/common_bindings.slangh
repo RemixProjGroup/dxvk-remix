@@ -128,3 +128,9 @@ Texture2D AtmosphereMultiscatteringLut;
 
 layout(binding = BINDING_ATMOSPHERE_SKY_VIEW_LUT)
 Texture2D AtmosphereSkyViewLut;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_NOISE_3D)
+Texture3D<float> AtmosphereCloudNoise3D;
+
+layout(binding = BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER)
+SamplerState AtmosphereCloudNoise3DSampler;

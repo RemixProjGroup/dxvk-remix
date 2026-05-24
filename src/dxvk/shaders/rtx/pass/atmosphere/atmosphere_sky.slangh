@@ -30,7 +30,7 @@
 //
 // Cloud and atmosphere helpers used by both the sky path and the ground
 // shadow term (intersectSphere, cloudPlanetRadius, computeCloudHeightFraction,
-// sampleCloudDensity, intersectCloudLayer, evalCloudGroundShadow,
+// sampleCloudDensityTextured, intersectCloudLayer, evalCloudGroundShadow,
 // getTransmittanceToSun, evalAtmosphereRadiance, hash31, fbmNoise2D, etc.)
 // stay in atmosphere_common.slangh and are pulled in via the include below.
 
@@ -580,7 +580,7 @@ vec3 evalMoonDisk(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float dis
 // ============================================================================
 // Procedural Cloud Rendering (view-direction evaluation)
 // ============================================================================
-// The cloud density / intersection helpers (sampleCloudDensity,
+// The cloud density / intersection helpers (sampleCloudDensityTextured,
 // intersectCloudLayer, evalCloudGroundShadow, computeCloudHeightFraction,
 // cloudPlanetRadius) live in atmosphere_common.slangh so closesthit ground
 // shadow paths and getTransmittanceToSun can use them without pulling in the
@@ -607,8 +607,9 @@ float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir,
     // Project to horizontal plane and compute heightFraction at the tap.
     // Taps that march above the slab top get hf=1 → bell→0 → density=0,
     // which is correct (no clouds outside the slab).
-    float d = sampleCloudDensityShadow(vec2(p.x, p.z), computeCloudHeightFraction(p, args),
-                                        typeLocal, coverageLocal, args);
+    float d = sampleCloudDensityTextured(p, computeCloudHeightFraction(p, args),
+                                          typeLocal, coverageLocal, args,
+                                          AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler);
     opticalDepth += d;
   }
 
@@ -825,7 +826,8 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     float coverageLocal = saturate(args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 
     float hf = computeCloudHeightFraction(samplePos, args);
-    float density = sampleCloudDensity(sampleXZ, hf, typeLocal, coverageLocal, args);
+    float density = sampleCloudDensityTextured(samplePos, hf, typeLocal, coverageLocal, args,
+                                                AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler);
     density *= horizonFade;
     if (density < 0.001f) {
       cacheValid = false;

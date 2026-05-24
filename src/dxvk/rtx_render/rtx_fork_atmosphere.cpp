@@ -117,6 +117,7 @@ namespace fork_hooks {
     auto transmittanceLut   = ctx.m_atmosphere->getTransmittanceLut();
     auto multiscatteringLut = ctx.m_atmosphere->getMultiscatteringLut();
     auto skyViewLut         = ctx.m_atmosphere->getSkyViewLut();
+    auto cloudNoise3D       = ctx.m_atmosphere->getCloudNoise3D();  // Stage C
 
     // Always bind the LUTs (they're declared in shaders unconditionally)
     if (transmittanceLut.isValid()) {
@@ -127,6 +128,25 @@ namespace fork_hooks {
     }
     if (skyViewLut.isValid()) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_SKY_VIEW_LUT, skyViewLut.view, nullptr);
+    }
+    if (cloudNoise3D.isValid()) {
+      ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_NOISE_3D, cloudNoise3D.view, nullptr);
+    }
+
+    // Bind a linear/REPEAT sampler for the cloud noise volume.
+    // REPEAT matches the tilable wraparound logic in sampleCloudDensityTextured
+    // (frac-based texcoord) so the hardware sampler and the shader math agree.
+    // Created per-bind (cheap — DxvkDevice caches identical samplers).
+    {
+      DxvkSamplerCreateInfo samplerInfo = {};
+      samplerInfo.magFilter    = VK_FILTER_LINEAR;
+      samplerInfo.minFilter    = VK_FILTER_LINEAR;
+      samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+      samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+      samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+      samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+      Rc<DxvkSampler> cloudNoiseSampler = ctx.m_device->createSampler(samplerInfo);
+      ctx.bindResourceSampler(BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER, cloudNoiseSampler);
     }
   }
 
@@ -487,6 +507,15 @@ namespace fork_hooks {
         ImGui::TextDisabled("Anvil");
         RemixGui::DragFloat("Anvil Bias", &RtxOptions::cloudAnvilBiasObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Cumulus top inflation. 0=flat tops, 1=fully spread mushroom-cap anvils. Nubis pow trick.");
+
+        ImGui::Separator();
+        ImGui::TextDisabled("3D Noise Bake (Stage C)");
+        RemixGui::DragFloat("Noise Tile (km)", &RtxOptions::cloudNoiseTileKmObject(), 1.0f, 4.0f, 32.0f, "%.0f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+          "World-space tile period (km) for the prebaked 3D cloud noise volume. Smaller = more visible "
+          "repetition; larger = lower-frequency cloud detail. Integer values (6, 8, 12, 16, 24) keep the "
+          "bake perfectly tilable; non-integer values snap the period via floor() and may show small seams. "
+          "CHANGE APPLIES ON GAME RELAUNCH — the bake runs once at atmosphere init.");
 
         ImGui::TreePop();
       }

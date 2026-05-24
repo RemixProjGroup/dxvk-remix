@@ -25,9 +25,11 @@
 #include "rtx_options.h"
 #include "rtx_context.h"
 #include "rtx_render/rtx_shader_manager.h"
+#include "rtx/pass/common_binding_indices.h"
 #include <rtx_shaders/transmittance_lut.h>
 #include <rtx_shaders/multiscattering_lut.h>
 #include <rtx_shaders/sky_view_lut.h>
+#include <rtx_shaders/rtx_cloud_noise_baker.h>
 #include <cmath>
 #include <fstream>
 #include <chrono>
@@ -59,7 +61,7 @@ namespace dxvk {
 
     class SkyViewLutShader : public ManagedShader {
       SHADER_SOURCE(SkyViewLutShader, VK_SHADER_STAGE_COMPUTE_BIT, sky_view_lut)
-      
+
       BEGIN_PARAMETER()
         CONSTANT_BUFFER(0)
         TEXTURE2D(1)
@@ -69,6 +71,17 @@ namespace dxvk {
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(SkyViewLutShader);
+
+    // Stage C: one-shot bake of the 256-cubed R8 cloud noise volume.
+    class CloudNoiseBakerShader : public ManagedShader {
+      SHADER_SOURCE(CloudNoiseBakerShader, VK_SHADER_STAGE_COMPUTE_BIT, rtx_cloud_noise_baker)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        RW_TEXTURE3D(1)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudNoiseBakerShader);
   }
 
 RtxAtmosphere::RtxAtmosphere(DxvkDevice* device)
@@ -91,6 +104,7 @@ void RtxAtmosphere::initialize(Rc<DxvkContext> ctx) {
   }
 
   createLutResources(ctx);
+  dispatchCloudNoise3DBake(ctx);
   m_initialized = true;
   m_lutsNeedRecompute = true;
 }
@@ -310,6 +324,10 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.pad5 = 0.0f;
     args.pad6 = 0.0f;
     args.pad7 = 0.0f;
+    args.cloudNoiseTileKm = RtxOptions::cloudNoiseTileKm();
+    args.padCloudC0 = 0.0f;
+    args.padCloudC1 = 0.0f;
+    args.padCloudC2 = 0.0f;
   }
 
   return args;
@@ -370,6 +388,22 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
     1, // numLayers
     VK_IMAGE_TYPE_2D,
     VK_IMAGE_VIEW_TYPE_2D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
+
+  // Stage C: 3D R8 noise volume (256-cubed, ~16 MB). Filled once at init.
+  VkExtent3D cloudNoise3DExtent = { kCloudNoise3DSize, kCloudNoise3DSize, kCloudNoise3DSize };
+  m_cloudNoise3D = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud Noise 3D",
+    cloudNoise3DExtent,
+    VK_FORMAT_R8_UNORM,
+    1, // numLayers
+    VK_IMAGE_TYPE_3D,
+    VK_IMAGE_VIEW_TYPE_3D,
     0, // imageCreateFlags
     VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
     VkClearColorValue{}, // clearValue
@@ -519,9 +553,49 @@ void RtxAtmosphere::dispatchSkyViewLut(Rc<DxvkContext> ctx) {
   ctx->dispatch(groupsX, groupsY, 1);
 }
 
+void RtxAtmosphere::dispatchCloudNoise3DBake(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud Noise 3D Bake");
+
+  // One-shot bake at atmosphere init. Runs the 3D Perlin FBM stack defined
+  // in rtx_cloud_noise_baker.comp.slang and writes 256-cubed voxels of R8 density.
+  // Mirrors dispatchSkyViewLut's structure but uses a 3D dispatch.
+
+  // Update atmosphere args buffer
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  // Bind resources: ConstantBuffer<AtmosphereArgs> at slot 0, RWTexture3D at slot 1.
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudNoise3D.view, nullptr);
+
+  // Track resources
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudNoise3D.image);
+
+  // Bind shader and dispatch
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudNoiseBakerShader::getShader());
+
+  // Dispatch: kCloudNoise3DSize / 8 = 32 groups per axis (shader uses [numthreads(8,8,8)])
+  const uint32_t groupCount = kCloudNoise3DSize / 8u;
+  ctx->dispatch(groupCount, groupCount, groupCount);
+}
+
 void RtxAtmosphere::bindResources(Rc<DxvkContext> ctx, VkPipelineBindPoint pipelineBindPoint) {
-  // TODO: Bind atmosphere LUT resources to the pipeline
-  // This will be called from RtxContext to make the LUTs available to shaders
+  // Bind atmosphere LUT resources to the pipeline.
+  // Note: The active call site for runtime binding is bindAtmosphereLuts in
+  // rtx_fork_atmosphere.cpp; this method is available for direct use if needed.
+  if (m_transmittanceLut.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_TRANSMITTANCE_LUT, m_transmittanceLut.view, nullptr);
+  }
+  if (m_multiscatteringLut.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_MULTISCATTERING_LUT, m_multiscatteringLut.view, nullptr);
+  }
+  if (m_skyViewLut.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_SKY_VIEW_LUT, m_skyViewLut.view, nullptr);
+  }
+  if (m_cloudNoise3D.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_NOISE_3D, m_cloudNoise3D.view, nullptr);
+  }
 }
 
 } // namespace dxvk

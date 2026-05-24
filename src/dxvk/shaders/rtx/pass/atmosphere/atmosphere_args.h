@@ -141,4 +141,13 @@ struct AtmosphereArgs {
   float pad5;                      // 16-byte alignment
   float pad6;
   float pad7;
+
+  // ----- Stage C: 3D noise texture (fork) -----
+  float cloudNoiseTileKm;   // World-space tile period for the prebaked 3D noise.
+                            // Texture is tilable; this controls how many km of
+                            // unique cloud structure before the pattern repeats.
+                            // Default 12.0 (~47 m/voxel at 256 resolution).
+  float padCloudC0;
+  float padCloudC1;
+  float padCloudC2;
 };
