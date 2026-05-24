@@ -623,13 +623,15 @@ void integratePathVertex(
         if (isWithinGbuffer)
         {
           uint8_t sampledTransportPortalIndex = invalidRayPortalIndex;
-    
+
+          // Create synthetic customIndex for view model filtering.
+          uint customIndex = rayInteraction.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
+
           // Select and sample a light for NEE via RTXDI
-    
           lightSampleValid = sampleLightRTXDI(
             pixelCoordinate,
             surfaceInteraction,
-            lightSample, invSelectionPdf, sampledTransportPortalIndex, lightIdx);
+            lightSample, invSelectionPdf, sampledTransportPortalIndex, lightIdx, customIndex);
         }
       }
 
@@ -651,11 +653,14 @@ void integratePathVertex(
         }
         else
         {
+          // Create synthetic customIndex for view model filtering.
+          uint customIndex = rayInteraction.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
+
           // Select and sample a light for NEE via RIS
           lightSampleValid = sampleLightRIS(
             randomState,
             surfaceInteraction, opaqueSurfaceMaterialInteraction, rayInteraction.viewDirection,
-            lightSample, invSelectionPdf, lightIdx);
+            lightSample, invSelectionPdf, lightIdx, customIndex);
         }
       }
 

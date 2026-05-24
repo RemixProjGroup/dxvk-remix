@@ -404,6 +404,8 @@ dxvk_src = files([
   'imgui/dxvk_imgui_capture.h',
   'imgui/dxvk_imgui_splash.cpp',
   'imgui/dxvk_imgui_splash.h',
+  'imgui/imgui_remix_exports.cpp',
+  'imgui/imgui_remix_exports.h',
   'imgui/rtx_user_menu.cpp',
   'imgui/imconfig.h',
   'imgui/imgui.cpp',

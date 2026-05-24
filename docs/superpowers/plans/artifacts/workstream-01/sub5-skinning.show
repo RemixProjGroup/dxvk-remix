@@ -1,0 +1,352 @@
+commit 4ce38d1bbb9a02b1057fc0e784f7ad4fdf6f3787
+Author: CattaRappa <sambow23@gmail.com>
+Date:   Wed Apr 1 19:09:16 2026 -0500
+
+    fix hw skinning for unity
+
+diff --git a/src/dxvk/rtx_render/rtx_remix_api.cpp b/src/dxvk/rtx_render/rtx_remix_api.cpp
+index 82e7a110..971dee6f 100644
+--- a/src/dxvk/rtx_render/rtx_remix_api.cpp
++++ b/src/dxvk/rtx_render/rtx_remix_api.cpp
+@@ -824,6 +824,7 @@ dxvk::ExternalDrawState dxvk::RemixAPIPrivateAccessor::toRtDrawState(const remix
+     for (uint32_t boneIdx = 0; boneIdx < boneCount; boneIdx++) {
+       prototype.skinningData.pBoneMatrices[boneIdx] = convert::tomat4(extBones->boneTransforms_values[boneIdx]);
+     }
++    prototype.skinningData.computeHash();
+   }
+ 
+   if (auto extBlend = pnext::find<remixapi_InstanceInfoBlendEXT>(&info)) {
+@@ -1074,8 +1075,8 @@ namespace {
+         dst.color0Buffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, color), sizeof(remixapi_HardcodedVertex), VK_FORMAT_B8G8R8A8_UNORM };
+         if (src.skinning_hasvalue) {
+           dst.numBonesPerVertex = src.skinning_value.bonesPerVertex;
+-          dst.blendWeightBuffer = dxvk::RasterBuffer { blendWeightsSlice, 0, sizeof(float), VK_FORMAT_R32_SFLOAT };;
+-          dst.blendIndicesBuffer = dxvk::RasterBuffer { blendIndicesSlice, 0, sizeof(uint32_t), VK_FORMAT_R8G8B8A8_USCALED };
++          dst.blendWeightBuffer = dxvk::RasterBuffer { blendWeightsSlice, 0, uint32_t(sizeof(float) * src.skinning_value.bonesPerVertex), VK_FORMAT_R32_SFLOAT };
++          dst.blendIndicesBuffer = dxvk::RasterBuffer { blendIndicesSlice, 0, uint32_t(sizeof(uint32_t) * dxvk::divCeil(src.skinning_value.bonesPerVertex, 4u)), VK_FORMAT_R8G8B8A8_USCALED };
+         }
+ 
+         dst.indexCount = src.indices_count;
+
+commit f567ad8b219338f64b750086a23850d68ab50c43
+Author: CattaRappa <sambow23@gmail.com>
+Date:   Mon Dec 8 21:56:09 2025 -0600
+
+    fix unity cord issues
+
+diff --git a/src/dxvk/rtx_render/rtx_game_capturer.cpp b/src/dxvk/rtx_render/rtx_game_capturer.cpp
+index 35fe568e..8a0ca754 100644
+--- a/src/dxvk/rtx_render/rtx_game_capturer.cpp
++++ b/src/dxvk/rtx_render/rtx_game_capturer.cpp
+@@ -1077,10 +1077,16 @@ namespace dxvk {
+     }
+     // Prep global transform
+     exportPrep.globalXform = pxr::GfMatrix4d{1.0};
+-    const bool bInvX = (!exportPrep.camera.view.bInv) && (exportPrep.camera.proj.bInv || exportPrep.camera.isLHS());
+-    const bool bInvY = (!exportPrep.camera.view.bInv) && exportPrep.camera.proj.bInv;
+-    const pxr::GfVec3d scale{ bInvX ? -1.0 : 1.0, bInvY ? -1.0 : 1.0, 1.0 };
+-    exportPrep.globalXform.SetScale(scale);
++    
++    // For external API content with explicit left-handed coordinate system setting,
++    // skip the coordinate transformation - it's already in consistent Y-up space
++    // External API cameras are always LHS, so if the game is configured as LHS, assume external content
++    if (!RtxOptions::leftHandedCoordinateSystem()) {
++      const bool bInvX = (!exportPrep.camera.view.bInv) && (exportPrep.camera.proj.bInv || exportPrep.camera.isLHS());
++      const bool bInvY = (!exportPrep.camera.view.bInv) && exportPrep.camera.proj.bInv;
++      const pxr::GfVec3d scale{ bInvX ? -1.0 : 1.0, bInvY ? -1.0 : 1.0, 1.0 };
++      exportPrep.globalXform.SetScale(scale);
++    }
+     if(exportPrep.meta.bCorrectBakedTransforms) {
+       exportPrep.globalXform.SetTranslateOnly(-exportPrep.stageOrigin);
+     }
+
+commit 0f4e6abb3ff0be1badfbe424f3b955dfbef5c77e
+Author: CattaRappa <sambow23@gmail.com>
+Date:   Mon Dec 8 20:50:24 2025 -0600
+
+    fix unity captures and replacements
+
+diff --git a/src/dxvk/rtx_render/rtx_game_capturer.cpp b/src/dxvk/rtx_render/rtx_game_capturer.cpp
+index 93e766f4..35fe568e 100644
+--- a/src/dxvk/rtx_render/rtx_game_capturer.cpp
++++ b/src/dxvk/rtx_render/rtx_game_capturer.cpp
+@@ -30,6 +30,7 @@
+ #include "rtx_instance_manager.h"
+ #include "rtx_scene_manager.h"
+ #include "rtx_materials.h"
++#include "rtx_texture_manager.h"
+ 
+ #include "../dxvk_device.h"
+ 
+@@ -455,10 +456,14 @@ namespace dxvk {
+     assert(meshHash != 0);
+ 
+     const LegacyMaterialData& material = pBlas->getMaterialData(matHash);
++    
++    // For API materials, use the MaterialData hash (what runtime uses for replacement lookup)
++    // For D3D9 materials, this equals matHash, but for API materials they differ
++    const XXH64_hash_t materialLookupHash = material.getHash();
+ 
+-    const bool bIsNewMat = (matHash != 0x0) && (m_pCap->materials.count(matHash) == 0);
++    const bool bIsNewMat = (materialLookupHash != 0x0) && (m_pCap->materials.count(materialLookupHash) == 0);
+     if (bIsNewMat) {
+-      captureMaterial(ctx, material, !rtInstance.surface.alphaState.isFullyOpaque);
++      captureMaterial(ctx, rtInstance, materialLookupHash, material, !rtInstance.surface.alphaState.isFullyOpaque);
+     }
+ 
+     bool bIsNewMesh = false;
+@@ -469,7 +474,7 @@ namespace dxvk {
+       if (bIsNewMesh) {
+         m_pCap->meshes[meshHash] = std::make_shared<Mesh>();
+         m_pCap->meshes[meshHash]->instanceCount = 0;
+-        m_pCap->meshes[meshHash]->matHash = matHash;
++        m_pCap->meshes[meshHash]->matHash = materialLookupHash;  // Use the lookup hash for USD references
+       }
+       instanceNum = m_pCap->meshes[meshHash]->instanceCount++;
+     }
+@@ -480,37 +485,107 @@ namespace dxvk {
+     const XXH64_hash_t instanceId = rtInstance.getId();
+     Instance& instance = m_pCap->instances[instanceId];
+     instance.meshHash = meshHash;
+-    instance.matHash = matHash;
++    instance.matHash = materialLookupHash;  // Use the lookup hash, not the BLAS hash
+     instance.meshInstNum = instanceNum;
+     instance.lssData.firstTime = m_pCap->currentFrameNum;
+ 
+     Logger::debug("[GameCapturer][" + m_pCap->idStr + "][Inst:" + hashToString(instanceId) + "] New");
+   }
+ 
+-  void GameCapturer::captureMaterial(const Rc<DxvkContext> ctx, const LegacyMaterialData& materialData, const bool bEnableOpacity) {
++  void GameCapturer::captureMaterial(const Rc<DxvkContext> ctx, const RtInstance& rtInstance, const XXH64_hash_t runtimeMaterialHash, const LegacyMaterialData& materialData, const bool bEnableOpacity) {
+     lss::Material lssMat; // to be populated
+ 
+-    // Resolve material name
+-    const std::string matName = dxvk::hashToString(materialData.getHash());
++    // Use runtime material hash for proper replacement lookup
++    const std::string matName = dxvk::hashToString(runtimeMaterialHash);
+     lssMat.matName = matName;
+-    // Export Textures
+-    const std::string albedoTexFilename(matName + lss::ext::dds);
+-    m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
+-                               albedoTexFilename,
+-                               materialData.getColorTexture().getImageView()->image());
+-    const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
+-    lssMat.albedoTexPath = albedoTexPath;
++    
++    Logger::info(str::format("[GameCapturer] captureMaterial called for: ", matName));
++    
++    // Check if material has a valid color texture
++    const auto& colorTexture = materialData.getColorTexture();
++    XXH64_hash_t textureHash = colorTexture.getImageHash();
++    
++    // For API materials, get texture hash from the albedo texture index
++    if (textureHash == 0 || textureHash == kEmptyHash) {
++      uint32_t albedoTexIndex = rtInstance.getAlbedoOpacityTextureIndex();
++      if (albedoTexIndex != kSurfaceMaterialInvalidTextureIndex) {
++        const RtxTextureManager& textureManager = ctx->getCommonObjects()->getTextureManager();
++        const auto& textureTable = textureManager.getTextureTable();
++        if (albedoTexIndex < textureTable.size() && textureTable[albedoTexIndex].isValid()) {
++          textureHash = textureTable[albedoTexIndex].getImageHash();
++          Logger::info(str::format("[GameCapturer]   API material - got texture hash from albedo index ", albedoTexIndex, ": 0x", std::hex, textureHash, std::dec));
++        }
++      }
++    }
++    
++    Logger::info(str::format("[GameCapturer]   colorTexture.isValid: ", colorTexture.isValid(), 
++                             ", hasImageView: ", (colorTexture.getImageView() != nullptr),
++                             ", imageHash: 0x", std::hex, textureHash, std::dec));
++    
++    if (colorTexture.isValid() && colorTexture.getImageView()) {
++      // Export Textures (standard D3D9 textures)
++      const std::string albedoTexFilename(matName + lss::ext::dds);
++      m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
++                                 albedoTexFilename,
++                                 colorTexture.getImageView()->image());
++      const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
++      lssMat.albedoTexPath = albedoTexPath;
++    } else {
++      // API-submitted material with texture hash - try to resolve from texture manager
++      if (textureHash != 0 && textureHash != kEmptyHash) {
++        RtxTextureManager& textureManager = ctx->getCommonObjects()->getTextureManager();
++        const auto& textureTable = textureManager.getTextureTable();
++        
++        // Search for texture by hash
++        const TextureRef* pFoundTexture = nullptr;
++        for (const auto& textureRef : textureTable) {
++          if (textureRef.isValid() && textureRef.getImageHash() == textureHash) {
++            pFoundTexture = &textureRef;
++            break;
++          }
++        }
++        
++        if (pFoundTexture && pFoundTexture->getImageView()) {
++          // Export API texture
++          const std::string albedoTexFilename(matName + lss::ext::dds);
++          Logger::info(str::format("[GameCapturer] Attempting to export API texture: ", matName, " (hash: 0x", std::hex, textureHash, std::dec, ")"));
++          Logger::info(str::format("[GameCapturer]   Image: ", pFoundTexture->getImageView()->image()->info().extent.width, "x", 
++                                   pFoundTexture->getImageView()->image()->info().extent.height, 
++                                   " format: ", pFoundTexture->getImageView()->image()->info().format));
++          
++          try {
++            m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
++                                       albedoTexFilename,
++                                       pFoundTexture->getImageView()->image());
++            const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
++            lssMat.albedoTexPath = albedoTexPath;
++            Logger::info(str::format("[GameCapturer] Successfully exported API texture to: ", albedoTexPath));
++          } catch (const std::exception& e) {
++            Logger::err(str::format("[GameCapturer] Failed to export API texture: ", e.what()));
++          }
++        } else {
++          Logger::warn(str::format("[GameCapturer] Could not resolve API texture hash for material: ", matName, 
++                                   " (hash: 0x", std::hex, textureHash, std::dec, 
++                                   ", textureTable size: ", textureTable.size(), ")"));
++        }
++      }
++    }
++    
+     // Opacity
+     lssMat.enableOpacity = bEnableOpacity;
+-    // Collect sampler info
+-    const auto& samplerCreateInfo = materialData.getSampler()->info();
+-    lssMat.sampler.addrModeU = samplerCreateInfo.addressModeU;
+-    lssMat.sampler.addrModeV = samplerCreateInfo.addressModeV;
+-    lssMat.sampler.filter = samplerCreateInfo.magFilter;
+-    lssMat.sampler.borderColor = samplerCreateInfo.borderColor;
+-
+-    // Set populated LSS Material in our cache
+-    m_pCap->materials[materialData.getHash()].lssData = lssMat;
++    
++    // Collect sampler info (if available)
++    const auto& sampler = materialData.getSampler();
++    if (sampler != nullptr) {
++      const auto& samplerCreateInfo = sampler->info();
++      lssMat.sampler.addrModeU = samplerCreateInfo.addressModeU;
++      lssMat.sampler.addrModeV = samplerCreateInfo.addressModeV;
++      lssMat.sampler.filter = samplerCreateInfo.magFilter;
++      lssMat.sampler.borderColor = samplerCreateInfo.borderColor;
++    }
++
++    // Set populated LSS Material in our cache (use runtime hash for proper lookup)
++    m_pCap->materials[runtimeMaterialHash].lssData = lssMat;
+     Logger::debug("[GameCapturer][" + m_pCap->idStr + "][Mat:" + matName + "] New");
+   }
+ 
+diff --git a/src/dxvk/rtx_render/rtx_game_capturer.h b/src/dxvk/rtx_render/rtx_game_capturer.h
+index 10cfbde9..760f7a2a 100644
+--- a/src/dxvk/rtx_render/rtx_game_capturer.h
++++ b/src/dxvk/rtx_render/rtx_game_capturer.h
+@@ -208,7 +208,7 @@ private:
+   void captureDistantLight(const RtDistantLight& rtLight);
+   void captureInstances(const Rc<DxvkContext> ctx);
+   void newInstance(const Rc<DxvkContext> ctx, const RtInstance& rtInstance);
+-  void captureMaterial(const Rc<DxvkContext> ctx, const LegacyMaterialData& materialData, const bool bEnableOpacity);
++  void captureMaterial(const Rc<DxvkContext> ctx, const RtInstance& rtInstance, const XXH64_hash_t runtimeMaterialHash, const LegacyMaterialData& materialData, const bool bEnableOpacity);
+   void captureMesh(const Rc<DxvkContext> ctx,
+                    const XXH64_hash_t currentMeshHash,
+                    const BlasEntry& blas,
+diff --git a/src/dxvk/rtx_render/rtx_scene_manager.cpp b/src/dxvk/rtx_render/rtx_scene_manager.cpp
+index 3d1129e9..f940cd3f 100644
+--- a/src/dxvk/rtx_render/rtx_scene_manager.cpp
++++ b/src/dxvk/rtx_render/rtx_scene_manager.cpp
+@@ -1723,6 +1723,18 @@ namespace dxvk {
+ 
+       const MaterialData* material = m_pReplacer->accessExternalMaterial(submesh.externalMaterial);
+       if (material != nullptr) {
++        XXH64_hash_t materialHandleHash = reinterpret_cast<XXH64_hash_t>(submesh.externalMaterial);
++        XXH64_hash_t materialDataHash = material->getHash();
++        Logger::info(str::format("[RTX-Material] External material - handle: 0x", std::hex, materialHandleHash, 
++                                      ", materialData.getHash(): 0x", materialDataHash, std::dec));
++        
++        // Check for material replacement (same as D3D9 path)
++        MaterialData* pReplacementMaterial = m_pReplacer->getReplacementMaterial(material->getHash());
++        if (pReplacementMaterial != nullptr) {
++          //Logger::info(str::format("[RTX-Material] Found replacement for external material: 0x", std::hex, material->getHash(), std::dec));
++          material = pReplacementMaterial;
++        }
++        
+         state.drawCall.materialData.setHashOverride(material->getHash());
+         
+         // Auto-apply texture categories for API-submitted content (matches D3D9 behavior)
+
+commit eb3c337bfd46325831c63316265c71481facdf99
+Author: CattaRappa <sambow23@gmail.com>
+Date:   Sun Nov 23 16:23:10 2025 -0600
+
+    fix indirect passes for prev commit
+
+diff --git a/src/dxvk/shaders/rtx/algorithm/integrator_indirect.slangh b/src/dxvk/shaders/rtx/algorithm/integrator_indirect.slangh
+index c378a13d..2712e867 100644
+--- a/src/dxvk/shaders/rtx/algorithm/integrator_indirect.slangh
++++ b/src/dxvk/shaders/rtx/algorithm/integrator_indirect.slangh
+@@ -611,7 +611,7 @@ void integratePathVertex(
+           lightSampleValid = sampleLightRTXDI(
+             pixelCoordinate,
+             surfaceInteraction,
+-            lightSample, invSelectionPdf, sampledTransportPortalIndex, lightIdx);
++            lightSample, invSelectionPdf, sampledTransportPortalIndex, lightIdx, rayInteraction.customIndex);
+         }
+       }
+ 
+diff --git a/src/dxvk/shaders/rtx/algorithm/rtxcr/rtxcr_material.slangh b/src/dxvk/shaders/rtx/algorithm/rtxcr/rtxcr_material.slangh
+index 2fbda007..6ebc354d 100644
+--- a/src/dxvk/shaders/rtx/algorithm/rtxcr/rtxcr_material.slangh
++++ b/src/dxvk/shaders/rtx/algorithm/rtxcr/rtxcr_material.slangh
+@@ -158,19 +158,22 @@ SssDiffusionProfileResult evalSssDiffusionProfile(
+     bool risLightSampleValid = false;
+     uint8_t sampledTransportPortalIndex = invalidRayPortalIndex;
+     uint16_t lightIdx = kInvalidLightIdx;
++    // Create synthetic customIndex for view model filtering
++    uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
++    
+     if (cb.enableRtxdi && geometryFlags.primarySelectedIntegrationSurface) {
+       // Select and sample a light for NEE via RTXDI
+       rtxdiLightSampleValid = sampleLightRTXDI(
+         samplePixelCoordinate,
+         sssTracingResult.sssMinimalSurfaceInteraction,
+-        sssLightSample, inverseSelectionPdf, sampledTransportPortalIndex, lightIdx);
++        sssLightSample, inverseSelectionPdf, sampledTransportPortalIndex, lightIdx, customIndex);
+     }
+     else {
+       // Select and sample a light for NEE via RIS
+       risLightSampleValid = sampleLightRIS(
+         randomState,
+         sssTracingResult.sssMinimalSurfaceInteraction, opaqueSurfaceMaterialInteraction, minimalRayInteraction.viewDirection,
+-        sssLightSample, inverseSelectionPdf, lightIdx);
++        sssLightSample, inverseSelectionPdf, lightIdx, customIndex);
+     }
+ 
+     if ((!rtxdiLightSampleValid && !risLightSampleValid) || all(sssLightSample.radiance == 0.0f)) {
+@@ -289,13 +292,15 @@ float3 evalSingleScatteringTransmission(
+       LightSample transmissionLightSample;
+       float inverseSelectionPdf = 0.0f;
+       uint16_t lightIdx = kInvalidLightIdx;
++      // Create synthetic customIndex for view model filtering
++      uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
+       // Select and sample a light for NEE via RIS
+       // SST TODO: NEE
+       const bool risLightSampleValid = sampleLightRIS(
+         randomState,
+         transmissionTracingResult.sssMinimalSurfaceInteraction, opaqueSurfaceMaterialInteraction,
+         minimalRayInteraction.viewDirection,
+-        transmissionLightSample, inverseSelectionPdf, lightIdx);
++        transmissionLightSample, inverseSelectionPdf, lightIdx, customIndex);
+ 
+       if (!risLightSampleValid) {
+         continue;
+@@ -381,12 +386,14 @@ float3 evalSingleScatteringTransmission(
+       LightSample singleScatteringLightSample;
+       float singleScatteringInverseSelectionPdf = 0.0f;
+       uint16_t singleScatteringLightIdx = kInvalidLightIdx;
++      // Create synthetic customIndex for view model filtering
++      uint customIndex = geometryFlags.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
+       // SST TODO: NEE
+       const bool risLightSampleValid = sampleLightRIS(
+         randomState,
+         singleScatteringTracingResult.sssMinimalSurfaceInteraction, opaqueSurfaceMaterialInteraction,
+         minimalRayInteraction.viewDirection,
+-        singleScatteringLightSample, singleScatteringInverseSelectionPdf, singleScatteringLightIdx);
++        singleScatteringLightSample, singleScatteringInverseSelectionPdf, singleScatteringLightIdx, customIndex);
+ 
+       if (!risLightSampleValid) {
+         continue;

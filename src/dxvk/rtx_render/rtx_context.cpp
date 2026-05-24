@@ -71,10 +71,28 @@
 #include "rtx_matrix_helpers.h"
 #include "../util/util_fastops.h"
 
+#include "rtx/pass/screen_overlay/screen_overlay.h"
+#include <rtx_shaders/screen_overlay.h>
+
 // Destructor requires the struct definitions
 #include "rtx_sky.h"
 
 namespace dxvk {
+
+  namespace {
+    class ScreenOverlayShader : public ManagedShader {
+      SHADER_SOURCE(ScreenOverlayShader, VK_SHADER_STAGE_COMPUTE_BIT, screen_overlay)
+
+      PUSH_CONSTANTS(ScreenOverlayArgs)
+
+      BEGIN_PARAMETER()
+        RW_TEXTURE2D(SCREEN_OVERLAY_INPUT_OUTPUT)
+        SAMPLER2D(SCREEN_OVERLAY_TEXTURE)
+      END_PARAMETER()
+    };
+
+    PREWARM_SHADER_PIPELINE(ScreenOverlayShader);
+  }
 
   Metrics Metrics::s_instance;
 
@@ -730,6 +748,9 @@ namespace dxvk {
         const bool performSRGBConversion = !captureScreenImage && g_allowSrgbConversionForOutput;
         dispatchToneMapping(rtOutput, performSRGBConversion);
 
+        // Composite screen overlay (from external C API) after tone mapping, before screenshot capture.
+        dispatchScreenOverlay(rtOutput);
+
         if (captureScreenImage) {
           if (m_common->metaDebugView().debugViewIdx() == DEBUG_VIEW_DISABLED) {
             takeScreenshot("rtxImagePostTonemapping", rtOutput.m_finalOutput.resource(Resources::AccessType::Read).image);
@@ -977,6 +998,14 @@ namespace dxvk {
 
   void RtxContext::commitExternalGeometryToRT(ExternalDrawState&& state) {
     getSceneManager().submitExternalDraw(this, std::move(state));
+  }
+
+  void RtxContext::setScreenOverlayData(Rc<DxvkBuffer> stagingBuffer, uint32_t width, uint32_t height, VkFormat format, float opacity) {
+    m_pendingScreenOverlay = ScreenOverlayFrame {
+      std::move(stagingBuffer),
+      width, height,
+      format, opacity
+    };
   }
 
   static uint32_t jenkinsHash(uint32_t a) {
@@ -1791,6 +1820,93 @@ namespace dxvk {
       RtxOptions::rngSeedWithFrameIndex() ? m_device->getCurrentFrameId() : 0,
       rtOutput,
       mainCamera.isCameraCut());
+  }
+
+  void RtxContext::dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput) {
+    if (!m_pendingScreenOverlay.has_value()) {
+      return;
+    }
+
+    ScopedGpuProfileZone(this, "Screen Overlay");
+    auto& overlay = *m_pendingScreenOverlay;
+
+    // Recreate overlay image if dimensions or format changed.
+    if (m_screenOverlayWidth != overlay.width || m_screenOverlayHeight != overlay.height
+        || m_screenOverlayFormat != overlay.format || !m_screenOverlayImage.ptr()) {
+      DxvkImageCreateInfo imageInfo = {};
+      imageInfo.type = VK_IMAGE_TYPE_2D;
+      imageInfo.format = overlay.format;
+      imageInfo.flags = 0;
+      imageInfo.sampleCount = VK_SAMPLE_COUNT_1_BIT;
+      imageInfo.extent = { overlay.width, overlay.height, 1 };
+      imageInfo.numLayers = 1;
+      imageInfo.mipLevels = 1;
+      imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+      imageInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+      imageInfo.access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+      imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+      imageInfo.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+      m_screenOverlayImage = m_device->createImage(
+        imageInfo,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        DxvkMemoryStats::Category::RTXRenderTarget,
+        "Screen overlay image");
+
+      DxvkImageViewCreateInfo viewInfo = {};
+      viewInfo.type = VK_IMAGE_VIEW_TYPE_2D;
+      viewInfo.format = overlay.format;
+      viewInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+      viewInfo.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+      viewInfo.minLevel = 0;
+      viewInfo.numLevels = 1;
+      viewInfo.minLayer = 0;
+      viewInfo.numLayers = 1;
+
+      m_screenOverlayView = m_device->createImageView(m_screenOverlayImage, viewInfo);
+
+      m_screenOverlayWidth = overlay.width;
+      m_screenOverlayHeight = overlay.height;
+      m_screenOverlayFormat = overlay.format;
+    }
+
+    // Copy staging buffer to overlay image
+    {
+      VkImageSubresourceLayers subresource = {};
+      subresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+      subresource.mipLevel = 0;
+      subresource.baseArrayLayer = 0;
+      subresource.layerCount = 1;
+
+      VkOffset3D offset = { 0, 0, 0 };
+      VkExtent3D extent = { overlay.width, overlay.height, 1 };
+
+      copyBufferToImage(m_screenOverlayImage, subresource, offset, extent,
+                        overlay.stagingBuffer, 0, 0, 0);
+    }
+
+    // Dispatch overlay blend compute shader
+    this->setPushConstantBank(DxvkPushConstantBank::RTX);
+
+    auto& finalOutput = rtOutput.m_finalOutput.resource(Resources::AccessType::ReadWrite);
+    const VkExtent3D outputSize = finalOutput.image->info().extent;
+    const VkExtent3D workgroups = util::computeBlockCount(outputSize, VkExtent3D { SCREEN_OVERLAY_TILE_SIZE, SCREEN_OVERLAY_TILE_SIZE, 1 });
+
+    ScreenOverlayArgs pushArgs = {};
+    pushArgs.imageSize = { outputSize.width, outputSize.height };
+    pushArgs.opacity = overlay.opacity;
+    this->pushConstants(0, sizeof(pushArgs), &pushArgs);
+
+    this->bindResourceView(SCREEN_OVERLAY_INPUT_OUTPUT, finalOutput.view, nullptr);
+    this->bindResourceView(SCREEN_OVERLAY_TEXTURE, m_screenOverlayView, nullptr);
+    this->bindResourceSampler(SCREEN_OVERLAY_TEXTURE,
+      getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+
+    this->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, ScreenOverlayShader::getShader());
+    this->dispatch(workgroups.width, workgroups.height, workgroups.depth);
+
+    // Clear pending overlay after dispatch
+    m_pendingScreenOverlay.reset();
   }
 
   void RtxContext::dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage)  {

@@ -1,0 +1,1450 @@
+commit 23fc439cc527adab66eb6668b320d3c96857a1de
+Author: CattaRappa <sambow23@gmail.com>
+Date:   Tue Mar 31 18:17:58 2026 -0500
+
+    add imgui remix api wrapper
+
+diff --git a/src/dxvk/imgui/dxvk_imgui.cpp b/src/dxvk/imgui/dxvk_imgui.cpp
+index 6eed1427..129ce5e2 100644
+--- a/src/dxvk/imgui/dxvk_imgui.cpp
++++ b/src/dxvk/imgui/dxvk_imgui.cpp
+@@ -35,6 +35,7 @@
+ #include "imgui_impl_vulkan.h"
+ #include "imgui_impl_win32.h"
+ #include "implot.h"
++#include "imgui_remix_exports.h"
+ #include "dxvk_imgui.h"
+ #include "rtx_render/rtx_imgui.h"
+ #include "dxvk_device.h"
+@@ -1068,6 +1069,8 @@ namespace dxvk {
+       // Tab Bar
+       if (ImGui::BeginTabBar("Developer Tabs", tab_bar_flags)) {
+         for (int n = 0; n < kTab_Count; n++) {
++          if (n == kTab_Wrapper && !remixapi_imgui_HasDrawCallback())
++            continue;
+           auto tabItemFlags = tab_item_flags;
+           if(n == m_triggerTab) {
+             tabItemFlags |= ImGuiTabItemFlags_SetSelected;
+@@ -1091,6 +1094,9 @@ namespace dxvk {
+             case kTab_Development:
+               showDevelopmentSettings(ctx);
+               break;
++            case kTab_Wrapper:
++              remixapi_imgui_InvokeDrawCallback();
++              break;
+             case kTab_Count:
+               assert(false && "kTab_Count hit in ImGUI::showMainMenu");
+               break;
+diff --git a/src/dxvk/imgui/dxvk_imgui.h b/src/dxvk/imgui/dxvk_imgui.h
+index db6d9b7c..9b4a1c09 100644
+--- a/src/dxvk/imgui/dxvk_imgui.h
++++ b/src/dxvk/imgui/dxvk_imgui.h
+@@ -107,6 +107,7 @@ namespace dxvk {
+       kTab_Enhancements,
+       kTab_About,
+       kTab_Development,
++      kTab_Wrapper,
+       kTab_Count
+     };
+     template<Tabs tab>
+@@ -169,7 +170,7 @@ namespace dxvk {
+     bool m_reflexLatencyStatsOpen = false;
+     bool m_lastRenderVsyncStatus = false;
+ 
+-    static constexpr const char* tabNames[] = { "Rendering", "Game Setup", "Enhancements", "About" , "Dev Settings"};
++    static constexpr const char* tabNames[] = { "Rendering", "Game Setup", "Enhancements", "About" , "Dev Settings", "Plugin"};
+     Tabs m_curTab = kTab_Count;
+     Tabs m_triggerTab = kTab_Count;
+     void triggerTab(const Tabs tab) {
+diff --git a/src/dxvk/imgui/imgui_remix_exports.cpp b/src/dxvk/imgui/imgui_remix_exports.cpp
+new file mode 100644
+index 00000000..b6599f85
+--- /dev/null
++++ b/src/dxvk/imgui/imgui_remix_exports.cpp
+@@ -0,0 +1,408 @@
++/*
++ * Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ */
++
++#include "imgui_remix_exports.h"
++#include "imgui.h"
++#include "implot.h"
++#include <atomic>
++
++// Static callback storage — only one wrapper can register at a time.
++static std::atomic<PFN_remixapi_imgui_DrawCallback> s_drawCallback{ nullptr };
++static std::atomic<void*> s_drawCallbackUserData{ nullptr };
++
++// --- Callback Registration ---
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_RegisterDrawCallback(
++    PFN_remixapi_imgui_DrawCallback callback, void* userData) {
++  s_drawCallbackUserData.store(userData, std::memory_order_release);
++  s_drawCallback.store(callback, std::memory_order_release);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_UnregisterDrawCallback() {
++  s_drawCallback.store(nullptr, std::memory_order_release);
++  s_drawCallbackUserData.store(nullptr, std::memory_order_release);
++}
++
++void remixapi_imgui_InvokeDrawCallback() {
++  auto cb = s_drawCallback.load(std::memory_order_acquire);
++  if (cb) {
++    cb(s_drawCallbackUserData.load(std::memory_order_acquire));
++  }
++}
++
++int remixapi_imgui_HasDrawCallback() {
++  return s_drawCallback.load(std::memory_order_acquire) != nullptr ? 1 : 0;
++}
++
++// --- Windows ---
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_Begin(const char* name, int* p_open, int flags) {
++  bool open = p_open ? (*p_open != 0) : true;
++  bool result = ImGui::Begin(name, p_open ? &open : nullptr, (ImGuiWindowFlags)flags);
++  if (p_open) *p_open = open ? 1 : 0;
++  return result ? 1 : 0;
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_End() {
++  ImGui::End();
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_BeginChild(const char* str_id, float w, float h, int border, int flags) {
++  return ImGui::BeginChild(str_id, ImVec2(w, h), border != 0, (ImGuiWindowFlags)flags) ? 1 : 0;
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndChild() {
++  ImGui::EndChild();
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SetNextWindowPos(float x, float y, int cond) {
++  ImGui::SetNextWindowPos(ImVec2(x, y), (ImGuiCond)cond);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SetNextWindowSize(float w, float h, int cond) {
++  ImGui::SetNextWindowSize(ImVec2(w, h), (ImGuiCond)cond);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SetNextWindowCollapsed(int collapsed, int cond) {
++  ImGui::SetNextWindowCollapsed(collapsed != 0, (ImGuiCond)cond);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SetNextWindowFocus() {
++  ImGui::SetNextWindowFocus();
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_GetWindowSize(float* out_w, float* out_h) {
++  ImVec2 sz = ImGui::GetWindowSize();
++  if (out_w) *out_w = sz.x;
++  if (out_h) *out_h = sz.y;
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_GetWindowPos(float* out_x, float* out_y) {
++  ImVec2 pos = ImGui::GetWindowPos();
++  if (out_x) *out_x = pos.x;
++  if (out_y) *out_y = pos.y;
++}
++
++// --- Layout ---
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SameLine(float offset_from_start_x, float spacing) {
++  ImGui::SameLine(offset_from_start_x, spacing);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_Separator() {
++  ImGui::Separator();
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_Spacing() {
++  ImGui::Spacing();
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_Dummy(float w, float h) {
++  ImGui::Dummy(ImVec2(w, h));
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_Indent(float indent_w) {
++  ImGui::Indent(indent_w);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_Unindent(float indent_w) {
++  ImGui::Unindent(indent_w);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_NewLine() {
++  ImGui::NewLine();
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_BeginGroup() {
++  ImGui::BeginGroup();
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndGroup() {
++  ImGui::EndGroup();
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_GetContentRegionAvail(float* out_w, float* out_h) {
++  ImVec2 avail = ImGui::GetContentRegionAvail();
++  if (out_w) *out_w = avail.x;
++  if (out_h) *out_h = avail.y;
++}
++
++// --- ID Stack ---
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PushID_Str(const char* str_id) {
++  ImGui::PushID(str_id);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PushID_Int(int int_id) {
++  ImGui::PushID(int_id);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PopID() {
++  ImGui::PopID();
++}
++
++// --- Text ---
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_Text(const char* text) {
++  ImGui::TextUnformatted(text);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_TextColored(float r, float g, float b, float a, const char* text) {
++  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(r, g, b, a));
++  ImGui::TextUnformatted(text);
++  ImGui::PopStyleColor();
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_TextWrapped(const char* text) {
++  ImGui::PushTextWrapPos(0.0f);
++  ImGui::TextUnformatted(text);
++  ImGui::PopTextWrapPos();
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_BulletText(const char* text) {
++  ImGui::Bullet();
++  ImGui::TextUnformatted(text);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_LabelText(const char* label, const char* text) {
++  ImGui::LabelText(label, "%s", text);
++}
++
++// --- Controls ---
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_Button(const char* label, float w, float h) {
++  return ImGui::Button(label, ImVec2(w, h)) ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_SmallButton(const char* label) {
++  return ImGui::SmallButton(label) ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_Checkbox(const char* label, int* v) {
++  bool val = v ? (*v != 0) : false;
++  bool result = ImGui::Checkbox(label, &val);
++  if (v) *v = val ? 1 : 0;
++  return result ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_RadioButton(const char* label, int active) {
++  return ImGui::RadioButton(label, active != 0) ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_SliderFloat(const char* label, float* v, float v_min, float v_max, const char* format) {
++  return ImGui::SliderFloat(label, v, v_min, v_max, format ? format : "%.3f") ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_SliderInt(const char* label, int* v, int v_min, int v_max, const char* format) {
++  return ImGui::SliderInt(label, v, v_min, v_max, format ? format : "%d") ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_SliderFloat2(const char* label, float* v, float v_min, float v_max, const char* format) {
++  return ImGui::SliderFloat2(label, v, v_min, v_max, format ? format : "%.3f") ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_SliderFloat3(const char* label, float* v, float v_min, float v_max, const char* format) {
++  return ImGui::SliderFloat3(label, v, v_min, v_max, format ? format : "%.3f") ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_DragFloat(const char* label, float* v, float v_speed, float v_min, float v_max, const char* format) {
++  return ImGui::DragFloat(label, v, v_speed, v_min, v_max, format ? format : "%.3f") ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_DragInt(const char* label, int* v, float v_speed, int v_min, int v_max, const char* format) {
++  return ImGui::DragInt(label, v, v_speed, v_min, v_max, format ? format : "%d") ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_InputFloat(const char* label, float* v, float step, float step_fast, const char* format) {
++  return ImGui::InputFloat(label, v, step, step_fast, format ? format : "%.3f") ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_InputInt(const char* label, int* v, int step, int step_fast) {
++  return ImGui::InputInt(label, v, step, step_fast) ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_InputText(const char* label, char* buf, uint32_t buf_size, int flags) {
++  return ImGui::InputText(label, buf, (size_t)buf_size, (ImGuiInputTextFlags)flags) ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_ColorEdit3(const char* label, float* col) {
++  return ImGui::ColorEdit3(label, col) ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_ColorEdit4(const char* label, float* col, int flags) {
++  return ImGui::ColorEdit4(label, col, (ImGuiColorEditFlags)flags) ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_ColorPicker3(const char* label, float* col) {
++  return ImGui::ColorPicker3(label, col) ? 1 : 0;
++}
++
++// --- Combo ---
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_BeginCombo(const char* label, const char* preview_value, int flags) {
++  return ImGui::BeginCombo(label, preview_value, (ImGuiComboFlags)flags) ? 1 : 0;
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndCombo() {
++  ImGui::EndCombo();
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_Selectable(const char* label, int selected, int flags, float w, float h) {
++  return ImGui::Selectable(label, selected != 0, (ImGuiSelectableFlags)flags, ImVec2(w, h)) ? 1 : 0;
++}
++
++// --- Trees ---
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_CollapsingHeader(const char* label, int flags) {
++  return ImGui::CollapsingHeader(label, (ImGuiTreeNodeFlags)flags) ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_TreeNode(const char* label) {
++  return ImGui::TreeNode(label) ? 1 : 0;
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_TreePop() {
++  ImGui::TreePop();
++}
++
++// --- Tabs ---
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_BeginTabBar(const char* str_id, int flags) {
++  return ImGui::BeginTabBar(str_id, (ImGuiTabBarFlags)flags) ? 1 : 0;
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndTabBar() {
++  ImGui::EndTabBar();
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_BeginTabItem(const char* label, int* p_open, int flags) {
++  bool open = p_open ? (*p_open != 0) : true;
++  bool result = ImGui::BeginTabItem(label, p_open ? &open : nullptr, (ImGuiTabItemFlags)flags);
++  if (p_open) *p_open = open ? 1 : 0;
++  return result ? 1 : 0;
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndTabItem() {
++  ImGui::EndTabItem();
++}
++
++// --- Tables ---
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_BeginTable(const char* str_id, int column, int flags, float outer_w, float outer_h, float inner_width) {
++  return ImGui::BeginTable(str_id, column, (ImGuiTableFlags)flags, ImVec2(outer_w, outer_h), inner_width) ? 1 : 0;
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndTable() {
++  ImGui::EndTable();
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_TableNextRow(int row_flags, float min_row_height) {
++  ImGui::TableNextRow((ImGuiTableRowFlags)row_flags, min_row_height);
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_TableNextColumn() {
++  return ImGui::TableNextColumn() ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_TableSetColumnIndex(int column_n) {
++  return ImGui::TableSetColumnIndex(column_n) ? 1 : 0;
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_TableSetupColumn(const char* label, int flags, float init_width_or_weight, uint32_t user_id) {
++  ImGui::TableSetupColumn(label, (ImGuiTableColumnFlags)flags, init_width_or_weight, (ImGuiID)user_id);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_TableHeadersRow() {
++  ImGui::TableHeadersRow();
++}
++
++// --- Tooltips ---
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_BeginTooltip() {
++  ImGui::BeginTooltip();
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndTooltip() {
++  ImGui::EndTooltip();
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SetTooltip(const char* text) {
++  ImGui::SetTooltip("%s", text);
++}
++
++// --- Misc ---
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_ProgressBar(float fraction, float w, float h, const char* overlay) {
++  ImGui::ProgressBar(fraction, ImVec2(w, h), overlay);
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_IsItemHovered(int flags) {
++  return ImGui::IsItemHovered((ImGuiHoveredFlags)flags) ? 1 : 0;
++}
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_IsItemClicked(int mouse_button) {
++  return ImGui::IsItemClicked((ImGuiMouseButton)mouse_button) ? 1 : 0;
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SetItemDefaultFocus() {
++  ImGui::SetItemDefaultFocus();
++}
++
++// --- Style ---
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PushStyleColor(int idx, float r, float g, float b, float a) {
++  ImGui::PushStyleColor((ImGuiCol)idx, ImVec4(r, g, b, a));
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PopStyleColor(int count) {
++  ImGui::PopStyleColor(count);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PushStyleVar_Float(int idx, float val) {
++  ImGui::PushStyleVar((ImGuiStyleVar)idx, val);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PushStyleVar_Vec2(int idx, float x, float y) {
++  ImGui::PushStyleVar((ImGuiStyleVar)idx, ImVec2(x, y));
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PopStyleVar(int count) {
++  ImGui::PopStyleVar(count);
++}
++
++// --- Plotting (ImPlot) ---
++
++RIMGUI_EXPORT int RIMGUI_CALL remixapi_imgui_PlotBeginPlot(const char* title_id, float w, float h, int flags) {
++  return ImPlot::BeginPlot(title_id, ImVec2(w, h), (ImPlotFlags)flags) ? 1 : 0;
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PlotEndPlot() {
++  ImPlot::EndPlot();
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PlotPlotLine(const char* label_id, const float* values, int count) {
++  ImPlot::PlotLine(label_id, values, count);
++}
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PlotPlotBars(const char* label_id, const float* values, int count, double bar_size) {
++  ImPlot::PlotBars(label_id, values, count, bar_size);
++}
+diff --git a/src/dxvk/imgui/imgui_remix_exports.h b/src/dxvk/imgui/imgui_remix_exports.h
+new file mode 100644
+index 00000000..e9044ff5
+--- /dev/null
++++ b/src/dxvk/imgui/imgui_remix_exports.h
+@@ -0,0 +1,159 @@
++/*
++ * Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ */
++
++// Thin C exports wrapping ImGui functions so external wrappers (ASI/DLL/managed)
++// can create custom ImGui windows at runtime inside the Remix developer menu.
++// The draw callback is invoked on the render thread between NewFrame() and Render().
++
++#pragma once
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define RIMGUI_EXPORT __declspec(dllexport)
++#define RIMGUI_CALL   __stdcall
++
++// Draw callback — invoked once per frame between ImGui::NewFrame() and ImGui::Render().
++// userData is the pointer passed to RegisterDrawCallback.
++typedef void (RIMGUI_CALL* PFN_remixapi_imgui_DrawCallback)(void* userData);
++
++// --- Callback Registration ---
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_RegisterDrawCallback(
++    PFN_remixapi_imgui_DrawCallback callback, void* userData);
++
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_UnregisterDrawCallback(void);
++
++// Internal: called by ImGUI::update() to invoke the registered callback.
++void remixapi_imgui_InvokeDrawCallback();
++
++// Internal: returns non-zero if a draw callback is currently registered.
++int remixapi_imgui_HasDrawCallback();
++
++// --- Windows ---
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_Begin(const char* name, int* p_open, int flags);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_End(void);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_BeginChild(const char* str_id, float w, float h, int border, int flags);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndChild(void);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SetNextWindowPos(float x, float y, int cond);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SetNextWindowSize(float w, float h, int cond);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SetNextWindowCollapsed(int collapsed, int cond);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SetNextWindowFocus(void);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_GetWindowSize(float* out_w, float* out_h);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_GetWindowPos(float* out_x, float* out_y);
++
++// --- Layout ---
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SameLine(float offset_from_start_x, float spacing);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_Separator(void);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_Spacing(void);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_Dummy(float w, float h);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_Indent(float indent_w);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_Unindent(float indent_w);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_NewLine(void);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_BeginGroup(void);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndGroup(void);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_GetContentRegionAvail(float* out_w, float* out_h);
++
++// --- ID Stack ---
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PushID_Str(const char* str_id);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PushID_Int(int int_id);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PopID(void);
++
++// --- Text ---
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_Text(const char* text);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_TextColored(float r, float g, float b, float a, const char* text);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_TextWrapped(const char* text);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_BulletText(const char* text);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_LabelText(const char* label, const char* text);
++
++// --- Controls ---
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_Button(const char* label, float w, float h);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_SmallButton(const char* label);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_Checkbox(const char* label, int* v);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_RadioButton(const char* label, int active);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_SliderFloat(const char* label, float* v, float v_min, float v_max, const char* format);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_SliderInt(const char* label, int* v, int v_min, int v_max, const char* format);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_SliderFloat2(const char* label, float* v, float v_min, float v_max, const char* format);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_SliderFloat3(const char* label, float* v, float v_min, float v_max, const char* format);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_DragFloat(const char* label, float* v, float v_speed, float v_min, float v_max, const char* format);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_DragInt(const char* label, int* v, float v_speed, int v_min, int v_max, const char* format);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_InputFloat(const char* label, float* v, float step, float step_fast, const char* format);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_InputInt(const char* label, int* v, int step, int step_fast);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_InputText(const char* label, char* buf, uint32_t buf_size, int flags);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_ColorEdit3(const char* label, float* col);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_ColorEdit4(const char* label, float* col, int flags);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_ColorPicker3(const char* label, float* col);
++
++// --- Combo ---
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_BeginCombo(const char* label, const char* preview_value, int flags);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndCombo(void);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_Selectable(const char* label, int selected, int flags, float w, float h);
++
++// --- Trees ---
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_CollapsingHeader(const char* label, int flags);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_TreeNode(const char* label);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_TreePop(void);
++
++// --- Tabs ---
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_BeginTabBar(const char* str_id, int flags);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndTabBar(void);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_BeginTabItem(const char* label, int* p_open, int flags);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndTabItem(void);
++
++// --- Tables ---
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_BeginTable(const char* str_id, int column, int flags, float outer_w, float outer_h, float inner_width);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndTable(void);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_TableNextRow(int row_flags, float min_row_height);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_TableNextColumn(void);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_TableSetColumnIndex(int column_n);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_TableSetupColumn(const char* label, int flags, float init_width_or_weight, uint32_t user_id);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_TableHeadersRow(void);
++
++// --- Tooltips ---
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_BeginTooltip(void);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_EndTooltip(void);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SetTooltip(const char* text);
++
++// --- Misc ---
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_ProgressBar(float fraction, float w, float h, const char* overlay);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_IsItemHovered(int flags);
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_IsItemClicked(int mouse_button);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_SetItemDefaultFocus(void);
++
++// --- Style ---
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PushStyleColor(int idx, float r, float g, float b, float a);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PopStyleColor(int count);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PushStyleVar_Float(int idx, float val);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PushStyleVar_Vec2(int idx, float x, float y);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PopStyleVar(int count);
++
++// --- Plotting (ImPlot) ---
++RIMGUI_EXPORT int  RIMGUI_CALL remixapi_imgui_PlotBeginPlot(const char* title_id, float w, float h, int flags);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PlotEndPlot(void);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PlotPlotLine(const char* label_id, const float* values, int count);
++RIMGUI_EXPORT void RIMGUI_CALL remixapi_imgui_PlotPlotBars(const char* label_id, const float* values, int count, double bar_size);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/dxvk/meson.build b/src/dxvk/meson.build
+index 296b04b2..f7c52502 100644
+--- a/src/dxvk/meson.build
++++ b/src/dxvk/meson.build
+@@ -395,6 +395,8 @@ dxvk_src = files([
+   'imgui/implot_demo.cpp',
+   'imgui/implot_internal.h',
+   'imgui/implot_items.cpp',
++  'imgui/imgui_remix_exports.cpp',
++  'imgui/imgui_remix_exports.h',
+ ])
+ 
+ thread_dep = dependency('threads')
+
+commit 09ea9daf1b3f186ebc7022d0a7d857337f3ef8b9
+Author: Kim2091 <jpavatargirl@gmail.com>
+Date:   Sat Apr 4 21:40:33 2026 -0400
+
+    add screen overlay remix API and clean release build script
+    
+    Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+
+diff --git a/build_dxvk_release.ps1 b/build_dxvk_release.ps1
+index 32ca2d6d..f930627e 100644
+--- a/build_dxvk_release.ps1
++++ b/build_dxvk_release.ps1
+@@ -20,6 +20,10 @@
+   DEALINGS IN THE SOFTWARE.
+ #>
+ 
++Remove-Item -Path .\nv-private -Recurse -Force -Confirm:$false
++Remove-Item -Path .\tests\rtx\dxvk_rt_testing -Recurse -Force -Confirm:$false
++
++
+ .   ".\build_common.ps1"
+ 
+ $BuildFlavours = @("release")
+diff --git a/public/include/remix/remix.h b/public/include/remix/remix.h
+index 93d04a3d..faa3356e 100644
+--- a/public/include/remix/remix.h
++++ b/public/include/remix/remix.h
+@@ -223,7 +223,7 @@ namespace remix {
+         return status;
+       }
+ 
+-      static_assert(sizeof(remixapi_Interface) == 248,
++      static_assert(sizeof(remixapi_Interface) == 272,
+                     "Change version, update C++ wrapper when adding new functions");
+ 
+       remix::Interface interfaceInCpp = {};
+diff --git a/public/include/remix/remix_c.h b/public/include/remix/remix_c.h
+index 501f6b65..4087bc90 100644
+--- a/public/include/remix/remix_c.h
++++ b/public/include/remix/remix_c.h
+@@ -763,6 +763,14 @@ extern "C" {
+   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_DestroyTexture)(
+     remixapi_TextureHandle      handle);
+ 
++  // Screen overlay API
++  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_DrawScreenOverlay)(
++    const void*       pPixelData,
++    uint32_t          width,
++    uint32_t          height,
++    remixapi_Format   format,
++    float             opacity);
++
+ 
+   typedef struct remixapi_InitializeLibraryInfo {
+     remixapi_StructType sType;
+@@ -810,6 +818,7 @@ extern "C" {
+     PFN_remixapi_RegisterCallbacks          RegisterCallbacks;
+     PFN_remixapi_AutoInstancePersistentLights AutoInstancePersistentLights;
+     PFN_remixapi_UpdateLightDefinition      UpdateLightDefinition;
++    PFN_remixapi_DrawScreenOverlay          DrawScreenOverlay;
+   } remixapi_Interface;
+ 
+   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(
+diff --git a/src/dxvk/rtx_render/rtx_context.cpp b/src/dxvk/rtx_render/rtx_context.cpp
+index be4c8250..047d07cc 100644
+--- a/src/dxvk/rtx_render/rtx_context.cpp
++++ b/src/dxvk/rtx_render/rtx_context.cpp
+@@ -73,11 +73,29 @@
+ #include "rtx_matrix_helpers.h"
+ #include "../util/util_fastops.h"
+ 
++#include "rtx/pass/screen_overlay/screen_overlay.h"
++#include <rtx_shaders/screen_overlay.h>
++
+ // Destructor requires the struct definitions
+ #include "rtx_sky.h"
+ 
+ namespace dxvk {
+ 
++  namespace {
++    class ScreenOverlayShader : public ManagedShader {
++      SHADER_SOURCE(ScreenOverlayShader, VK_SHADER_STAGE_COMPUTE_BIT, screen_overlay)
++
++      PUSH_CONSTANTS(ScreenOverlayArgs)
++
++      BEGIN_PARAMETER()
++        RW_TEXTURE2D(SCREEN_OVERLAY_INPUT_OUTPUT)
++        SAMPLER2D(SCREEN_OVERLAY_TEXTURE)
++      END_PARAMETER()
++    };
++
++    PREWARM_SHADER_PIPELINE(ScreenOverlayShader);
++  }
++
+   Metrics Metrics::s_instance;
+ 
+   bool g_allowSrgbConversionForOutput = true;
+@@ -677,6 +695,9 @@ namespace dxvk {
+           }
+         }
+ 
++        // Composite screen overlay (from external C API) after tone mapping
++        dispatchScreenOverlay(rtOutput);
++
+         // Set up output src
+         Rc<DxvkImage> srcImage = rtOutput.m_finalOutput.resource(Resources::AccessType::Read).image;
+ 
+@@ -920,6 +941,14 @@ namespace dxvk {
+     getSceneManager().submitExternalDraw(this, std::move(state));
+   }
+ 
++  void RtxContext::setScreenOverlayData(Rc<DxvkBuffer> stagingBuffer, uint32_t width, uint32_t height, VkFormat format, float opacity) {
++    m_pendingScreenOverlay = ScreenOverlayFrame {
++      std::move(stagingBuffer),
++      width, height,
++      format, opacity
++    };
++  }
++
+   static uint32_t jenkinsHash(uint32_t a) {
+     // http://burtleburtle.net/bob/hash/integer.html
+     a = (a + 0x7ed55d16) + (a << 12);
+@@ -1812,6 +1841,93 @@ namespace dxvk {
+       mainCamera.isCameraCut());
+   }
+ 
++  void RtxContext::dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput) {
++    if (!m_pendingScreenOverlay.has_value()) {
++      return;
++    }
++
++    ScopedGpuProfileZone(this, "Screen Overlay");
++    auto& overlay = *m_pendingScreenOverlay;
++
++    // Recreate overlay image if dimensions or format changed
++    if (m_screenOverlayWidth != overlay.width || m_screenOverlayHeight != overlay.height
++        || m_screenOverlayFormat != overlay.format || !m_screenOverlayImage.ptr()) {
++      DxvkImageCreateInfo imageInfo = {};
++      imageInfo.type = VK_IMAGE_TYPE_2D;
++      imageInfo.format = overlay.format;
++      imageInfo.flags = 0;
++      imageInfo.sampleCount = VK_SAMPLE_COUNT_1_BIT;
++      imageInfo.extent = { overlay.width, overlay.height, 1 };
++      imageInfo.numLayers = 1;
++      imageInfo.mipLevels = 1;
++      imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
++      imageInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
++      imageInfo.access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
++      imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
++      imageInfo.layout = VK_IMAGE_LAYOUT_UNDEFINED;
++
++      m_screenOverlayImage = m_device->createImage(
++        imageInfo,
++        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
++        DxvkMemoryStats::Category::RTXRenderTarget,
++        "Screen overlay image");
++
++      DxvkImageViewCreateInfo viewInfo = {};
++      viewInfo.type = VK_IMAGE_VIEW_TYPE_2D;
++      viewInfo.format = overlay.format;
++      viewInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
++      viewInfo.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
++      viewInfo.minLevel = 0;
++      viewInfo.numLevels = 1;
++      viewInfo.minLayer = 0;
++      viewInfo.numLayers = 1;
++
++      m_screenOverlayView = m_device->createImageView(m_screenOverlayImage, viewInfo);
++
++      m_screenOverlayWidth = overlay.width;
++      m_screenOverlayHeight = overlay.height;
++      m_screenOverlayFormat = overlay.format;
++    }
++
++    // Copy staging buffer to overlay image
++    {
++      VkImageSubresourceLayers subresource = {};
++      subresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++      subresource.mipLevel = 0;
++      subresource.baseArrayLayer = 0;
++      subresource.layerCount = 1;
++
++      VkOffset3D offset = { 0, 0, 0 };
++      VkExtent3D extent = { overlay.width, overlay.height, 1 };
++
++      copyBufferToImage(m_screenOverlayImage, subresource, offset, extent,
++                        overlay.stagingBuffer, 0, 0, 0);
++    }
++
++    // Dispatch overlay blend compute shader
++    this->setPushConstantBank(DxvkPushConstantBank::RTX);
++
++    auto& finalOutput = rtOutput.m_finalOutput.resource(Resources::AccessType::ReadWrite);
++    const VkExtent3D outputSize = finalOutput.image->info().extent;
++    const VkExtent3D workgroups = util::computeBlockCount(outputSize, VkExtent3D { SCREEN_OVERLAY_TILE_SIZE, SCREEN_OVERLAY_TILE_SIZE, 1 });
++
++    ScreenOverlayArgs pushArgs = {};
++    pushArgs.imageSize = { outputSize.width, outputSize.height };
++    pushArgs.opacity = overlay.opacity;
++    this->pushConstants(0, sizeof(pushArgs), &pushArgs);
++
++    this->bindResourceView(SCREEN_OVERLAY_INPUT_OUTPUT, finalOutput.view, nullptr);
++    this->bindResourceView(SCREEN_OVERLAY_TEXTURE, m_screenOverlayView, nullptr);
++    this->bindResourceSampler(SCREEN_OVERLAY_TEXTURE,
++      getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
++
++    this->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, ScreenOverlayShader::getShader());
++    this->dispatch(workgroups.width, workgroups.height, workgroups.depth);
++
++    // Clear pending overlay after dispatch
++    m_pendingScreenOverlay.reset();
++  }
++
+   void RtxContext::dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage)  {
+     ScopedCpuProfileZone();
+ 
+diff --git a/src/dxvk/rtx_render/rtx_context.h b/src/dxvk/rtx_render/rtx_context.h
+index c8bfb640..589ba5dc 100644
+--- a/src/dxvk/rtx_render/rtx_context.h
++++ b/src/dxvk/rtx_render/rtx_context.h
+@@ -30,6 +30,7 @@
+ 
+ #include <cstdint>
+ #include <chrono>
++#include <optional>
+ #include "rtx_options.h"
+ 
+ struct VolumeArgs;
+@@ -114,6 +115,8 @@ namespace dxvk {
+     void commitGeometryToRT(const DrawParameters& params, DrawCallState& drawCallState);
+     void commitExternalGeometryToRT(ExternalDrawState&& state);
+ 
++    void setScreenOverlayData(Rc<DxvkBuffer> stagingBuffer, uint32_t width, uint32_t height, VkFormat format, float opacity);
++
+     static void blitImageHelper(Rc<DxvkContext> ctx, const Rc<DxvkImage>& srcImage, const Rc<DxvkImage>& dstImage, VkFilter filter);
+ 
+     virtual void flushCommandList() override;
+@@ -206,6 +209,7 @@ namespace dxvk {
+     void dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage);
+     void dispatchObjectPicking(Resources::RaytracingOutput& rtOutput, const VkExtent3D& srcExtent, const VkExtent3D& targetExtent);
+     void dispatchDLFG();
++    void dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput);
+     void updateMetrics(const float gpuIdleTimeMilliseconds) const;
+ 
+     void rasterizeToSkyMatte(const DrawParameters& params, const DrawCallState& drawCallState);
+@@ -264,6 +268,22 @@ namespace dxvk {
+     uint32_t m_screenshotFrameNum = -1;
+     uint32_t m_terminateAppFrameNum = -1;
+     bool m_previousInjectRtxHadScene = false;
++
++    // Screen overlay state
++    struct ScreenOverlayFrame {
++      Rc<DxvkBuffer> stagingBuffer;
++      uint32_t width = 0;
++      uint32_t height = 0;
++      VkFormat format = VK_FORMAT_UNDEFINED;
++      float opacity = 1.0f;
++    };
++    std::optional<ScreenOverlayFrame> m_pendingScreenOverlay;
++    Rc<DxvkImage> m_screenOverlayImage;
++    Rc<DxvkImageView> m_screenOverlayView;
++    uint32_t m_screenOverlayWidth = 0;
++    uint32_t m_screenOverlayHeight = 0;
++    VkFormat m_screenOverlayFormat = VK_FORMAT_UNDEFINED;
++
+     IntegrateIndirectMode m_prevIntegrateIndirectMode = IntegrateIndirectMode::Count;
+ 
+     DxvkRaytracingInstanceState m_rtState;
+diff --git a/src/dxvk/rtx_render/rtx_remix_api.cpp b/src/dxvk/rtx_render/rtx_remix_api.cpp
+index 971dee6f..31f4f58e 100644
+--- a/src/dxvk/rtx_render/rtx_remix_api.cpp
++++ b/src/dxvk/rtx_render/rtx_remix_api.cpp
+@@ -53,6 +53,7 @@
+ 
+ #include <windows.h>
+ 
++#include <algorithm>
+ #include <optional>
+ #include <unordered_set>
+ #include <unordered_map>
+@@ -107,6 +108,15 @@ namespace {
+     dxvk::Matrix4 transform; 
+     std::filesystem::path texturePath;
+   };
++  struct PendingScreenOverlay {
++    dxvk::Rc<dxvk::DxvkBuffer> stagingBuffer;
++    uint32_t width;
++    uint32_t height;
++    VkFormat format;
++    float opacity;
++  };
++  std::optional<PendingScreenOverlay> s_pendingScreenOverlay;
++
+   struct OwnedSurface {
+     std::vector<remixapi_HardcodedVertex> vertices;
+     std::vector<uint32_t> indices;
+@@ -2311,6 +2321,22 @@ namespace {
+ 
+       lightMgr.queueAutoInstancePersistent();
+     });
++    // Process screen overlay
++    {
++      std::optional<PendingScreenOverlay> overlay;
++      {
++        std::lock_guard lock { s_mutex };
++        overlay.swap(s_pendingScreenOverlay);
++      }
++      if (overlay.has_value()) {
++        remixDevice->EmitCs([cOverlay = std::move(*overlay)](dxvk::DxvkContext* ctx) mutable {
++          static_cast<dxvk::RtxContext*>(ctx)->setScreenOverlayData(
++            std::move(cOverlay.stagingBuffer),
++            cOverlay.width, cOverlay.height,
++            cOverlay.format, cOverlay.opacity);
++        });
++      }
++    }
+     // endScene right before present if a frame was started
+     if (s_inFrame.load()) {
+       auto cb = s_endCallback;
+@@ -2911,6 +2937,71 @@ extern "C"
+     return REMIXAPI_ERROR_CODE_SUCCESS;
+   }
+ 
++  remixapi_ErrorCode REMIXAPI_CALL remixapi_DrawScreenOverlay(
++    const void*     pPixelData,
++    uint32_t        width,
++    uint32_t        height,
++    remixapi_Format format,
++    float           opacity) {
++
++    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
++    if (!remixDevice) {
++      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
++    }
++
++    // Allow clearing the overlay
++    if (!pPixelData || width == 0 || height == 0) {
++      std::lock_guard lock { s_mutex };
++      s_pendingScreenOverlay.reset();
++      return REMIXAPI_ERROR_CODE_SUCCESS;
++    }
++
++    // Convert format
++    VkFormat vkFormat = VK_FORMAT_UNDEFINED;
++    switch (format) {
++      case REMIXAPI_FORMAT_R8G8B8A8_UNORM: vkFormat = VK_FORMAT_R8G8B8A8_UNORM; break;
++      case REMIXAPI_FORMAT_B8G8R8A8_UNORM: vkFormat = VK_FORMAT_B8G8R8A8_UNORM; break;
++      default:
++        return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
++    }
++
++    // Calculate data size (4 bytes per pixel for RGBA/BGRA)
++    const uint64_t dataSize = static_cast<uint64_t>(width) * height * 4;
++
++    // Create staging buffer
++    dxvk::DxvkBufferCreateInfo stagingInfo = {};
++    stagingInfo.size = dataSize;
++    stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
++    stagingInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT;
++    stagingInfo.access = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_HOST_WRITE_BIT;
++
++    dxvk::Rc<dxvk::DxvkBuffer> stagingBuffer = remixDevice->GetDXVKDevice()->createBuffer(
++      stagingInfo,
++      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
++      dxvk::DxvkMemoryStats::Category::RTXBuffer,
++      "Remix API screen overlay staging");
++
++    if (stagingBuffer == nullptr) {
++      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
++    }
++
++    // Copy pixel data to staging buffer
++    dxvk::DxvkBufferSlice stagingSlice { stagingBuffer };
++    memcpy(stagingSlice.mapPtr(0), pPixelData, dataSize);
++
++    {
++      std::lock_guard lock { s_mutex };
++      s_pendingScreenOverlay = PendingScreenOverlay {
++        std::move(stagingBuffer),
++        width, height,
++        vkFormat,
++        std::clamp(opacity, 0.0f, 1.0f)
++      };
++    }
++
++    return REMIXAPI_ERROR_CODE_SUCCESS;
++  }
++
+   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(
+     const remixapi_InitializeLibraryInfo* info,
+     remixapi_Interface* out_result) {
+@@ -2961,8 +3052,9 @@ extern "C"
+       interf.CreateMeshBatched = remixapi_CreateMeshBatched;
+       interf.CreateTexture = remixapi_CreateTexture;
+       interf.DestroyTexture = remixapi_DestroyTexture;
++      interf.DrawScreenOverlay = remixapi_DrawScreenOverlay;
+     }
+-    static_assert(sizeof(interf) == 264, "Add/remove function registration");
++    static_assert(sizeof(interf) == 272, "Add/remove function registration");
+ 
+     *out_result = interf;
+     return REMIXAPI_ERROR_CODE_SUCCESS;
+diff --git a/src/dxvk/shaders/rtx/pass/screen_overlay/screen_overlay.comp.slang b/src/dxvk/shaders/rtx/pass/screen_overlay/screen_overlay.comp.slang
+new file mode 100644
+index 00000000..6277d0dc
+--- /dev/null
++++ b/src/dxvk/shaders/rtx/pass/screen_overlay/screen_overlay.comp.slang
+@@ -0,0 +1,50 @@
++/*
++ * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ */
++#include "screen_overlay.h"
++
++layout(binding = SCREEN_OVERLAY_INPUT_OUTPUT)
++RWTexture2D<float4> InOutImage;
++
++layout(binding = SCREEN_OVERLAY_TEXTURE)
++Sampler2D<float4> OverlayTexture;
++
++layout(push_constant)
++ConstantBuffer<ScreenOverlayArgs> cb;
++
++[shader("compute")]
++[numthreads(SCREEN_OVERLAY_TILE_SIZE, SCREEN_OVERLAY_TILE_SIZE, 1)]
++void main(uint2 threadId : SV_DispatchThreadID) {
++  if (any(threadId >= cb.imageSize))
++    return;
++
++  // Map pixel position to normalized UV for overlay sampling
++  float2 uv = (float2(threadId) + 0.5f) / float2(cb.imageSize);
++
++  float4 overlay = OverlayTexture.SampleLevel(uv, 0);
++  float4 target = InOutImage[threadId];
++
++  // Standard alpha blend: overlay over target
++  float alpha = overlay.a * cb.opacity;
++  float3 blended = overlay.rgb * alpha + target.rgb * (1.0f - alpha);
++
++  InOutImage[threadId] = float4(blended, 1.0f);
++}
+diff --git a/src/dxvk/shaders/rtx/pass/screen_overlay/screen_overlay.h b/src/dxvk/shaders/rtx/pass/screen_overlay/screen_overlay.h
+new file mode 100644
+index 00000000..31282dd2
+--- /dev/null
++++ b/src/dxvk/shaders/rtx/pass/screen_overlay/screen_overlay.h
+@@ -0,0 +1,38 @@
++/*
++ * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a
++ * copy of this software and associated documentation files (the "Software"),
++ * to deal in the Software without restriction, including without limitation
++ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
++ * and/or sell copies of the Software, and to permit persons to whom the
++ * Software is furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ */
++#ifndef SCREEN_OVERLAY_H
++#define SCREEN_OVERLAY_H
++
++#include "rtx/utility/shader_types.h"
++
++#define SCREEN_OVERLAY_INPUT_OUTPUT  0
++#define SCREEN_OVERLAY_TEXTURE       1
++
++#define SCREEN_OVERLAY_TILE_SIZE 8
++
++struct ScreenOverlayArgs {
++  uint2 imageSize;
++  float opacity;
++  float _pad;
++};
++
++#endif // SCREEN_OVERLAY_H
+
+commit f3695cc8d91f01ac3e63dc7606d480d5eb5d2d71
+Author: CR <sambow23@gmail.com>
+Date:   Tue Mar 18 19:57:07 2025 -0500
+
+    custom splash, fix flickering mouse, add imgui state api calls
+
+diff --git a/public/include/remix/remix.h b/public/include/remix/remix.h
+index 23db993e..c6a9b2d0 100644
+--- a/public/include/remix/remix.h
++++ b/public/include/remix/remix.h
+@@ -130,6 +130,12 @@ namespace remix {
+     }
+   }
+ 
++  enum class UIState {
++      None = REMIXAPI_UI_STATE_NONE,
++      Basic = REMIXAPI_UI_STATE_BASIC,
++      Advanced = REMIXAPI_UI_STATE_ADVANCED
++  };
++
+   template< typename T >
+   using Result = detail::Result< T >;
+ 
+@@ -189,6 +195,8 @@ namespace remix {
+     Result< void >                           pick_HighlightObjects(const uint32_t* objectPickingValues_values,
+                                                                    uint32_t objectPickingValues_count,
+                                                                    uint8_t colorR, uint8_t colorG, uint8_t colorB);
++    Result<UIState> GetUIState();
++    Result<void> SetUIState(UIState state);
+   };
+ 
+   namespace lib {
+@@ -208,7 +216,7 @@ namespace remix {
+         return status;
+       }
+ 
+-      static_assert(sizeof(remixapi_Interface) == 168,
++      static_assert(sizeof(remixapi_Interface) == 184,
+                     "Change version, update C++ wrapper when adding new functions");
+ 
+       remix::Interface interfaceInCpp = {};
+@@ -258,7 +266,22 @@ namespace remix {
+     return m_CInterface.Present(info);
+   }
+ 
++  inline Result<UIState> Interface::GetUIState() {
++    if (!m_CInterface.GetUIState) {
++        return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
++    }
++    
++    remixapi_UIState state = m_CInterface.GetUIState();
++    return static_cast<UIState>(state);
++  }
+ 
++  inline Result<void> Interface::SetUIState(UIState state) {
++      if (!m_CInterface.SetUIState) {
++          return REMIXAPI_ERROR_CODE_NOT_INITIALIZED;
++      }
++      
++      return m_CInterface.SetUIState(static_cast<remixapi_UIState>(state));
++  }
+ 
+   struct MaterialInfoOpaqueEXT : remixapi_MaterialInfoOpaqueEXT {
+     MaterialInfoOpaqueEXT() {
+diff --git a/public/include/remix/remix_c.h b/public/include/remix/remix_c.h
+index d1a1c041..d3aa8c29 100644
+--- a/public/include/remix/remix_c.h
++++ b/public/include/remix/remix_c.h
+@@ -332,6 +332,14 @@ extern "C" {
+     REMIXAPI_CAMERA_TYPE_VIEW_MODEL,
+   } remixapi_CameraType;
+ 
++  typedef enum remixapi_UIState {
++      REMIXAPI_UI_STATE_NONE = 0,
++      REMIXAPI_UI_STATE_BASIC = 1,
++      REMIXAPI_UI_STATE_ADVANCED = 2
++  } remixapi_UIState;
++
++  REMIXAPI remixapi_UIState REMIXAPI_CALL remixapi_GetUIState(void);
++  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state);  
+   typedef struct remixapi_CameraInfoParameterizedEXT {
+     remixapi_StructType sType;
+     void*               pNext;
+@@ -689,6 +697,8 @@ extern "C" {
+ 
+     PFN_remixapi_Startup            Startup;
+     PFN_remixapi_Present            Present;
++    remixapi_UIState                (*GetUIState)(void);
++    remixapi_ErrorCode              (*SetUIState)(remixapi_UIState state);
+   } remixapi_Interface;
+ 
+   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(
+diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
+index e3d00ff5..33d434c3 100644
+--- a/src/d3d9/d3d9_swapchain.cpp
++++ b/src/d3d9/d3d9_swapchain.cpp
+@@ -34,6 +34,7 @@
+ 
+ // NV-DXVK start: DLFG integration
+ #include "../dxvk/rtx_render/rtx_dlfg.h"
++extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+ // NV-DXVK end
+ 
+ namespace dxvk {
+@@ -268,6 +269,23 @@ namespace dxvk {
+     // Safe from bSkipSwapchainActions as we're just getting a handle that shouldn't
+     // be invalidated
+     auto& gui = windowData.swapchain->getDxvkDevice()->getCommon()->getImgui();
++    
++    if (message == WM_SETCURSOR) {
++      // If ImGui is initialized and wants to capture mouse
++      if (gui.isInit() && ImGui::GetIO().WantCaptureMouse) {
++        // Let ImGui handle the cursor
++        if (ImGui_ImplWin32_WndProcHandler(window, message, wParam, lParam))
++          return TRUE;  // Prevent further processing
++      }
++      // Otherwise, let the game handle it
++      else if (windowData.proc) {
++        return CallCharsetFunction(
++          CallWindowProcW, CallWindowProcA, unicode,
++          windowData.proc, window, message, wParam, lParam);
++      }
++      return FALSE;
++    }
++
+     if(gui.isInit()) {
+       gui.wndProcHandler(window, message, wParam, lParam);
+     }
+diff --git a/src/dxvk/imgui/dxvk_imgui.cpp b/src/dxvk/imgui/dxvk_imgui.cpp
+index bc361fcf..494fbe7d 100644
+--- a/src/dxvk/imgui/dxvk_imgui.cpp
++++ b/src/dxvk/imgui/dxvk_imgui.cpp
+@@ -153,6 +153,7 @@ namespace dxvk {
+   fast_unordered_cache<FogState> g_imguiFogMap;
+   XXH64_hash_t g_usedFogStateHash;
+   std::mutex g_imguiFogMapMutex; // protects g_imguiFogMap
++  ImGUI* g_imgui = nullptr;
+ 
+   struct RtxTextureOption {
+     const char* uniqueId;
+@@ -583,6 +584,8 @@ namespace dxvk {
+   , m_hwnd   (nullptr)
+   , m_about  (new ImGuiAbout)
+   , m_splash  (new ImGuiSplash) {
++    g_imgui = this;
++
+     // Clamp Option ranges
+ 
+     RTX_OPTION_CLAMP(reflexStatRangeInterpolationRate, 0.0f, 1.0f);
+@@ -660,6 +663,7 @@ namespace dxvk {
+   }
+ 
+   ImGUI::~ImGUI() {
++    g_imgui = nullptr;
+     g_imguiTextureMap.clear();
+ 
+     ImGui::SetCurrentContext(m_context);
+diff --git a/src/dxvk/imgui/dxvk_imgui.h b/src/dxvk/imgui/dxvk_imgui.h
+index 7339623a..db6d9b7c 100644
+--- a/src/dxvk/imgui/dxvk_imgui.h
++++ b/src/dxvk/imgui/dxvk_imgui.h
+@@ -47,6 +47,7 @@ namespace dxvk {
+   class ImGuiCapture;
+   class DxvkDevice;
+   class DxvkContext;
++  extern ImGUI* g_imgui;
+ 
+   /**
+    * \brief DXVK ImGUI
+@@ -236,6 +237,7 @@ namespace dxvk {
+ 
+     void showMemoryStats() const;
+     bool showRayReconstructionEnable(bool supportsRR);
++    void switchImGuiMenu(UIType type);
+ 
+     RTX_OPTION("rtx.gui", bool, showLegacyTextureGui, false, "A setting to toggle the old texture selection GUI, where each texture category is represented as its own list.");
+     RTX_OPTION("rtx.gui", bool, legacyTextureGuiShowAssignedOnly, false, "A setting to show only the textures in a category that are assigned to it (Unassigned textures are found in the new \"Uncategorized\" list at the top).\nRequires: \'Split Texture Category List\' option to be enabled.");
+diff --git a/src/dxvk/imgui/dxvk_imgui_splash.cpp b/src/dxvk/imgui/dxvk_imgui_splash.cpp
+index 80fbcfb5..bbd8c965 100644
+--- a/src/dxvk/imgui/dxvk_imgui_splash.cpp
++++ b/src/dxvk/imgui/dxvk_imgui_splash.cpp
+@@ -37,7 +37,7 @@ namespace dxvk {
+            "When set to true this message will be hidden, otherwise it will be displayed on every launch.");
+     // Note: 20 chosen as a default here to allow the message to persist long enough to read in case the user focuses on other information on the screen first (e.g.
+     // shader compilation messages, text from the application itself in its startup sequence, etc).
+-    RTX_OPTION("rtx", std::uint32_t, splashMessageDisplayTimeSeconds, 20, "The amount of time in seconds to display the Remix splash message for.");
++    RTX_OPTION("rtx", std::uint32_t, splashMessageDisplayTimeSeconds, 12, "The amount of time in seconds to display the Remix splash message for.");
+     RTX_OPTION("rtx", std::string, welcomeMessage, "", "Display a message to the user on startup, leave empty if no message is to be displayed.");
+   };
+ 
+@@ -87,8 +87,14 @@ namespace dxvk {
+       ));
+ 
+       if (ImGui::Begin("Splash Message", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove)) {
+-        const auto keyBindDescriptor = buildKeyBindDescriptorString(RtxOptions::remixMenuKeyBinds());
+-        std::string message = str::format("Welcome to Star Wars Republic Commando RTX. At any time, press ", keyBindDescriptor, " to open up the mod's graphics options. Closing in ", clampedSecondsRemaining);
++        const auto keyBindDescriptor = buildKeyBindDescriptorString(RtxOptions::Get()->remixMenuKeyBinds());
++        std::string message = str::format("Welcome to Garry's Mod RTX.  At any point during gameplay press : ", keyBindDescriptor, " to access the Remix Menu.\n"
++                                        "\n"
++                                        "This is a work in progress, report any bugs you find to https://github.com/Xenthio/gmod-rtx-fixes-2 \n"
++                                        "Please read the 'Known Issues' section on the GitHub page before reporting one. \n"
++                                        "If you need support, please find us on the RTX Remix Showcase Discord server \n"
++                                        "\n"
++                                        "Closing in ", clampedSecondsRemaining);
+         ImGui::Text(message.c_str());
+       }
+       ImGui::End();
+diff --git a/src/dxvk/rtx_render/rtx_remix_api.cpp b/src/dxvk/rtx_render/rtx_remix_api.cpp
+index d30620a1..4b28807b 100644
+--- a/src/dxvk/rtx_render/rtx_remix_api.cpp
++++ b/src/dxvk/rtx_render/rtx_remix_api.cpp
+@@ -762,6 +762,57 @@ namespace {
+     return REMIXAPI_ERROR_CODE_SUCCESS;
+   }
+ 
++    remixapi_UIState impl_GetUIState(void) {
++    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
++    if (!remixDevice) {
++        return REMIXAPI_UI_STATE_NONE;
++    }
++    
++    // Map the UIType enum to our API enum
++    switch (dxvk::RtxOptions::Get()->showUI()) {
++        case dxvk::UIType::None:
++            return REMIXAPI_UI_STATE_NONE;
++        case dxvk::UIType::Basic:
++            return REMIXAPI_UI_STATE_BASIC;
++        case dxvk::UIType::Advanced:
++            return REMIXAPI_UI_STATE_ADVANCED;
++        default:
++            return REMIXAPI_UI_STATE_NONE;
++    }
++  }
++
++  remixapi_ErrorCode impl_SetUIState(remixapi_UIState state) {
++    dxvk::D3D9DeviceEx* remixDevice = tryAsDxvk();
++    if (!remixDevice) {
++        return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
++    }
++    
++    dxvk::UIType uiType;
++    switch (state) {
++        case REMIXAPI_UI_STATE_NONE:
++            uiType = dxvk::UIType::None;
++            break;
++        case REMIXAPI_UI_STATE_BASIC:
++            uiType = dxvk::UIType::Basic;
++            break;
++        case REMIXAPI_UI_STATE_ADVANCED:
++            uiType = dxvk::UIType::Advanced;
++            break;
++        default:
++            return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
++    }
++    
++    std::lock_guard lock { s_mutex };
++    
++    // Use the global ImGUI pointer
++    if (dxvk::g_imgui) {
++        dxvk::g_imgui->switchMenu(uiType);
++        return REMIXAPI_ERROR_CODE_SUCCESS;
++    }
++    
++    return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
++  }
++
+   remixapi_ErrorCode REMIXAPI_CALL remixapi_DestroyMaterial(
+     remixapi_MaterialHandle handle) {
+     if (auto remixDevice = tryAsDxvk()) {
+@@ -1536,6 +1587,14 @@ namespace {
+ 
+ extern "C"
+ {
++  REMIXAPI remixapi_UIState REMIXAPI_CALL remixapi_GetUIState(void) {
++    return impl_GetUIState();
++  }
++  
++  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state) {
++    return impl_SetUIState(state);
++  }
++  
+   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(const remixapi_InitializeLibraryInfo* info,
+                                                                        remixapi_Interface* out_result) {
+     if (!info || info->sType != REMIXAPI_STRUCT_TYPE_INITIALIZE_LIBRARY_INFO) {
+@@ -1572,8 +1631,10 @@ extern "C"
+       interf.dxvk_SetDefaultOutput = remixapi_dxvk_SetDefaultOutput;
+       interf.pick_RequestObjectPicking = remixapi_pick_RequestObjectPicking;
+       interf.pick_HighlightObjects = remixapi_pick_HighlightObjects;
++      interf.GetUIState = remixapi_GetUIState;
++      interf.SetUIState = remixapi_SetUIState;
+     }
+-    static_assert(sizeof(interf) == 168, "Add/remove function registration");
++    static_assert(sizeof(interf) == 184, "Add/remove function registration");
+ 
+     *out_result = interf;
+     return REMIXAPI_ERROR_CODE_SUCCESS;

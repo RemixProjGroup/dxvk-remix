@@ -132,7 +132,7 @@ struct RtSphereLight {
 
   void applyTransform(const Matrix4& lightToWorld);
 
-  void writeGPUData(unsigned char* data, std::size_t& offset) const;
+  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false) const;
 
   bool operator==(const RtSphereLight& rhs) const = delete;
 
@@ -196,7 +196,7 @@ struct RtRectLight {
 
   void applyTransform(const Matrix4& lightToWorld);
 
-  void writeGPUData(unsigned char* data, std::size_t& offset) const;
+  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false) const;
 
   bool operator==(const RtRectLight& rhs) const = delete;
 
@@ -274,7 +274,7 @@ struct RtDiskLight {
 
   void applyTransform(const Matrix4& lightToWorld);
 
-  void writeGPUData(unsigned char* data, std::size_t& offset) const;
+  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false) const;
 
   bool operator==(const RtDiskLight& rhs) const = delete;
 
@@ -349,7 +349,7 @@ struct RtCylinderLight {
 
   void applyTransform(const Matrix4& lightToWorld);
 
-  void writeGPUData(unsigned char* data, std::size_t& offset) const;
+  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false) const;
 
   bool operator==(const RtCylinderLight& rhs) const = delete;
 
@@ -411,7 +411,7 @@ struct RtDistantLight {
 
   void applyTransform(const Matrix4& lightToWorld);
 
-  void writeGPUData(unsigned char* data, std::size_t& offset) const;
+  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false) const;
 
   bool operator==(const RtDistantLight& rhs) const = delete;
 
@@ -644,6 +644,7 @@ struct RtLight {
 
   uint32_t isStaticCount = 0;
   bool isDynamic = false;
+  bool ignoreViewModel = false;
 
 private:
   // Type-specific Light Information

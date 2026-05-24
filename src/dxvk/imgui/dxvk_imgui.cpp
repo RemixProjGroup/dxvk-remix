@@ -36,6 +36,7 @@
 #include "imgui_impl_dxvk.hpp"
 #include "imgui_impl_win32.h"
 #include "implot.h"
+#include "imgui_remix_exports.h"
 #include "dxvk_imgui.h"
 #include "rtx_render/rtx_imgui.h"
 #include "dxvk_device.h"
@@ -1022,6 +1023,10 @@ namespace dxvk {
       // Tab Bar
       if (ImGui::BeginTabBar("Developer Tabs", tab_bar_flags)) {
         for (int n = 0; n < kTab_Count; n++) {
+          // Only surface the Plugin tab when an external wrapper has registered a draw callback.
+          if (n == kTab_Wrapper && !remixapi_imgui_HasDrawCallback()) {
+            continue;
+          }
           auto tabItemFlags = tab_item_flags;
           if(n == m_triggerTab) {
             tabItemFlags |= ImGuiTabItemFlags_SetSelected;
@@ -1044,6 +1049,9 @@ namespace dxvk {
               break;
             case kTab_Development:
               showDevelopmentSettings(ctx);
+              break;
+            case kTab_Wrapper:
+              remixapi_imgui_InvokeDrawCallback();
               break;
             case kTab_Count:
               assert(false && "kTab_Count hit in ImGUI::showMainMenu");

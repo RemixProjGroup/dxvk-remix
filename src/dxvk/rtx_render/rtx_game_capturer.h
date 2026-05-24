@@ -209,7 +209,7 @@ private:
   void captureDistantLight(const RtDistantLight& rtLight);
   void captureInstances(const Rc<DxvkContext> ctx);
   void newInstance(const Rc<DxvkContext> ctx, const RtInstance& rtInstance);
-  void captureMaterial(const Rc<DxvkContext> ctx, const LegacyMaterialData& materialData, const bool bEnableOpacity);
+  void captureMaterial(const Rc<DxvkContext> ctx, const RtInstance& rtInstance, const XXH64_hash_t runtimeMaterialHash, const LegacyMaterialData& materialData, const bool bEnableOpacity);
   void captureMesh(const Rc<DxvkContext> ctx,
                    const XXH64_hash_t currentMeshHash,
                    const BlasEntry& blas,

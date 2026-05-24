@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2023-2025, NVIDIA CORPORATION. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -65,6 +65,7 @@
 typedef struct IDirect3D9Ex       IDirect3D9Ex;
 typedef struct IDirect3DDevice9Ex IDirect3DDevice9Ex;
 typedef struct IDirect3DSurface9  IDirect3DSurface9;
+typedef struct IDirect3DTexture9  IDirect3DTexture9;
 
 #ifndef REMIX_WINAPI_NO_INCLUDE
   typedef HWND remixapi_HWND;
@@ -128,9 +129,10 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_STARTUP_INFO                         = 22,
     REMIXAPI_STRUCT_TYPE_PRESENT_INFO                         = 23,
     REMIXAPI_STRUCT_TYPE_DEPRECATED_LEGACY_PARTICLE_SYSTEM    = 24,
-    REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_PARTICLE_SYSTEM_EXT    = 25,
-    REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT     = 26,
-    REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_INFO                   = 27
+    REMIXAPI_STRUCT_TYPE_TEXTURE_INFO                         = 25,
+    REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_PARTICLE_SYSTEM_EXT    = 26,
+    REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT     = 27,
+    REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_INFO                   = 28,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
     //       and only extend this enum by appending, never adjust the order of these 
     //       as that will break backwards compatibility.
@@ -200,6 +202,7 @@ extern "C" {
   typedef struct remixapi_MaterialHandle_T* remixapi_MaterialHandle;
   typedef struct remixapi_MeshHandle_T* remixapi_MeshHandle;
   typedef struct remixapi_LightHandle_T* remixapi_LightHandle;
+  typedef struct remixapi_TextureHandle_T* remixapi_TextureHandle;
 
   typedef const wchar_t* remixapi_Path;
 
@@ -359,6 +362,13 @@ extern "C" {
     const remixapi_MeshInfo*  info,
     remixapi_MeshHandle*      out_handle);
 
+  // Batched variant of CreateMesh: deep-copies the provided info and defers
+  // DXVK buffer allocation / asset-replacer registration to the next render
+  // thread flush point (DrawInstance, Present, AutoInstancePersistentLights).
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateMeshBatched)(
+    const remixapi_MeshInfo*  info,
+    remixapi_MeshHandle*      out_handle);
+
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_DestroyMesh)(
     remixapi_MeshHandle       handle);
 
@@ -369,6 +379,15 @@ extern "C" {
     REMIXAPI_CAMERA_TYPE_SKY,
     REMIXAPI_CAMERA_TYPE_VIEW_MODEL,
   } remixapi_CameraType;
+
+  typedef enum remixapi_UIState {
+      REMIXAPI_UI_STATE_NONE = 0,
+      REMIXAPI_UI_STATE_BASIC = 1,
+      REMIXAPI_UI_STATE_ADVANCED = 2
+  } remixapi_UIState;
+
+  REMIXAPI remixapi_UIState REMIXAPI_CALL remixapi_GetUIState(void);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetUIState(remixapi_UIState state);
 
   typedef struct remixapi_CameraInfoParameterizedEXT {
     remixapi_StructType sType;
@@ -674,9 +693,15 @@ extern "C" {
     void*                           pNext;
     uint64_t                        hash;
     remixapi_Float3D                radiance;
+    remixapi_Bool                   isDynamic;
+    remixapi_Bool                   ignoreViewModel;
   } remixapi_LightInfo;
 
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateLight)(
+    const remixapi_LightInfo* info,
+    remixapi_LightHandle*     out_handle);
+
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateLightBatched)(
     const remixapi_LightInfo* info,
     remixapi_LightHandle*     out_handle);
 
@@ -692,6 +717,14 @@ extern "C" {
     const char*               key,
     const char*               value);
 
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_AddTextureHash)(
+    const char* textureCategory,
+    const char* textureHash);
+
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_RemoveTextureHash)(
+    const char* textureCategory,
+    const char* textureHash);
+
   typedef struct remixapi_PresentInfo {
     remixapi_StructType       sType;
     void*                     pNext;
@@ -699,6 +732,29 @@ extern "C" {
   } remixapi_PresentInfo;
 
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_Present)(const remixapi_PresentInfo* info);
+
+  // Optional frame-boundary callbacks (mirrors bridge API semantics)
+  typedef void (REMIXAPI_PTR* PFN_remixapi_BridgeCallback)(void);
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_RegisterCallbacks)(
+    PFN_remixapi_BridgeCallback beginSceneCallback,
+    PFN_remixapi_BridgeCallback endSceneCallback,
+    PFN_remixapi_BridgeCallback presentCallback);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_RegisterCallbacks(
+    PFN_remixapi_BridgeCallback beginSceneCallback,
+    PFN_remixapi_BridgeCallback endSceneCallback,
+    PFN_remixapi_BridgeCallback presentCallback);
+
+  // Internal helper to auto-instance persistent external API lights once per frame
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_AutoInstancePersistentLights)(void);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_AutoInstancePersistentLights(void);
+
+  // Queue a definition update for an existing analytical light. Applied safely each frame.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_UpdateLightDefinition)(
+    remixapi_LightHandle handle,
+    const remixapi_LightInfo* info);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_UpdateLightDefinition(
+    remixapi_LightHandle handle,
+    const remixapi_LightInfo* info);
 
   typedef void (REMIXAPI_PTR* PFN_remixapi_pick_RequestObjectPickingUserCallback)(
     const uint32_t*           objectPickingValues_values,
@@ -734,6 +790,11 @@ extern "C" {
     uint64_t*           out_vkSemaphoreRenderingDone,
     uint64_t*           out_vkSemaphoreResumeSemaphore);
 
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_dxvk_GetSharedD3D11TextureHandle)(
+    void**    out_sharedHandle,
+    uint32_t* out_width,
+    uint32_t* out_height);
+
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_dxvk_GetVkImage)(
     IDirect3DSurface9*  source,
     uint64_t*           out_vkImage);
@@ -753,6 +814,54 @@ extern "C" {
     remixapi_dxvk_CopyRenderingOutputType type,
     const remixapi_Float4D* color);
 
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_dxvk_GetTextureHash)(
+    IDirect3DTexture9* texture,
+    uint64_t*          out_hash);
+
+
+  // Texture upload API
+  typedef enum remixapi_Format {
+    REMIXAPI_FORMAT_R8G8B8A8_UNORM = 37,   // VK_FORMAT_R8G8B8A8_UNORM
+    REMIXAPI_FORMAT_R8G8B8A8_SRGB = 43,    // VK_FORMAT_R8G8B8A8_SRGB
+    REMIXAPI_FORMAT_B8G8R8A8_UNORM = 44,   // VK_FORMAT_B8G8R8A8_UNORM
+    REMIXAPI_FORMAT_B8G8R8A8_SRGB = 50,    // VK_FORMAT_B8G8R8A8_SRGB
+    REMIXAPI_FORMAT_BC1_RGB_UNORM = 131,   // VK_FORMAT_BC1_RGB_UNORM_BLOCK
+    REMIXAPI_FORMAT_BC1_RGB_SRGB = 132,    // VK_FORMAT_BC1_RGB_SRGB_BLOCK
+    REMIXAPI_FORMAT_BC3_UNORM = 135,       // VK_FORMAT_BC3_UNORM_BLOCK
+    REMIXAPI_FORMAT_BC3_SRGB = 136,        // VK_FORMAT_BC3_SRGB_BLOCK
+    REMIXAPI_FORMAT_BC5_UNORM = 139,       // VK_FORMAT_BC5_UNORM_BLOCK (normal maps)
+    REMIXAPI_FORMAT_BC7_UNORM = 145,       // VK_FORMAT_BC7_UNORM_BLOCK
+    REMIXAPI_FORMAT_BC7_SRGB = 146,        // VK_FORMAT_BC7_SRGB_BLOCK
+  } remixapi_Format;
+
+  typedef struct remixapi_TextureInfo {
+    remixapi_StructType sType;
+    void*               pNext;
+    uint64_t            hash;           // Unique identifier for this texture
+    uint32_t            width;
+    uint32_t            height;
+    uint32_t            depth;          // Set to 1 for 2D textures
+    uint32_t            mipLevels;      // Set to 1 for no mipmaps
+    remixapi_Format     format;
+    const void*         data;           // Pointer to pixel data (all mips sequential)
+    uint64_t            dataSize;       // Total size in bytes
+  } remixapi_TextureInfo;
+
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateTexture)(
+    const remixapi_TextureInfo* info,
+    remixapi_TextureHandle*     out_handle);
+
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_DestroyTexture)(
+    remixapi_TextureHandle      handle);
+
+  // Screen overlay API
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_DrawScreenOverlay)(
+    const void*       pPixelData,
+    uint32_t          width,
+    uint32_t          height,
+    remixapi_Format   format,
+    float             opacity);
+
 
   typedef struct remixapi_InitializeLibraryInfo {
     remixapi_StructType sType;
@@ -765,14 +874,20 @@ extern "C" {
     PFN_remixapi_CreateMaterial     CreateMaterial;
     PFN_remixapi_DestroyMaterial    DestroyMaterial;
     PFN_remixapi_CreateMesh         CreateMesh;
+    PFN_remixapi_CreateMeshBatched  CreateMeshBatched;
     PFN_remixapi_DestroyMesh        DestroyMesh;
     PFN_remixapi_SetupCamera        SetupCamera;
     PFN_remixapi_SetCameraMediumMaterial SetCameraMediumMaterial;
     PFN_remixapi_DrawInstance       DrawInstance;
     PFN_remixapi_CreateLight        CreateLight;
+    PFN_remixapi_CreateLightBatched CreateLightBatched;
     PFN_remixapi_DestroyLight       DestroyLight;
     PFN_remixapi_DrawLightInstance  DrawLightInstance;
     PFN_remixapi_SetConfigVariable  SetConfigVariable;
+    PFN_remixapi_AddTextureHash     AddTextureHash;
+    PFN_remixapi_RemoveTextureHash  RemoveTextureHash;
+    PFN_remixapi_CreateTexture      CreateTexture;
+    PFN_remixapi_DestroyTexture     DestroyTexture;
 
     // DXVK interoperability
     PFN_remixapi_dxvk_CreateD3D9            dxvk_CreateD3D9;
@@ -781,12 +896,22 @@ extern "C" {
     PFN_remixapi_dxvk_GetVkImage            dxvk_GetVkImage;
     PFN_remixapi_dxvk_CopyRenderingOutput   dxvk_CopyRenderingOutput;
     PFN_remixapi_dxvk_SetDefaultOutput      dxvk_SetDefaultOutput;
+    PFN_remixapi_dxvk_GetTextureHash        dxvk_GetTextureHash;
+    PFN_remixapi_dxvk_GetSharedD3D11TextureHandle dxvk_GetSharedD3D11TextureHandle;
     // Object picking utils
     PFN_remixapi_pick_RequestObjectPicking  pick_RequestObjectPicking;
     PFN_remixapi_pick_HighlightObjects      pick_HighlightObjects;
 
     PFN_remixapi_Startup            Startup;
     PFN_remixapi_Present            Present;
+    remixapi_UIState                (*GetUIState)(void);
+    remixapi_ErrorCode              (*SetUIState)(remixapi_UIState state);
+
+    // Optional extension functions (present starting in v0.5.1+)
+    PFN_remixapi_RegisterCallbacks          RegisterCallbacks;
+    PFN_remixapi_AutoInstancePersistentLights AutoInstancePersistentLights;
+    PFN_remixapi_UpdateLightDefinition      UpdateLightDefinition;
+    PFN_remixapi_DrawScreenOverlay          DrawScreenOverlay;
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(
