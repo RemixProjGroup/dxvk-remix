@@ -4,8 +4,8 @@ This index lists every upstream file the fork touches. It is the authoritative
 inventory of fork-vs-upstream surface area, maintained as fork edits are added
 or removed.
 
-See `docs/superpowers/specs/2026-04-18-fork-touchpoint-pattern-design.md` for
-the design this index supports.
+See [`docs/CONTRIBUTING.md`](CONTRIBUTING.md) for the fork-touchpoint
+discipline this index supports.
 
 ## Conventions
 
@@ -46,8 +46,8 @@ check will enforce it if discipline slips.
 
 **Category:** migrate
 
-- **Block** at `Interface` class (method declarations) — ~12 LOC, planned target `N/A (public header)` in `N/A (public header)`.
-  *Declares fork-added C++ wrapper methods: `CreateMeshBatched`, `GetUIState`, `SetUIState`, `AddTextureHash`, `RemoveTextureHash`, `dxvk_GetTextureHash`, `CreateLightBatched`, `UpdateLightDefinition`.*
+- **Block** at `Interface` class (method declarations) — ~13 LOC, planned target `N/A (public header)` in `N/A (public header)`.
+  *Declares fork-added C++ wrapper methods: `CreateMeshBatched`, `GetUIState`, `SetUIState`, `AddTextureHash`, `RemoveTextureHash`, `dxvk_GetTextureHash`, `CreateLightBatched`, `UpdateLightDefinition`, `SetGameValue`.*
 
 - **Block** at `Interface::CreateMeshBatched` (inline definition) — ~9 LOC, planned target `N/A (public header)` in `N/A (public header)`.
   *Inline C++ wrapper that calls `m_CInterface.CreateMeshBatched` for the batched mesh submission API slot.*
@@ -67,8 +67,11 @@ check will enforce it if discipline slips.
 - **Block** at `UIState` enum (file scope) — ~5 LOC, planned target `N/A (public header)` in `N/A (public header)`.
   *Adds `UIState` C++ enum mirroring `remixapi_UIState` for the C++ API surface.*
 
+- **Block** at `Interface::SetGameValue` (declaration + inline definition) — ~8 LOC, planned target `N/A (public header)` in `N/A (public header)`.
+  *C++ wrapper for the `remixapi_SetGameValue` C API slot introduced in workstream 10 (plugin-injected game-state write). Wrapper guards on nullptr vtable slot before dispatching, matching the `SetConfigVariable` shape. Companion readers are graph components `GameValueReadBool` / `GameValueReadNumber`; backing store lives in `rtx_fork_game_state.h`.*
+
 - **Block** at `remixapi_Interface` static_assert updates (file scope) — ~3 LOC (three separate assert sizes), planned target `N/A (public header)` in `N/A (public header)`.
-  *Updates `sizeof(remixapi_Interface)` static_asserts in the C++ header to match each successive vtable extension (208 → 240 → 272 → 280).*
+  *Updates `sizeof(remixapi_Interface)` static_asserts in the C++ header to match each successive vtable extension (208 → 240 → 272 → 280 → 288).*
 
 ---
 
@@ -129,8 +132,11 @@ check will enforce it if discipline slips.
 - **Block** at `PFN_remixapi_dxvk_GetSharedD3D11TextureHandle` typedef (file scope) — ~5 LOC, planned target `N/A (public header)` in `N/A (public header)`.
   *Declares the dxvk-specific extension function for the DX11 shared-texture export path (stub in this fork; slot populated for ABI layout compatibility).*
 
-- **Block** at `remixapi_Interface` vtable additions (struct fields) — ~14 LOC spread across the vtable struct, planned target `N/A (public header)` in `N/A (public header)`.
-  *Appends new function-pointer slots to `remixapi_Interface`: `AddTextureHash`, `RemoveTextureHash`, `CreateTexture`, `DestroyTexture`, `dxvk_GetTextureHash`, `CreateMeshBatched`, `GetUIState`/`SetUIState`, `DrawScreenOverlay`, `RegisterCallbacks`, `AutoInstancePersistentLights`, `UpdateLightDefinition`, `CreateLightBatched`, `dxvk_GetSharedD3D11TextureHandle`.*
+- **Block** at `PFN_remixapi_SetGameValue` typedef (file scope) — ~14 LOC (including the contract doc block), planned target `N/A (public header)` in `N/A (public header)`.
+  *Declares the function-pointer type for the plugin-injected game-state write API introduced in workstream 10. The entrypoint stores a single string/string pair under a caller-chosen key in a fork-owned thread-safe map; graph components `GameValueReadBool` / `GameValueReadNumber` read those values by name. The contract doc block above the typedef describes key/value semantics, validation, and lifetime (store survives `Shutdown` / re-init).*
+
+- **Block** at `remixapi_Interface` vtable additions (struct fields) — ~15 LOC spread across the vtable struct, planned target `N/A (public header)` in `N/A (public header)`.
+  *Appends new function-pointer slots to `remixapi_Interface`: `AddTextureHash`, `RemoveTextureHash`, `CreateTexture`, `DestroyTexture`, `dxvk_GetTextureHash`, `CreateMeshBatched`, `GetUIState`/`SetUIState`, `DrawScreenOverlay`, `RegisterCallbacks`, `AutoInstancePersistentLights`, `UpdateLightDefinition`, `CreateLightBatched`, `dxvk_GetSharedD3D11TextureHandle`, `SetGameValue`.*
 
 ---
 
@@ -249,6 +255,15 @@ check will enforce it if discipline slips.
 
 - **[pending commit 1]** Inline tweak — register `src/dxvk/rtx_render/rtx_fork_tonemap.cpp` in the rtx_render source list. Subsequent commits add `fork_tonemap_operators.slangh` (commit 2), `AgX.hlsl` (commit 4), `Lottes.hlsl` (commit 5).
   *Fork-owned tonemap module and shader source files.*
+
+---
+
+## src/dxvk/rtx_render/graph/rtx_component_list.h
+
+**Category:** index-only
+
+- **Inline tweak** at `components/` include list (~line 56) — 2-line addition. Not migrated: the include manifest is the intended extension point for new components, and adding two alphabetically-placed `#include` lines is the canonical way to register fork-owned graph components.
+  *Registers `components/game_value_read_bool.h` and `components/game_value_read_number.h` in the component manifest. Both are fork-owned Sense components introduced in workstream 10 (plugin-injected game-state readers); their backing store is the fork-owned `rtx_fork_game_state.h`.*
 
 ---
 
@@ -502,8 +517,8 @@ check will enforce it if discipline slips.
 
 **Note on diag blocks:** The fridge list originally listed 3 `[RTX-Diag]` blocks (blocks 2-4). These were introduced and then immediately reverted (commit `664a9ba4` reverted `0d590fb4`) before this migration ran. They are not present in the current file; no action was taken. Only block 1 (keyboard-forward) was active and required migration.
 
-- **Hook** at `GameOverlay::gameWndProcHandler` (after hwnd guard) → `fork_hooks::overlayKeyboardForward` in `rtx_fork_overlay.cpp`
-  *Forwards WM_KEYDOWN/UP, WM_SYSKEYDOWN/UP, WM_CHAR, WM_SYSCHAR messages to `ImGui_ImplWin32_WndProcHandler` on the legacy WndProc path so ImGui key state stays in sync when a game menu captures raw input and the overlay window is not foreground. Access to private `m_hwnd` is granted via a `friend` declaration — see the `rtx_overlay_window.h` entry below.*
+- **Hook** at `GameOverlay::gameWndProcHandler` (after hwnd guard) → `fork_hooks::overlayInputForward` in `rtx_fork_overlay.cpp`
+  *Forwards keyboard (WM_KEY\*, WM_CHAR, WM_SYSCHAR) AND mouse (WM_MOUSEMOVE, WM_{L,R,M,X}BUTTON\*, WM_MOUSE{,H}WHEEL) messages to `ImGui_ImplWin32_WndProcHandler` on the legacy WndProc path so ImGui keyboard + mouse state stays in sync when a game menu captures raw input or when the plugin HUD pulls focus via the Remix API. Mouse coords in lParam are translated from gameHwnd to overlayHwnd client-space when the two differ; wheel lParam is screen-space and forwards without translation. Access to private `m_hwnd` is granted via a `friend` declaration — see the `rtx_overlay_window.h` entry below. Previously named `overlayKeyboardForward` (keyboard-only); renamed + expanded 2026-04-19 when the plugin-API mouse-input bug was diagnosed.*
 
 ---
 
@@ -513,10 +528,10 @@ check will enforce it if discipline slips.
 
 **Category:** index-only
 
-- **Inline tweak** at file scope (just before `class GameOverlay`) — 6-line forward declaration of `fork_hooks::overlayKeyboardForward` so the friend declaration inside `GameOverlay` can name the fork-owned hook.
-  *Companion to the `rtx_fork_overlay.cpp` hook that needs private-member access to `m_hwnd`.*
+- **Inline tweak** at file scope (just before `class GameOverlay`) — 6-line forward declaration of `fork_hooks::overlayInputForward` so the friend declaration inside `GameOverlay` can name the fork-owned hook.
+  *Companion to the `rtx_fork_overlay.cpp` hook that needs private-member access to `m_hwnd`. Renamed from `overlayKeyboardForward` on 2026-04-19 when the hook's scope expanded to cover mouse messages.*
 
-- **Inline tweak** at `GameOverlay` class body (top of class, before `public:`) — 3-line `friend` declaration granting `fork_hooks::overlayKeyboardForward` access to `m_hwnd`.
+- **Inline tweak** at `GameOverlay` class body (top of class, before `public:`) — 3-line `friend` declaration granting `fork_hooks::overlayInputForward` access to `m_hwnd`.
   *Canonical pattern for hooks that must read/write private upstream state — one inline tweak per such hook, tracked here.*
 
 ---
@@ -524,10 +539,10 @@ check will enforce it if discipline slips.
 ## src/dxvk/rtx_render/rtx_remix_api.cpp
 
 **Pre-refactor fork footprint:** +1277 / -118 LOC (audit 2026-04-18)
-**Post-refactor footprint (fully migrated — migrations #7a, #7b, #7c done):** 20 hook call sites + 1 `#include "rtx_fork_hooks.h"` + inline tweaks listed below. All extractable fork blocks have been migrated to `rtx_fork_api_entry.cpp`.
+**Post-refactor footprint (fully migrated — migrations #7a, #7b, #7c, #7d done):** 23 hook call sites + 1 `#include "rtx_fork_hooks.h"` + inline tweaks listed below. All extractable fork blocks have been migrated to `rtx_fork_api_entry.cpp`.
 
-- **Inline tweak** at `(file scope)` (includes block) — ~7 LOC added. Not migrated: include lines don't get hooks — they either stay inline or the fork-owned file pulls them for its own code. Tracked here per the fridge-list invariant.
-  *Adds includes for `dxvk_objects.h`, `dxvk_imgui.h`, `rtx_context.h`, `rtx_option_layer.h`, `util_hash_set_layer.h`, `xxhash.h`, `algorithm`, and `d3d9_texture.h` to support fork-added API functions, plus `rtx_fork_hooks.h` added in migration #7a.*
+- **Inline tweak** at `(file scope)` (includes block) — ~8 LOC added. Not migrated: include lines don't get hooks — they either stay inline or the fork-owned file pulls them for its own code. Tracked here per the fridge-list invariant.
+  *Adds includes for `dxvk_objects.h`, `dxvk_imgui.h`, `rtx_context.h`, `rtx_option_layer.h`, `util_hash_set_layer.h`, `xxhash.h`, `algorithm`, and `d3d9_texture.h` to support fork-added API functions, plus `rtx_fork_hooks.h` added in migration #7a and `rtx_fork_game_state.h` added in workstream 10 for the `remixapi_SetGameValue` entry point.*
 
 - **Inline tweak** at `(file scope)` (`PendingScreenOverlay` struct + `s_pendingScreenOverlay`) — **Removed in migration #7b**. Both the struct and the optional are now defined exclusively in `rtx_fork_api_entry.cpp` (anonymous namespace). A comment marking the removal remains in the upstream file for auditability.
   *The struct held staging buffer, dimensions, format, and opacity; the optional was the hand-off point between the API thread (writer: `drawScreenOverlay`) and the render thread (reader: `presentScreenOverlayFlush`). Both now live in the fork-owned TU.*
@@ -598,6 +613,15 @@ check will enforce it if discipline slips.
 - **Hook** at `remixapi_RegisterCallbacks` (function body) → `fork_hooks::registerCallbacks` in `rtx_fork_api_entry.cpp` (migrated 2026-04-18, migration #7c).
   *One-liner delegate. Body now lives in the fork-owned TU where the callback state vars live.*
 
+- **Hook** at `remixapi_RequestVramCompaction` (function body) → `fork_hooks::requestVramCompaction` in `rtx_fork_api_entry.cpp` (migrated 2026-04-20, migration #7d).
+  *One-liner delegate passing `tryAsDxvk()` to the hook. Hook does its own null check and sets SceneManager's atomic VRAM-compaction flag; render thread consumes it in manageTextureVram. Lock-free — `s_mutex` not taken.*
+
+- **Hook** at `remixapi_RequestTextureVramFree` (function body) → `fork_hooks::requestTextureVramFree` in `rtx_fork_api_entry.cpp` (migrated 2026-04-20, migration #7d).
+  *One-liner delegate. Hook sets SceneManager's atomic texture-VRAM-free flag; the render-thread tick calls `textureManager.clear()`, matching the DX9 scene-transition behavior exposed to plugins. Lock-free — `s_mutex` not taken.*
+
+- **Hook** at `remixapi_GetVramStats` (function body) → `fork_hooks::getVramStats` in `rtx_fork_api_entry.cpp` (migrated 2026-04-20, migration #7d).
+  *One-liner delegate. Hook fills `remixapi_VramStats` with per-category DXVK totals plus driver-view heap info (`driverAllocatedBytes` / `driverBudgetBytes`) and the fork-side `RtxTextureManager::getTextureTable().size()` (`forkTextureCacheCount`). Driver-view numbers match Task Manager / nvidia-smi; the gap vs `totalAllocatedBytes` exposes non-DXVK allocations (NGX, RT pipeline state, descriptor pools, NRC).*
+
 - **Inline tweak** at `(anonymous namespace)` frame-boundary callback infrastructure — `s_pendingLightCreates`, `s_pendingLightUpdates`, `s_pendingDomeUpdates`, `s_pendingLightDestroys`, `s_pendingMeshCreates`, `s_handlesDeletedThisFrame`. Not migrated. The pending-queue state stays in upstream because it is accessed by too many anonymous-namespace functions (`flushPendingMeshes`, `remixapi_CreateMeshBatched`, `remixapi_CreateLight`, `remixapi_DestroyLight`, `remixapi_Present`, `remixapi_UpdateLightDefinition`) — moving it would require either lifting all those callers or exposing a wide accessor surface. Tracked here per the fridge-list invariant.
 
 - **Inline tweak** at `remixapi_AutoInstancePersistentLights` / `remixapi_UpdateLightDefinition` bodies (extern-C fork-owned functions) — not extracted to hooks. These are `REMIXAPI`-exported entry points; their bodies are the fork's implementation of those API calls. The pending-queue state they access is documented as staying inline above. Tracked here per the fridge-list invariant.
@@ -605,11 +629,14 @@ check will enforce it if discipline slips.
 - **Inline tweak** at `REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE` routing (in category conversion) — ~1 LOC. Not migrated (latent ABI: bit 24 semantic).
   *Routes `REMIXAPI_INSTANCE_CATEGORY_BIT_LEGACY_EMISSIVE` (bit 24) to `InstanceCategories::SmoothNormals` in the category-bit conversion function.*
 
-- **Block** at `extern "C"` vtable init block (fork-added anonymous-namespace slots) — ~10 LOC inline assignment block in `remixapi_InitializeLibrary`. Not fully hookable: the anonymous-namespace function pointers have internal linkage and cannot be named from another TU. Tracked here per the fridge-list invariant. The three extern-C-linked fork slots (RegisterCallbacks, AutoInstancePersistentLights, UpdateLightDefinition) are assigned via `fork_hooks::remixApiVtableInit` (migrated 2026-04-18, migration #7c).
-  *Registers all fork-added API functions into the `remixapi_Interface` vtable. The inline block assigns the anonymous-namespace slots; the hook fills the three externally-linked ones.*
+- **Inline tweak** at `(anonymous namespace)` `remixapi_SetGameValue` — ~15 LOC. Not migrated (fork-owned store + direct inline body fits the surrounding `remixapi_SetConfigVariable` pattern; no anonymous-namespace state to share with other TUs).
+  *Implements the plugin-injected game-state write API introduced in workstream 10. Validates args, constructs `std::string` copies of the incoming C strings, and forwards to `dxvk::fork_game_state::GameStateStore::get().set(key, value)`. Does not take `s_mutex` — the store owns its own lock, and funnelling high-frequency plugin writes through the API-wide mutex has no benefit.*
+
+- **Block** at `extern "C"` vtable init block (fork-added anonymous-namespace slots) — ~11 LOC inline assignment block in `remixapi_InitializeLibrary`. Not fully hookable: the anonymous-namespace function pointers have internal linkage and cannot be named from another TU. Tracked here per the fridge-list invariant. The three extern-C-linked fork slots (RegisterCallbacks, AutoInstancePersistentLights, UpdateLightDefinition) are assigned via `fork_hooks::remixApiVtableInit` (migrated 2026-04-18, migration #7c).
+  *Registers all fork-added API functions into the `remixapi_Interface` vtable. The inline block assigns the anonymous-namespace slots (including `SetGameValue` added in workstream 10); the hook fills the three externally-linked ones.*
 
 - **Inline tweak** at `extern "C"` vtable size static_assert — 1 LOC. Not migrated (fridge-listed).
-  *The `static_assert(sizeof(interf) == 280, ...)` sentinel is the final value in the chain (208 → 240 → 272 → 280 across four workstreams). Retained inline in `remixapi_InitializeLibrary` as a size sentinel.*
+  *The `static_assert(sizeof(interf) == 288, ...)` sentinel is the final value in the chain (208 → 240 → 272 → 280 → 288 across five workstreams). Retained inline in `remixapi_InitializeLibrary` as a size sentinel.*
 
 ---
 

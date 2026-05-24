@@ -156,7 +156,7 @@ void GameOverlay::gameWndProcHandler(HWND gameHwnd, UINT msg, WPARAM wParam, LPA
     return;
   }
 
-  fork_hooks::overlayKeyboardForward(*this, gameHwnd, msg, wParam, lParam);
+  fork_hooks::overlayInputForward(*this, gameHwnd, msg, wParam, lParam);
 
   auto postShowMsg = [this] { PostMessage(hwnd(), WM_REMIX_SHOW_OVERLAY, 0, 0); };
   auto postHideMsg = [this] { PostMessage(hwnd(), WM_REMIX_HIDE_OVERLAY, 0, 0); };

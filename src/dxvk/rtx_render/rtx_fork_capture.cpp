@@ -82,12 +82,21 @@ namespace fork_hooks {
 
     if (colorTexture.isValid() && colorTexture.getImageView()) {
       // Standard D3D9 material path: export the color texture directly.
-      const std::string albedoTexFilename(matName + lss::ext::dds);
-      capturer.m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
-                                          albedoTexFilename,
-                                          colorTexture.getImageView()->image());
-      const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
-      lssMat.albedoTexPath = albedoTexPath;
+      auto* imageView = colorTexture.getImageView();
+      if (imageView && imageView->image().ptr()) {
+        try {
+          const std::string albedoTexFilename(matName + lss::ext::dds);
+          capturer.m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
+                                              albedoTexFilename,
+                                              imageView->image());
+          const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
+          lssMat.albedoTexPath = albedoTexPath;
+        } catch (const std::exception& e) {
+          Logger::err(str::format("[GameCapturer] Failed to export D3D9 texture for material '", matName, "': ", e.what()));
+        }
+      } else {
+        Logger::warn(str::format("[GameCapturer] D3D9 texture has invalid image for material: ", matName));
+      }
     } else if (textureHash != 0 && textureHash != kEmptyHash) {
       // API-submitted material: locate the image via the texture-manager table by hash and export it.
       RtxTextureManager& textureManager = ctx->getCommonObjects()->getTextureManager();
@@ -102,15 +111,29 @@ namespace fork_hooks {
       }
 
       if (pFoundTexture && pFoundTexture->getImageView()) {
-        const std::string albedoTexFilename(matName + lss::ext::dds);
-        try {
-          capturer.m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
-                                              albedoTexFilename,
-                                              pFoundTexture->getImageView()->image());
-          const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
-          lssMat.albedoTexPath = albedoTexPath;
-        } catch (const std::exception& e) {
-          Logger::warn(str::format("[GameCapturer] Failed to export API texture for material ", matName, ": ", e.what()));
+        auto* apiImageView = pFoundTexture->getImageView();
+        if (apiImageView && apiImageView->image().ptr()) {
+          const auto& imageInfo = apiImageView->image()->info();
+
+          // Validate image has valid dimensions
+          if (imageInfo.extent.width > 0 && imageInfo.extent.height > 0) {
+            const std::string albedoTexFilename(matName + lss::ext::dds);
+            try {
+              capturer.m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
+                                                  albedoTexFilename,
+                                                  apiImageView->image());
+              const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
+              lssMat.albedoTexPath = albedoTexPath;
+            } catch (const std::exception& e) {
+              Logger::warn(str::format("[GameCapturer] Failed to export API texture for material ", matName, ": ", e.what()));
+            }
+          } else {
+            Logger::warn(str::format("[GameCapturer] API texture has invalid dimensions for material: ", matName,
+                                     " (", imageInfo.extent.width, "x", imageInfo.extent.height, ")"));
+          }
+        } else {
+          Logger::warn(str::format("[GameCapturer] API texture has null image for material: ", matName,
+                                   " (hash: 0x", std::hex, textureHash, std::dec, ")"));
         }
       } else {
         Logger::warn(str::format("[GameCapturer] Could not resolve API texture hash for material: ", matName,

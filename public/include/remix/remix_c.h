@@ -717,6 +717,20 @@ extern "C" {
     const char*               key,
     const char*               value);
 
+  // Plugin-injected game-state write. Stores `value` under `key` in a
+  // fork-owned, thread-safe string/string map that graph components
+  // (GameValueReadBool / GameValueReadNumber) read by name.
+  //
+  // Keys are chosen by the plugin; Remix does not validate or namespace them.
+  // The store survives Shutdown / re-init, so callers do not have to
+  // re-populate their state across device resets.
+  //
+  // Returns REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS on a null or empty key,
+  // REMIXAPI_ERROR_CODE_SUCCESS otherwise.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_SetGameValue)(
+    const char*               key,
+    const char*               value);
+
   typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_AddTextureHash)(
     const char* textureCategory,
     const char* textureHash);
@@ -869,6 +883,73 @@ extern "C" {
     uint64_t            version;
   } remixapi_InitializeLibraryInfo;
 
+  // Force the RtxTextureManager to demote/clear textures not currently needed.
+  // Hooks SceneManager::requestTextureVramFree, which sets an atomic flag
+  // consumed next render-thread tick; the tick calls textureManager.clear(),
+  // which wipes the SparseUniqueCache and (if over the fork's texturemanager
+  // budget) demotes streaming textures to 0 mips. Complements the plugin's
+  // own material/texture refcount chain: this catches orphans whose cache
+  // entry outlives their last owner.
+  //
+  // Not free -- the cache wipe runs on the render thread. Fire at bulk
+  // scene-turnover events (cell transitions, fast-travel), not every frame.
+  //
+  // Thread-safe: sets an atomic on SceneManager; no lock acquired.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_RequestTextureVramFree)(void);
+
+  // Release unused memory back to the driver (force compaction).
+  // DXVK's memory allocator retains freed VkDeviceMemory chunks as spare empty
+  // chunks in a high-water-mark pattern, only returning them to the driver
+  // when a second spare chunk of the same type appears or the heap is over
+  // budget. This call asks the renderer to explicitly release those retained
+  // chunks on the next render-thread tick (see
+  // SceneManager::requestVramCompaction + DxvkMemoryAllocator::freeUnusedChunks).
+  //
+  // Intent: plugins call this after bulk destroy events (cell transitions,
+  // fast-travel, scene turnover) where the allocator is likely holding onto
+  // VRAM that will not be reused. The call is not free -- it blocks on the
+  // next frame's vkFreeMemory sweep -- so fire it at a low rate, not every
+  // frame.
+  //
+  // Thread-safe: sets an atomic flag on SceneManager; no lock acquired.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_RequestVramCompaction)(void);
+
+  // Per-category VRAM usage snapshot aggregated across all device-local heaps.
+  // Sizes are in bytes. poolRetainedBytes == totalAllocatedBytes - totalUsedBytes
+  // and represents memory owned by the DXVK allocator's empty-chunk pool that
+  // has not been returned to the driver -- the number that RequestVramCompaction
+  // moves. Category breakdown mirrors DxvkMemoryStats::Category and covers only
+  // RTX-owned suballocations; app-owned buffers/textures (D3D9 app traffic) are
+  // not included.
+  typedef struct remixapi_VramStats {
+    uint64_t totalAllocatedBytes;
+    uint64_t totalUsedBytes;
+    uint64_t poolRetainedBytes;
+    uint64_t usedReplacementGeometryBytes;
+    uint64_t usedBufferBytes;
+    uint64_t usedAccelerationStructureBytes;
+    uint64_t usedOpacityMicromapBytes;
+    uint64_t usedMaterialTextureBytes;
+    uint64_t usedRenderTargetBytes;
+    // Driver-reported allocation on device-local heaps. Sourced from
+    // VK_EXT_memory_budget (adapter->getMemoryHeapInfo -> memoryAllocated).
+    // This is the Task-Manager / nvidia-smi view of the process's Vulkan
+    // footprint. totalAllocatedBytes only counts DXVK's own allocator path,
+    // so (driverAllocatedBytes - totalAllocatedBytes) is the non-DXVK
+    // overhead: DLSS/NGX internal buffers, raytracing pipeline driver
+    // state, bindless descriptor pools, NRC CUDA, pipeline caches, etc.
+    uint64_t driverAllocatedBytes;
+    uint64_t driverBudgetBytes;
+    // Size of the fork-side RtxTextureManager's SparseUniqueCache. Grows
+    // with both D3D9-native and plugin-created textures tracked by Remix.
+    // If this climbs while plugin's own texture count is stable, the
+    // growth is in fork-side streaming/native textures, not plugin uploads.
+    uint32_t forkTextureCacheCount;
+  } remixapi_VramStats;
+
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_GetVramStats)(
+    remixapi_VramStats* out_stats);
+
   typedef struct remixapi_Interface {
     PFN_remixapi_Shutdown           Shutdown;
     PFN_remixapi_CreateMaterial     CreateMaterial;
@@ -912,6 +993,10 @@ extern "C" {
     PFN_remixapi_AutoInstancePersistentLights AutoInstancePersistentLights;
     PFN_remixapi_UpdateLightDefinition      UpdateLightDefinition;
     PFN_remixapi_DrawScreenOverlay          DrawScreenOverlay;
+    PFN_remixapi_SetGameValue               SetGameValue;
+    PFN_remixapi_RequestVramCompaction      RequestVramCompaction;
+    PFN_remixapi_GetVramStats               GetVramStats;
+    PFN_remixapi_RequestTextureVramFree     RequestTextureVramFree;
   } remixapi_Interface;
 
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_InitializeLibrary(

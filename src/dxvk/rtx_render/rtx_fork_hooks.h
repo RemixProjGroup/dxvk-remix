@@ -141,14 +141,21 @@ namespace dxvk {
       XXH64_hash_t textureHash,
       SceneManager& scene);
 
-    // Forwards WM_KEYDOWN/UP, WM_SYSKEYDOWN/UP, WM_CHAR, WM_SYSCHAR messages
-    // to ImGui_ImplWin32_WndProcHandler so ImGui key state stays in sync on
-    // the legacy WndProc path (when a game menu captures raw input and the
-    // overlay window is not foreground).
+    // Forwards keyboard (WM_KEY*, WM_CHAR, WM_SYSCHAR) AND mouse
+    // (WM_MOUSEMOVE, WM_{L,R,M,X}BUTTON*, WM_MOUSE{,H}WHEEL) messages to
+    // ImGui_ImplWin32_WndProcHandler so ImGui's keyboard + mouse state stays
+    // in sync on the legacy WndProc path. Used when a game menu captures raw
+    // input OR the plugin HUD pulls focus via the Remix API — either case
+    // stops overlayWndProc from receiving messages directly and the legacy
+    // wndProcHandler fallback becomes the only delivery path.
+    // Mouse coords in lParam are translated from gameHwnd client-space to
+    // overlayHwnd client-space when the two differ, so ImGui hit-tests
+    // correctly. Wheel lParam is screen-space per Windows convention and
+    // forwards without translation.
     // NOTE: requires GameOverlay to declare this as a friend for access to the
     // private m_hwnd member. See rtx_overlay_window.h.
     // Implementation in rtx_fork_overlay.cpp.
-    void overlayKeyboardForward(
+    void overlayInputForward(
       GameOverlay& overlay, HWND gameHwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
     // Alpha-composites a plugin-uploaded RGBA pixel buffer over the final
@@ -420,6 +427,35 @@ namespace dxvk {
     // No private-member access; no friend declaration needed.
     // Implementation in rtx_fork_api_entry.cpp.
     void remixApiVtableInit(remixapi_Interface& interf);
+
+    // Sets SceneManager's atomic VRAM-compaction request flag; the render
+    // thread consumes it in manageTextureVram on the next tick. Returns
+    // REMIX_DEVICE_WAS_NOT_REGISTERED if remixDevice is null. Lock-free;
+    // callers need not hold the remix-api static mutex.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    remixapi_ErrorCode requestVramCompaction(D3D9DeviceEx* remixDevice);
+
+    // Sets SceneManager's atomic texture-VRAM-free request flag; the render
+    // thread consumes it in manageTextureVram on the next tick (which then
+    // calls textureManager.clear()). Returns REMIX_DEVICE_WAS_NOT_REGISTERED
+    // if remixDevice is null. Lock-free; callers need not hold the remix-api
+    // static mutex.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    remixapi_ErrorCode requestTextureVramFree(D3D9DeviceEx* remixDevice);
+
+    // Fills out_stats with DXVK per-category totals, driver-view heap info
+    // (matches Task Manager / nvidia-smi — gap vs totalAllocatedBytes exposes
+    // non-DXVK allocations such as NGX, RT pipeline state, descriptor pools,
+    // NRC, etc.), and the fork-side texture manager's table size. Returns
+    // INVALID_ARGUMENTS if out_stats is null or REMIX_DEVICE_WAS_NOT_REGISTERED
+    // if remixDevice is null.
+    // No private-member access; no friend declaration needed.
+    // Implementation in rtx_fork_api_entry.cpp.
+    remixapi_ErrorCode getVramStats(
+      D3D9DeviceEx*        remixDevice,
+      remixapi_VramStats*  out_stats);
 
     // Populates the tonemap-operator-related fields of the global tonemapper's
     // shader args struct (tonemapOperator, directOperatorMode, Hable params,
