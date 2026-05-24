@@ -63,6 +63,22 @@ runtime.
 - **Hillaire atmosphere** — physically-based atmospheric scattering
   ported from the gmod-rtx community fork. Daylight, sunset, and
   twilight all behave correctly without manual fog tuning.
+- **Volumetric clouds** — procedural FBM cloud layer with
+  weather-driven coverage and Nubis-style spatial variation. Anvil,
+  shear, and vertical-profile shaping are artist-tunable. Renders
+  through a sky-dome curvature with sample-seam jitter to hide
+  stepping artifacts. Sun and any number of moons cast shadows
+  through the volume; twilight and night cloud lighting are
+  physically correct rather than tuned-by-eye. Shadow-tap cost is
+  heavily reduced via multi-octave density approximation,
+  cadence-decoupled shadow caching, combined-moon marching, and
+  density-gated skipping.
+- **Night sky** — stars, milky way, shooting stars, and airglow,
+  with sidereal rotation so the celestial sphere actually moves.
+  Multi-moon support: independent elevation / rotation / phase per
+  moon, unified moon-disk eval with surface-style presets (Rocky,
+  Volcanic), soft radial glow/halo, and physically-scaled lunar
+  illumination on the cloud volume.
 
 ### Hardware skinning
 

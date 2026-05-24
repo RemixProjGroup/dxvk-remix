@@ -2519,7 +2519,7 @@ extern "C"
       // Fork-added vtable slots (extern-C exported; delegated to fork hook)
       dxvk::fork_hooks::remixApiVtableInit(interf);
     }
-    static_assert(sizeof(interf) == 312, "Add/remove function registration");
+    static_assert(sizeof(interf) == 320, "Add/remove function registration");
 
     *out_result = interf;
     return REMIXAPI_ERROR_CODE_SUCCESS;

@@ -1962,6 +1962,19 @@ namespace dxvk {
       return;
     }
 
+    // Persistence-tracking setup happens before the replacement-lookup early-out
+    // so the same ReplacementInstance can be threaded through both paths —
+    // drawReplacements() requires a non-null instance and uses it to drive
+    // RtInstance reuse across frames for the replacement primitives.
+    const XXH64_hash_t identityHash = state.computeExternalDrawIdentityHash();
+    const XXH64_hash_t spatialMapHash = spatialMapHashForExternalDrawMesh(state.mesh);
+    const Matrix4& xform = state.drawCall.transformData.objectToWorld;
+    const XXH64_hash_t matHash = state.drawCall.materialData.getHash();
+    const Vector3 worldPos = xform[3].xyz();
+
+    const ReplacementInstance::LookupKey externalKey { identityHash, spatialMapHash, matHash, kEmptyHash, worldPos, xform };
+    ReplacementInstance* replacementInstance = m_drawCallTracker.findOrCreateReplacementInstance(externalKey);
+
     if (std::vector<AssetReplacement>* pReplacements = fork_hooks::externalDrawMeshReplacement(*m_pReplacer, meshHash)) {
       // Copy the DrawCallState so we don't mutate the caller's state. Point geometryData
       // at submeshes[0] as the replacement geometry template, clear externalMaterial so
@@ -1973,18 +1986,9 @@ namespace dxvk {
       replacementDrawCall.geometryData.externalMaterial = nullptr;
 
       MaterialData renderMaterialData = LegacyMaterialData().as<OpaqueMaterialData>();
-      drawReplacements(ctx, &replacementDrawCall, pReplacements, renderMaterialData);
+      drawReplacements(ctx, &replacementDrawCall, pReplacements, renderMaterialData, replacementInstance);
       return;
     }
-
-    const XXH64_hash_t identityHash = state.computeExternalDrawIdentityHash();
-    const XXH64_hash_t spatialMapHash = spatialMapHashForExternalDrawMesh(state.mesh);
-    const Matrix4& xform = state.drawCall.transformData.objectToWorld;
-    const XXH64_hash_t matHash = state.drawCall.materialData.getHash();
-    const Vector3 worldPos = xform[3].xyz();
-
-    const ReplacementInstance::LookupKey externalKey { identityHash, spatialMapHash, matHash, kEmptyHash, worldPos, xform };
-    ReplacementInstance* replacementInstance = m_drawCallTracker.findOrCreateReplacementInstance(externalKey);
 
     AxisAlignedBoundingBox geometryBBox;
 

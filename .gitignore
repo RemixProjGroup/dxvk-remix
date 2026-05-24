@@ -46,3 +46,7 @@ python.dxvk-cache
 
 # Fork-maintainability audit outputs (ephemeral).
 audit-output/
+
+# ignore build artifacts
+nv-private
+tests

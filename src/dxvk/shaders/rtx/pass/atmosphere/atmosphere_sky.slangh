@@ -590,7 +590,7 @@ vec3 evalMoonDisk(vec3 viewDir, uint moonIdx, AtmosphereArgs args, out float dis
 
 // Sample cloud density along the sun direction from a cloud hit point.
 // Used to self-shadow the clouds. Reuses the main-sample's typeLocal /
-// coverageLocal across all 4 sun-shadow taps — spec rationale: noise
+// coverageLocal across all 2 sun-shadow taps — spec rationale: noise
 // wavelength (~2km at default scale) is large compared to the 1.6km tap
 // span, so the approximation is visually adequate.
 float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir,
@@ -598,8 +598,8 @@ float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir,
                                   AtmosphereArgs args) {
   if (sunDir.y <= 0.01f) return 1.0f;  // Sun near/below horizon: no meaningful shadow
 
-  const int kTaps = 4;
-  const float kStepKm = 0.4f;
+  const int kTaps = 2;
+  const float kStepKm = 0.8f;
   float opticalDepth = 0.0f;
 
   for (int i = 0; i < kTaps; ++i) {
@@ -607,8 +607,8 @@ float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir,
     // Project to horizontal plane and compute heightFraction at the tap.
     // Taps that march above the slab top get hf=1 → bell→0 → density=0,
     // which is correct (no clouds outside the slab).
-    float d = sampleCloudDensity(vec2(p.x, p.z), computeCloudHeightFraction(p, args),
-                                  typeLocal, coverageLocal, args);
+    float d = sampleCloudDensityShadow(vec2(p.x, p.z), computeCloudHeightFraction(p, args),
+                                        typeLocal, coverageLocal, args);
     opticalDepth += d;
   }
 
@@ -627,7 +627,7 @@ float sampleCloudSunTransmittance(vec3 cloudHitPos, vec3 sunDir,
 //     to modulate effective coverage (creates non-uniform sky).
 //  3. Step through the slab cloudViewSamples times. At each sample:
 //       - Sample density (with effective coverage)
-//       - Compute sun illumination (4-tap shadow + atmospheric transmittance)
+//       - Compute sun illumination (2-tap shadow + atmospheric transmittance)
 //       - Add ambient + sky-bounce shadow tint + sun-coupled warm tint
 //       - Accumulate using analytical Beer-Lambert
 //  4. Early-exit when transmittance drops below 0.01.
@@ -711,10 +711,13 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
   //     response gated by phaseGlow and cloudMoonBrightness. Same shape
   //     as the sun's per-ray lightResponse * sunIlluminance product.
   //   - moonShadow (per-sample, computed in the march loop below):
-  //     4-tap density march along moon direction via the same
+  //     ONE 2-tap density march along the brightness-weighted combined
+  //     moon direction (combinedMoonDir, computed below) via the same
   //     sampleCloudSunTransmittance helper the sun uses. Multiplies
-  //     moonCoeff[mi] per sample so the cumulus moon-facing side reads
-  //     bright while the far side darkens — mirrors sun behavior.
+  //     combinedMoonCoeff per sample so the cumulus moon-facing side reads
+  //     bright while the far side darkens — mirrors sun behavior. The
+  //     combined-direction approximation replaces N independent per-moon
+  //     shadow marches; see Lever 4 rationale near the precompute below.
   vec3 nightLight = vec3(0.0f);
   vec3 moonCoeff[MAX_MOONS];
   vec3 moonDirNorm[MAX_MOONS];
@@ -764,6 +767,30 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     }
   }
 
+  // Combined-moon shadow direction (Lever 4). Brightness-weighted average of
+  // all enabled, above-horizon moons' directions. One shadow march at this
+  // direction per density-passing sample replaces N independent marches.
+  // Visual delta is near-zero -- with multiple moons you cannot resolve
+  // independent cast shadows on the same cloud cell; shadow direction is a
+  // perceptual cue, not a per-moon feature.
+  vec3 combinedMoonDir   = vec3(0.0f, 1.0f, 0.0f);
+  vec3 combinedMoonCoeff = vec3(0.0f);
+  {
+    vec3 sumWeightedDir = vec3(0.0f);
+    float sumWeight = 0.0f;
+    [unroll] for (uint mi = 0u; mi < MAX_MOONS; ++mi) {
+      float w = max(max(moonCoeff[mi].r, moonCoeff[mi].g), moonCoeff[mi].b);
+      if (w > 0.001f) {
+        sumWeightedDir += moonDirNorm[mi] * w;
+        sumWeight += w;
+        combinedMoonCoeff += moonCoeff[mi];
+      }
+    }
+    if (sumWeight > 0.0f && length(sumWeightedDir) > 0.001f) {
+      combinedMoonDir = normalize(sumWeightedDir);
+    }
+  }
+
   // Horizon fade applied uniformly per ray
   float horizonFade = smoothstep(0.02f, 0.15f, viewDir.y);
 
@@ -774,6 +801,14 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
   float jitter = hash31(viewDir);  // [0, 1) per pixel
   vec3 accumRadiance = vec3(0.0f);
   float transmittance = 1.0f;
+
+  // Shadow cadence cache (Lever 3). Sun and combined-moon shadow march only
+  // every other density-passing sample; reuse cached value on the alternate.
+  // Cache is invalidated whenever the density gate fires so we never reuse
+  // a stale shadow across an empty interval.
+  float cachedSunShadow  = 1.0f;
+  float cachedMoonShadow = 1.0f;
+  bool  cacheValid       = false;
 
   for (uint i = 0u; i < args.cloudViewSamples; ++i) {
     if (transmittance < 0.01f) break;  // early-exit (free perf win)
@@ -792,25 +827,48 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     float hf = computeCloudHeightFraction(samplePos, args);
     float density = sampleCloudDensity(sampleXZ, hf, typeLocal, coverageLocal, args);
     density *= horizonFade;
-    if (density < 0.001f) continue;
+    if (density < 0.001f) {
+      cacheValid = false;
+      continue;
+    }
 
-    // Per-sample lighting (airTrans hoisted above the loop)
-    float sunTransmittance = sampleCloudSunTransmittance(samplePos, sunDir, typeLocal, coverageLocal, args);
+    // Per-sample lighting (airTrans hoisted above the loop). Sun and combined-
+    // moon shadow share a single parity decision so they march together.
+    bool reuse = cacheValid && ((i & 1u) == 1u);
+
+    float sunTransmittance;
+    if (reuse) {
+      sunTransmittance = cachedSunShadow;
+    } else {
+      sunTransmittance = sampleCloudSunTransmittance(samplePos, sunDir, typeLocal, coverageLocal, args);
+      cachedSunShadow = sunTransmittance;
+    }
     vec3 directLight = args.sunIlluminance * airTrans * sunTransmittance * lightResponse;
     vec3 ambient = args.sunIlluminance * airTrans * 0.04f;
 
-    // Per-sample moon direct light: each above-horizon moon's pre-computed
-    // Lambert+HG coefficient multiplied by a 4-tap shadow march along its
-    // direction. Mirrors the sun's directLight = lightResponse * sunTrans
-    // structure. Skipped for moons whose coefficient is effectively zero
-    // (disabled, below horizon, new moon, or cloudMoonBrightness=0).
+    // Per-sample moon direct light: ONE shadow march along the brightness-
+    // weighted combined moon direction (Lever 4), participating in the same
+    // cadence cache as the sun shadow (Lever 3). At low local density the
+    // unshadowed moon contribution gets crushed by (1 - stepTransmittance)
+    // anyway, so we skip the march entirely below kMoonShadowSkipDensity
+    // (Lever 5).
+    const float kMoonShadowSkipDensity = 0.05f;
     vec3 moonDirectLight = vec3(0.0f);
-    [unroll] for (uint moonI = 0u; moonI < MAX_MOONS; ++moonI) {
-      if (any(moonCoeff[moonI] > vec3(0.001f))) {
-        float moonShadow = sampleCloudSunTransmittance(samplePos, moonDirNorm[moonI],
-                                                       typeLocal, coverageLocal, args);
-        moonDirectLight += moonCoeff[moonI] * moonShadow;
+    if (any(combinedMoonCoeff > vec3(0.001f))) {
+      float moonShadow;
+      if (density < kMoonShadowSkipDensity) {
+        moonShadow = 1.0f;  // unshadowed; visible contribution stays small via (1-T) factor
+      } else if (reuse) {
+        moonShadow = cachedMoonShadow;
+      } else {
+        moonShadow = sampleCloudSunTransmittance(samplePos, combinedMoonDir,
+                                                  typeLocal, coverageLocal, args);
+        cachedMoonShadow = moonShadow;
       }
+      // Approximation: (Σ moonCoeff_i) * shadow_combined replaces the original
+      // Σ(moonCoeff_i * shadow_i). Equal iff per-moon shadow values are uniform,
+      // which holds at cloud scale where direction is a perceptual cue only.
+      moonDirectLight = combinedMoonCoeff * moonShadow;
     }
 
     // Sky-bounce shadow tint: shadowed parts get faint blue contribution.
@@ -831,6 +889,8 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args) {
     vec3 stepRadiance = sampleColor * (1.0f - stepTransmittance);
     accumRadiance += stepRadiance * transmittance;
     transmittance *= stepTransmittance;
+
+    cacheValid = true;
   }
 
   float alpha = 1.0f - transmittance;
