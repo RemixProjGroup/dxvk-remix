@@ -423,7 +423,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudColor = RtxOptions::cloudColor();
     args.cloudDensity = RtxOptions::cloudDensity();
     args.cloudAltitude = RtxOptions::cloudAltitude();
-    args.cloudScale = RtxOptions::cloudScale();
+    args.cloudLayer2CoverageSpread = RtxOptions::cloudLayer2CoverageSpread();
     args.cloudEnabled = RtxOptions::cloudEnabled() ? 1.0f : 0.0f;
 
     // Accumulated wind offset. Wind scrolling is driven by timeSeconds so the
@@ -444,7 +444,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudShadowTint = RtxOptions::cloudShadowTint();
     args.cloudShadowTintStrength = RtxOptions::cloudShadowTintStrength();
     args.cloudThickness = RtxOptions::cloudThickness();
-    args.cloudDetailWeight = RtxOptions::cloudDetailWeight();
+    args.cloudLayer2TypeSpread = RtxOptions::cloudLayer2TypeSpread();
     args.cloudSunsetWarmth = RtxOptions::cloudSunsetWarmth();
     args.cloudViewSamples = RtxOptions::cloudViewSamples();
     args.cloudCurvature = RtxOptions::cloudCurvature();
@@ -455,11 +455,10 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudCoverageSpread = RtxOptions::cloudCoverageSpread();
     args.cloudCoverageNoiseScale = RtxOptions::cloudCoverageNoiseScale();
     args.cloudAnvilBias = RtxOptions::cloudAnvilBias();
-    args.cloudWindShearStrength = RtxOptions::cloudWindShearStrength();
+    args.cloudMsScale = RtxOptions::cloudMsScale();
     args.cloudMultiScatterStrength = RtxOptions::cloudMultiScatterStrength();
     args.cloudMultiScatterOctaves = RtxOptions::cloudMultiScatterOctaves();
-    args.pad6 = 0.0f;
-    args.pad7 = 0.0f;
+    args.cloudLayer2NoiseSeed = RtxOptions::cloudLayer2NoiseSeed();
     args.cloudNoiseTileKm = RtxOptions::cloudNoiseTileKm();
     // Volumetric sky-ambient illumination knobs (fork, 2026-05-12). Defaults
     // applied here are the ship-state defaults: skyAmbientStrength = 0 keeps
@@ -568,7 +567,8 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudWorleyCarveStrength = RtxOptions::cloudWorleyCarveStrength();
     args.cloudWorleyFrequency     = RtxOptions::cloudWorleyFrequency();
     args.cloudWorleyOctaves       = RtxOptions::cloudWorleyOctaves();
-    args.cloudAerialExtinctionPerKm = RtxOptions::cloudAerialExtinctionPerKm();
+    args.cloudAerialHazePerKm = RtxOptions::cloudAerialHazePerKm();
+    args.cloudAerialFadePerKm = RtxOptions::cloudAerialFadePerKm();
   }
 
   return args;

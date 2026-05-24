@@ -134,7 +134,7 @@ struct AtmosphereArgs {
   float cloudDensity;       // Overall opacity/density multiplier
 
   float cloudAltitude;      // Altitude of cloud layer (km)
-  float cloudScale;         // Horizontal noise scale (smaller = larger clouds)
+  float cloudLayer2CoverageSpread; // [0,1] coverage variation for layer 2 (independent of layer 1)
   float cloudEnabled;       // 1.0 if clouds should be rendered, 0.0 otherwise
   float cloudShadowStrength;// How strongly clouds dim ground/atmosphere lighting [0..1]
 
@@ -147,7 +147,7 @@ struct AtmosphereArgs {
   float cloudShadowTintStrength;
 
   float cloudThickness;        // Cloud-slab vertical depth, km
-  float cloudDetailWeight;     // Pre-fade detail FBM weight [0..1]
+  float cloudLayer2TypeSpread; // [0,1] cloud-type variation for layer 2 (independent of layer 1)
   float cloudSunsetWarmth;     // Strength of low-sun warm tint
   uint cloudViewSamples;       // Ray-march steps through cloud slab
 
@@ -160,12 +160,16 @@ struct AtmosphereArgs {
   float cloudCoverageSpread;       // [0,1] amplitude of coverage variation around mean.
   float cloudCoverageNoiseScale;   // Region size frequency for coverage noise (independent of type).
   float cloudAnvilBias;            // [0,1] cumulus top inflation strength (Nubis anvil pow trick).
-  float cloudWindShearStrength;    // [0,1+] lateral cloud-top displacement along wind, scaled by type.
+  float cloudMsScale;              // Multi-scatter sigma_ms master multiplier (1.0 = paper baseline)
 
   float cloudMultiScatterStrength; // Wrenninge multi-scatter master multiplier (1.0 = physical baseline).
   uint  cloudMultiScatterOctaves;  // Number of Wrenninge octaves to sum (clamped 1..4 in shader).
-  float pad6;                      // 16-byte alignment
-  float pad7;
+  float cloudLayer2NoiseSeed;      // Seed offset added to layer 2's 2D coverage/type smoothNoise2D
+                                   // calls so layer 2 generates a fully decorrelated noise pattern
+                                   // at the same XZ (no geometry interference).
+  float cloudAerialFadePerKm;      // Aerial-perspective FADE on cloud extinction (1/km). Softens
+                                   // alpha-accumulation at distance so horizon-grazing rays don't
+                                   // pile up into a solid white wall.
 
   // ----- Stage C: 3D noise texture (fork) -----
   float cloudNoiseTileKm;   // World-space tile period for the prebaked 3D noise.
@@ -298,5 +302,6 @@ struct AtmosphereArgs {
   float cloudWorleyCarveStrength;  // [0, 1.5] amount of Worley subtracted from base Perlin
   float cloudWorleyFrequency;      // cycles/km of the first Worley octave (default 1.0 = cumulus scale)
   uint  cloudWorleyOctaves;        // FBM octave count (clamped 1..4 in shader)
-  float cloudAerialExtinctionPerKm; // Aerial-perspective extinction (1/km). Higher = more horizon fade
+  float cloudAerialHazePerKm;      // Aerial-perspective HAZE on cloud radiance (1/km). Dims distant
+                                   // cloud samples toward atmospheric color. Visual softness control.
 };

@@ -66,10 +66,6 @@ All presets: `0.0034`
 |-------|-------------|---------|------|-------|---------|-----------|-------------|------|----------|-----------|--------|
 | 0.3 | 0.3 | 0.3 | 0.3 | 0.3 | 0.3 | 0.3 | 0.7 | 0.3 | 0.3 | 0.3 | 0.3 |
 
-### cloudWindShearStrength
-
-All presets: `0.5`
-
 ### cloudColor (Vector3)
 
 | Preset | Value |
@@ -110,10 +106,6 @@ All presets: `0.6`
 | clear | partlyCloudy | overcast | hazy | foggy | drizzle | rainstorm | thunderstorm | snow | blizzard | sandstorm | smoggy |
 |-------|-------------|---------|------|-------|---------|-----------|-------------|------|----------|-----------|--------|
 | 2.0 | 2.5 | 3.05 | 2.5 | 2.0 | 3.0 | 4.0 | 5.0 | 3.0 | 4.5 | 2.5 | 2.5 |
-
-### cloudDetailWeight
-
-All presets: `1.0`
 
 ### cloudShadowTint (Vector3)
 

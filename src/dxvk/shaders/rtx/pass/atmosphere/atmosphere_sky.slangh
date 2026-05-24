@@ -1050,13 +1050,14 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args, uint2 pixelCoord, uint frameI
     float stepTransmittance = exp(-effectiveDensity * stepLen);
     vec3 stepRadiance = sampleColor * (1.0f - stepTransmittance);
 
-    // Aerial perspective (fork — 2026-05-16). Mirrors marchCloudSlab in
-    // cloud_render.comp.slang. Distant samples attenuate both contribution
-    // and effective extinction so horizon-grazing rays don't form a solid
-    // wall.
-    float aerialT = exp(-args.cloudAerialExtinctionPerKm * t);
-    accumRadiance += stepRadiance * transmittance * aerialT;
-    transmittance *= mix(1.0f, stepTransmittance, aerialT);
+    // Aerial perspective (fork — 2026-05-16, split 2026-05-19). Mirrors
+    // marchCloudSlab in cloud_render.comp.slang. Split into haze (radiance)
+    // and fade (extinction) so close-cloud appearance can be tuned
+    // separately from horizon wall prevention.
+    float aerialT_haze = exp(-args.cloudAerialHazePerKm * t);
+    float aerialT_fade = exp(-args.cloudAerialFadePerKm * t);
+    accumRadiance += stepRadiance * transmittance * aerialT_haze;
+    transmittance *= mix(1.0f, stepTransmittance, aerialT_fade);
 
     cacheValid = true;
   }

@@ -1364,7 +1364,7 @@ namespace dxvk {
                "Cloud-moon Lambert diffuse weight controlling off-axis cloud illumination. "
                "Lower = stronger contrast (off-axis clouds dimmer relative to peak). "
                "Higher = more uniform cloud lighting. Default 0.10.");
-    RTX_OPTION("rtx.atmosphere", float, moonCloudPhaseGain, 0.30f,
+    RTX_OPTION("rtx.atmosphere", float, moonCloudPhaseGain, 1.0f,
                "Cloud-moon HG phase weight controlling peak silver-lining intensity. "
                "Higher = brighter cloud directly in front of moon. Default 0.30.");
     RTX_OPTION("rtx.atmosphere", float, moonCloudAnisotropy, 0.85f,
@@ -1382,22 +1382,22 @@ namespace dxvk {
 
     // Cloud parameters (procedural FBM cloud layer)
     RTX_OPTION("rtx.atmosphere", bool, cloudEnabled, true, "Enable procedural cloud rendering.");
-    RTX_OPTION("rtx.atmosphere", float, cloudDensity, 1.80f, "Cloud opacity/density multiplier.");
+    RTX_OPTION("rtx.atmosphere", float, cloudDensity, 1.65f, "Cloud opacity/density multiplier.");
     RTX_OPTION("rtx.atmosphere", float, cloudAltitude, 1.3f, "Cloud layer altitude in kilometers.");
-    RTX_OPTION("rtx.atmosphere", float, cloudScale, 0.010f, "Horizontal noise scale — smaller values produce larger clouds.");
     RTX_OPTION("rtx.atmosphere", Vector3, cloudColor, Vector3(0.89f, 0.92f, 1.0f), "Base cloud color (albedo).");
     RTX_OPTION("rtx.atmosphere", float, cloudWindSpeed, 0.02f, "Cloud drift speed in km/s. Clouds scroll with this velocity.");
     RTX_OPTION("rtx.atmosphere", float, cloudWindDirection, 45.0f, "Cloud wind direction in degrees (0 = +X, 90 = +Z).");
-    RTX_OPTION("rtx.atmosphere", float, cloudShadowStrength, 0.0f, "How strongly overcast clouds dim ground and atmosphere lighting [0..1].");
+    RTX_OPTION("rtx.atmosphere", float, cloudShadowStrength, 1.0f,
+               "How strongly overcast clouds dim ground and atmosphere lighting [0..1]. "
+               "1.0 = full physical voxel-grid shadow contribution from cloudVoxelShadowsEnable; "
+               "0 = shadows fully muted (voxel grid still runs but its output is mixed away).");
     RTX_OPTION("rtx.atmosphere", float, cloudAnisotropy, 0.6f, "Henyey-Greenstein g for cloud forward-scatter (silver lining).");
 
     // Cloud volumetric / appearance enhancements
     RTX_OPTION("rtx.atmosphere", uint32_t, cloudViewSamples, 32,
                "Number of ray-march steps through the cloud slab. Higher = better quality, more cost. Range 1..32.");
-    RTX_OPTION("rtx.atmosphere", float, cloudThickness, 3.05f,
+    RTX_OPTION("rtx.atmosphere", float, cloudThickness, 2.75f,
                "Vertical depth of the cloud slab in km.");
-    RTX_OPTION("rtx.atmosphere", float, cloudDetailWeight, 1.0f,
-               "Weight of the high-frequency detail FBM term [0..1]. Auto-fades at low cloudScale to avoid visible noise.");
     RTX_OPTION("rtx.atmosphere", Vector3, cloudShadowTint, Vector3(0.55f, 0.65f, 0.85f),
                "Sky-blue bounce color applied on the shadow side of clouds.");
     RTX_OPTION("rtx.atmosphere", float, cloudShadowTintStrength, 1.0f,
@@ -1443,25 +1443,32 @@ namespace dxvk {
                "3 is the standard cost/quality tradeoff. 1 disables multi-scatter "
                "(single direct anisotropic term only). Range clamped to 1..4 in-shader.");
 
+    // Master multiplier on the Nubis Cubed sigma_ms remap (page 137 of the
+    // Nubis Cubed 2023 paper). Scales the per-sample multi-scatter sigma
+    // before it enters M = dim_profile * exp(-sigma_ms * D_sun). At 1.0 the
+    // paper baseline is unchanged; raise to brighten cumulus bottoms (more
+    // multi-scatter), lower to flatten lighting. The 4 individual sigma_ms
+    // sub-knobs (cloudMsSigmaShallow/Deep, cloudMsSunDotMax, cloudMsSdfDepth)
+    // remain accessible via user.conf for power tuning.
+    RTX_OPTION("rtx.atmosphere", float, cloudMsScale, 1.0f,
+               "Multi-scatter strength multiplier on the Nubis Cubed sigma_ms term [0..2]. "
+               "1.0 = paper baseline; higher brightens cumulus bottoms, lower flattens.");
+
     // Cloud spatial variation (Nubis-style — spec 2026-05-06)
-    RTX_OPTION("rtx.atmosphere", float, cloudTypeMean, 0.0f,
+    RTX_OPTION("rtx.atmosphere", float, cloudTypeMean, 0.75f,
                "Mean cloud type across the sky [0,1]: 0=stratus, 0.5=stratocumulus, 1=cumulus.");
-    RTX_OPTION("rtx.atmosphere", float, cloudTypeSpread, 1.0f,
+    RTX_OPTION("rtx.atmosphere", float, cloudTypeSpread, 0.5f,
                "Spatial variation amplitude for cloud type [0,1]. 0=uniform, 1=full range across the sky.");
-    RTX_OPTION("rtx.atmosphere", float, cloudTypeNoiseScale, 0.0034f,
+    RTX_OPTION("rtx.atmosphere", float, cloudTypeNoiseScale, 0.01f,
                "Region size frequency for type noise. Numerically smaller = larger spatial features.");
-    RTX_OPTION("rtx.atmosphere", float, cloudCoverageMean, 0.64f,
+    RTX_OPTION("rtx.atmosphere", float, cloudCoverageMean, 0.85f,
                "Mean cloud coverage across the sky [0,1]: 0=clear, 1=overcast.");
-    RTX_OPTION("rtx.atmosphere", float, cloudCoverageSpread, 0.16f,
+    RTX_OPTION("rtx.atmosphere", float, cloudCoverageSpread, 1.0f,
                "Spatial variation amplitude for coverage [0,1]. 0=uniform, 1=full range.");
     RTX_OPTION("rtx.atmosphere", float, cloudCoverageNoiseScale, 0.0033f,
                "Region size frequency for coverage noise. Independent from type noise scale.");
     RTX_OPTION("rtx.atmosphere", float, cloudAnvilBias, 0.3f,
                "Cumulus top inflation strength [0,1]. 0=flat tops, 1=fully spread mushroom-cap anvils.");
-    RTX_OPTION("rtx.atmosphere", float, cloudWindShearStrength, 0.5f,
-               "Lateral cloud-top displacement along wind direction, scaled by cloud type [0,1+]. "
-               "0=cloud tops vertical above base, 1=tops offset by ~thickness*type along wind. "
-               "Reduces the visible per-cumulus 45-degree lean at default settings.");
     RTX_OPTION("rtx.atmosphere", float, cloudNoiseTileKm, 12.0f,
                "World-space tile period (km) for the prebaked 3D cloud noise texture. "
                "Smaller = more visible repetition; larger = lower-frequency cloud detail. "
@@ -1491,13 +1498,18 @@ namespace dxvk {
     // extinction. Without this, horizon-grazing rays integrate through ~100 km
     // of cloud volume and produce a solid white wall at the horizon. Live-
     // tunable.
-    RTX_OPTION("rtx.atmosphere", float, cloudAerialExtinctionPerKm, 0.2f,
-               "Aerial-perspective extinction coefficient applied to cloud "
-               "samples per km of march distance. Higher = clouds fade to "
-               "atmosphere faster. 0 = no aerial perspective (legacy behavior). "
-               "Typical range: 0.05 (subtle) to 0.3 (heavy haze). Default 0.2 "
-               "tuned to hide horizon-grazing white wall at all weathers / "
-               "times of day.");
+    RTX_OPTION("rtx.atmosphere", float, cloudAerialHazePerKm, 0.05f,
+               "Per-km haze extinction applied to cloud RADIANCE (effect A of "
+               "the aerial-perspective fork). Dims distant cloud samples "
+               "toward atmospheric color so they read as 'softer / duller "
+               "with distance.' Visual softness control \xe2\x80\x94 does NOT prevent "
+               "the horizon white wall by itself. 0 = no haze. Default 0.05.");
+    RTX_OPTION("rtx.atmosphere", float, cloudAerialFadePerKm, 0.15f,
+               "Per-km fade extinction applied to cloud ALPHA accumulation "
+               "(effect B of the aerial-perspective fork). Distant samples "
+               "stop piling up extinction so horizon-grazing rays don't form "
+               "a solid white wall. Does NOT affect cloud appearance close to "
+               "camera. 0 = no fade (legacy white-wall behavior). Default 0.05.");
 
     // Nubis Cubed 2023 lighting (fork — 2026-05-12).
     // Tuning knobs for the per-sample lighting equations in cloud_render.comp.slang.
@@ -1596,7 +1608,7 @@ namespace dxvk {
     // by default) on top of the existing cumulus layer. cloud_render marches
     // the lower slab first and composites layer 2 onto residual transmittance.
     // Default off so today's look is preserved bit-for-bit.
-    RTX_OPTION("rtx.atmosphere", bool, cloudLayer2Enable, false,
+    RTX_OPTION("rtx.atmosphere", bool, cloudLayer2Enable, true,
                "When true, cloud_render.comp.slang marches a second cloud "
                "slab on top of the primary one. Layer 2 has its own altitude / "
                "thickness / type / coverage / density-scale knobs (the "
@@ -1604,19 +1616,29 @@ namespace dxvk {
                "ground-shadow NEE remain layer-1-only — cirrus is optically "
                "thin enough that the per-frame compute cost of shadowing it "
                "isn't worth the visual delta.");
-    RTX_OPTION("rtx.atmosphere", float, cloudLayer2Altitude, 7.5f,
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2Altitude, 5.5f,
                "Altitude (km) of the layer-2 slab base. Default 7.5 km targets "
                "the cirrus altitude band.");
-    RTX_OPTION("rtx.atmosphere", float, cloudLayer2Thickness, 0.5f,
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2Thickness, 2.0f,
                "Vertical depth (km) of the layer-2 slab. Default 0.5 km keeps "
                "the cirrus deck thin.");
-    RTX_OPTION("rtx.atmosphere", float, cloudLayer2TypeMean, 0.05f,
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2TypeMean, 0.6f,
                "[0,1] mean cloud type for layer 2. Low values (~0.05) sample "
                "the LUT's stratus-shaped column — appropriate for cirrus.");
-    RTX_OPTION("rtx.atmosphere", float, cloudLayer2CoverageMean, 0.35f,
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2CoverageMean, 0.85f,
                "[0,1] mean coverage for layer 2. Defaults sparser than layer 1 "
                "so cirrus reads as wispy patches rather than overcast.");
-    RTX_OPTION("rtx.atmosphere", float, cloudLayer2DensityScale, 0.30f,
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2CoverageSpread, 0.0f,
+               "[0,1] coverage variation for layer 2. Independent of layer 1's spread.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2TypeSpread, 1.0f,
+               "[0,1] cloud-type variation for layer 2. Independent of layer 1's spread.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2NoiseSeed, 1000.0f,
+               "Seed offset added to layer 2's 2D coverage/type noise. Layer 2's smoothNoise2D "
+               "hash receives (200/250 + this), producing a fully decorrelated noise pattern at "
+               "the same XZ. 0 = layer 2 shares layer 1's noise pattern exactly. Any non-zero "
+               "value produces decorrelation; the magnitude itself does not matter beyond ~10. "
+               "Default 1000.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2DensityScale, 0.65f,
                "Per-step density multiplier applied to layer 2 only. Cirrus is "
                "optically thin; default 0.30 keeps it from competing visually "
                "with the cumulus deck below.");

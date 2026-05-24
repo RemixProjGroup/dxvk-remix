@@ -114,14 +114,14 @@ The 12 valid values for `__weather.target`:
 | `sandstorm` | Yellow-orange forward-scattering fog |
 | `smoggy` | Industrial dark grey-brown haze |
 
-## Field list (29 fields per preset)
+## Field list (27 fields per preset)
 
 Single source of truth: `WEATHER_PRESET_FIELD_LIST` in
 [`rtx_fork_weather.h:28`](../src/dxvk/rtx_render/rtx_fork_weather.h#L28).
 Adding a field there propagates to all 12 presets, the `WeatherSnapshot`
 struct, and the blender automatically.
 
-### Cloud (19 fields)
+### Cloud (17 fields)
 
 | Field | Type | Neutral default |
 | :-- | :-: | :-: |
@@ -133,14 +133,12 @@ struct, and the blender automatically.
 | `cloudTypeSpread` | float | `0.2` |
 | `cloudTypeNoiseScale` | float | `0.0034` |
 | `cloudAnvilBias` | float | `0.3` |
-| `cloudWindShearStrength` | float | `0.5` |
 | `cloudColor` | Vector3 | `(0.89, 0.92, 1.0)` |
 | `cloudWindSpeed` | float | `0.02` |
 | `cloudWindDirection` | float (degrees) | `45.0` |
-| `cloudShadowStrength` | float | `0.0` |
+| `cloudShadowStrength` | float | `1.0` |
 | `cloudAnisotropy` | float | `0.6` |
 | `cloudThickness` | float | `3.05` |
-| `cloudDetailWeight` | float | `1.0` |
 | `cloudShadowTint` | Vector3 | `(0.55, 0.65, 0.85)` |
 | `cloudShadowTintStrength` | float | `1.0` |
 | `cloudSunsetWarmth` | float | `0.95` |

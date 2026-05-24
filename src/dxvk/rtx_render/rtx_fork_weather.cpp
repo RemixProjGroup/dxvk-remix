@@ -1,7 +1,7 @@
 // src/dxvk/rtx_render/rtx_fork_weather.cpp
 //
 // Fork-owned file. Full implementation of WeatherBlender: the per-frame lerp
-// pipeline that blends 29 weather params (cloud, atmosphere, sky/moon mood,
+// pipeline that blends 27 weather params (cloud, atmosphere, sky/moon mood,
 // volumetric fog) between named presets over a plugin-specified duration.
 //
 // Reads:
@@ -79,7 +79,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // use lerp.
   WeatherSnapshot lerpSnapshot(const WeatherSnapshot& a, const WeatherSnapshot& b, float t) {
     WeatherSnapshot out;
-    // Cloud (19)
+    // Cloud (17)
     out.cloudDensity            = lerp(a.cloudDensity,            b.cloudDensity,            t);
     out.cloudCoverageMean       = lerp(a.cloudCoverageMean,       b.cloudCoverageMean,       t);
     out.cloudCoverageSpread     = lerp(a.cloudCoverageSpread,     b.cloudCoverageSpread,     t);
@@ -88,14 +88,12 @@ namespace dxvk { namespace fork_weather { namespace {
     out.cloudTypeSpread         = lerp(a.cloudTypeSpread,         b.cloudTypeSpread,         t);
     out.cloudTypeNoiseScale     = lerp(a.cloudTypeNoiseScale,     b.cloudTypeNoiseScale,     t);
     out.cloudAnvilBias          = lerp(a.cloudAnvilBias,          b.cloudAnvilBias,          t);
-    out.cloudWindShearStrength  = lerp(a.cloudWindShearStrength,  b.cloudWindShearStrength,  t);
     out.cloudColor              = lerpV3(a.cloudColor,            b.cloudColor,              t);
     out.cloudWindSpeed          = lerp(a.cloudWindSpeed,          b.cloudWindSpeed,          t);
     out.cloudWindDirection      = lerpAngleDeg(a.cloudWindDirection, b.cloudWindDirection,   t);
     out.cloudShadowStrength     = lerp(a.cloudShadowStrength,     b.cloudShadowStrength,     t);
     out.cloudAnisotropy         = lerp(a.cloudAnisotropy,         b.cloudAnisotropy,         t);
     out.cloudThickness          = lerp(a.cloudThickness,          b.cloudThickness,          t);
-    out.cloudDetailWeight       = lerp(a.cloudDetailWeight,       b.cloudDetailWeight,       t);
     out.cloudShadowTint         = lerpV3(a.cloudShadowTint,       b.cloudShadowTint,         t);
     out.cloudShadowTintStrength = lerp(a.cloudShadowTintStrength, b.cloudShadowTintStrength, t);
     out.cloudSunsetWarmth       = lerp(a.cloudSunsetWarmth,       b.cloudSunsetWarmth,       t);
@@ -149,7 +147,7 @@ namespace dxvk { namespace fork_weather { namespace {
   }
 
   // ---------------------------------------------------------------------------
-  // Drift field table — 9 of 29 WeatherSnapshot fields drift.
+  // Drift field table — 9 of 27 WeatherSnapshot fields drift.
   //
   // Color, optical, sky/moon, atmosphere, volumetric, and noise-scale fields
   // are intentionally excluded (drift would look sickly, break calibration,
@@ -290,7 +288,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // readPresetValues — dispatch by name to the appropriate per-preset getters.
   //
   // Returns false when the preset name is unknown (caller treats blender as
-  // dormant). Each branch reads all 29 fields from RtxOptions::<preset>_<field>.
+  // dormant). Each branch reads all 27 fields from RtxOptions::<preset>_<field>.
   //
   // FIELD ORDER matches WEATHER_PRESET_FIELD_LIST exactly (same 4 sites:
   // lerpSnapshot, readPresetValues' 12 branches, snapshotRenderer,
@@ -302,7 +300,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // ---------------------------------------------------------------------------
   bool readPresetValues(const std::string& name, WeatherSnapshot& out) {
     if (name == "clear") {
-      // Cloud (19)
+      // Cloud (17)
       out.cloudDensity               = RtxOptions::clear_cloudDensity();
       out.cloudCoverageMean          = RtxOptions::clear_cloudCoverageMean();
       out.cloudCoverageSpread        = RtxOptions::clear_cloudCoverageSpread();
@@ -311,14 +309,12 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudTypeSpread            = RtxOptions::clear_cloudTypeSpread();
       out.cloudTypeNoiseScale        = RtxOptions::clear_cloudTypeNoiseScale();
       out.cloudAnvilBias             = RtxOptions::clear_cloudAnvilBias();
-      out.cloudWindShearStrength     = RtxOptions::clear_cloudWindShearStrength();
       out.cloudColor                 = RtxOptions::clear_cloudColor();
       out.cloudWindSpeed             = RtxOptions::clear_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::clear_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::clear_cloudShadowStrength();
       out.cloudAnisotropy            = RtxOptions::clear_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::clear_cloudThickness();
-      out.cloudDetailWeight          = RtxOptions::clear_cloudDetailWeight();
       out.cloudShadowTint            = RtxOptions::clear_cloudShadowTint();
       out.cloudShadowTintStrength    = RtxOptions::clear_cloudShadowTintStrength();
       out.cloudSunsetWarmth          = RtxOptions::clear_cloudSunsetWarmth();
@@ -344,14 +340,12 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudTypeSpread            = RtxOptions::partlyCloudy_cloudTypeSpread();
       out.cloudTypeNoiseScale        = RtxOptions::partlyCloudy_cloudTypeNoiseScale();
       out.cloudAnvilBias             = RtxOptions::partlyCloudy_cloudAnvilBias();
-      out.cloudWindShearStrength     = RtxOptions::partlyCloudy_cloudWindShearStrength();
       out.cloudColor                 = RtxOptions::partlyCloudy_cloudColor();
       out.cloudWindSpeed             = RtxOptions::partlyCloudy_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::partlyCloudy_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::partlyCloudy_cloudShadowStrength();
       out.cloudAnisotropy            = RtxOptions::partlyCloudy_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::partlyCloudy_cloudThickness();
-      out.cloudDetailWeight          = RtxOptions::partlyCloudy_cloudDetailWeight();
       out.cloudShadowTint            = RtxOptions::partlyCloudy_cloudShadowTint();
       out.cloudShadowTintStrength    = RtxOptions::partlyCloudy_cloudShadowTintStrength();
       out.cloudSunsetWarmth          = RtxOptions::partlyCloudy_cloudSunsetWarmth();
@@ -374,14 +368,12 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudTypeSpread            = RtxOptions::overcast_cloudTypeSpread();
       out.cloudTypeNoiseScale        = RtxOptions::overcast_cloudTypeNoiseScale();
       out.cloudAnvilBias             = RtxOptions::overcast_cloudAnvilBias();
-      out.cloudWindShearStrength     = RtxOptions::overcast_cloudWindShearStrength();
       out.cloudColor                 = RtxOptions::overcast_cloudColor();
       out.cloudWindSpeed             = RtxOptions::overcast_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::overcast_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::overcast_cloudShadowStrength();
       out.cloudAnisotropy            = RtxOptions::overcast_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::overcast_cloudThickness();
-      out.cloudDetailWeight          = RtxOptions::overcast_cloudDetailWeight();
       out.cloudShadowTint            = RtxOptions::overcast_cloudShadowTint();
       out.cloudShadowTintStrength    = RtxOptions::overcast_cloudShadowTintStrength();
       out.cloudSunsetWarmth          = RtxOptions::overcast_cloudSunsetWarmth();
@@ -404,14 +396,12 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudTypeSpread            = RtxOptions::hazy_cloudTypeSpread();
       out.cloudTypeNoiseScale        = RtxOptions::hazy_cloudTypeNoiseScale();
       out.cloudAnvilBias             = RtxOptions::hazy_cloudAnvilBias();
-      out.cloudWindShearStrength     = RtxOptions::hazy_cloudWindShearStrength();
       out.cloudColor                 = RtxOptions::hazy_cloudColor();
       out.cloudWindSpeed             = RtxOptions::hazy_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::hazy_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::hazy_cloudShadowStrength();
       out.cloudAnisotropy            = RtxOptions::hazy_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::hazy_cloudThickness();
-      out.cloudDetailWeight          = RtxOptions::hazy_cloudDetailWeight();
       out.cloudShadowTint            = RtxOptions::hazy_cloudShadowTint();
       out.cloudShadowTintStrength    = RtxOptions::hazy_cloudShadowTintStrength();
       out.cloudSunsetWarmth          = RtxOptions::hazy_cloudSunsetWarmth();
@@ -434,14 +424,12 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudTypeSpread            = RtxOptions::foggy_cloudTypeSpread();
       out.cloudTypeNoiseScale        = RtxOptions::foggy_cloudTypeNoiseScale();
       out.cloudAnvilBias             = RtxOptions::foggy_cloudAnvilBias();
-      out.cloudWindShearStrength     = RtxOptions::foggy_cloudWindShearStrength();
       out.cloudColor                 = RtxOptions::foggy_cloudColor();
       out.cloudWindSpeed             = RtxOptions::foggy_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::foggy_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::foggy_cloudShadowStrength();
       out.cloudAnisotropy            = RtxOptions::foggy_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::foggy_cloudThickness();
-      out.cloudDetailWeight          = RtxOptions::foggy_cloudDetailWeight();
       out.cloudShadowTint            = RtxOptions::foggy_cloudShadowTint();
       out.cloudShadowTintStrength    = RtxOptions::foggy_cloudShadowTintStrength();
       out.cloudSunsetWarmth          = RtxOptions::foggy_cloudSunsetWarmth();
@@ -464,14 +452,12 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudTypeSpread            = RtxOptions::drizzle_cloudTypeSpread();
       out.cloudTypeNoiseScale        = RtxOptions::drizzle_cloudTypeNoiseScale();
       out.cloudAnvilBias             = RtxOptions::drizzle_cloudAnvilBias();
-      out.cloudWindShearStrength     = RtxOptions::drizzle_cloudWindShearStrength();
       out.cloudColor                 = RtxOptions::drizzle_cloudColor();
       out.cloudWindSpeed             = RtxOptions::drizzle_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::drizzle_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::drizzle_cloudShadowStrength();
       out.cloudAnisotropy            = RtxOptions::drizzle_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::drizzle_cloudThickness();
-      out.cloudDetailWeight          = RtxOptions::drizzle_cloudDetailWeight();
       out.cloudShadowTint            = RtxOptions::drizzle_cloudShadowTint();
       out.cloudShadowTintStrength    = RtxOptions::drizzle_cloudShadowTintStrength();
       out.cloudSunsetWarmth          = RtxOptions::drizzle_cloudSunsetWarmth();
@@ -494,14 +480,12 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudTypeSpread            = RtxOptions::rainstorm_cloudTypeSpread();
       out.cloudTypeNoiseScale        = RtxOptions::rainstorm_cloudTypeNoiseScale();
       out.cloudAnvilBias             = RtxOptions::rainstorm_cloudAnvilBias();
-      out.cloudWindShearStrength     = RtxOptions::rainstorm_cloudWindShearStrength();
       out.cloudColor                 = RtxOptions::rainstorm_cloudColor();
       out.cloudWindSpeed             = RtxOptions::rainstorm_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::rainstorm_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::rainstorm_cloudShadowStrength();
       out.cloudAnisotropy            = RtxOptions::rainstorm_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::rainstorm_cloudThickness();
-      out.cloudDetailWeight          = RtxOptions::rainstorm_cloudDetailWeight();
       out.cloudShadowTint            = RtxOptions::rainstorm_cloudShadowTint();
       out.cloudShadowTintStrength    = RtxOptions::rainstorm_cloudShadowTintStrength();
       out.cloudSunsetWarmth          = RtxOptions::rainstorm_cloudSunsetWarmth();
@@ -524,14 +508,12 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudTypeSpread            = RtxOptions::thunderstorm_cloudTypeSpread();
       out.cloudTypeNoiseScale        = RtxOptions::thunderstorm_cloudTypeNoiseScale();
       out.cloudAnvilBias             = RtxOptions::thunderstorm_cloudAnvilBias();
-      out.cloudWindShearStrength     = RtxOptions::thunderstorm_cloudWindShearStrength();
       out.cloudColor                 = RtxOptions::thunderstorm_cloudColor();
       out.cloudWindSpeed             = RtxOptions::thunderstorm_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::thunderstorm_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::thunderstorm_cloudShadowStrength();
       out.cloudAnisotropy            = RtxOptions::thunderstorm_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::thunderstorm_cloudThickness();
-      out.cloudDetailWeight          = RtxOptions::thunderstorm_cloudDetailWeight();
       out.cloudShadowTint            = RtxOptions::thunderstorm_cloudShadowTint();
       out.cloudShadowTintStrength    = RtxOptions::thunderstorm_cloudShadowTintStrength();
       out.cloudSunsetWarmth          = RtxOptions::thunderstorm_cloudSunsetWarmth();
@@ -554,14 +536,12 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudTypeSpread            = RtxOptions::snow_cloudTypeSpread();
       out.cloudTypeNoiseScale        = RtxOptions::snow_cloudTypeNoiseScale();
       out.cloudAnvilBias             = RtxOptions::snow_cloudAnvilBias();
-      out.cloudWindShearStrength     = RtxOptions::snow_cloudWindShearStrength();
       out.cloudColor                 = RtxOptions::snow_cloudColor();
       out.cloudWindSpeed             = RtxOptions::snow_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::snow_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::snow_cloudShadowStrength();
       out.cloudAnisotropy            = RtxOptions::snow_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::snow_cloudThickness();
-      out.cloudDetailWeight          = RtxOptions::snow_cloudDetailWeight();
       out.cloudShadowTint            = RtxOptions::snow_cloudShadowTint();
       out.cloudShadowTintStrength    = RtxOptions::snow_cloudShadowTintStrength();
       out.cloudSunsetWarmth          = RtxOptions::snow_cloudSunsetWarmth();
@@ -584,14 +564,12 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudTypeSpread            = RtxOptions::blizzard_cloudTypeSpread();
       out.cloudTypeNoiseScale        = RtxOptions::blizzard_cloudTypeNoiseScale();
       out.cloudAnvilBias             = RtxOptions::blizzard_cloudAnvilBias();
-      out.cloudWindShearStrength     = RtxOptions::blizzard_cloudWindShearStrength();
       out.cloudColor                 = RtxOptions::blizzard_cloudColor();
       out.cloudWindSpeed             = RtxOptions::blizzard_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::blizzard_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::blizzard_cloudShadowStrength();
       out.cloudAnisotropy            = RtxOptions::blizzard_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::blizzard_cloudThickness();
-      out.cloudDetailWeight          = RtxOptions::blizzard_cloudDetailWeight();
       out.cloudShadowTint            = RtxOptions::blizzard_cloudShadowTint();
       out.cloudShadowTintStrength    = RtxOptions::blizzard_cloudShadowTintStrength();
       out.cloudSunsetWarmth          = RtxOptions::blizzard_cloudSunsetWarmth();
@@ -614,14 +592,12 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudTypeSpread            = RtxOptions::sandstorm_cloudTypeSpread();
       out.cloudTypeNoiseScale        = RtxOptions::sandstorm_cloudTypeNoiseScale();
       out.cloudAnvilBias             = RtxOptions::sandstorm_cloudAnvilBias();
-      out.cloudWindShearStrength     = RtxOptions::sandstorm_cloudWindShearStrength();
       out.cloudColor                 = RtxOptions::sandstorm_cloudColor();
       out.cloudWindSpeed             = RtxOptions::sandstorm_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::sandstorm_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::sandstorm_cloudShadowStrength();
       out.cloudAnisotropy            = RtxOptions::sandstorm_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::sandstorm_cloudThickness();
-      out.cloudDetailWeight          = RtxOptions::sandstorm_cloudDetailWeight();
       out.cloudShadowTint            = RtxOptions::sandstorm_cloudShadowTint();
       out.cloudShadowTintStrength    = RtxOptions::sandstorm_cloudShadowTintStrength();
       out.cloudSunsetWarmth          = RtxOptions::sandstorm_cloudSunsetWarmth();
@@ -644,14 +620,12 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudTypeSpread            = RtxOptions::smoggy_cloudTypeSpread();
       out.cloudTypeNoiseScale        = RtxOptions::smoggy_cloudTypeNoiseScale();
       out.cloudAnvilBias             = RtxOptions::smoggy_cloudAnvilBias();
-      out.cloudWindShearStrength     = RtxOptions::smoggy_cloudWindShearStrength();
       out.cloudColor                 = RtxOptions::smoggy_cloudColor();
       out.cloudWindSpeed             = RtxOptions::smoggy_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::smoggy_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::smoggy_cloudShadowStrength();
       out.cloudAnisotropy            = RtxOptions::smoggy_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::smoggy_cloudThickness();
-      out.cloudDetailWeight          = RtxOptions::smoggy_cloudDetailWeight();
       out.cloudShadowTint            = RtxOptions::smoggy_cloudShadowTint();
       out.cloudShadowTintStrength    = RtxOptions::smoggy_cloudShadowTintStrength();
       out.cloudSunsetWarmth          = RtxOptions::smoggy_cloudSunsetWarmth();
@@ -683,7 +657,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // ---------------------------------------------------------------------------
   WeatherSnapshot snapshotRenderer() {
     WeatherSnapshot s;
-    // Cloud (19)
+    // Cloud (17)
     s.cloudDensity               = RtxOptions::cloudDensity();
     s.cloudCoverageMean          = RtxOptions::cloudCoverageMean();
     s.cloudCoverageSpread        = RtxOptions::cloudCoverageSpread();
@@ -692,14 +666,12 @@ namespace dxvk { namespace fork_weather { namespace {
     s.cloudTypeSpread            = RtxOptions::cloudTypeSpread();
     s.cloudTypeNoiseScale        = RtxOptions::cloudTypeNoiseScale();
     s.cloudAnvilBias             = RtxOptions::cloudAnvilBias();
-    s.cloudWindShearStrength     = RtxOptions::cloudWindShearStrength();
     s.cloudColor                 = RtxOptions::cloudColor();
     s.cloudWindSpeed             = RtxOptions::cloudWindSpeed();
     s.cloudWindDirection         = RtxOptions::cloudWindDirection();
     s.cloudShadowStrength        = RtxOptions::cloudShadowStrength();
     s.cloudAnisotropy            = RtxOptions::cloudAnisotropy();
     s.cloudThickness             = RtxOptions::cloudThickness();
-    s.cloudDetailWeight          = RtxOptions::cloudDetailWeight();
     s.cloudShadowTint            = RtxOptions::cloudShadowTint();
     s.cloudShadowTintStrength    = RtxOptions::cloudShadowTintStrength();
     s.cloudSunsetWarmth          = RtxOptions::cloudSunsetWarmth();
@@ -726,7 +698,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // FIELD ORDER matches WEATHER_PRESET_FIELD_LIST exactly (same 4 sites).
   // ---------------------------------------------------------------------------
   void writeBlendedToDerivedLayer(const WeatherSnapshot& interp) {
-    // Cloud (19)
+    // Cloud (17)
     RtxOptions::cloudDensityObject().setImmediately(interp.cloudDensity);
     RtxOptions::cloudCoverageMeanObject().setImmediately(interp.cloudCoverageMean);
     RtxOptions::cloudCoverageSpreadObject().setImmediately(interp.cloudCoverageSpread);
@@ -735,14 +707,12 @@ namespace dxvk { namespace fork_weather { namespace {
     RtxOptions::cloudTypeSpreadObject().setImmediately(interp.cloudTypeSpread);
     RtxOptions::cloudTypeNoiseScaleObject().setImmediately(interp.cloudTypeNoiseScale);
     RtxOptions::cloudAnvilBiasObject().setImmediately(interp.cloudAnvilBias);
-    RtxOptions::cloudWindShearStrengthObject().setImmediately(interp.cloudWindShearStrength);
     RtxOptions::cloudColorObject().setImmediately(interp.cloudColor);
     RtxOptions::cloudWindSpeedObject().setImmediately(interp.cloudWindSpeed);
     RtxOptions::cloudWindDirectionObject().setImmediately(interp.cloudWindDirection);
     RtxOptions::cloudShadowStrengthObject().setImmediately(interp.cloudShadowStrength);
     RtxOptions::cloudAnisotropyObject().setImmediately(interp.cloudAnisotropy);
     RtxOptions::cloudThicknessObject().setImmediately(interp.cloudThickness);
-    RtxOptions::cloudDetailWeightObject().setImmediately(interp.cloudDetailWeight);
     RtxOptions::cloudShadowTintObject().setImmediately(interp.cloudShadowTint);
     RtxOptions::cloudShadowTintStrengthObject().setImmediately(interp.cloudShadowTintStrength);
     RtxOptions::cloudSunsetWarmthObject().setImmediately(interp.cloudSunsetWarmth);
@@ -974,42 +944,44 @@ namespace dxvk { namespace fork_weather {
       static int s_tuneIndex = 0;
       ImGui::Combo("Preset to Tune", &s_tuneIndex, kTunePresetNames, kTuneCount);
 
-      // Macro: expand 29 DragFloat / DragFloat3 calls for a given preset name.
+      // Macro: expand 27 DragFloat / DragFloat3 calls for a given preset name,
+      // grouped into the same section structure as the main Clouds tree.
       // Uses the RtxOptions::<presetName>_<fieldName>Object() accessor pattern.
-#define WEATHER_PRESET_SLIDERS(P)                                                                     \
-      /* Cloud (19) */                                                                                \
-      RemixGui::DragFloat("Cloud Density",              &RtxOptions::P##_cloudDensityObject(),              0.05f,  0.0f,  10.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat("Coverage Mean",              &RtxOptions::P##_cloudCoverageMeanObject(),          0.01f,  0.0f,   1.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat("Coverage Spread",            &RtxOptions::P##_cloudCoverageSpreadObject(),        0.01f,  0.0f,   1.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat("Coverage Noise Scale",       &RtxOptions::P##_cloudCoverageNoiseScaleObject(),    0.0001f,0.0f,   0.05f,  "%.4f",  sliderFlags); \
-      RemixGui::DragFloat("Type Mean",                  &RtxOptions::P##_cloudTypeMeanObject(),              0.01f,  0.0f,   1.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat("Type Spread",                &RtxOptions::P##_cloudTypeSpreadObject(),            0.01f,  0.0f,   1.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat("Type Noise Scale",           &RtxOptions::P##_cloudTypeNoiseScaleObject(),        0.0001f,0.0f,   0.05f,  "%.4f",  sliderFlags); \
-      RemixGui::DragFloat("Anvil Bias",                 &RtxOptions::P##_cloudAnvilBiasObject(),             0.01f,  0.0f,   1.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat("Wind Shear Strength",        &RtxOptions::P##_cloudWindShearStrengthObject(),     0.05f,  0.0f,   2.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat3("Cloud Color",               &RtxOptions::P##_cloudColorObject(),                 0.01f,  0.0f,   1.5f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat("Wind Speed",                 &RtxOptions::P##_cloudWindSpeedObject(),             0.005f, 0.0f,   1.0f,   "%.3f",  sliderFlags); \
-      RemixGui::DragFloat("Wind Direction",             &RtxOptions::P##_cloudWindDirectionObject(),         1.0f,   0.0f, 360.0f,   "%.0f",  sliderFlags); \
-      RemixGui::DragFloat("Shadow Strength",            &RtxOptions::P##_cloudShadowStrengthObject(),        0.01f,  0.0f,   1.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat("Anisotropy",                 &RtxOptions::P##_cloudAnisotropyObject(),            0.01f, -1.0f,   1.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat("Thickness",                  &RtxOptions::P##_cloudThicknessObject(),             0.05f,  0.0f,  10.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat("Detail Weight",              &RtxOptions::P##_cloudDetailWeightObject(),          0.01f,  0.0f,   2.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat3("Shadow Tint",               &RtxOptions::P##_cloudShadowTintObject(),            0.01f,  0.0f,   1.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat("Shadow Tint Strength",       &RtxOptions::P##_cloudShadowTintStrengthObject(),    0.05f,  0.0f,   2.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat("Sunset Warmth",              &RtxOptions::P##_cloudSunsetWarmthObject(),          0.05f,  0.0f,   2.0f,   "%.2f",  sliderFlags); \
-      /* Atmosphere (3) */                                                                            \
-      RemixGui::DragFloat("Air Density",                &RtxOptions::P##_airDensityObject(),                 0.05f,  0.0f,   5.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat("Aerosol Density",            &RtxOptions::P##_aerosolDensityObject(),             0.05f,  0.0f,   5.0f,   "%.2f",  sliderFlags); \
-      RemixGui::DragFloat3("Sun Illuminance",           &RtxOptions::P##_sunIlluminanceObject(),             0.5f,   0.0f, 100.0f,   "%.1f",  sliderFlags); \
-      /* Sky/moon mood (3) */                                                                        \
-      RemixGui::DragFloat("Night Sky Brightness",       &RtxOptions::P##_nightSkyBrightnessObject(),         0.001f, 0.0f,   1.0f,   "%.3f",  sliderFlags); \
-      RemixGui::DragFloat("Moon NEE Strength",          &RtxOptions::P##_moonNeeStrengthObject(),            0.05f,  0.0f,  10.0f,   "%.2f",  sliderFlags); \
+#define WEATHER_PRESET_SLIDERS(P)                                                                                                                          \
+      ImGui::TextDisabled("Coverage & Shape");                                                                                                             \
+      RemixGui::DragFloat("Coverage",                   &RtxOptions::P##_cloudCoverageMeanObject(),          0.01f,  0.0f,   1.0f,    "%.2f", sliderFlags); \
+      RemixGui::DragFloat("Coverage Spread",            &RtxOptions::P##_cloudCoverageSpreadObject(),        0.01f,  0.0f,   1.0f,    "%.2f", sliderFlags); \
+      RemixGui::DragFloat("Coverage Patch Size",        &RtxOptions::P##_cloudCoverageNoiseScaleObject(),    0.0001f,0.0001f,0.01f,   "%.4f", sliderFlags); \
+      RemixGui::DragFloat("Cloud Type",                 &RtxOptions::P##_cloudTypeMeanObject(),              0.01f,  0.0f,   1.0f,    "%.2f", sliderFlags); \
+      RemixGui::DragFloat("Type Spread",                &RtxOptions::P##_cloudTypeSpreadObject(),            0.01f,  0.0f,   1.0f,    "%.2f", sliderFlags); \
+      RemixGui::DragFloat("Type Patch Size",            &RtxOptions::P##_cloudTypeNoiseScaleObject(),        0.0001f,0.0001f,0.01f,   "%.4f", sliderFlags); \
+      RemixGui::DragFloat("Anvil Spread",               &RtxOptions::P##_cloudAnvilBiasObject(),             0.01f,  0.0f,   1.0f,    "%.2f", sliderFlags); \
+      ImGui::Separator(); ImGui::TextDisabled("Look");                                                                                                     \
+      RemixGui::DragFloat("Density",                    &RtxOptions::P##_cloudDensityObject(),               0.05f,  0.0f,   10.0f,   "%.2f", sliderFlags); \
+      RemixGui::DragFloat("Depth",                      &RtxOptions::P##_cloudThicknessObject(),             0.05f,  0.0f,   10.0f,   "%.2f", sliderFlags); \
+      RemixGui::DragFloat3("Color",                     &RtxOptions::P##_cloudColorObject(),                 0.01f,  0.0f,   1.5f,    "%.2f", sliderFlags); \
+      ImGui::Separator(); ImGui::TextDisabled("Wind");                                                                                                     \
+      RemixGui::DragFloat("Wind Speed",                 &RtxOptions::P##_cloudWindSpeedObject(),             0.005f, 0.0f,   1.0f,    "%.3f", sliderFlags); \
+      RemixGui::DragFloat("Wind Direction",             &RtxOptions::P##_cloudWindDirectionObject(),         1.0f,   0.0f,   360.0f,  "%.1f\xc2\xb0", sliderFlags); \
+      ImGui::Separator(); ImGui::TextDisabled("Lighting");                                                                                                 \
+      RemixGui::DragFloat("Anisotropy",                 &RtxOptions::P##_cloudAnisotropyObject(),            0.01f, -1.0f,   1.0f,    "%.2f", sliderFlags); \
+      RemixGui::DragFloat("Ground Shadow",              &RtxOptions::P##_cloudShadowStrengthObject(),        0.01f,  0.0f,   1.0f,    "%.2f", sliderFlags); \
+      RemixGui::DragFloat3("Shadow Tint",               &RtxOptions::P##_cloudShadowTintObject(),            0.01f,  0.0f,   1.0f,    "%.2f", sliderFlags); \
+      RemixGui::DragFloat("Shadow Tint Strength",       &RtxOptions::P##_cloudShadowTintStrengthObject(),    0.05f,  0.0f,   2.0f,    "%.2f", sliderFlags); \
+      RemixGui::DragFloat("Sunset Warmth",              &RtxOptions::P##_cloudSunsetWarmthObject(),          0.05f,  0.0f,   2.0f,    "%.2f", sliderFlags); \
+      ImGui::Separator(); ImGui::TextDisabled("Atmosphere");                                                                                               \
+      RemixGui::DragFloat("Air Density",                &RtxOptions::P##_airDensityObject(),                 0.05f,  0.0f,   5.0f,    "%.2f", sliderFlags); \
+      RemixGui::DragFloat("Aerosol Density",            &RtxOptions::P##_aerosolDensityObject(),             0.05f,  0.0f,   5.0f,    "%.2f", sliderFlags); \
+      RemixGui::DragFloat3("Sun Illuminance",           &RtxOptions::P##_sunIlluminanceObject(),             0.5f,   0.0f,   100.0f,  "%.1f", sliderFlags); \
+      ImGui::Separator(); ImGui::TextDisabled("Sky & Moon Mood");                                                                                          \
+      RemixGui::DragFloat("Night Sky Brightness",       &RtxOptions::P##_nightSkyBrightnessObject(),         0.001f, 0.0f,   1.0f,    "%.3f", sliderFlags); \
+      RemixGui::DragFloat("Moon NEE Strength",          &RtxOptions::P##_moonNeeStrengthObject(),            0.05f,  0.0f,   10.0f,   "%.2f", sliderFlags); \
       RemixGui::DragFloat("Moon Atm Coupling",          &RtxOptions::P##_moonAtmosphericCouplingStrengthObject(), 0.05f, 0.0f, 10.0f, "%.2f", sliderFlags); \
-      /* Volumetric (4) */                                                                           \
-      RemixGui::DragFloat3("Transmittance Color",       &RtxOptions::P##_transmittanceColorObject(),         0.005f, 0.0f,   1.0f,   "%.3f",  sliderFlags); \
+      ImGui::Separator(); ImGui::TextDisabled("Volumetric Fog");                                                                                           \
+      RemixGui::DragFloat3("Transmittance Color",       &RtxOptions::P##_transmittanceColorObject(),         0.005f, 0.0f,   1.0f,    "%.3f", sliderFlags); \
       RemixGui::DragFloat("Transmittance Distance (m)", &RtxOptions::P##_transmittanceMeasurementDistanceMetersObject(), 5.0f, 1.0f, 2000.0f, "%.0f", sliderFlags); \
-      RemixGui::DragFloat3("Single Scattering Albedo",  &RtxOptions::P##_singleScatteringAlbedoObject(),     0.005f, 0.0f,   1.0f,   "%.3f",  sliderFlags); \
-      RemixGui::DragFloat("Volumetric Anisotropy",      &RtxOptions::P##_volumetricAnisotropyObject(),       0.01f, -1.0f,   1.0f,   "%.2f",  sliderFlags)
+      RemixGui::DragFloat3("Single Scattering Albedo",  &RtxOptions::P##_singleScatteringAlbedoObject(),     0.005f, 0.0f,   1.0f,    "%.3f", sliderFlags); \
+      RemixGui::DragFloat("Volumetric Anisotropy",      &RtxOptions::P##_volumetricAnisotropyObject(),       0.01f, -1.0f,   1.0f,    "%.2f", sliderFlags)
 
       const char* tunePreset = kTunePresetNames[s_tuneIndex];
       if      (tunePreset == std::string("clear"))         { WEATHER_PRESET_SLIDERS(clear); }
@@ -1138,13 +1110,15 @@ namespace dxvk { namespace fork_hooks {
     }
   }
 
-  // Renders the weather preset panel inside a CollapsingHeader, delegating to
-  // the active WeatherBlender's showImguiSettings(). No-op when no blender
-  // is live (tests, pre-RtxContext-init).
+  // Renders the weather preset panel inside a TreeNode (matching the
+  // surrounding atmosphere panel's tree style), delegating to the active
+  // WeatherBlender's showImguiSettings(). No-op when no blender is live
+  // (tests, pre-RtxContext-init).
   void showWeatherUI() {
     if (auto* b = fork_weather::g_activeBlender) {
-      if (ImGui::CollapsingHeader("Weather Presets")) {
+      if (ImGui::TreeNode("Weather Presets")) {
         b->showImguiSettings();
+        ImGui::TreePop();
       }
     }
   }

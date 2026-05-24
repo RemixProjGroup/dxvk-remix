@@ -1,10 +1,10 @@
 #pragma once
 
 // rtx_fork_weather.h — fork-owned weather preset declarations.
-// Defines 348 RTX_OPTIONs (12 presets x 29 fields) under the
+// Defines 324 RTX_OPTIONs (12 presets x 27 fields) under the
 // rtx.weather.preset.<presetName> namespace.
 //
-// Field bucket breakdown: 19 cloud + 3 atmosphere + 3 sky/moon mood + 4 volumetric.
+// Field bucket breakdown: 17 cloud + 3 atmosphere + 3 sky/moon mood + 4 volumetric.
 //
 // Usage: invoke DECLARE_ALL_WEATHER_PRESETS() inside the RtxOptions struct body
 // (see rtx_options.h). The macro expands all 12 preset declarations inline.
@@ -20,13 +20,13 @@
 #include "../../util/util_vector.h"
 
 // ---------------------------------------------------------------------------
-// Field-list X-macro — single source of truth for the 29 weather fields.
+// Field-list X-macro — single source of truth for the 27 weather fields.
 // Consumed by DECLARE_WEATHER_PRESET (via the per-preset binders) and also
 // available for Task 2 (WeatherSnapshot struct member declaration).
 // Expands to: X(type, name, defaultValue), one entry per field.
 // ---------------------------------------------------------------------------
 #define WEATHER_PRESET_FIELD_LIST(X)                                                               \
-  /* Cloud (19) */                                                                                 \
+  /* Cloud (17) */                                                                                 \
   X(float,   cloudDensity,                              1.0f)                                      \
   X(float,   cloudCoverageMean,                         0.5f)                                      \
   X(float,   cloudCoverageSpread,                       0.2f)                                      \
@@ -35,14 +35,12 @@
   X(float,   cloudTypeSpread,                           0.2f)                                      \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                   \
   X(float,   cloudAnvilBias,                            0.3f)                                      \
-  X(float,   cloudWindShearStrength,                    0.5f)                                      \
   X(Vector3, cloudColor,                                Vector3(0.89f, 0.92f, 1.0f))               \
   X(float,   cloudWindSpeed,                            0.02f)                                     \
   X(float,   cloudWindDirection,                        45.0f)                                     \
-  X(float,   cloudShadowStrength,                       0.0f)                                      \
+  X(float,   cloudShadowStrength,                       1.0f)                                      \
   X(float,   cloudAnisotropy,                           0.6f)                                      \
   X(float,   cloudThickness,                            3.05f)                                     \
-  X(float,   cloudDetailWeight,                         1.0f)                                      \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))              \
   X(float,   cloudShadowTintStrength,                   1.0f)                                      \
   X(float,   cloudSunsetWarmth,                         0.95f)                                     \
@@ -94,14 +92,14 @@
 #define WEATHER_PRESET_BIND_smoggy(type, name, def)        WEATHER_PRESET_RTX_OPTION_FOR(smoggy,        type, name, def);
 
 // ---------------------------------------------------------------------------
-// Per-preset value X-macros — one per archetype, 29 fields each, in the same
+// Per-preset value X-macros — one per archetype, 27 fields each, in the same
 // order as WEATHER_PRESET_FIELD_LIST. Fields not explicitly tuned use the
 // neutral default from WEATHER_PRESET_FIELD_LIST.
 // Field order: cloudDensity, cloudCoverageMean, cloudCoverageSpread,
 //   cloudCoverageNoiseScale, cloudTypeMean, cloudTypeSpread,
-//   cloudTypeNoiseScale, cloudAnvilBias, cloudWindShearStrength, cloudColor,
+//   cloudTypeNoiseScale, cloudAnvilBias, cloudColor,
 //   cloudWindSpeed, cloudWindDirection, cloudShadowStrength, cloudAnisotropy,
-//   cloudThickness, cloudDetailWeight, cloudShadowTint, cloudShadowTintStrength,
+//   cloudThickness, cloudShadowTint, cloudShadowTintStrength,
 //   cloudSunsetWarmth, airDensity, aerosolDensity, sunIlluminance,
 //   nightSkyBrightness, moonNeeStrength, moonAtmosphericCouplingStrength,
 //   transmittanceColor, transmittanceMeasurementDistanceMeters,
@@ -118,14 +116,12 @@
   X(float,   cloudTypeSpread,                           0.3f)                                          \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                       \
   X(float,   cloudAnvilBias,                            0.3f)                                          \
-  X(float,   cloudWindShearStrength,                    0.5f)                                          \
   X(Vector3, cloudColor,                                Vector3(0.95f, 0.97f, 1.00f))                  \
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.0f)                                          \
   X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            2.0f)                                          \
-  X(float,   cloudDetailWeight,                         1.0f)                                          \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
   X(float,   cloudShadowTintStrength,                   1.0f)                                          \
   X(float,   cloudSunsetWarmth,                         0.95f)                                         \
@@ -150,14 +146,12 @@
   X(float,   cloudTypeSpread,                           0.3f)                                          \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                       \
   X(float,   cloudAnvilBias,                            0.3f)                                          \
-  X(float,   cloudWindShearStrength,                    0.5f)                                          \
   X(Vector3, cloudColor,                                Vector3(0.92f, 0.95f, 1.00f))                  \
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.05f)                                         \
   X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            2.5f)                                          \
-  X(float,   cloudDetailWeight,                         1.0f)                                          \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
   X(float,   cloudShadowTintStrength,                   1.0f)                                          \
   X(float,   cloudSunsetWarmth,                         0.95f)                                         \
@@ -182,14 +176,12 @@
   X(float,   cloudTypeSpread,                           0.2f)                                          \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                       \
   X(float,   cloudAnvilBias,                            0.3f)                                          \
-  X(float,   cloudWindShearStrength,                    0.5f)                                          \
   X(Vector3, cloudColor,                                Vector3(0.89f, 0.92f, 1.00f))                  \
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.10f)                                         \
   X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            3.05f)                                         \
-  X(float,   cloudDetailWeight,                         1.0f)                                          \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
   X(float,   cloudShadowTintStrength,                   1.0f)                                          \
   X(float,   cloudSunsetWarmth,                         0.95f)                                         \
@@ -214,14 +206,12 @@
   X(float,   cloudTypeSpread,                           0.3f)                                          \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                       \
   X(float,   cloudAnvilBias,                            0.3f)                                          \
-  X(float,   cloudWindShearStrength,                    0.5f)                                          \
   X(Vector3, cloudColor,                                Vector3(0.92f, 0.91f, 0.88f))                  \
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.10f)                                         \
   X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            2.5f)                                          \
-  X(float,   cloudDetailWeight,                         1.0f)                                          \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
   X(float,   cloudShadowTintStrength,                   1.0f)                                          \
   X(float,   cloudSunsetWarmth,                         1.10f)                                         \
@@ -246,14 +236,12 @@
   X(float,   cloudTypeSpread,                           0.2f)                                          \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                       \
   X(float,   cloudAnvilBias,                            0.3f)                                          \
-  X(float,   cloudWindShearStrength,                    0.5f)                                          \
   X(Vector3, cloudColor,                                Vector3(0.85f, 0.88f, 0.92f))                  \
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.05f)                                         \
   X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            2.0f)                                          \
-  X(float,   cloudDetailWeight,                         1.0f)                                          \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
   X(float,   cloudShadowTintStrength,                   1.0f)                                          \
   X(float,   cloudSunsetWarmth,                         0.50f)                                         \
@@ -278,14 +266,12 @@
   X(float,   cloudTypeSpread,                           0.3f)                                          \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                       \
   X(float,   cloudAnvilBias,                            0.3f)                                          \
-  X(float,   cloudWindShearStrength,                    0.5f)                                          \
   X(Vector3, cloudColor,                                Vector3(0.78f, 0.82f, 0.88f))                  \
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.20f)                                         \
   X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            3.0f)                                          \
-  X(float,   cloudDetailWeight,                         1.0f)                                          \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
   X(float,   cloudShadowTintStrength,                   1.0f)                                          \
   X(float,   cloudSunsetWarmth,                         0.50f)                                         \
@@ -310,14 +296,12 @@
   X(float,   cloudTypeSpread,                           0.3f)                                          \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                       \
   X(float,   cloudAnvilBias,                            0.3f)                                          \
-  X(float,   cloudWindShearStrength,                    0.5f)                                          \
   X(Vector3, cloudColor,                                Vector3(0.65f, 0.68f, 0.75f))                  \
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.40f)                                         \
   X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            4.0f)                                          \
-  X(float,   cloudDetailWeight,                         1.0f)                                          \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
   X(float,   cloudShadowTintStrength,                   1.0f)                                          \
   X(float,   cloudSunsetWarmth,                         0.20f)                                         \
@@ -334,7 +318,7 @@
 
 // thunderstorm — heaviest, bruised tone (retuned 2026-05-09 by in-game
 // tuning against the post-FAST-noise + temporal-smoother + Jensen-revert
-// pipeline at cloudAltitude=1.5 km, cloudScale=0.015, cloudCurvature=0.38)
+// pipeline at cloudAltitude=1.5 km, cloudCurvature=0.38)
 #define WEATHER_PRESET_VALUES_thunderstorm(X)                                                          \
   X(float,   cloudDensity,                              2.65f)                                         \
   X(float,   cloudCoverageMean,                         0.95f)                                         \
@@ -344,14 +328,12 @@
   X(float,   cloudTypeSpread,                           0.28f)                                         \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                       \
   X(float,   cloudAnvilBias,                            0.7f)                                          \
-  X(float,   cloudWindShearStrength,                    0.5f)                                          \
   X(Vector3, cloudColor,                                Vector3(0.61f, 0.63f, 0.69f))                  \
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.44f)                                         \
   X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            4.13f)                                         \
-  X(float,   cloudDetailWeight,                         1.0f)                                          \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
   X(float,   cloudShadowTintStrength,                   1.0f)                                          \
   X(float,   cloudSunsetWarmth,                         0.21f)                                         \
@@ -376,14 +358,12 @@
   X(float,   cloudTypeSpread,                           0.3f)                                          \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                       \
   X(float,   cloudAnvilBias,                            0.3f)                                          \
-  X(float,   cloudWindShearStrength,                    0.5f)                                          \
   X(Vector3, cloudColor,                                Vector3(0.95f, 0.97f, 1.00f))                  \
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.20f)                                         \
   X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            3.0f)                                          \
-  X(float,   cloudDetailWeight,                         1.0f)                                          \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
   X(float,   cloudShadowTintStrength,                   1.0f)                                          \
   X(float,   cloudSunsetWarmth,                         0.30f)                                         \
@@ -408,14 +388,12 @@
   X(float,   cloudTypeSpread,                           0.2f)                                          \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                       \
   X(float,   cloudAnvilBias,                            0.3f)                                          \
-  X(float,   cloudWindShearStrength,                    0.5f)                                          \
   X(Vector3, cloudColor,                                Vector3(0.92f, 0.96f, 1.00f))                  \
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.50f)                                         \
   X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            4.5f)                                          \
-  X(float,   cloudDetailWeight,                         1.0f)                                          \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
   X(float,   cloudShadowTintStrength,                   1.0f)                                          \
   X(float,   cloudSunsetWarmth,                         0.10f)                                         \
@@ -440,14 +418,12 @@
   X(float,   cloudTypeSpread,                           0.4f)                                          \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                       \
   X(float,   cloudAnvilBias,                            0.3f)                                          \
-  X(float,   cloudWindShearStrength,                    0.5f)                                          \
   X(Vector3, cloudColor,                                Vector3(0.85f, 0.65f, 0.40f))                  \
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.20f)                                         \
   X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            2.5f)                                          \
-  X(float,   cloudDetailWeight,                         1.0f)                                          \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
   X(float,   cloudShadowTintStrength,                   1.0f)                                          \
   X(float,   cloudSunsetWarmth,                         1.30f)                                         \
@@ -472,14 +448,12 @@
   X(float,   cloudTypeSpread,                           0.3f)                                          \
   X(float,   cloudTypeNoiseScale,                       0.0034f)                                       \
   X(float,   cloudAnvilBias,                            0.3f)                                          \
-  X(float,   cloudWindShearStrength,                    0.5f)                                          \
   X(Vector3, cloudColor,                                Vector3(0.65f, 0.58f, 0.45f))                  \
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.15f)                                         \
   X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            2.5f)                                          \
-  X(float,   cloudDetailWeight,                         1.0f)                                          \
   X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
   X(float,   cloudShadowTintStrength,                   1.0f)                                          \
   X(float,   cloudSunsetWarmth,                         0.80f)                                         \
@@ -496,7 +470,7 @@
 
 // ---------------------------------------------------------------------------
 // Single-preset macro. Walks WEATHER_PRESET_VALUES_<N> via the binder for
-// preset N, emitting all 29 RTX_OPTION declarations with archetype-tuned
+// preset N, emitting all 27 RTX_OPTION declarations with archetype-tuned
 // defaults. Must be invoked inside a class body (RTX_OPTION declares inline
 // static members).
 // ---------------------------------------------------------------------------
@@ -504,7 +478,7 @@
 
 // ---------------------------------------------------------------------------
 // Umbrella macro. Invoke inside RtxOptions struct body to declare all 348
-// RTX_OPTIONs (12 presets x 29 fields).
+// RTX_OPTIONs (12 presets x 27 fields).
 // ---------------------------------------------------------------------------
 #define DECLARE_ALL_WEATHER_PRESETS()   \
   DECLARE_WEATHER_PRESET(clear)         \
@@ -531,7 +505,7 @@
 namespace dxvk { namespace fork_weather {
 
   // -------------------------------------------------------------------------
-  // WeatherSnapshot — a plain-value copy of all 29 renderer weather params.
+  // WeatherSnapshot — a plain-value copy of all 27 renderer weather params.
   // Members are auto-generated from the single-source-of-truth X-macro so
   // that any field addition automatically propagates here.
   // -------------------------------------------------------------------------

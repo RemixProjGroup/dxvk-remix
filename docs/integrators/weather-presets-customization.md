@@ -15,7 +15,7 @@ to push it toward the intended look.
 
 ### How customization works
 
-All 348 weather RTX_OPTIONs (12 presets x 29 fields) accept overrides via the
+All 324 weather RTX_OPTIONs (12 presets x 27 fields) accept overrides via the
 standard `user.conf` mechanism. The naming convention is:
 
 ```
@@ -147,14 +147,12 @@ These drive the volumetric cloud ray-marcher and Nubis-style spatial variation.
 | `cloudTypeSpread` | Variance around the type mean. |
 | `cloudTypeNoiseScale` | World-space frequency of the type noise field. |
 | `cloudAnvilBias` | Pushes type toward anvil/cumulonimbus shapes; useful for thunderstorm. |
-| `cloudWindShearStrength` | Horizontal shear on the upper cloud layer. |
 | `cloudColor` | RGB tint of the cloud scattering albedo. |
 | `cloudWindSpeed` | Animation speed of the cloud layer. |
 | `cloudWindDirection` | Wind direction in degrees. |
 | `cloudShadowStrength` | How strongly clouds occlude the sun (ground shadow intensity). |
 | `cloudAnisotropy` | Henyey-Greenstein g factor for cloud phase function. |
 | `cloudThickness` | Vertical extent of the cloud slab in km. |
-| `cloudDetailWeight` | Weight of the high-frequency detail noise layer. |
 | `cloudShadowTint` | RGB color tint applied to the cloud shadow. |
 | `cloudShadowTintStrength` | Blend weight between neutral and tinted shadow. |
 | `cloudSunsetWarmth` | Warm-tint strength applied at low sun angles. |

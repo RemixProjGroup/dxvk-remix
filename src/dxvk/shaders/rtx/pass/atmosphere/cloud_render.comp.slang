@@ -212,6 +212,7 @@ void marchCloudSlab(vec3   viewDirYUp,
                     float  slabTypeMean,
                     float  slabCoverageMean,
                     float  slabDensityScale,
+                    float  slabNoiseSeedOffset,
                     uint   sampleCount,
                     CloudShadeContext ctx,
                     AtmosphereArgs args,
@@ -266,8 +267,8 @@ void marchCloudSlab(vec3   viewDirYUp,
     // doesn't need its own spread knobs. Mean values are per-slab so layer 2
     // can pick a different baseline (cirrus typeMean ~= 0.05 vs cumulus 0.5).
     vec2 sampleXZ = vec2(samplePos.x, samplePos.z);
-    float typeNoise     = smoothNoise2D(sampleXZ * args.cloudTypeNoiseScale, 200.0f);
-    float coverageNoise = smoothNoise2D(sampleXZ * args.cloudCoverageNoiseScale, 250.0f);
+    float typeNoise     = smoothNoise2D(sampleXZ * args.cloudTypeNoiseScale, 200.0f + slabNoiseSeedOffset);
+    float coverageNoise = smoothNoise2D(sampleXZ * args.cloudCoverageNoiseScale, 250.0f + slabNoiseSeedOffset);
     float typeLocal     = saturate(slabTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
     float coverageLocal = saturate(slabCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 
@@ -328,18 +329,18 @@ void marchCloudSlab(vec3   viewDirYUp,
     float stepTransmittance = exp(-effectiveDensity * stepLen);
     vec3 stepRadiance = sampleColor * (1.0f - stepTransmittance);
 
-    // Aerial perspective: distant cloud samples attenuate per-step
-    // contribution AND viewTransmittance via atmospheric extinction over
-    // the camera-to-sample distance. Without this, horizon-grazing rays
-    // accumulate through 100+ km of cloud volume producing a solid white
-    // wall — physical clouds fade into atmospheric haze with distance.
-    // Both stepRadiance AND the cloud's own extinction must be attenuated:
-    // attenuating only stepRadiance leaves alpha intact, painting a faint
-    // white veil over distant geometry. Both factors keeps clouds opaque
-    // close to camera and progressively transparent into the haze.
-    float aerialT = exp(-args.cloudAerialExtinctionPerKm * t);
-    accumColor += stepRadiance * viewTransmittance * aerialT;
-    viewTransmittance *= mix(1.0f, stepTransmittance, aerialT);
+    // Aerial perspective split into two independent effects so cloud
+    // appearance close to camera can be tuned separately from horizon
+    // wall prevention:
+    //   - aerialT_haze: dims cloud RADIANCE with distance (visual softness)
+    //   - aerialT_fade: softens cloud EXTINCTION accumulation with distance
+    //                   so horizon-grazing rays don't pile up into a wall
+    // At default 0.05/0.05 both effects are mild; setting either to 0
+    // disables that half of the aerial perspective independently.
+    float aerialT_haze = exp(-args.cloudAerialHazePerKm * t);
+    float aerialT_fade = exp(-args.cloudAerialFadePerKm * t);
+    accumColor += stepRadiance * viewTransmittance * aerialT_haze;
+    viewTransmittance *= mix(1.0f, stepTransmittance, aerialT_fade);
   }
 }
 
@@ -566,6 +567,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
                  args.cloudAltitude, args.cloudThickness,
                  args.cloudTypeMean, args.cloudCoverageMean,
                  /*slabDensityScale=*/1.0f,
+                 /*slabNoiseSeedOffset=*/0.0f,
                  sampleCount, ctx, args,
                  accumColor, viewTransmittance);
 
@@ -581,11 +583,22 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     CloudShadeContext ctx2 = ctx;
     ctx2.combinedMoonDiffuseCoeff = vec3(0.0f);
     ctx2.combinedMoonPhaseAmt     = vec3(0.0f);
+    // Layer 2 reads its own coverage/type spread via an args copy so
+    // sampleCloudDensityTextured uses cirrus-appropriate variation. The
+    // seed offset below shifts the 2D smoothNoise2D hash so layer 2
+    // generates a completely decorrelated coverage/type field at the same
+    // XZ. Position-based shifts would interfere with the spherical
+    // altitude math in computeCloudHeightFraction (length()-based),
+    // pushing samples out of the slab; a seed shift is geometry-free.
+    AtmosphereArgs args2 = args;
+    args2.cloudCoverageSpread = args.cloudLayer2CoverageSpread;
+    args2.cloudTypeSpread     = args.cloudLayer2TypeSpread;
     marchCloudSlab(viewDirYUp, jitter,
                    args.cloudLayer2Altitude, args.cloudLayer2Thickness,
                    args.cloudLayer2TypeMean, args.cloudLayer2CoverageMean,
                    args.cloudLayer2DensityScale,
-                   sampleCount, ctx2, args,
+                   args.cloudLayer2NoiseSeed,
+                   sampleCount, ctx2, args2,
                    accumColor, viewTransmittance);
   }
 
