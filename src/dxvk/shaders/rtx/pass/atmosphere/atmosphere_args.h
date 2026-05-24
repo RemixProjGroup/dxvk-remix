@@ -260,4 +260,43 @@ struct AtmosphereArgs {
 
   vec3  cameraWorldPosYUpKm;       // Camera position in Y-up km, world-absolute
   float pad_c6_1;                  // 16-byte alignment
+
+  // ----- Cloud Height LUT (slide 3 lift — RDR2 SIGGRAPH 2019) -----
+  // Replaces the procedural cloudTypeProfile() trapezoid in
+  // sampleCloudDensityTextured with a 64x128 R8 lookup (typeSlice x altitudeIdx)
+  // baked once at startup by cloud_height_lut_baker.comp.slang. Lets the cloud
+  // type continuum (stratus ... cumulonimbus) carry richer altitude-shape
+  // variation than the 3-keypoint trapezoid, and lets layer-2 cirrus pick a
+  // genuinely different vertical profile than layer-1 cumulus. Only
+  // cloud_render.comp.slang binds the LUT today; voxel grid bakers and the
+  // analytical evalClouds path fall back to the procedural curve (cheap, and
+  // the LUT bake targets visual parity at type values 0/0.5/1 so the deltas
+  // stay inside cumulus shape noise).
+  uint  cloudHeightLutEnable;      // 0 = use procedural cloudTypeProfile, 1 = sample LUT
+
+  // ----- Two-layer cloud map (slide 1 lift — RDR2 SIGGRAPH 2019) -----
+  // Adds an independent second cloud slab at its own altitude band, sampled
+  // by cloud_render.comp.slang only (voxel grid bakers + analytical
+  // evalClouds + ground-shadow march all stay layer-1 only for v1 — cirrus
+  // is too thin to need precomputed terrain shadows, and the simpler
+  // scoping caps the change surface). When enabled, cloud_render marches
+  // the lower slab first (front-to-back) and composes layer 2 on top of
+  // the residual transmittance.
+  uint  cloudLayer2Enable;         // 0 = single-layer (default), 1 = render layer 2 also
+  float cloudLayer2Altitude;       // Altitude of layer 2 slab base (km)
+  float cloudLayer2Thickness;      // Layer 2 slab vertical depth (km)
+
+  float cloudLayer2TypeMean;       // [0,1] mean cloud type for layer 2 (defaults to a cirrus-shaped 0.0)
+  float cloudLayer2CoverageMean;   // [0,1] mean coverage for layer 2 (defaults sparse)
+  float cloudLayer2DensityScale;   // Per-step density multiplier for layer 2 (cirrus is optically thin)
+  float pad_cloudLayer2_0;         // 16-byte alignment
+
+  // ----- Worley carve params (Schneider15 lift, fork — 2026-05-15) -----
+  // Consumed by rtx_cloud_noise_baker.comp.slang at the one-shot bake. Each
+  // field is exposed via RTX_OPTION so the bake can be tuned from ImGui;
+  // changes APPLY ON GAME RELAUNCH because the bake runs once at init.
+  float cloudWorleyCarveStrength;  // [0, 1.5] amount of Worley subtracted from base Perlin
+  float cloudWorleyFrequency;      // cycles/km of the first Worley octave (default 1.0 = cumulus scale)
+  uint  cloudWorleyOctaves;        // FBM octave count (clamped 1..4 in shader)
+  float pad_cloudWorley_0;         // 16-byte alignment
 };

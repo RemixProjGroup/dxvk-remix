@@ -589,11 +589,21 @@ float cloudPlanetRadius(AtmosphereArgs args) {
 // position. hf=0 at slab base (cloudAltitude); hf=1 at slab top
 // (cloudAltitude + cloudThickness). Saturates outside the slab. Uses the
 // effective cloud planet radius so geometry is consistent with curvature.
-float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args) {
+//
+// The slab-parametric overload accepts explicit altitude / thickness for
+// callers marching a non-default slab (layer 2 cirrus deck, etc.). The
+// args-only overload below stays semantically identical to the original
+// for everything still marching the primary cumulus slab.
+float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args,
+                                  float slabAltitudeKm, float slabThicknessKm) {
   float cloudR = cloudPlanetRadius(args);
   vec3 planetCenter = vec3(0.0f, -cloudR, 0.0f);
   float altitudeAboveSea = length(samplePos - planetCenter) - cloudR;
-  return saturate((altitudeAboveSea - args.cloudAltitude) / max(args.cloudThickness, 0.001f));
+  return saturate((altitudeAboveSea - slabAltitudeKm) / max(slabThicknessKm, 0.001f));
+}
+
+float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args) {
+  return computeCloudHeightFraction(samplePos, args, args.cloudAltitude, args.cloudThickness);
 }
 
 // Nubis sliding-keypoint vertical density profile. Type slides the rise/peak/fall
@@ -614,6 +624,44 @@ float cloudTypeProfile(float hf, float type) {
   float rise = saturate(hf / max(riseEnd, 1e-4f));
   float fall = saturate((fallEnd - hf) / max(fallEnd - fallStart, 1e-4f));
   return saturate(rise * fall);
+}
+
+// Height-profile lookup that selects between a baked LUT (slide 3 lift —
+// RDR2 SIGGRAPH 2019) and the procedural cloudTypeProfile fallback.
+//
+// Translation units that bind the cloud height LUT define
+// ATMOSPHERE_CLOUD_HEIGHT_LUT_AVAILABLE and declare globals named
+// AtmosphereCloudHeightLut + AtmosphereCloudHeightLutSampler at their own
+// binding slots. cloud_render.comp.slang is the only such TU today; voxel
+// grid bakers, the cloud-noise baker, the height LUT baker itself, and the
+// analytical evalClouds path in atmosphere_sky.slangh all fall back to the
+// procedural curve via the #else branch below.
+//
+// The LUT is keyed (typeSlice, heightFrac) -> (R = density envelope, G =
+// coverage threshold scale). The R-only `cloudHeightProfile` overload returns
+// the density envelope only — kept for callers that don't need the coverage
+// modulator (none today, but the surface is API-clean). The vec2 overload
+// `cloudHeightProfileFull` returns both channels and is consumed by
+// sampleCloudDensityTextured to apply G at the coverage-threshold step.
+#ifdef ATMOSPHERE_CLOUD_HEIGHT_LUT_AVAILABLE
+vec2 sampleCloudHeightLUT(float hf, float type) {
+  vec2 uv = vec2(saturate(type), saturate(hf));
+  return AtmosphereCloudHeightLut.SampleLevel(AtmosphereCloudHeightLutSampler, uv, 0).rg;
+}
+vec2 cloudHeightProfileFull(float hf, float type, AtmosphereArgs args) {
+  return (args.cloudHeightLutEnable != 0u)
+      ? sampleCloudHeightLUT(hf, type)
+      : vec2(cloudTypeProfile(hf, type), 1.0f);
+}
+#else
+vec2 cloudHeightProfileFull(float hf, float type, AtmosphereArgs args) {
+  return vec2(cloudTypeProfile(hf, type), 1.0f);
+}
+#endif
+
+// R-only convenience accessor for callers that only need the density envelope.
+float cloudHeightProfile(float hf, float type, AtmosphereArgs args) {
+  return cloudHeightProfileFull(hf, type, args).r;
 }
 
 // Intersect view ray with the cloud shell. Returns true and the hit distance
@@ -1458,6 +1506,78 @@ float fbmNoise3DPeriodic(vec3 p, int octaves, float seed, vec3 basePeriod) {
   return value;
 }
 
+// =============================================================================
+// Periodic 3D Worley (cellular) noise — used by the cloud-noise bake to carve
+// cauliflower-shaped cells out of the Perlin base shape. This is the
+// Schneider15 "carve detail out of low-frequency shape" technique (slide 17
+// of RDR2 SIGGRAPH 2019 — referenced as [Schneider15] there). Without it the
+// cloud density is smooth Perlin blobs, and the coverage-threshold smoothstep
+// produces a thin "skin" of cloud at the threshold crossing that reads as a
+// flat plane from outside. With Worley carve, the density field has chunky 3D
+// cell structure, and the same coverage threshold produces real volumetric
+// silhouettes that read as 3D towers.
+//
+// Only invoked from the one-shot bake, so the 27-cell neighbor loop is
+// affordable (no per-frame cost).
+// =============================================================================
+
+// Hash a 3D integer cell ID to a feature-point offset inside the unit cube
+// [0, 1)^3. Sin-frac hash — same flavor as the simpler hash3 helpers in this
+// header. Quality is fine for noise baking (the eye can't see the bias).
+vec3 worleyFeaturePoint3D(vec3 cellId, float seed) {
+  vec3 h = vec3(
+    dot(cellId, vec3(127.1f, 311.7f, 74.7f)),
+    dot(cellId, vec3(269.5f, 183.3f, 246.1f)),
+    dot(cellId, vec3(113.5f, 271.9f, 124.6f)));
+  return frac(sin(h + seed) * 43758.5453f);
+}
+
+// Periodic 3D Worley F1 — distance to nearest feature point. Returns roughly
+// [0, 1] where 0 = at a feature point (cell center) and ~1 = far from any
+// feature point (cell boundary). `period` MUST be a positive integer vector
+// (matches the perlinNoise3DPeriodic convention) so the cell-ID modulo keeps
+// the lattice wrappable at the bake's tile period.
+float worleyNoise3DPeriodic(vec3 p, vec3 period, float seed) {
+  vec3 pi = floor(p);
+  vec3 pf = p - pi;
+  float minDistSq = 4.0f;  // > max possible squared distance inside the 27-cell window
+
+  [unroll] for (int dz = -1; dz <= 1; ++dz) {
+    [unroll] for (int dy = -1; dy <= 1; ++dy) {
+      [unroll] for (int dx = -1; dx <= 1; ++dx) {
+        vec3 offset = vec3(float(dx), float(dy), float(dz));
+        vec3 neighborCell = mod(pi + offset, period);
+        vec3 fp = worleyFeaturePoint3D(neighborCell, seed);
+        vec3 d  = (offset + fp) - pf;
+        float distSq = dot(d, d);
+        minDistSq = min(minDistSq, distSq);
+      }
+    }
+  }
+  return saturate(sqrt(minDistSq));
+}
+
+// Periodic 3D Worley FBM. Mirrors fbmNoise3DPeriodic's lacunarity-2 / gain-0.5
+// octave loop. Each octave's Worley lattice is wrapped to a doubling period so
+// the FBM tiles cleanly at the bake's input range. Returns ~[0, 1] where low
+// values = near a feature point and high values = at a cell boundary — the
+// natural convention for the Schneider15 carve (subtract from base shape to
+// erode cell edges).
+float worleyFbm3DPeriodic(vec3 p, int octaves, float seed, vec3 basePeriod) {
+  float value     = 0.0f;
+  float amplitude = 0.5f;
+  vec3  period    = basePeriod;
+
+  for (int i = 0; i < octaves && i < 4; i++) {
+    float seedOffset = seed + float(i) * 19.07f;
+    value     += amplitude * worleyNoise3DPeriodic(p, period, seedOffset);
+    p         *= 2.0f;
+    period    *= 2.0f;
+    amplitude *= 0.5f;
+  }
+  return value;
+}
+
 // Sigg-Hadwiger 4-tap-per-axis B-spline tricubic. In 3D, separability gives
 // 8 hardware trilinear taps with C2 continuous filtering and no boxy
 // linear-filter artifact at close-up density gradients.
@@ -1541,10 +1661,19 @@ float sampleTricubicBSpline(Texture3D<float> tex, SamplerState s,
 // common_bindings.slangh or atmosphere_bindings.slangh. cloudSampler must be
 // a linear (trilinear) SamplerState — the tricubic kernel does its own
 // weighting via 8 trilinear taps and requires linear filtering to be correct.
+// Slab-parametric overload. The slabAltitudeKm / slabThicknessKm parameters
+// pick which cloud layer's vertical mapping to use for the 3D noise texcoord;
+// densityScale is applied to the final output so per-layer optical thickness
+// can differ (cirrus is ~0.3x cumulus by default). Callers marching the
+// primary slab use the unqualified overload below — its behavior is
+// bit-identical to before the slide-1 two-layer refactor.
 float sampleCloudDensityTextured(vec3 worldPosKm,
                                  float heightFraction,
                                  float typeLocal,
                                  float coverageLocal,
+                                 float slabAltitudeKm,
+                                 float slabThicknessKm,
+                                 float densityScale,
                                  AtmosphereArgs args,
                                  Texture3D<float> cloudNoise3D,
                                  SamplerState cloudSampler) {
@@ -1558,18 +1687,23 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   vec3 windOffset = vec3(args.cloudWindOffset.x, 0.0f, args.cloudWindOffset.y);
   vec3 perturbed  = worldPosKm + windOffset;
 
-  // 2. World-pos → texcoord. Anisotropic mapping: horizontal axes use the
-  //    cloudNoiseTileKm period (multiple cumulus widths per tile, ~12 km),
-  //    vertical axis is mapped to the cloud-layer-relative span [0, 1] across
-  //    cloudThickness so the bake's full 6-cycle base-octave structure runs
-  //    across the cloud layer's 1 km vertical extent. A uniform (worldPos / 12)
-  //    mapping would compress the cloud layer into ~8% of the texture's Y
-  //    axis — too little base-octave variation, reading as "stacked 2D layers"
-  //    rather than true volumetric structure.
-  float yRelative = (perturbed.y - args.cloudAltitude) / max(args.cloudThickness, 0.01f);
+  // 2. World-pos -> texcoord. ISOTROPIC mapping: all three axes use the same
+  //    cloudNoiseTileKm period. The previous slabAlt-relative Y mapping
+  //    stretched the texture's full 256-pixel Y range across the slab
+  //    thickness (3 km), which made vertical noise frequency ~4x higher than
+  //    horizontal. From outside this read as horizontal pancake LAYERS
+  //    stacked vertically — and when the coverage gate cut through, you got
+  //    one active "skin" layer translating rigidly with wind (the 2.5D look).
+  //    With isotropic mapping the noise is genuine 3D blobs and the cloud
+  //    silhouette has real depth as it moves through the camera view.
+  //    The old comment worried about losing Y variation by sampling only
+  //    ~8% of the texture; that was written when the bake was pure Perlin
+  //    and the slab was 1 km. With our current 3 km slab + Worley carve +
+  //    4 octaves of Perlin packed into ~25% of the Y range, there's plenty
+  //    of variation.
   vec3 texcoord = vec3(
       frac(perturbed.x / args.cloudNoiseTileKm),
-      frac(yRelative),
+      frac(perturbed.y / args.cloudNoiseTileKm),
       frac(perturbed.z / args.cloudNoiseTileKm));
 
   // 3. Tricubic 3D sample. Texture-size literal must match the baker's
@@ -1590,17 +1724,37 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   float density      = texturedNoise + detailWeight * detail;
 
   // 5. Coverage threshold + anvil pow + cloud-type vertical profile.
-  //    Lifted verbatim from sampleCloudDensity.
+  //    The R channel is the density envelope (gentle altitude shape). The G
+  //    channel is the per-altitude coverage threshold scale — that's the
+  //    lever with visible silhouette teeth (slide-3 anvil mechanism: a low G
+  //    at the cumulus top lowers the threshold, so more pixels survive the
+  //    coverage gate and the silhouette widens horizontally).
+  vec2 heightProfile = cloudHeightProfileFull(heightFraction, typeLocal, args);
+
   float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
                             smoothstep(0.7f, 0.8f, heightFraction));
   float coverageAnvil = pow(coverageLocal, anvilExponent);
 
-  float coverageThreshold = mix(0.80f, 0.15f, coverageAnvil);
+  float coverageThreshold = mix(0.80f, 0.15f, coverageAnvil) * heightProfile.g;
   density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, density);
 
-  density *= cloudTypeProfile(heightFraction, typeLocal);
+  density *= heightProfile.r;
 
-  return saturate(density);
+  return saturate(density) * densityScale;
+}
+
+// Args-default overload — preserves the layer-1 behavior every existing
+// caller has today.
+float sampleCloudDensityTextured(vec3 worldPosKm,
+                                 float heightFraction,
+                                 float typeLocal,
+                                 float coverageLocal,
+                                 AtmosphereArgs args,
+                                 Texture3D<float> cloudNoise3D,
+                                 SamplerState cloudSampler) {
+  return sampleCloudDensityTextured(worldPosKm, heightFraction, typeLocal, coverageLocal,
+                                     args.cloudAltitude, args.cloudThickness, 1.0f,
+                                     args, cloudNoise3D, cloudSampler);
 }
 
 // ===========================================================================
@@ -1623,20 +1777,30 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
 //   that the cumulus-scale shadow / ambient march cannot integrate out;
 //   dropping it removes per-tap aliasing.
 // ===========================================================================
+// Slab-parametric overload. Same body as sampleCloudDensityTextured's slab
+// variant, but trilinear-only and no per-frame analytical detail (this is
+// the cheap variant used by voxel grid bakes). Voxel grid bakers always
+// invoke the layer-1 wrapper below — the grids only cover the primary slab.
 float sampleCloudDensityForShadow(vec3 worldPosKm,
                                    float heightFraction,
                                    float typeLocal,
                                    float coverageLocal,
+                                   float slabAltitudeKm,
+                                   float slabThicknessKm,
+                                   float densityScale,
                                    AtmosphereArgs args,
                                    Texture3D<float> cloudNoise3D,
                                    SamplerState cloudSampler) {
   vec3 windOffset = vec3(args.cloudWindOffset.x, 0.0f, args.cloudWindOffset.y);
   vec3 perturbed  = worldPosKm + windOffset;
 
-  float yRelative = (perturbed.y - args.cloudAltitude) / max(args.cloudThickness, 0.01f);
+  // Isotropic Y texcoord — see the long comment in sampleCloudDensityTextured
+  // above. Same fix applies here: voxel grid bakes need to see the same 3D
+  // density field the runtime samples, so the cloud-on-terrain shadow patches
+  // match the cumulus shapes overhead.
   vec3 texcoord = vec3(
       frac(perturbed.x / args.cloudNoiseTileKm),
-      frac(yRelative),
+      frac(perturbed.y / args.cloudNoiseTileKm),
       frac(perturbed.z / args.cloudNoiseTileKm));
 
   // Single trilinear sample (assumes the bound sampler is linear-filter +
@@ -1644,14 +1808,31 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
   float density = cloudNoise3D.SampleLevel(cloudSampler, texcoord, 0).r;
 
   // Coverage threshold + vertical profile lifted from sampleCloudDensityTextured.
+  // R = envelope multiplier, G = coverage threshold scale (slide 3 lift).
+  vec2 heightProfile = cloudHeightProfileFull(heightFraction, typeLocal, args);
+
   float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
                             smoothstep(0.7f, 0.8f, heightFraction));
   float coverageAnvil = pow(coverageLocal, anvilExponent);
-  float coverageThreshold = mix(0.80f, 0.15f, coverageAnvil);
+  float coverageThreshold = mix(0.80f, 0.15f, coverageAnvil) * heightProfile.g;
   density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, density);
-  density *= cloudTypeProfile(heightFraction, typeLocal);
+  density *= heightProfile.r;
 
-  return saturate(density);
+  return saturate(density) * densityScale;
+}
+
+// Args-default overload — preserves layer-1 behavior for the voxel grid
+// bakers and any future shadow callers.
+float sampleCloudDensityForShadow(vec3 worldPosKm,
+                                   float heightFraction,
+                                   float typeLocal,
+                                   float coverageLocal,
+                                   AtmosphereArgs args,
+                                   Texture3D<float> cloudNoise3D,
+                                   SamplerState cloudSampler) {
+  return sampleCloudDensityForShadow(worldPosKm, heightFraction, typeLocal, coverageLocal,
+                                      args.cloudAltitude, args.cloudThickness, 1.0f,
+                                      args, cloudNoise3D, cloudSampler);
 }
 
 // ===========================================================================

@@ -1483,6 +1483,25 @@ namespace dxvk {
                "Smaller = more visible repetition; larger = lower-frequency cloud detail. "
                "Default 12.0; viable range 6-24.");
 
+    // Worley carve (Schneider15 — slide 17 of RDR2 SIGGRAPH 2019).
+    // These knobs control how chunky / cell-shaped the prebaked cloud noise is.
+    // The bake is one-shot at atmosphere init, so changes APPLY ON GAME RELAUNCH.
+    RTX_OPTION("rtx.atmosphere", float, cloudWorleyCarveStrength, 0.6f,
+               "Schneider15 cauliflower carve strength. The Worley FBM is "
+               "subtracted from the Perlin base in the cloud noise bake to "
+               "produce chunky 3D cell silhouettes. 0 = pure Perlin (smooth "
+               "blobs, flat pancake look); 1.0 = aggressive carve (crushed "
+               "base shape). 0.6 default. CHANGE APPLIES ON GAME RELAUNCH.");
+    RTX_OPTION("rtx.atmosphere", float, cloudWorleyFrequency, 1.0f,
+               "Worley feature-point density, cycles per km. Smaller = larger "
+               "cumulus cells (boulder-sized chunks); larger = smaller cells "
+               "(cauliflower bumps). Default 1.0 targets cumulus-cell scale. "
+               "CHANGE APPLIES ON GAME RELAUNCH.");
+    RTX_OPTION("rtx.atmosphere", uint32_t, cloudWorleyOctaves, 3,
+               "Worley FBM octave count (clamped 1..4 in the bake shader). "
+               "Higher = more sub-scale detail on cell boundaries. Default 3. "
+               "CHANGE APPLIES ON GAME RELAUNCH.");
+
     // Nubis Cubed 2023 lighting (fork — 2026-05-12).
     // Tuning knobs for the per-sample lighting equations in cloud_render.comp.slang.
     // The paper's magic constants for the sigma_ms remap (page 137) are unexplained,
@@ -1535,6 +1554,52 @@ namespace dxvk {
                "physical baseline (transmittance = exp(-OD * density)); higher "
                "values darken cloud-on-terrain shadows, lower values lighten "
                "them. Only consumed when cloudVoxelShadowsEnable is on.");
+
+    // Cloud Height LUT (slide 3 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
+    // 64x128 R8 lookup table indexed by (cloud type slice, height fraction).
+    // Replaces the 3-keypoint procedural trapezoid in cloudTypeProfile() with a
+    // baked curve family — stratus / stratocumulus / cumulus stay close to the
+    // procedural shape so default-on doesn't regress the shipped Nubis Cubed
+    // look, but the high-type end gains an anvil lift and the low-type end can
+    // be re-tuned per weather without rebuilding shaders.
+    RTX_OPTION("rtx.atmosphere", bool, cloudHeightLutEnable, true,
+               "When true, cloud_render.comp.slang samples a 64x128 baked "
+               "height LUT to determine the per-altitude shape modulator "
+               "instead of the procedural cloudTypeProfile trapezoid. The LUT "
+               "is baked once at startup and keyed by (typeSlice, heightFrac). "
+               "Voxel grid bakers + analytical evalClouds still use the "
+               "procedural curve, so this flag only affects the screen-space "
+               "cloud render pass.");
+
+    // Two-layer cloud map (slide 1 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
+    // Adds an independent second cloud slab at a higher altitude (cirrus deck
+    // by default) on top of the existing cumulus layer. cloud_render marches
+    // the lower slab first and composites layer 2 onto residual transmittance.
+    // Default off so today's look is preserved bit-for-bit.
+    RTX_OPTION("rtx.atmosphere", bool, cloudLayer2Enable, false,
+               "When true, cloud_render.comp.slang marches a second cloud "
+               "slab on top of the primary one. Layer 2 has its own altitude / "
+               "thickness / type / coverage / density-scale knobs (the "
+               "cloudLayer2* options below). Voxel-grid terrain shadows + "
+               "ground-shadow NEE remain layer-1-only — cirrus is optically "
+               "thin enough that the per-frame compute cost of shadowing it "
+               "isn't worth the visual delta.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2Altitude, 7.5f,
+               "Altitude (km) of the layer-2 slab base. Default 7.5 km targets "
+               "the cirrus altitude band.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2Thickness, 0.5f,
+               "Vertical depth (km) of the layer-2 slab. Default 0.5 km keeps "
+               "the cirrus deck thin.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2TypeMean, 0.05f,
+               "[0,1] mean cloud type for layer 2. Low values (~0.05) sample "
+               "the LUT's stratus-shaped column — appropriate for cirrus.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2CoverageMean, 0.35f,
+               "[0,1] mean coverage for layer 2. Defaults sparser than layer 1 "
+               "so cirrus reads as wispy patches rather than overcast.");
+    RTX_OPTION("rtx.atmosphere", float, cloudLayer2DensityScale, 0.30f,
+               "Per-step density multiplier applied to layer 2 only. Cirrus is "
+               "optically thin; default 0.30 keeps it from competing visually "
+               "with the cumulus deck below.");
 
     // TODO (REMIX-656): Remove this once we can transition content to new hash
     RTX_OPTION("rtx", bool, logLegacyHashReplacementMatches, false, "");

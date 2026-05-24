@@ -68,6 +68,13 @@ void main(uint3 threadId : SV_DispatchThreadID) {
   // to decorrelate from the base lattice. Both return approximately [-1, 1]
   // (gradient noise's natural range).
   //
+  // Worley carve (Schneider15, slide 17 of RDR2 SIGGRAPH 2019): 3-octave
+  // Worley FBM at 1.0 cycles/km. The Worley output runs ~[0, 1] where 0 =
+  // near a feature point and ~1 = at a cell boundary. Subtracting it from
+  // the base shape erodes cell edges and leaves cell-interior bumps — the
+  // chunky cauliflower silhouettes that make cumulus read as 3D towers from
+  // outside instead of smooth Perlin pancakes.
+  //
   // Periodic variant: each octave's lattice is wrapped to (cloudNoiseTileKm *
   // freq) so the bake produces a tilable volume. Without this, perlinNoise3D's
   // unique-everywhere output created visible seams every cloudNoiseTileKm
@@ -79,19 +86,26 @@ void main(uint3 threadId : SV_DispatchThreadID) {
   // tile values, with min 2 to avoid a degenerate single-cell period.
   const float baseFreq   = 0.5f;
   const float detailFreq = 2.0f;
+  // Worley frequency + octave count + carve strength surface as RTX_OPTIONs
+  // (cloudWorleyFrequency / cloudWorleyOctaves / cloudWorleyCarveStrength)
+  // so the bake can be tuned from ImGui. Bake is one-shot at init, so
+  // changes take effect on game relaunch.
+  float worleyFreq = max(args.cloudWorleyFrequency, 0.05f);
+  uint  worleyOcts = clamp(args.cloudWorleyOctaves, 1u, 4u);
   vec3  basePeriodBase   = max(floor(vec3(args.cloudNoiseTileKm * baseFreq)),   vec3(2.0f));
   vec3  basePeriodDetail = max(floor(vec3(args.cloudNoiseTileKm * detailFreq)), vec3(2.0f));
-  float base   = fbmNoise3DPeriodic(worldPosKm * baseFreq,   4, 0.0f,  basePeriodBase);
-  float detail = fbmNoise3DPeriodic(worldPosKm * detailFreq, 3, 17.3f, basePeriodDetail);
+  vec3  basePeriodWorley = max(floor(vec3(args.cloudNoiseTileKm * worleyFreq)), vec3(2.0f));
+  float base   = fbmNoise3DPeriodic   (worldPosKm * baseFreq,   4, 0.0f,  basePeriodBase);
+  float detail = fbmNoise3DPeriodic   (worldPosKm * detailFreq, 3, 17.3f, basePeriodDetail);
+  float worley = worleyFbm3DPeriodic  (worldPosKm * worleyFreq, int(worleyOcts), 5.0f, basePeriodWorley);
 
   // Combine and recenter from gradient noise's [-1, 1]-ish range to [0, 1]
-  // for R8 storage. The earlier saturate-clipped form (max(sum, 0)) lost half
-  // the signal because gradient noise has zero mean — clipping the negative
-  // half left the texture mostly empty and the coverage-threshold math (tuned
-  // against the analytic 2D's value-noise [0, 1] distribution) found nothing
-  // to threshold against. The recentering preserves the full FBM contrast and
-  // matches the distribution the per-frame coverage threshold expects.
-  float density = saturate(0.5f + 0.5f * (base + 0.5f * detail));
+  // for R8 storage. Worley is already in [0, 1] roughly. carveStrength
+  // scales how aggressively Worley erodes the base — 0.0 reverts to pre-
+  // Schneider behavior (smooth Perlin pancakes); 0.6 default produces
+  // visible chunky cell silhouettes without crushing the base shape.
+  float baseDensity = saturate(0.5f + 0.5f * (base + 0.5f * detail));
+  float density     = saturate(baseDensity - worley * args.cloudWorleyCarveStrength);
 
   cloudNoise3DOutput[threadId] = density;
 }

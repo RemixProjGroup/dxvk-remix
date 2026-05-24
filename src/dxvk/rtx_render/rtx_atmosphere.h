@@ -127,6 +127,19 @@ public:
   const Resources::Resource& getCloudRenderRT() const { return m_cloudRenderRT; }
 
   /**
+   * \brief Get the cloud height LUT (slide 3 lift — RDR2 SIGGRAPH 2019,
+   * fork — 2026-05-15).
+   *
+   * 64x128 R8 baked once at startup by cloud_height_lut_baker.comp.slang.
+   * Indexed (typeSlice, heightFrac) -> per-altitude density modulator. Consumed
+   * by cloud_render.comp.slang's cloudHeightProfile() helper to replace the
+   * procedural cloudTypeProfile trapezoid with a richer per-type altitude
+   * shape family (anvil lift for cumulus, room to retune cirrus end without
+   * shader rebuilds).
+   */
+  const Resources::Resource& getCloudHeightLut() const { return m_cloudHeightLut; }
+
+  /**
    * \brief Ensure the cloud render RT exists at the requested downscale extent.
    *
    * Recreates the RT on resize. Cheap when the extent is unchanged. Called
@@ -227,6 +240,7 @@ private:
   void dispatchMultiscatteringLut(Rc<DxvkContext> ctx);
   void dispatchSkyViewLut(Rc<DxvkContext> ctx);
   void dispatchCloudNoise3DBake(Rc<DxvkContext> ctx);  // Stage C: one-shot at init
+  void dispatchCloudHeightLutBake(Rc<DxvkContext> ctx);  // Fork: one-shot at init (slide 3 lift)
   void dispatchCloudSkyTransmittanceLut(Rc<DxvkContext> ctx);  // Fork: per-frame
   // Cloud voxel grid bakes (Nubis Cubed 2023, fork — 2026-05-12). Round-robin
   // every 8 frames. Driven from computeLuts based on the device frame ID.
@@ -264,6 +278,14 @@ private:
   static constexpr uint32_t kCloudVoxelGridY = 256;
   static constexpr uint32_t kCloudVoxelGridZ = 32;
 
+  // Cloud height LUT (slide 3 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
+  // 64 type slices x 128 altitude entries x R8 = 8 KB VRAM. One-shot bake at
+  // startup. Keep in lockstep with the dispatch dimensions inside
+  // cloud_height_lut_baker.comp.slang and the LUT sample call in
+  // atmosphere_common.slangh's cloudHeightProfile.
+  static constexpr uint32_t kCloudHeightLutWidth  = 64;
+  static constexpr uint32_t kCloudHeightLutHeight = 128;
+
   // Scale heights for exponential density profiles (in km)
   static constexpr float kRayleighScaleHeight = 8.0f;
   static constexpr float kMieScaleHeight = 1.2f;
@@ -283,6 +305,10 @@ private:
   // realloc inside ensureCloudRenderRT.
   Resources::Resource m_cloudRenderRT;
   VkExtent2D          m_cloudRenderExtent = { 0u, 0u };
+
+  // Cloud height LUT (slide 3 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
+  // 64x128 R8, baked once at startup.
+  Resources::Resource m_cloudHeightLut;
 
   // Per-frame camera basis for cloud_render.comp.slang. Pushed via
   // setCloudRenderCameraBasis() from updateAtmosphereConstants before

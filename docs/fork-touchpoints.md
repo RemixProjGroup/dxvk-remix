@@ -187,6 +187,15 @@ check will enforce it if discipline slips.
 
 ---
 
+## src/dxvk/dxvk_limits.h
+
+**Category:** index-only
+
+- **Inline tweak** at the `MaxPushConstantSize` enum value (~line 21) — 1-LOC value change + multi-line rationale comment.
+  *Bumps `MaxPushConstantSize` from 128 to 256. The fork-side tonemap apply args struct (`ToneMappingApplyToneMappingArgs` in `src/dxvk/shaders/rtx/pass/tonemap/tonemapping.h`) grew to 144 bytes across Workstream 2 commits 3–4 (Hable + AgX operator params). With the old cap, `DxvkContext::pushConstants()` silently overflowed the per-bank storage by 16 bytes on every Global / Direct tonemap dispatch, corrupting adjacent bank state and crashing the NVIDIA driver later. Every RTX-class GPU reports `maxPushConstantsSize >= 256`; pipeline layouts derive per-shader push-constant ranges from shader reflection, so the larger cap is harmless to existing shaders.*
+
+---
+
 ## src/dxvk/imgui/dxvk_imgui.cpp
 
 **Pre-refactor fork footprint:** +236 / -71 LOC (audit 2026-04-18)
@@ -1305,5 +1314,71 @@ cloud-shadow-map post-mortem's hard-won correctness invariant.
 
 - **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
   *In `updateAtmosphereConstants` (immediately after `setCloudRenderCameraBasis`): reads the camera world position in game units, applies the same `toYUp` swap used for the basis vectors, converts to km via `kmPerWorldUnit = 1 / (100000 * sceneScale)`, and pushes via `setCloudShadowCameraPosition`. In the "Nubis Cubed Lighting" ImGui collapsing block (after the Master gate (C5) section): adds a "Cloud-on-terrain shadows (C6)" separator + checkbox bound to `cloudVoxelShadowsEnableObject()` + a `DragFloat` slider bound to `cloudShadowMarchStrengthObject()` with tooltips for both. ~25 LOC total.*
+
+---
+
+## Workstream — Cloud system slides 1+3 lift + samplePos parallax fix (fork — 2026-05-15)
+
+Three lifts from "Real-Time Rendering of Volumetric Clouds in Red
+Dead Redemption 2" (Bauer et al., SIGGRAPH 2019) sit on top of the
+shipped Nubis Cubed pipeline, plus a one-line bug fix that unblocks
+all three visually:
+
+* **Slide 3 — Cloud height LUT.** 64×128 RG8 baked once at startup
+  by `cloud_height_lut_baker.comp.slang`. R = per-altitude density
+  envelope multiplier. G = per-altitude coverage threshold scale
+  (the lever with visible silhouette teeth — lowers the coverage
+  gate near cumulus tops to widen the mushroom-cap horizontally).
+  Sampled by `cloud_render.comp.slang` via the new
+  `cloudHeightProfileFull` helper in `atmosphere_common.slangh`;
+  the procedural `cloudTypeProfile` is the fallback for the voxel
+  grid bakers and the analytical evalClouds path.
+* **Slide 1 — Two-layer cloud map.** The per-pixel march body is
+  extracted into a `marchCloudSlab` helper with slab altitude /
+  thickness / type / coverage / density-scale parameters. Layer 1
+  (primary cumulus) marches first; layer 2 (cirrus deck by default)
+  marches after with residual transmittance. Voxel-grid shadows,
+  ground-shadow NEE, and moon shadows remain layer-1-only — cirrus
+  is optically thin enough that the precompute cost isn't justified.
+* **Schneider15 Worley carve.** Three new periodic-3D-Worley helpers
+  in `atmosphere_common.slangh` feed the noise bake. Worley FBM is
+  subtracted from the Perlin base to carve cell silhouettes (chunky
+  cauliflower cumulus instead of smooth Perlin pancakes).
+* **`samplePos` parallax fix.** The per-step world position was being
+  computed as `viewDirYUp * t` (camera implicitly at origin), gluing
+  the noise field to the camera and letting only wind translate it.
+  Anchoring `samplePos` to `args.cameraWorldPosYUpKm` gives real
+  parallax between near and far parts of the volume as the player
+  moves through the world. The three lifts above were inert without
+  this; together they restore the depth cues that make clouds read
+  as 3D volumes instead of cardboard cutouts translating across the
+  sky.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_height_lut_baker.comp.slang`** — fork-only addition.
+  *New one-shot bake compute pass. 8×8 thread groups over a 64×128 R8G8 RWTexture2D. R channel emits the per-type density envelope (trapezoid + Gaussian anvil bump for type > 0.6); G channel emits the per-type coverage threshold scale (1.0 = no effect, drops to ~0.30 at hf ≈ 0.80 for cumulus). Curves are tuned so type values 0 / 0.5 / 1 land close to the procedural `cloudTypeProfile` shape — keeps default-on visual parity with pre-LUT scenes.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang`** — fork-owned additions.
+  *Adds two binding slots (10 = `Texture2D<float2>` height LUT, 11 = `SamplerState` linear/CLAMP); defines `ATMOSPHERE_CLOUD_HEIGHT_LUT_AVAILABLE` before the common header so `cloudHeightProfileFull` resolves to LUT samples. Extracts the per-pixel raymarch into a `marchCloudSlab(slabAltKm, slabThickKm, slabTypeMean, slabCoverageMean, slabDensityScale, ctx, args, inout accumColor, inout viewTransmittance)` helper plus a `CloudShadeContext` struct bundling the sun/moon/sky precomputes. `main()` calls the helper once for layer 1 (always) and once for layer 2 (when `args.cloudLayer2Enable != 0u`). Anchors `samplePos = args.cameraWorldPosYUpKm + viewDirYUp * t` (parallax fix). The "trivially clear sky" early-out widens to `max(layer1, layer2)` coverage so a cirrus-only preset doesn't get short-circuited.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/rtx_cloud_noise_baker.comp.slang`** — fork-owned additions.
+  *Adds a `worleyFbm3DPeriodic(worldPosKm * worleyFreq, worleyOctaves, 5.0f, basePeriodWorley)` tap alongside the existing Perlin base + detail FBM, with `worleyFreq` / `worleyOctaves` from `args.cloudWorleyFrequency` / `cloudWorleyOctaves`. Output is `saturate(baseDensity - worley * args.cloudWorleyCarveStrength)` instead of the old smooth Perlin sum.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions.
+  *Adds three periodic-3D-Worley helpers (`worleyFeaturePoint3D`, `worleyNoise3DPeriodic`, `worleyFbm3DPeriodic`) used only by the bake. Adds `cloudHeightProfileFull` (vec2) + `sampleCloudHeightLUT` gated by `ATMOSPHERE_CLOUD_HEIGHT_LUT_AVAILABLE`, with a procedural fallback via the existing `cloudTypeProfile`. Extends `sampleCloudDensityTextured` and `sampleCloudDensityForShadow` with slab-parametric overloads (slab altitude / thickness / density-scale) plus thin args-default wrappers preserving the original signature; the slab-parametric versions apply the LUT G channel to the coverage-threshold step and the LUT R channel to the density envelope. Also switches the Y texcoord in both density samplers from slab-relative to isotropic `/ args.cloudNoiseTileKm` (correctness alignment with the isotropic bake).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned additions.
+  *Adds two 16-byte rows after the C6 camera block: `(cloudHeightLutEnable, cloudLayer2Enable, cloudLayer2Altitude, cloudLayer2Thickness)` and `(cloudLayer2TypeMean, cloudLayer2CoverageMean, cloudLayer2DensityScale, pad_cloudLayer2_0)`, plus one row for Worley `(cloudWorleyCarveStrength, cloudWorleyFrequency, cloudWorleyOctaves, pad_cloudWorley_0)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned additions.
+  *Adds `#include <rtx_shaders/cloud_height_lut_baker.h>`, the `CloudHeightLutBakerShader` ManagedShader class (single `RW_TEXTURE2D(0)`), and `dispatchCloudHeightLutBake` (one-shot, called from `initialize()` right after `dispatchCloudNoise3DBake`). Allocates `m_cloudHeightLut` (64×128 R8G8_UNORM) in `createLutResources`. In `dispatchCloudRender`: creates a linear/CLAMP `heightLutSampler`, binds slot 10 (LUT view) + slot 11 (sampler), and adds the resource-tracking line. In `getAtmosphereArgs`: populates the height LUT toggle + six layer-2 fields + three Worley fields from RTX_OPTIONs.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h`** — fork-owned additions.
+  *Adds `Resources::Resource m_cloudHeightLut` member, `getCloudHeightLut()` accessor, `dispatchCloudHeightLutBake` declaration, and `kCloudHeightLutWidth = 64` / `kCloudHeightLutHeight = 128` constants.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *Adds 10 new RTX_OPTIONs in the `rtx.atmosphere` cluster: `cloudHeightLutEnable` (default on), `cloudLayer2Enable` (default off) + 5 layer-2 tuning floats, and `cloudWorleyCarveStrength` (0.6) / `cloudWorleyFrequency` (1.0) / `cloudWorleyOctaves` (3). The Worley trio is tagged "CHANGE APPLIES ON GAME RELAUNCH" since the noise bake is one-shot at init.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
+  *Adds Height LUT (1 checkbox), Layer 2 (1 checkbox + 5 sliders), and Worley carve (2 `DragFloat` + 1 `DragInt`) ImGui subsections inside the existing Clouds tree, each with tooltips describing the slide source and the relaunch requirement where applicable.*
 
 ---

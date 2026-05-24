@@ -34,6 +34,7 @@
 #include <rtx_shaders/cloud_sun_density_grid.h>
 #include <rtx_shaders/cloud_ambient_density_grid.h>
 #include <rtx_shaders/cloud_render.h>
+#include <rtx_shaders/cloud_height_lut_baker.h>
 #include <cmath>
 #include <fstream>
 #include <chrono>
@@ -133,12 +134,17 @@ namespace dxvk {
     // rgb + transmittance alpha to AtmosphereCloudRender at downscale extent.
     // Bindings (kept in lockstep with cloud_render.comp.slang):
     //   0: ConstantBuffer<AtmosphereArgs>
-    //   1: Texture3D<float>     (AtmosphereCloudNoise3D)
-    //   2: SamplerState         (linear/REPEAT)
-    //   3: Texture3D<float>     (AtmosphereCloudDSun)
-    //   4: Texture3D<float>     (AtmosphereCloudDAmbient)
-    //   5: Texture2DArray<float2> (AtmosphereFastNoise)
-    //   6: RWTexture2D<float4>  output
+    //   1: Texture3D<float>      (AtmosphereCloudNoise3D)
+    //   2: SamplerState          (linear/REPEAT)
+    //   3: Texture3D<float>      (AtmosphereCloudDSun)
+    //   4: Texture3D<float>      (AtmosphereCloudDAmbient)
+    //   5: Texture2DArray<float2>(AtmosphereFastNoise)
+    //   6: RWTexture2D<float4>   output
+    //   7: Texture2D<float4>     (AtmosphereSkyViewLut)
+    //   8: Texture2D<float>      (AtmosphereCloudSkyTransmittanceLut)
+    //   9: SamplerState          (linear/CLAMP — sky-view LUT)
+    //  10: Texture2D<float>      (AtmosphereCloudHeightLut, slide 3 lift — fork 2026-05-15)
+    //  11: SamplerState          (linear/CLAMP — height LUT)
     class CloudRenderShader : public ManagedShader {
       SHADER_SOURCE(CloudRenderShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_render)
 
@@ -153,9 +159,25 @@ namespace dxvk {
         TEXTURE2D(7)
         TEXTURE2D(8)
         SAMPLER(9)
+        TEXTURE2D(10)
+        SAMPLER(11)
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(CloudRenderShader);
+
+    // Fork (slide 3 lift — RDR2 SIGGRAPH 2019, 2026-05-15): one-shot bake of
+    // the 64x128 R8 cloud height LUT. Indexed (typeSlice, heightFrac) -> per-
+    // altitude shape modulator. Consumed by cloud_render.comp.slang via the
+    // cloudHeightProfile() helper to replace the procedural cloudTypeProfile
+    // trapezoid.
+    class CloudHeightLutBakerShader : public ManagedShader {
+      SHADER_SOURCE(CloudHeightLutBakerShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_height_lut_baker)
+
+      BEGIN_PARAMETER()
+        RW_TEXTURE2D(0)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudHeightLutBakerShader);
   }
 
 RtxAtmosphere::RtxAtmosphere(DxvkDevice* device)
@@ -179,6 +201,7 @@ void RtxAtmosphere::initialize(Rc<DxvkContext> ctx) {
 
   createLutResources(ctx);
   dispatchCloudNoise3DBake(ctx);
+  dispatchCloudHeightLutBake(ctx);
   m_initialized = true;
   m_lutsNeedRecompute = true;
 }
@@ -506,6 +529,29 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.pad_c6_1 = 0.0f;
   }
 
+  // Cloud Height LUT + two-layer cloud map (slides 1 + 3 lift, fork — 2026-05-15).
+  // Pulled from RTX_OPTIONs so ImGui tuning works without rebuilding shaders.
+  // Default cloudLayer2Enable = false means today's single-layer Nubis Cubed
+  // look is preserved bit-for-bit until the user opts in.
+  {
+    args.cloudHeightLutEnable     = RtxOptions::cloudHeightLutEnable() ? 1u : 0u;
+
+    args.cloudLayer2Enable        = RtxOptions::cloudLayer2Enable() ? 1u : 0u;
+    args.cloudLayer2Altitude      = RtxOptions::cloudLayer2Altitude();
+    args.cloudLayer2Thickness     = RtxOptions::cloudLayer2Thickness();
+    args.cloudLayer2TypeMean      = RtxOptions::cloudLayer2TypeMean();
+    args.cloudLayer2CoverageMean  = RtxOptions::cloudLayer2CoverageMean();
+    args.cloudLayer2DensityScale  = RtxOptions::cloudLayer2DensityScale();
+    args.pad_cloudLayer2_0        = 0.0f;
+
+    // Worley carve params — consumed only by rtx_cloud_noise_baker, which
+    // runs once at init. Changing these from ImGui requires a game relaunch.
+    args.cloudWorleyCarveStrength = RtxOptions::cloudWorleyCarveStrength();
+    args.cloudWorleyFrequency     = RtxOptions::cloudWorleyFrequency();
+    args.cloudWorleyOctaves       = RtxOptions::cloudWorleyOctaves();
+    args.pad_cloudWorley_0        = 0.0f;
+  }
+
   return args;
 }
 
@@ -647,6 +693,30 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
   // cloud ray-march jitter. One-shot upload of the embedded byte data; no-op on
   // subsequent calls.
   m_fastNoise.initialize(ctx);
+
+  // Fork (slide 3 lift — RDR2 SIGGRAPH 2019, 2026-05-15): cloud height LUT
+  // (64x128 RG8 — 16 KB VRAM). Baked once at init by dispatchCloudHeightLutBake.
+  // Indexed (typeSlice, heightFrac) -> (R = density envelope, G = coverage
+  // threshold scale) by atmosphere_common.slangh's cloudHeightProfileFull
+  // inside cloud_render.comp.slang. The G channel is the lever with visible
+  // silhouette teeth — it widens cumulus tops by lowering the coverage
+  // threshold at the right altitudes.
+  VkExtent3D cloudHeightLutExtent = {
+    kCloudHeightLutWidth, kCloudHeightLutHeight, 1
+  };
+  m_cloudHeightLut = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud Height LUT",
+    cloudHeightLutExtent,
+    VK_FORMAT_R8G8_UNORM,
+    1, // numLayers
+    VK_IMAGE_TYPE_2D,
+    VK_IMAGE_VIEW_TYPE_2D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags (SAMPLED implicit)
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
 }
 
 void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
@@ -1027,6 +1097,11 @@ void RtxAtmosphere::dispatchCloudRender(Rc<DxvkContext> ctx) {
   skyViewSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
   Rc<DxvkSampler> skyViewSampler = m_device->createSampler(skyViewSamplerInfo);
 
+  // Linear/CLAMP sampler for the cloud height LUT. CLAMP because the LUT is
+  // parameterized on a bounded (typeSlice, heightFrac) domain — REPEAT would
+  // alias the cumulonimbus column back into stratus territory.
+  Rc<DxvkSampler> heightLutSampler = m_device->createSampler(skyViewSamplerInfo);
+
   ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
   ctx->bindResourceView(1, m_cloudNoise3D.view, nullptr);
   ctx->bindResourceSampler(2, cloudSampler);
@@ -1037,6 +1112,8 @@ void RtxAtmosphere::dispatchCloudRender(Rc<DxvkContext> ctx) {
   ctx->bindResourceView(7, m_skyViewLut.isValid() ? m_skyViewLut.view : nullptr, nullptr);
   ctx->bindResourceView(8, m_cloudSkyTransmittanceLut.isValid() ? m_cloudSkyTransmittanceLut.view : nullptr, nullptr);
   ctx->bindResourceSampler(9, skyViewSampler);
+  ctx->bindResourceView(10, m_cloudHeightLut.isValid() ? m_cloudHeightLut.view : nullptr, nullptr);
+  ctx->bindResourceSampler(11, heightLutSampler);
 
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNoise3D.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDSun.image);
@@ -1047,6 +1124,9 @@ void RtxAtmosphere::dispatchCloudRender(Rc<DxvkContext> ctx) {
   }
   if (m_cloudSkyTransmittanceLut.isValid()) {
     ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudSkyTransmittanceLut.image);
+  }
+  if (m_cloudHeightLut.isValid()) {
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudHeightLut.image);
   }
 
   ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudRenderShader::getShader());
@@ -1082,6 +1162,31 @@ void RtxAtmosphere::dispatchCloudNoise3DBake(Rc<DxvkContext> ctx) {
   // Dispatch: kCloudNoise3DSize / 8 = 32 groups per axis (shader uses [numthreads(8,8,8)])
   const uint32_t groupCount = kCloudNoise3DSize / 8u;
   ctx->dispatch(groupCount, groupCount, groupCount);
+}
+
+void RtxAtmosphere::dispatchCloudHeightLutBake(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud Height LUT Bake");
+
+  // One-shot bake at atmosphere init. Procedurally fills the 64x128 R8 LUT
+  // with the per-type altitude shape family — base shape matches the
+  // procedural cloudTypeProfile (visual parity at type values 0 / 0.5 / 1),
+  // plus a Gaussian anvil lift for type > 0.7 so cumulonimbus reads with a
+  // proper top widening rather than relying on the coverage-side anvil pow
+  // trick alone.
+  //
+  // The baker shader has no dependency on the atmosphere args CB (the
+  // curve formulas are baked in directly), so the only binding is the
+  // RWTexture2D output at slot 0. cloud_height_lut_baker.comp.slang
+  // declares `[numthreads(8, 8, 1)]`, matching the dispatch dimensions below.
+
+  ctx->bindResourceView(0, m_cloudHeightLut.view, nullptr);
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudHeightLut.image);
+
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudHeightLutBakerShader::getShader());
+
+  const uint32_t groupsX = (kCloudHeightLutWidth  + 7u) / 8u;
+  const uint32_t groupsY = (kCloudHeightLutHeight + 7u) / 8u;
+  ctx->dispatch(groupsX, groupsY, 1);
 }
 
 void RtxAtmosphere::onFrameAdvanceForCloudHistory(uint32_t currentFrameId) {

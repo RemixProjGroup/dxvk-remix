@@ -873,6 +873,65 @@ namespace fork_hooks {
         RemixGui::DragFloat("Anvil Bias", &RtxOptions::cloudAnvilBiasObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Cumulus top inflation. 0=flat tops, 1=fully spread mushroom-cap anvils. Nubis pow trick.");
 
+        // Slide 3 lift — RDR2 SIGGRAPH 2019, fork 2026-05-15. The baked 64x128
+        // R8 LUT replaces cloudTypeProfile's procedural trapezoid inside
+        // sampleCloudDensityTextured. Only cloud_render.comp.slang samples it;
+        // voxel-grid bakes + analytical evalClouds use the procedural fallback.
+        ImGui::Separator();
+        ImGui::TextDisabled("Height LUT (slide 3 — fork 2026-05-15)");
+        RemixGui::Checkbox("Use Height LUT (cloud render only)",
+                           &RtxOptions::cloudHeightLutEnableObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "When on, cloud_render.comp.slang samples a 64x128 baked LUT to "
+            "pick the per-altitude shape modulator instead of the procedural "
+            "cloudTypeProfile trapezoid. Adds a Gaussian anvil lift for "
+            "type > 0.7 (cumulus / cumulonimbus). Visual parity at type "
+            "values 0 / 0.5 / 1 with the procedural curve. Default on.");
+
+        // Slide 1 lift — RDR2 SIGGRAPH 2019, fork 2026-05-15. Adds an
+        // independent second cloud slab. Voxel-grid terrain shadows + ground-
+        // shadow NEE + moon shadow stay layer-1-only (cirrus is too thin to
+        // warrant the precompute cost).
+        ImGui::Separator();
+        ImGui::TextDisabled("Layer 2 — Cirrus Deck (slide 1 — fork 2026-05-15)");
+        RemixGui::Checkbox("Enable Layer 2",
+                           &RtxOptions::cloudLayer2EnableObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "When on, cloud_render.comp.slang marches a second cloud slab on "
+            "top of the primary one — defaults to a cirrus deck at 7.5 km. "
+            "Voxel grid bakes + ground-shadow NEE remain layer-1-only.");
+        RemixGui::DragFloat("Layer 2 Altitude (km)",
+                            &RtxOptions::cloudLayer2AltitudeObject(),
+                            0.1f, 0.5f, 20.0f, "%.1f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Altitude (km) of the layer-2 slab base. Default 7.5 km targets "
+            "the cirrus altitude band.");
+        RemixGui::DragFloat("Layer 2 Thickness (km)",
+                            &RtxOptions::cloudLayer2ThicknessObject(),
+                            0.05f, 0.05f, 3.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Vertical depth (km) of the layer-2 slab. Default 0.5 km keeps "
+            "the cirrus deck thin.");
+        RemixGui::DragFloat("Layer 2 Type Mean",
+                            &RtxOptions::cloudLayer2TypeMeanObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "[0,1] mean cloud type for layer 2. Low values (~0.05) sample the "
+            "LUT's stratus-shaped column — appropriate for cirrus.");
+        RemixGui::DragFloat("Layer 2 Coverage Mean",
+                            &RtxOptions::cloudLayer2CoverageMeanObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "[0,1] mean coverage for layer 2. Defaults sparser than layer 1 "
+            "so cirrus reads as wispy patches rather than overcast.");
+        RemixGui::DragFloat("Layer 2 Density Scale",
+                            &RtxOptions::cloudLayer2DensityScaleObject(),
+                            0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Per-step density multiplier applied to layer 2 only. Cirrus is "
+            "optically thin; default 0.30 keeps it from competing visually "
+            "with the cumulus deck below.");
+
         ImGui::Separator();
         ImGui::TextDisabled("3D Noise Bake (Stage C)");
         RemixGui::DragFloat("Noise Tile (km)", &RtxOptions::cloudNoiseTileKmObject(), 1.0f, 4.0f, 32.0f, "%.0f", sliderFlags);
@@ -881,6 +940,33 @@ namespace fork_hooks {
           "repetition; larger = lower-frequency cloud detail. Integer values (6, 8, 12, 16, 24) keep the "
           "bake perfectly tilable; non-integer values snap the period via floor() and may show small seams. "
           "CHANGE APPLIES ON GAME RELAUNCH — the bake runs once at atmosphere init.");
+
+        // Worley carve sliders (Schneider15 lift — slide 17 of RDR2 SIGGRAPH 2019,
+        // fork 2026-05-15). All three feed into the one-shot noise bake. Tooltips
+        // call out the relaunch requirement so users don't expect immediate effect.
+        RemixGui::DragFloat("Worley Carve Strength",
+                            &RtxOptions::cloudWorleyCarveStrengthObject(),
+                            0.02f, 0.0f, 1.5f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Schneider15 cauliflower carve strength. The Worley FBM is "
+            "subtracted from the Perlin base in the cloud noise bake to "
+            "produce chunky 3D cell silhouettes. 0 = pure Perlin (smooth "
+            "blobs, flat pancake look); 1.0 = aggressive carve. 0.6 default. "
+            "CHANGE APPLIES ON GAME RELAUNCH.");
+        RemixGui::DragFloat("Worley Frequency (cycles/km)",
+                            &RtxOptions::cloudWorleyFrequencyObject(),
+                            0.05f, 0.25f, 4.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Worley feature-point density. Smaller = larger cumulus cells "
+            "(boulder-sized chunks); larger = smaller cells (cauliflower "
+            "bumps). Default 1.0 targets cumulus-cell scale. "
+            "CHANGE APPLIES ON GAME RELAUNCH.");
+        RemixGui::DragInt("Worley Octaves",
+                          &RtxOptions::cloudWorleyOctavesObject(),
+                          1.0f, 1, 4, "%d", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Worley FBM octave count. Higher = more sub-scale detail on "
+            "cell boundaries. Default 3. CHANGE APPLIES ON GAME RELAUNCH.");
 
         ImGui::TreePop();
       }
