@@ -26,6 +26,11 @@
 // Atmosphere LUT bindings - only include in shaders that need atmosphere rendering
 layout(binding = BINDING_ATMOSPHERE_TRANSMITTANCE_LUT)
 Texture2D AtmosphereTransmittanceLut;
+// Signals to atmosphere_common.slangh that AtmosphereTransmittanceLut is bound.
+// Mirrors the define in common_bindings.slangh; atmosphere-only compute passes
+// (LUT bakers, cloud_render) do not include this file and therefore fall back
+// to the analytical path inside getAtmosphericTransmittanceForDir.
+#define ATMOSPHERE_TRANSMITTANCE_LUT_AVAILABLE
 
 layout(binding = BINDING_ATMOSPHERE_MULTISCATTERING_LUT)
 Texture2D AtmosphereMultiscatteringLut;
