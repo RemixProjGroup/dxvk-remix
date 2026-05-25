@@ -113,9 +113,7 @@ float ozoneDensity(float altitude, AtmosphereArgs args) {
   // Gaussian falloff
   float density = exp(-distFromCenter * distFromCenter / (2.0f * sigma * sigma));
   
-  // Scale down the overall ozone effect to prevent excessive purple at sunset
-  // The absorption coefficients in rtx_options.h are already quite strong
-  return density * 0.5f;
+  return density;
 }
 
 // Ray-sphere intersection with improved numerical stability
@@ -277,6 +275,9 @@ vec3 evalAtmosphereRadiance(
   vec3 rayDir,
   vec3 sunDir,
   AtmosphereArgs args,
+  Texture2D<float4> transmittanceLut,
+  SamplerState transmittanceLutSampler,
+  Texture2D<float4> multiscatteringLut,
   int numSamples = 32
 ) {
   // Intersect ray with atmosphere
@@ -311,11 +312,7 @@ vec3 evalAtmosphereRadiance(
     return vec3(0.0f);
   }
   
-  // Use FIXED physical step size instead of dividing ray into equal parts
-  // This eliminates artifacts caused by certain ray lengths producing bad step sizes
-  const float fixedStepSize = 2.0f;  // 2 km per step
-  int actualSamples = max(1, int(ceil((t1 - t0) / fixedStepSize)));
-  float dt = (t1 - t0) / float(actualSamples);
+  float dt = (t1 - t0) / float(numSamples);
   
   vec3 L = vec3(0.0f);
   vec3 transmittance = vec3(1.0f);
@@ -366,7 +363,7 @@ vec3 evalAtmosphereRadiance(
     }
   }
 
-  for (int i = 0; i < actualSamples && i < 512; ++i) {
+  for (int i = 0; i < numSamples; ++i) {
     float t = t0 + (float(i) + 0.5f) * dt;
     vec3 samplePos = rayOrigin + rayDir * t;
     float altitude = length(samplePos - planetCenter) - args.planetRadius;
@@ -391,75 +388,21 @@ vec3 evalAtmosphereRadiance(
     // Extinction = scattering (Rayleigh + Mie) + absorption (Ozone)
     vec3 extinction = scattering + ozoneAbsorption;
     
-    // BYPASS TRANSMITTANCE LUT - compute sun transmittance analytically
-    // This eliminates quantization artifacts from the transmittance LUT
-    vec3 sunDir_normalized = normalize(sunDir);
+    // Sample transmittance LUT for sun visibility at this sample point.
+    // Encodes full extinction (Rayleigh + Mie + ozone); returns 0 when sun is
+    // below the planet horizon from this sample (handles twilight automatically).
     vec3 up = normalize(samplePos - planetCenter);
-    float sunZenithCosAngle = dot(up, sunDir_normalized);
-    
-    // Improved analytical transmittance following Blender's approach
-    // Key insight: when sun is at horizon, light still travels through atmosphere
-    // - it just has to traverse a VERY long path (the "air mass" factor)
-    float H = args.rayleighScaleHeight;
-    
-    // Air mass factor: how much atmosphere the sun ray traverses relative to zenith
-    // At zenith (cos=1): air mass = 1
-    // At horizon (cos=0): air mass → very large (we use Kasten-Young formula for accuracy)
-    // Below horizon: continue increasing for twilight
-    
-    // Kasten-Young approximation for air mass, extended for negative sun angles
-    // Original: 1 / (cos(z) + 0.50572*(96.07995 - z)^-1.6364)
-    // We use a simpler but robust approximation that handles the full range
-    float sunElevationRad = acos(clamp(sunZenithCosAngle, -1.0f, 1.0f));  // 0 = zenith, π/2 = horizon, π = nadir
-    float sunElevationDeg = degrees(sunElevationRad);
-    
-    // Modified air mass that smoothly increases past horizon for twilight
-    // At zenith (0°): ~1, at horizon (90°): ~40, at -10° below: ~100
-    float airMass;
-    if (sunZenithCosAngle > 0.01f) {
-      // Above horizon: standard air mass calculation
-      airMass = 1.0f / (sunZenithCosAngle + 0.15f * pow(93.885f - sunElevationDeg, -1.253f));
-    } else {
-      // At/below horizon: smoothly extended air mass
-      // Uses exponential growth past horizon for physically plausible twilight
-      float horizonAirMass = 40.0f;  // Air mass at exact horizon
-      float belowHorizonFactor = exp(-sunZenithCosAngle * 10.0f);  // Grows exponentially below
-      airMass = horizonAirMass * belowHorizonFactor;
-    }
-    
-    // Clamp air mass to prevent numerical issues while allowing strong twilight
-    airMass = min(airMass, 200.0f);
-    
-    // Optical depth scales with air mass and altitude-dependent density
-    float opticalDepthToSun = H * exp(-altitude / H) * airMass;
-    
-    // Include ozone absorption in sun transmittance
-    // Ozone path is weighted by the ozone density profile - reduced to prevent purple cast
-    float ozonePathLength = ozoneDensity(args.ozoneLayerAltitude, args) * airMass;
-    vec3 sunTransmittance = exp(-args.rayleighScattering * opticalDepthToSun - 
-                                 args.ozoneAbsorption * ozonePathLength * 0.15f);  // Reduced from 0.3
-    
-    // Twilight fade: sky should go dark by -15 degrees below horizon
-    // Civil twilight ends around -6°, nautical twilight at -12°, astronomical at -18°
-    // Apply exponential falloff below horizon for realistic darkening
-    float twilightFactor;
-    if (sunZenithCosAngle >= 0.0f) {
-      // Above horizon: full brightness
-      twilightFactor = 1.0f;
-    } else {
-      // Below horizon: exponential fade
-      // At -15° (cos ≈ -0.259), should be ~0.01 (nearly dark)
-      // At -90° (cos = 0), should be ~0.0001 (essentially black)
-      float angleBelow = -sunZenithCosAngle;  // 0 at horizon, positive below
-      twilightFactor = exp(-angleBelow * 15.0f);  // Exponential falloff
-    }
-    
-    // Apply twilight fade to sun transmittance
-    sunTransmittance *= twilightFactor;
-    
-    // Single scattering contribution
-    vec3 singleScatter = args.sunIlluminance * sunTransmittance *
-                          (scatteringR * phaseR + scatteringM * phaseM);
+    float sunZenithCosAngle = dot(up, normalize(sunDir));
+    vec3 sunTransmittance = sampleTransmittanceLut(transmittanceLut, transmittanceLutSampler, altitude, sunZenithCosAngle, args);
+
+    // Sample multiscattering LUT (isotropic higher-order scattering transfer coefficient)
+    vec3 ms = sampleMultiscatteringLut(multiscatteringLut, transmittanceLutSampler, altitude, sunZenithCosAngle, args);
+
+    // Combined single + multiple scattering (Hillaire — matches bufferB.glsl reference exactly)
+    // S = sunIlluminance * (scatteringR * (phaseR * T_sun + ms) + scatteringM * (phaseM * T_sun + ms))
+    vec3 scatteredLight = args.sunIlluminance *
+      (scatteringR * (phaseR * sunTransmittance + ms) +
+       scatteringM * (phaseM * sunTransmittance + ms));
 
     // Moon contribution to single scattering. Combined-moon direction +
     // irradiance precomputed above the per-sample loop (Lever-4 style —
@@ -473,23 +416,9 @@ vec3 evalAtmosphereRadiance(
       float moonPhaseM = hgPhase(moonCosTheta, args.mieAnisotropy);
       vec3 moonSingleScatter = combinedMoonIrradiance *
                                (scatteringR * moonPhaseR + scatteringM * moonPhaseM);
-      singleScatter += moonSingleScatter;
+      scatteredLight += moonSingleScatter;
     }
 
-    // Multiscattering contribution
-    // Use high-accuracy analytical approximation instead of LUT
-    vec3 multiScatter = getAnalyticalMultiscattering(altitude, sunZenithCosAngle, args);
-    // Modulate by local scattering coefficient and sun illuminance
-    // Multiscattering is isotropic (phase = 1/4π, integrated gives 1) so we use total scattering
-    vec3 multiScatterContrib = args.sunIlluminance * multiScatter * scattering;
-    
-    // Combined scattering
-    vec3 scatteredLight = singleScatter + multiScatterContrib;
-    
-    // Apply twilight fade to ALL scattering (not just sun transmittance)
-    // This ensures the entire sky darkens uniformly below horizon
-    scatteredLight *= twilightFactor;
-    
     // Energy-conserving analytical integration (Hillaire paper Section 5.6.3, Equation 17)
     // This is crucial for correct behavior in thick media
     // Formula: ∫exp(-σt*x) * S dx = (S - S*exp(-σt*d)) / σt
@@ -514,48 +443,12 @@ vec3 evalAtmosphereRadiance(
     
     L += contribution;
     transmittance *= sampleTransmittance;
-    
-    // Early exit if transmittance becomes negligible
-    if (all(transmittance < vec3(1e-4f))) {
-      break;
-    }
   }
   
   // Final sanitization: replace any NaN/Inf with zero
   L = max(L, vec3(0.0f));
   if (any(isnan(L)) || any(isinf(L))) {
     L = vec3(0.0f);
-  }
-  
-  // BLUE TWILIGHT HAZE (added outside loop for proper falloff)
-  // When sun is below horizon (-15° to 0°), add blue ambient glow from high-altitude scattering
-  // This is view-independent and fades out properly with sun elevation
-  float sunElevation = dot(normalize(sunDir), vec3(0.0f, 1.0f, 0.0f));
-  
-  const float kTwilightStart = -0.01f;       // Starts just below horizon
-  const float kTwilightPeak  = -0.04f;       // Peaks at ~ -2.3 degrees (earlier peak to blend better)
-  const float kTwilightEnd   = -0.20f;       // Ends at ~ -11.5 degrees
-  
-  if (sunElevation < kTwilightStart && sunElevation > kTwilightEnd) {
-    // Calculate strength using a triangle/bell curve: 0 -> 1 -> 0
-    float blueTwilightStrength = 0.0f;
-    
-    if (sunElevation > kTwilightPeak) {
-      // Ramping UP from Horizon to Peak
-      // Map [kTwilightStart, kTwilightPeak] -> [0, 1]
-      blueTwilightStrength = smoothstep(kTwilightStart, kTwilightPeak, sunElevation);
-    } else {
-      // Ramping DOWN from Peak to Deep Night
-      // Map [kTwilightPeak, kTwilightEnd] -> [1, 0]
-      blueTwilightStrength = smoothstep(kTwilightEnd, kTwilightPeak, sunElevation);
-    }
-    
-    blueTwilightStrength = pow(blueTwilightStrength, 1.0f);  // Linear fade
-    
-    // Add subtle blue ambient term (view-independent)
-    // This represents light scattered from high altitude where sun is still visible
-    vec3 blueTwilight = vec3(0.5f, 0.7f, 1.0f) * blueTwilightStrength * 0.015f;
-    L += args.sunIlluminance * blueTwilight;
   }
   
   return L;
@@ -839,12 +732,15 @@ vec3 sampleSkyAmbientForVolume(vec3 dirYUp,
     return vec3(0.0f);
   }
 
-  // Direction -> (azimuth, elevation) UV. Mirrors sky_view_lut.comp.slang:52-53
-  // exactly so a single UV samples both LUTs consistently.
-  float elevation = asin(saturate(dirYUp.y));
+  // Direction -> (azimuth, elevation) UV using the same non-linear elevation
+  // encoding as sky_view_lut.comp.slang and sampleSkyViewLutForRay.
+  // Must stay in sync with both bake and full-sphere sampler.
+  float elevation = asin(saturate(dirYUp.y));  // [0, π/2] — above-horizon only
   float azimuth = atan2(dirYUp.z, dirYUp.x);
   if (azimuth < 0.0f) azimuth += 2.0f * kPi;
-  vec2 uv = vec2(azimuth / (2.0f * kPi), elevation / kPi + 0.5f);
+  float elevSign = sign(elevation);
+  float elevV = elevSign * sqrt(abs(elevation) / (kPi * 0.5f)) * 0.5f + 0.5f;
+  vec2 uv = vec2(azimuth / (2.0f * kPi), elevV);
 
   vec3 skyRadiance = skyViewLut.SampleLevel(lutSampler, uv, 0).rgb;
   float cloudTrans = cloudSkyTransmittanceLut.SampleLevel(lutSampler, uv, 0).r;
@@ -880,7 +776,11 @@ vec3 sampleSkyViewLutForRay(vec3 dirYUp,
   float elevation = asin(clamp(dirYUp.y, -1.0f, 1.0f));
   float azimuth = atan2(dirYUp.z, dirYUp.x);
   if (azimuth < 0.0f) azimuth += 2.0f * kPi;
-  vec2 uv = vec2(azimuth / (2.0f * kPi), elevation / kPi + 0.5f);
+  // Non-linear elevation encoding: must match sky_view_lut.comp.slang bake transform.
+  // Concentrates texels near the horizon where color changes most rapidly.
+  float elevSign = sign(elevation);
+  float elevV = elevSign * sqrt(abs(elevation) / (kPi * 0.5f)) * 0.5f + 0.5f;
+  vec2 uv = vec2(azimuth / (2.0f * kPi), elevV);
 
   return skyViewLut.SampleLevel(lutSampler, uv, 0).rgb;
 }

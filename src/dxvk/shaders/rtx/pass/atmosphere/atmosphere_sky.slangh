@@ -851,13 +851,16 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args, uint2 pixelCoord, uint frameI
   uint msOctaveCount = clamp(args.cloudMultiScatterOctaves, 1u, 4u);
   float baseSigma = 2.0f * args.cloudDensity;  // direct-extinction coefficient (matches shadow march)
 
-  // Atmospheric transmittance to the sun. Purely a function of sun direction
-  // (the simplified ground-level model has no altitude/position dependence),
-  // so hoisted out of the march loop. Calling getAtmosphericTransmittanceForDir
-  // directly rather than getTransmittanceToSun avoids the cloud-ground-shadow
-  // term — clouds shouldn't be self-shadowed by the cloud layer when their
-  // own per-sample sun-shadow march already accounts for occlusion.
-  vec3 airTrans = getAtmosphericTransmittanceForDir(sunDir, args);
+  // Atmospheric transmittance to the sun via the precomputed LUT.
+  // The LUT encodes full Rayleigh + Mie + ozone extinction and returns 0 when
+  // the sun is below the planet horizon — this produces physically correct
+  // warm orange/red cloud color at sunset instead of the analytically-computed
+  // (Mie-less, ozone-scaled) grey. Altitude 0.0 is a valid ground-level
+  // approximation for cloud-slab shading. sunDir.y = cos(sun zenith angle).
+  // Called directly (not via getTransmittanceToSun) to avoid applying the
+  // analytical cloud-ground-shadow term; per-sample shadow march handles it.
+  vec3 airTrans = sampleTransmittanceLut(AtmosphereTransmittanceLut, AtmosphereSkyViewSampler,
+                                         0.0f, sunDir.y, args);
 
   // Pre-compute warm tint (constant per ray). lowSunFactor peaks near the
   // horizon and fades on both sides — the below-horizon smoothstep gate
