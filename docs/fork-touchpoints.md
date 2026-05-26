@@ -576,6 +576,14 @@ initializer list and can't be lifted into a separate TU.
 
 ---
 
+## src/dxvk/rtx_render/rtx_global_volumetrics.cpp
+
+**Category:** index-only
+
+- **Inline tweak** at `RtxGlobalVolumetrics::dispatch` (volumeArgs population block) — 1 LOC (2026-05-26). Populates `volumeArgs.fogSunVisibilityGain` from the matching RTX_OPTION. Adjacent to the existing `volumetricFogAnisotropy` populate; same trivial pattern. Companion to the new field in `volume_args.h` and the new option in `rtx_global_volumetrics.h`.
+
+---
+
 ## src/dxvk/rtx_render/rtx_global_volumetrics.h
 
 **Pre-refactor fork footprint:** N/A — value-only cold-default tweaks
@@ -583,6 +591,8 @@ initializer list and can't be lifted into a separate TU.
 **Category:** index-only
 
 - **Inline tweak** — weather-preset cold-default alignment (2026-05-26). Three RTX_OPTION cold defaults aligned to the `WEATHER_PRESET_VALUES_overcast` block in `rtx_fork_weather.h`: `transmittanceColor` (0.999, 0.999, 0.999) → (0.995, 0.995, 0.995), `transmittanceMeasurementDistanceMeters` 200.0 → 500.0, `anisotropy` 0.0 → 0.05 (mapped from `volumetricAnisotropy` in the preset). Companion to the matching `rtx_options.h` block — same rationale: the dormant "(none / dormant)" weather preset path leaves cold RTX_OPTIONs untouched, so the cold defaults themselves had to move to match overcast.
+
+- **Inline tweak** — new `fogSunVisibilityGain` RTX_OPTION (2026-05-26). `rtx.volumetrics.fogSunVisibilityGain` (default 5.0, range 0.0–50.0) replaces the historical hardcoded artistic gain (x5 with a misleading "10x" comment in the gmod-rtx port) that was previously baked into the per-cache-write expression in fork-owned `atmosphere_common.slangh`. Read by `volume_composite_helpers.slangh::integrateVolumetricNEE` (consumer-side fog application only — surface consumers still read the cache straight). Companions: `rtx_global_volumetrics.cpp` (CB populate), `volume_args.h` (CB field), submodule fork edit at `rtxdi-sdk/include/volumetrics/rtx/algorithm/volume_composite_helpers.slangh`.
 
 ---
 
@@ -1203,6 +1213,14 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** at `applyToneMapping` — replace `if (cb.finalizeWithACES) { color = ACESFilm(color, cb.useLegacyACES); }` with `color = applyTonemapOperator(cb.tonemapOperator, color, false, ..., adaptiveStateBT709);`. Add `#include "rtx/pass/tonemap/fork_tonemap_operators.slangh"`. The 2026-05-XX cleanup also stripped the dead helpers (`reinhardToneMapper`, `filmicToneMapper`, `dynamicToneMapper`, `lumaAverage`, `setSaturationAverage`) and the `InToneCurve` binding. `adaptiveStateBT709` is the observer adaptive state in post-AE-exposure BT.709 space — currently `(0.18, 0.18, 0.18)` because the perceptual auto-exposure brings the geometric-mean scene Yf to mid-gray; consumed by psycho17, ignored by other operators.
   *Global apply pass routes through the fork dispatcher for operator selection.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/volume_args.h
+
+**Category:** index-only
+
+- **Inline tweak** at the `VolumeArgs` struct tail (replaces the `vec2 pad0` slot) — 1 LOC delta (2026-05-26). Adds `float fogSunVisibilityGain;` consuming 4 bytes of the existing 8-byte `pad0` slot; `pad0` shrinks to `float pad0;` to preserve 16-byte struct alignment. Consumed by the submodule fork edit at `rtxdi-sdk/include/volumetrics/rtx/algorithm/volume_composite_helpers.slangh` (named knob replaces the previous hardcoded `* 10.0f` artistic gain at the fog-render consumer site). Companions: `rtx_global_volumetrics.{h,cpp}`.
 
 ---
 

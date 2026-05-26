@@ -1162,10 +1162,15 @@ AtmosphereVolumeSunSample sampleAtmosphereSunLightVolume(vec3 volumePos, vec3 vi
   float phase = hgPhase(cosTheta, kVolumetricAnisotropy);
   
   // For volumetrics, we include the phase function in the radiance
-  // The phase function replaces the BRDF for volume scattering
-  // Cache now stores physical sun radiance (matches surface direct's 0.5f factor).
-  // The historical 10x boost has been moved to the fog-render read site in
-  // volume_composite_helpers.slangh so particle/PSR/dust/SAB consumers see physical values.
+  // The phase function replaces the BRDF for volume scattering.
+  //
+  // Cache stores the honest sun contribution to in-scattering -- no artistic
+  // gain factor is baked in here. The historical fog-visibility gain (originally
+  // a hardcoded x5 with a misleading "10x" comment in the gmod-rtx port) has
+  // moved to a user-tunable knob (rtx.volumetrics.fogSunVisibilityGain) read at
+  // the fog-render consumer site in volume_composite_helpers.slangh. Surface
+  // consumers (decals/particles/PSR/SAB Path B via evalVolumetricNEE) read this
+  // cache straight, which is correct for their lighting math when un-muted.
   //
   // Fork (2026-05-26): sun-elevation gate. Volumetric NEE fires for any
   // sun above the -15deg twilight cutoff, but the cache is filled by
@@ -1173,10 +1178,11 @@ AtmosphereVolumeSunSample sampleAtmosphereSunLightVolume(vec3 volumePos, vec3 vi
   // the sun over local terrain even when ground surfaces are in shadow.
   // Gate the contribution by sun altitude so the cache fades smoothly
   // as the sun approaches/crosses the geodetic horizon, killing the
-  // bright fog/decals when sun is visually below terrain.
+  // bright fog/decals when sun is visually below terrain. This is a
+  // per-froxel visibility approximation, not an artistic gain.
   const float sunUpAxis = (isZUp ? args.sunDirection.z : args.sunDirection.y);
   const float sunElevationGate = smoothstep(0.0f, 0.3f, sunUpAxis);
-  result.radiance = args.sunIlluminance * transmittance * phase * mieModulation * sunVisibility * args.sunRayBrightness * 0.5f * sunElevationGate;
+  result.radiance = args.sunIlluminance * transmittance * phase * mieModulation * sunVisibility * args.sunRayBrightness * sunElevationGate;
   result.valid = any(transmittance > vec3(0.0f));
 
 #ifdef ATMOSPHERE_AVAILABLE
