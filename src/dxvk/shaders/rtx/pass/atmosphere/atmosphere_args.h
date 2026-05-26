@@ -74,7 +74,7 @@ struct AtmosphereArgs {
   uint skyViewLutHeight;
   float ozoneLayerWidth;  // Width of ozone layer (km)
   float viewAltitude;     // Camera altitude offset (km)
-  uint pad2;
+  float multiScatterPhysicalStrength;  // 0 = pure analytical (artistic, preset-faithful), 1 = pure LUT-based hemisphere integration (physical)
 
   // Derived parameters (computed on CPU)
   float atmosphereRadius;  // planetRadius + atmosphereThickness

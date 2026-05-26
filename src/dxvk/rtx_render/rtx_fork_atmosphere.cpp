@@ -920,6 +920,12 @@ namespace fork_hooks {
           RemixGui::DragFloat("Ozone Layer Altitude", &RtxOptions::ozoneLayerAltitudeObject(), 0.5f, 0.0f, 50.0f, "%.1f km", sliderFlags);
           RemixGui::DragFloat("Ozone Layer Width", &RtxOptions::ozoneLayerWidthObject(), 0.5f, 1.0f, 30.0f, "%.1f km", sliderFlags);
 
+          RemixGui::DragFloat("Multiscatter Physical Strength", &RtxOptions::multiScatterPhysicalStrengthObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "0 = artistic multiscattering (analytical inline fit; preset color stays faithful, easy to style). "
+              "1 = physical multiscattering (Hillaire-style LUT hemisphere integration; wavelength-amplifies each preset's "
+              "Rayleigh bias for realistic saturation but harder to art-direct). Intermediate values blend.");
+
           ImGui::TreePop();
         }
 

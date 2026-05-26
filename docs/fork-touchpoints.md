@@ -1469,3 +1469,32 @@ all three visually:
   *Adds Height LUT (1 checkbox), Layer 2 (1 checkbox + 5 sliders), and Worley carve (2 `DragFloat` + 1 `DragInt`) ImGui subsections inside the existing Clouds tree, each with tooltips describing the slide source and the relaunch requirement where applicable.*
 
 ---
+
+## Workstream — Multiscattering: preset-faithful default + physical-blend knob (fork — 2026-05-26)
+
+Owen's `3e37062b` (`fix(atmosphere): fix multiscattering to match reference two-term model`) on canonical replaced the numerical hemisphere integration in `computeMultiscattering` with an analytical-only fit using heavily blue-biased coefficients (`vec3(0.217, 0.347, 0.594) * 0.02`), and switched `evalAtmosphereRadiance` to sample the multiscattering LUT instead of calling the inline analytical helpers. Two consequences:
+
+1. **Cloud-vs-sky color mismatch at sunset.** `cloud_render.comp.slang` reads the sky-view LUT at the sun direction as the warm ambient source for cumulus. The new bake pumped extra blue energy into the LUT at every elevation, so the cumulus ambient term lost its warm tint and read white against an orange sky.
+2. **Preset color washed across all defaults.** With the LUT consumed by `evalAtmosphereRadiance`, the hemisphere integration's wavelength bias amplified each preset's Rayleigh into the sky (Earth too blue, Desert blue-ish, Mars desaturated). The previously-inline `getAnalyticalMultiscattering` was a tame curve fit that the presets were calibrated against.
+
+Fork resolution: restore the numerical hemisphere integration in the LUT bake AND keep the inline analytical multiscattering as the default in `evalAtmosphereRadiance`, with a per-preset knob to blend in the LUT-based physical version when realism is wanted.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/multiscattering_lut.comp.slang`** — restoration to pre-`3e37062b` state.
+  *Restores `computeMultiscattering` to the 64-direction × 20-march-sample hemisphere integration (Hillaire 2nd-order scattering primary term) plus ground reflection plus analytical fit. Restores `computeAnalyticalMultiscattering` coefficients to the toned-down `vec3(0.35, 0.38, 0.45) × 0.01` ("more neutral, less blue-heavy") tuning that prevents purple cast when combined with sunset orange.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned inline tweak.
+  *Inside `evalAtmosphereRadiance`'s per-sample loop: replaces the post-`3e37062b` LUT-only multiscattering with a `lerp(contribAnalytical, contribLut, args.multiScatterPhysicalStrength)` blend. `contribAnalytical` calls the existing inline `getAnalyticalMultiscattering` (preset-faithful, the pre-`3e37062b` shape); `contribLut` samples the multiscattering LUT (the now-restored hemisphere integration). Default 0.0 = byte-identical to pre-`3e37062b`; 1.0 = full physical.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned addition.
+  *Replaces the existing `uint pad2` slot at the end of the LUT-dims 16-byte row with `float multiScatterPhysicalStrength`. No struct layout change; existing field offsets unchanged.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds `RTX_OPTION("rtx.atmosphere", float, multiScatterPhysicalStrength, 0.0f, …)` immediately after `sunIlluminance` in the `rtx.atmosphere` cluster.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned addition.
+  *Inside `getAtmosphereArgs()`: sets `args.multiScatterPhysicalStrength = RtxOptions::multiScatterPhysicalStrength()`. Removes the now-stale `args.pad2 = 0` write (slot is the new typed field). ~2 LOC net.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *Adds a `RemixGui::DragFloat("Multiscatter Physical Strength", …, 0.0f, 1.0f, "%.2f", sliderFlags)` widget at the end of the Atmosphere → Advanced ImGui tree (right after Ozone Layer Width), with a tooltip explaining the artistic-vs-physical tradeoff. ~6 LOC.*
+
+---

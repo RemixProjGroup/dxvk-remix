@@ -356,6 +356,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.ozoneLayerAltitude = RtxOptions::ozoneLayerAltitude();
   args.ozoneLayerWidth = RtxOptions::ozoneLayerWidth();
 
+  // Multiscattering blend: 0 = artistic (analytical inline), 1 = physical (LUT hemisphere).
+  args.multiScatterPhysicalStrength = RtxOptions::multiScatterPhysicalStrength();
+
   // View Altitude (converted m to km)
   args.viewAltitude = RtxOptions::altitude() * 0.001f;
 
@@ -370,7 +373,6 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.atmosphereRadius = args.planetRadius + args.atmosphereThickness;
   args.rayleighScaleHeight = kRayleighScaleHeight;
   args.mieScaleHeight = kMieScaleHeight;
-  args.pad2 = 0;
 
   // ----- Night-sky shading (fork) -----
   args.starBrightness     = RtxOptions::starBrightness();

@@ -1236,6 +1236,7 @@ namespace dxvk {
     RTX_OPTION("rtx.atmosphere", float, ozoneLayerAltitude, 25.0f, "Altitude of ozone layer peak in kilometers.");
     RTX_OPTION("rtx.atmosphere", float, ozoneLayerWidth, 15.0f, "Width of the ozone layer in kilometers.");
     RTX_OPTION("rtx.atmosphere", Vector3, sunIlluminance, Vector3(15.0f, 15.0f, 15.0f), "Base Sun illuminance color/intensity.");
+    RTX_OPTION("rtx.atmosphere", float, multiScatterPhysicalStrength, 0.0f, "Blend between artistic (0) and physical (1) multiscattering. 0 = analytical inline fit that preserves preset color directly. 1 = LUT-based hemisphere integration (Hillaire-physical) that wavelength-amplifies each preset's Rayleigh bias. Intermediate values blend. Per-preset overrides recommended.");
 
     // ----- Night-sky shading (fork) -----
     // Stars, Milky Way, shooting stars, airglow. Active when skyMode == PhysicalAtmosphere.

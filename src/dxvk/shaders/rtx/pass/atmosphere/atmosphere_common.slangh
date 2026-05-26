@@ -112,7 +112,7 @@ float ozoneDensity(float altitude, AtmosphereArgs args) {
   
   // Gaussian falloff
   float density = exp(-distFromCenter * distFromCenter / (2.0f * sigma * sigma));
-  
+
   return density;
 }
 
@@ -395,14 +395,21 @@ vec3 evalAtmosphereRadiance(
     float sunZenithCosAngle = dot(up, normalize(sunDir));
     vec3 sunTransmittance = sampleTransmittanceLut(transmittanceLut, transmittanceLutSampler, altitude, sunZenithCosAngle, args);
 
-    // Sample multiscattering LUT (isotropic higher-order scattering transfer coefficient)
-    vec3 ms = sampleMultiscatteringLut(multiscatteringLut, transmittanceLutSampler, altitude, sunZenithCosAngle, args);
+    // Multiscattering: blended between analytical (preset-faithful, artistic
+    // control surface) and LUT-based hemisphere integration (physical, Hillaire
+    // reference). Knob default 0.0 = pure analytical so existing presets are
+    // byte-identical. Per-preset override to 1.0 opts into physical realism.
+    // Intermediate values blend.
+    vec3 msAnalytical = getAnalyticalMultiscattering(altitude, sunZenithCosAngle, args);
+    vec3 msLut        = sampleMultiscatteringLut(multiscatteringLut, transmittanceLutSampler, altitude, sunZenithCosAngle, args);
 
-    // Combined single + multiple scattering (Hillaire — matches bufferB.glsl reference exactly)
-    // S = sunIlluminance * (scatteringR * (phaseR * T_sun + ms) + scatteringM * (phaseM * T_sun + ms))
-    vec3 scatteredLight = args.sunIlluminance *
-      (scatteringR * (phaseR * sunTransmittance + ms) +
-       scatteringM * (phaseM * sunTransmittance + ms));
+    vec3 singleScatter = args.sunIlluminance * sunTransmittance *
+                         (scatteringR * phaseR + scatteringM * phaseM);
+    vec3 contribAnalytical = args.sunIlluminance * msAnalytical * scattering;
+    vec3 contribLut        = args.sunIlluminance * scattering * msLut;
+    vec3 multiScatterContrib = lerp(contribAnalytical, contribLut,
+                                     args.multiScatterPhysicalStrength);
+    vec3 scatteredLight = singleScatter + multiScatterContrib;
 
     // Moon contribution to single scattering. Combined-moon direction +
     // irradiance precomputed above the per-sample loop (Lever-4 style —
