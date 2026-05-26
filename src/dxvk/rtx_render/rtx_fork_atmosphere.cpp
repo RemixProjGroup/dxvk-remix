@@ -25,6 +25,7 @@
 #include <cstdio>                     // std::snprintf (renderMoonUI label)
 #include <cmath>                      // std::tan (cloud render camera basis)
 #include <algorithm>                  // std::max / std::min (renderChromaticityWidget)
+#include <unordered_map>              // per-widget cached chromaticity state
 
 namespace dxvk {
 namespace fork_hooks {
@@ -538,12 +539,23 @@ namespace fork_hooks {
     }
 
     // Render an RtxOption<Vector3> as a ColorEdit3 chromaticity picker plus a
-    // magnitude scalar. Chromaticity is normalized using the max channel; magnitude
-    // is the max-channel value. On any widget change, writes back color * magnitude.
+    // magnitude scalar. opt holds chromaticity * magnitude; the picker shows
+    // chromaticity (normalized to max channel == 1 in steady state) and the
+    // DragFloat shows magnitude == max(opt).
     //
     // Designed for atmospheric-coefficient triplets (Base Rayleigh / Base Mie /
-    // Base Ozone / Base Sun Illuminance) where the Vector3's per-channel ratio IS
-    // the visible "color" and the overall magnitude is the user-tunable strength.
+    // Base Ozone / Base Sun Illuminance) where the Vector3's per-channel ratio
+    // IS the visible "color" and the overall magnitude is the user-tunable
+    // strength.
+    //
+    // We cache chromaticity and magnitude per widget across frames because the
+    // picker popup manipulates RGB in place and re-deriving them every frame
+    // from opt = chromaticity * magnitude makes the SV cursor spring back to
+    // V=1 mid-drag (and collapse to (1,1,1) entirely when the user crosses
+    // the S=0 axis, taking the popup's "Original" ref swatch with it). Sync
+    // from opt only on external mutation (preset load, .conf reload), and
+    // re-normalize chromaticity to max=1 once the picker popup closes so the
+    // magnitude slider keeps reading max(opt) in steady state.
     void renderChromaticityWidget(const char* colorLabel,
                                   const char* magLabel,
                                   RtxOption<Vector3>* opt,
@@ -554,40 +566,70 @@ namespace fork_hooks {
                                   const char* magTooltip) {
       constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
 
-      const Vector3 v = opt->get();
-      float magnitude = std::max({v.x, v.y, v.z});
-      Vector3 color = (magnitude > 1e-9f)
-                      ? Vector3(v.x / magnitude, v.y / magnitude, v.z / magnitude)
-                      : Vector3(1.0f, 1.0f, 1.0f);
+      struct State {
+        Vector3 chromaticity { 1.0f, 1.0f, 1.0f };
+        float magnitude = 0.0f;
+        Vector3 lastWrittenOpt { 0.0f, 0.0f, 0.0f };
+        bool initialized = false;
+      };
+      static std::unordered_map<const char*, State> states;
+      State& st = states[colorLabel];
 
-      bool colorChanged = false;
-      if (ImGui::ColorEdit3(colorLabel, &color.x, ImGuiColorEditFlags_NoAlpha)) {
-        colorChanged = true;
+      const Vector3 v = opt->get();
+      const bool externallyChanged = !st.initialized
+          || std::abs(v.x - st.lastWrittenOpt.x) > 1e-9f
+          || std::abs(v.y - st.lastWrittenOpt.y) > 1e-9f
+          || std::abs(v.z - st.lastWrittenOpt.z) > 1e-9f;
+      if (externallyChanged) {
+        st.magnitude = std::max({v.x, v.y, v.z});
+        st.chromaticity = (st.magnitude > 1e-9f)
+                        ? Vector3(v.x / st.magnitude, v.y / st.magnitude, v.z / st.magnitude)
+                        : Vector3(1.0f, 1.0f, 1.0f);
+        st.lastWrittenOpt = v;
+        st.initialized = true;
       }
+
+      const bool colorChanged = ImGui::ColorEdit3(colorLabel, &st.chromaticity.x, ImGuiColorEditFlags_NoAlpha);
       if (colorTooltip) RemixGui::SetTooltipToLastWidgetOnHover(colorTooltip);
 
-      bool magChanged = false;
-      if (ImGui::DragFloat(magLabel, &magnitude, magSpeed, 0.0f, magMax, magFormat, sliderFlags)) {
-        magChanged = true;
-      }
+      const bool magChanged = ImGui::DragFloat(magLabel, &st.magnitude, magSpeed, 0.0f, magMax, magFormat, sliderFlags);
+      const bool magActive = ImGui::IsItemActive();
       if (magTooltip) RemixGui::SetTooltipToLastWidgetOnHover(magTooltip);
 
       if (colorChanged || magChanged) {
         // If the user picks a color while magnitude is zero, color * 0 = (0,0,0)
-        // erases the chromaticity entirely — next frame the picker resets to
-        // white and the choice can't be recovered. Nudge magnitude to magSpeed
-        // so the color choice becomes visible and tunable from there.
-        if (colorChanged && magnitude <= 1e-9f) {
-          magnitude = magSpeed;
+        // erases the chromaticity entirely. Nudge magnitude to magSpeed so the
+        // pick is recoverable.
+        if (colorChanged && st.magnitude <= 1e-9f) {
+          st.magnitude = magSpeed;
         }
-        // Clamp normalized color into [0,1] in case the picker returned an
-        // out-of-gamut value (shouldn't happen with ColorEdit3 default flags).
-        color.x = std::max(0.0f, std::min(1.0f, color.x));
-        color.y = std::max(0.0f, std::min(1.0f, color.y));
-        color.z = std::max(0.0f, std::min(1.0f, color.z));
-        opt->setImmediately(Vector3(color.x * magnitude,
-                                    color.y * magnitude,
-                                    color.z * magnitude));
+        st.chromaticity.x = std::max(0.0f, std::min(1.0f, st.chromaticity.x));
+        st.chromaticity.y = std::max(0.0f, std::min(1.0f, st.chromaticity.y));
+        st.chromaticity.z = std::max(0.0f, std::min(1.0f, st.chromaticity.z));
+        const Vector3 newOpt(st.chromaticity.x * st.magnitude,
+                             st.chromaticity.y * st.magnitude,
+                             st.chromaticity.z * st.magnitude);
+        opt->setImmediately(newOpt);
+        st.lastWrittenOpt = newOpt;
+      }
+
+      // Detect ColorEdit3's internal popup state. ColorEdit3 calls
+      // PushID(label) then OpenPopup("picker"); mirror the PushID so the
+      // hash matches.
+      ImGui::PushID(colorLabel);
+      const bool pickerOpen = ImGui::IsPopupOpen("picker");
+      ImGui::PopID();
+      if (!pickerOpen && !magActive) {
+        const float maxCh = std::max({st.chromaticity.x, st.chromaticity.y, st.chromaticity.z});
+        if (maxCh > 1e-9f && maxCh < 1.0f - 1e-6f) {
+          const float invMax = 1.0f / maxCh;
+          st.chromaticity = Vector3(st.chromaticity.x * invMax,
+                                     st.chromaticity.y * invMax,
+                                     st.chromaticity.z * invMax);
+          st.magnitude *= maxCh;
+          // chromaticity * magnitude is preserved, so opt and lastWrittenOpt
+          // stay correct without a writeback.
+        }
       }
     }
 
