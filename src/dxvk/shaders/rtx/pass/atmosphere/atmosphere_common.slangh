@@ -1163,8 +1163,20 @@ AtmosphereVolumeSunSample sampleAtmosphereSunLightVolume(vec3 volumePos, vec3 vi
   
   // For volumetrics, we include the phase function in the radiance
   // The phase function replaces the BRDF for volume scattering
-  // Boost brightness by 10x for volumetrics since they need more energy to be visible
-  result.radiance = args.sunIlluminance * transmittance * phase * mieModulation * sunVisibility * args.sunRayBrightness * 5.0f;
+  // Cache now stores physical sun radiance (matches surface direct's 0.5f factor).
+  // The historical 10x boost has been moved to the fog-render read site in
+  // volume_composite_helpers.slangh so particle/PSR/dust/SAB consumers see physical values.
+  //
+  // Fork (2026-05-26): sun-elevation gate. Volumetric NEE fires for any
+  // sun above the -15deg twilight cutoff, but the cache is filled by
+  // per-froxel visibility rays from positions in the air -- froxels see
+  // the sun over local terrain even when ground surfaces are in shadow.
+  // Gate the contribution by sun altitude so the cache fades smoothly
+  // as the sun approaches/crosses the geodetic horizon, killing the
+  // bright fog/decals when sun is visually below terrain.
+  const float sunUpAxis = (isZUp ? args.sunDirection.z : args.sunDirection.y);
+  const float sunElevationGate = smoothstep(0.0f, 0.3f, sunUpAxis);
+  result.radiance = args.sunIlluminance * transmittance * phase * mieModulation * sunVisibility * args.sunRayBrightness * 0.5f * sunElevationGate;
   result.valid = any(transmittance > vec3(0.0f));
 
 #ifdef ATMOSPHERE_AVAILABLE
