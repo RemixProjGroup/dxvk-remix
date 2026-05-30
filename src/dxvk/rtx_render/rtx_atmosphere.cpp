@@ -201,6 +201,7 @@ void RtxAtmosphere::initialize(Rc<DxvkContext> ctx) {
 
   createLutResources(ctx);
   dispatchCloudNoise3DBake(ctx);
+  cacheCloudNoiseBakeInputs();  // seed the re-bake gate with the launch-time inputs
   dispatchCloudHeightLutBake(ctx);
   m_initialized = true;
   m_lutsNeedRecompute = true;
@@ -490,17 +491,20 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // physical cloud occlusion when the feature is enabled.
     args.cloudSkyAmbientStrength = RtxOptions::cloudSkyAmbientStrength();
     args.cloudSkyAmbientCloudOcclusionStrength = RtxOptions::cloudSkyAmbientCloudOcclusionStrength();
-    args.padCloudC2 = 0.0f;
+    args.cloudNoiseWarpStrength = RtxOptions::cloudNoiseWarpStrength();
 
     // Cloud voxel grid extent (Nubis Cubed 2023, fork — 2026-05-12).
-    // Horizontal: 12 km camera-centered tile-wrap (cumulus-cell-friendly span
-    // matching the cloudNoiseTileKm convention). Vertical: track cloudThickness
-    // so the grid spans the slab vertically. cloudThickness is already in km
-    // per atmosphere_args.h:149.
+    // Horizontal: track cloudNoiseTileKm so the grid's frac-wrap stays aligned
+    // with the noise period at ALL tile values — the sampleDSun / sampleDAmbient
+    // math assumes extent == tile. Previously hardcoded 12 km, which only held
+    // at the default tile; non-divisor tiles (7-11) desynced the voxel-grid
+    // lighting from the density field. Vertical: track cloudThickness so the
+    // grid spans the slab vertically. cloudThickness is already in km per
+    // atmosphere_args.h:149.
     // The Dirty flags are informational fields with no consumer in this
     // commit; left zero here to avoid spurious LUT-recompute triggers via
     // the memcmp in needsLutRecompute().
-    args.cloudVoxelGridExtentKm    = 12.0f;
+    args.cloudVoxelGridExtentKm    = RtxOptions::cloudNoiseTileKm();
     args.cloudVoxelGridVerticalKm  = args.cloudThickness;
     args.cloudVoxelGridFrameOffset = 0.0f;
     args.cloudVoxelGridSunDirty    = 0u;
@@ -591,8 +595,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudLayer2DensityScale  = RtxOptions::cloudLayer2DensityScale();
     args.pad_cloudLayer2_0        = 0.0f;
 
-    // Worley carve params — consumed only by rtx_cloud_noise_baker, which
-    // runs once at init. Changing these from ImGui requires a game relaunch.
+    // Worley carve params — consumed only by rtx_cloud_noise_baker. Changing
+    // these (or cloudNoiseTileKm) re-bakes the noise volume live via the
+    // needsCloudNoiseRebake() gate in computeLuts; no relaunch required.
     args.cloudWorleyCarveStrength = RtxOptions::cloudWorleyCarveStrength();
     args.cloudWorleyFrequency     = RtxOptions::cloudWorleyFrequency();
     args.cloudWorleyOctaves       = RtxOptions::cloudWorleyOctaves();
@@ -617,6 +622,24 @@ bool RtxAtmosphere::needsLutRecompute() const {
   AtmosphereArgs currentArgs = getAtmosphereArgs();
   normalizeForSkyLutCache(currentArgs);
   return memcmp(&currentArgs, &m_cachedArgs, sizeof(AtmosphereArgs)) != 0;
+}
+
+bool RtxAtmosphere::needsCloudNoiseRebake() const {
+  // Compares only the inputs rtx_cloud_noise_baker.comp.slang actually reads:
+  // cloudNoiseTileKm (world tile period) and the cloudWorley* carve controls.
+  // baseFreq / detailFreq / octave seeds are shader-side constants, so they
+  // never trigger a re-bake.
+  return m_cachedNoiseTileKm         != RtxOptions::cloudNoiseTileKm()
+      || m_cachedWorleyFrequency     != RtxOptions::cloudWorleyFrequency()
+      || m_cachedWorleyOctaves       != RtxOptions::cloudWorleyOctaves()
+      || m_cachedWorleyCarveStrength != RtxOptions::cloudWorleyCarveStrength();
+}
+
+void RtxAtmosphere::cacheCloudNoiseBakeInputs() {
+  m_cachedNoiseTileKm         = RtxOptions::cloudNoiseTileKm();
+  m_cachedWorleyFrequency     = RtxOptions::cloudWorleyFrequency();
+  m_cachedWorleyOctaves       = RtxOptions::cloudWorleyOctaves();
+  m_cachedWorleyCarveStrength = RtxOptions::cloudWorleyCarveStrength();
 }
 
 void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
@@ -774,6 +797,25 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
 void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
   if (!m_initialized) {
     return;
+  }
+
+  // Re-bake the 256^3 cloud noise volume if a bake input changed at runtime
+  // (e.g. dragging the ImGui cloudNoiseTileKm slider). The bake encodes the
+  // tile period into the texture's periodic structure; the runtime sampler
+  // divides world position by the live cloudNoiseTileKm. If they disagree the
+  // cloud feature size rescales and the sky bands toward the horizon. Gated by
+  // needsCloudNoiseRebake() so it fires only on an actual change, not per
+  // frame. Must run before the voxel-grid bakes and cloud render below — all
+  // read m_cloudNoise3D — so the write→read barrier orders the fresh volume
+  // ahead of those consumers this frame.
+  if (needsCloudNoiseRebake()) {
+    dispatchCloudNoise3DBake(ctx);
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+    cacheCloudNoiseBakeInputs();
   }
 
   // Sky LUTs (transmittance / multiscattering / sky-view) only rebake when
@@ -1197,9 +1239,10 @@ void RtxAtmosphere::dispatchCloudRender(Rc<DxvkContext> ctx) {
 void RtxAtmosphere::dispatchCloudNoise3DBake(Rc<DxvkContext> ctx) {
   ScopedGpuProfileZone(ctx, "Atmosphere Cloud Noise 3D Bake");
 
-  // One-shot bake at atmosphere init. Runs the 3D Perlin FBM stack defined
-  // in rtx_cloud_noise_baker.comp.slang and writes 256-cubed voxels of R8 density.
-  // Mirrors dispatchSkyViewLut's structure but uses a 3D dispatch.
+  // Baked at atmosphere init and re-baked whenever a bake input changes (the
+  // needsCloudNoiseRebake() gate in computeLuts). Runs the 3D Perlin FBM stack
+  // defined in rtx_cloud_noise_baker.comp.slang and writes 256-cubed voxels of
+  // R8 density. Mirrors dispatchSkyViewLut's structure but uses a 3D dispatch.
 
   // Update atmosphere args buffer
   AtmosphereArgs args = getAtmosphereArgs();

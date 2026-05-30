@@ -1013,8 +1013,15 @@ namespace fork_hooks {
                             1.0f, 6.0f, 24.0f, "%.0f km", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "World-space tile size for the 3D cloud noise. Smaller = visible "
-            "repetition; larger = lower-frequency detail. CHANGE APPLIES ON "
-            "GAME RELAUNCH.");
+            "repetition; larger = lower-frequency detail. Re-bakes the noise "
+            "volume live on change.");
+        RemixGui::DragFloat("Anti-Tile Warp", &RtxOptions::cloudNoiseWarpStrengthObject(),
+                            0.01f, 0.0f, 1.5f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Anti-tiling domain warp, as a fraction of Texture Scale. Breaks the "
+            "noise's periodic repeat so it stops reading as horizontal layers "
+            "toward the horizon at small tile sizes. 0 = off, 0.75 default. "
+            "Too high smears cloud shapes. Applies live.");
 
         ImGui::Separator();
         ImGui::TextDisabled("Look");

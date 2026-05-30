@@ -1534,26 +1534,35 @@ namespace dxvk {
     RTX_OPTION("rtx.atmosphere", float, cloudNoiseTileKm, 12.0f,
                "World-space tile period (km) for the prebaked 3D cloud noise texture. "
                "Smaller = more visible repetition; larger = lower-frequency cloud detail. "
-               "Default 12.0; viable range 6-24.");
+               "Default 12.0; viable range 6-24. Re-bakes the cloud noise volume live on change.");
+    RTX_OPTION("rtx.atmosphere", float, cloudNoiseWarpStrength, 0.75f,
+               "Anti-tiling domain-warp strength, as a fraction of cloudNoiseTileKm. "
+               "Displaces the horizontal cloud-noise sample position by a low-frequency "
+               "non-tiling offset so the texture's periodic repeat stops reading as "
+               "horizontal layers toward the horizon at small tile values. 0 = off; "
+               "0.75 default. Higher = more de-tiling but more organic distortion of "
+               "cloud shapes. Applied live (no re-bake needed).");
 
     // Worley carve (Schneider15 — slide 17 of RDR2 SIGGRAPH 2019).
     // These knobs control how chunky / cell-shaped the prebaked cloud noise is.
-    // The bake is one-shot at atmosphere init, so changes APPLY ON GAME RELAUNCH.
+    // Changing any of them (or cloudNoiseTileKm) re-bakes the 256^3 noise volume
+    // live via RtxAtmosphere::needsCloudNoiseRebake — no relaunch needed, though
+    // dragging a slider re-bakes each frame the value changes and may hitch.
     RTX_OPTION("rtx.atmosphere", float, cloudWorleyCarveStrength, 0.6f,
                "Schneider15 cauliflower carve strength. The Worley FBM is "
                "subtracted from the Perlin base in the cloud noise bake to "
                "produce chunky 3D cell silhouettes. 0 = pure Perlin (smooth "
                "blobs, flat pancake look); 1.0 = aggressive carve (crushed "
-               "base shape). 0.6 default. CHANGE APPLIES ON GAME RELAUNCH.");
+               "base shape). 0.6 default. Re-bakes the cloud noise volume live on change.");
     RTX_OPTION("rtx.atmosphere", float, cloudWorleyFrequency, 1.0f,
                "Worley feature-point density, cycles per km. Smaller = larger "
                "cumulus cells (boulder-sized chunks); larger = smaller cells "
                "(cauliflower bumps). Default 1.0 targets cumulus-cell scale. "
-               "CHANGE APPLIES ON GAME RELAUNCH.");
+               "Re-bakes the cloud noise volume live on change.");
     RTX_OPTION("rtx.atmosphere", uint32_t, cloudWorleyOctaves, 3,
                "Worley FBM octave count (clamped 1..4 in the bake shader). "
                "Higher = more sub-scale detail on cell boundaries. Default 3. "
-               "CHANGE APPLIES ON GAME RELAUNCH.");
+               "Re-bakes the cloud noise volume live on change.");
 
     // Cloud aerial perspective (fork — 2026-05-16). Distant cloud samples
     // attenuate exponentially with march distance, mimicking real atmospheric

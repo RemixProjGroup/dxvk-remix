@@ -250,7 +250,9 @@ struct AtmosphereArgs {
   // (skyAmbientStrength = 0 means the feature is off by default).
   float cloudSkyAmbientStrength;                 // Overall multiplier on the sky-ambient term [0..3]. 0 = feature off.
   float cloudSkyAmbientCloudOcclusionStrength;   // Strength of cloud occlusion of sky ambient [0..1]. 1 = physical.
-  float padCloudC2;
+  float cloudNoiseWarpStrength;  // Anti-tiling domain-warp amplitude as a fraction of
+                                 // cloudNoiseTileKm (0 = off). Reuses the former padCloudC2
+                                 // slot, so the constant-buffer layout is unchanged.
 
   // ----- Cloud voxel grid (Nubis Cubed 2023, fork — 2026-05-12) -----
   // 256x256x32 R16F precomputed grids storing summed optical depth along the

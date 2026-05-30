@@ -239,7 +239,9 @@ private:
   void dispatchTransmittanceLut(Rc<DxvkContext> ctx);
   void dispatchMultiscatteringLut(Rc<DxvkContext> ctx);
   void dispatchSkyViewLut(Rc<DxvkContext> ctx);
-  void dispatchCloudNoise3DBake(Rc<DxvkContext> ctx);  // Stage C: one-shot at init
+  void dispatchCloudNoise3DBake(Rc<DxvkContext> ctx);  // Stage C: baked at init + on bake-input change
+  bool needsCloudNoiseRebake() const;                  // true when a bake input (tile / worley*) changed
+  void cacheCloudNoiseBakeInputs();                    // snapshot the current bake inputs after a bake
   void dispatchCloudHeightLutBake(Rc<DxvkContext> ctx);  // Fork: one-shot at init (slide 3 lift)
   void dispatchCloudSkyTransmittanceLut(Rc<DxvkContext> ctx);  // Fork: per-frame
   // Cloud voxel grid bakes (Nubis Cubed 2023, fork — 2026-05-12). Round-robin
@@ -355,6 +357,18 @@ private:
   Rc<DxvkBuffer> m_constantsBuffer;
 
   AtmosphereArgs m_cachedArgs;
+  // Cloud noise 3D re-bake gate (fork). The 256^3 noise volume bakes its
+  // periodic structure from cloudNoiseTileKm + the cloudWorley* inputs, while
+  // the runtime sampler divides world position by the *live* cloudNoiseTileKm.
+  // The bake originally ran only once at init, so changing a bake input at
+  // runtime (e.g. the ImGui tile slider) desynced the runtime divisor from the
+  // baked structure — rescaling cloud feature size and banding the horizon.
+  // These snapshot the last-baked inputs; needsCloudNoiseRebake() compares them
+  // against the live RtxOptions so the volume re-bakes only on an actual change.
+  float    m_cachedNoiseTileKm         = 0.0f;
+  float    m_cachedWorleyFrequency     = 0.0f;
+  uint32_t m_cachedWorleyOctaves       = 0u;
+  float    m_cachedWorleyCarveStrength = 0.0f;
   bool m_initialized = false;
   bool m_lutsNeedRecompute = true;
 };

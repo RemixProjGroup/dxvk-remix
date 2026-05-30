@@ -1704,6 +1704,41 @@ float sampleTricubicBSpline(Texture3D<float> tex, SamplerState s,
   return mix(txy1, txy0, g0.z);
 }
 
+// Anti-tiling domain warp (fork). The prebaked cloud noise is periodic at
+// cloudNoiseTileKm, so at small tiles the periodic repeat telescopes into
+// visible horizontal layers toward the horizon — the residual that remains
+// after the runtime re-bake fix. Displace the HORIZONTAL sample position by a
+// low-frequency, NON-tiling offset whose wavelength spans several tiles, so
+// two world positions one tile apart no longer sample identical texels and the
+// repeat dissolves into organic variation. Amplitude is a fraction of the tile
+// (args.cloudNoiseWarpStrength) so it scales with the knob; 0 disables. Y is
+// left unwarped so the altitude / height-profile mapping stays intact. Applied
+// identically in the full runtime sampler and the cheap voxel-bake sampler so
+// the density and its baked self-shadows agree.
+void applyCloudNoiseAntiTileWarp(inout vec3 perturbed, AtmosphereArgs args) {
+  if (args.cloudNoiseWarpStrength <= 0.0f) {
+    return;
+  }
+  // Two-octave fractal warp. A single smooth wave only decorrelates repeats at
+  // one spacing — adjacent horizon repeats get shoved by nearly the same amount,
+  // leaving a faint residual no matter the amplitude. Two octaves at NON-integer
+  // tile multiples break the periodicity across scales: the long octave
+  // (~5.3 tiles) scrambles large structure; the short octave (~2.1 tiles, near a
+  // half-period-per-tile offset) lands adjacent repeats out of phase. Non-integer
+  // multiples matter — a wavelength that's an integer multiple of the tile would
+  // itself repeat at the tile period and re-introduce banding.
+  const float kWarp1Tiles = 5.3f;  // large-scale break
+  const float kWarp2Tiles = 2.1f;  // adjacent-repeat break
+  vec2  hz   = vec2(perturbed.x, perturbed.z);
+  float inv1 = 1.0f / max(args.cloudNoiseTileKm * kWarp1Tiles, 1e-3f);
+  float inv2 = 1.0f / max(args.cloudNoiseTileKm * kWarp2Tiles, 1e-3f);
+  float wx = perlinNoise3D(vec3(hz * inv1, 0.0f))  + 0.5f * perlinNoise3D(vec3(hz * inv2, 23.7f));
+  float wz = perlinNoise3D(vec3(hz * inv1, 11.3f)) + 0.5f * perlinNoise3D(vec3(hz * inv2, 31.1f));
+  float ampKm = args.cloudNoiseWarpStrength * args.cloudNoiseTileKm;
+  perturbed.x += wx * ampKm;
+  perturbed.z += wz * ampKm;
+}
+
 // Stage C replacement for sampleCloudDensity AND sampleCloudDensityShadow.
 // Reads a tricubic sample of the prebaked 3D Perlin FBM, layers a small
 // per-frame analytic detail FBM for shape-jitter, and applies the same
@@ -1750,6 +1785,10 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   //    than in this helper's contract.
   vec3 windOffset = vec3(args.cloudWindOffset.x, 0.0f, args.cloudWindOffset.y);
   vec3 perturbed  = worldPosKm + windOffset;
+
+  // 1b. Anti-tiling domain warp (fork) — dissolve the periodic repeat at small
+  //     tiles before the texcoord wrap below reads it as horizontal layers.
+  applyCloudNoiseAntiTileWarp(perturbed, args);
 
   // 2. World-pos -> texcoord. ISOTROPIC mapping: all three axes use the same
   //    cloudNoiseTileKm period. The previous slabAlt-relative Y mapping
@@ -1857,6 +1896,10 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
                                    SamplerState cloudSampler) {
   vec3 windOffset = vec3(args.cloudWindOffset.x, 0.0f, args.cloudWindOffset.y);
   vec3 perturbed  = worldPosKm + windOffset;
+
+  // Anti-tiling domain warp (fork) — identical to the full sampler so the baked
+  // self-shadows track the warped density the runtime shows.
+  applyCloudNoiseAntiTileWarp(perturbed, args);
 
   // Isotropic Y texcoord — see the long comment in sampleCloudDensityTextured
   // above. Same fix applies here: voxel grid bakes need to see the same 3D

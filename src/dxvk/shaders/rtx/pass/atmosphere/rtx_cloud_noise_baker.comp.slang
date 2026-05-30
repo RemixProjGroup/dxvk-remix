@@ -21,7 +21,7 @@
 */
 
 /*
- * Cloud-noise bake (fork) -- runs once at atmosphere init.
+ * Cloud-noise bake (fork) -- baked at atmosphere init and re-baked on input change.
  *
  * Fills the 256-cubed R8 cloudNoise3D texture with a 3D Perlin gradient FBM
  * stack: 4-octave base + 3-octave detail. Coverage, anvil pow, cloud-type
@@ -33,7 +33,7 @@
  *
  * Dispatch: 32x32x32 thread groups, 8x8x8 threads each -> 256-cubed voxels.
  *
- * One-shot at init -- see RtxAtmosphere::dispatchCloudNoise3DBake (Task 5).
+ * Baked at init + on bake-input change -- see RtxAtmosphere::dispatchCloudNoise3DBake.
  */
 
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
@@ -88,8 +88,9 @@ void main(uint3 threadId : SV_DispatchThreadID) {
   const float detailFreq = 2.0f;
   // Worley frequency + octave count + carve strength surface as RTX_OPTIONs
   // (cloudWorleyFrequency / cloudWorleyOctaves / cloudWorleyCarveStrength)
-  // so the bake can be tuned from ImGui. Bake is one-shot at init, so
-  // changes take effect on game relaunch.
+  // so the bake can be tuned from ImGui. Changing any of them (or
+  // cloudNoiseTileKm) re-bakes this volume live via the needsCloudNoiseRebake
+  // gate in RtxAtmosphere::computeLuts.
   float worleyFreq = max(args.cloudWorleyFrequency, 0.05f);
   uint  worleyOcts = clamp(args.cloudWorleyOctaves, 1u, 4u);
   vec3  basePeriodBase   = max(floor(vec3(args.cloudNoiseTileKm * baseFreq)),   vec3(2.0f));
