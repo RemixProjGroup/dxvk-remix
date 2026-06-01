@@ -71,6 +71,27 @@ bool initPixelOnLaunch(inout uvec2 gbufferPixelCoordinate, out bool isNrcUpdate)
 
 void integrate_indirect_pass(ivec2 threadIndex)
 {
+  // NV-DXVK start: SHARC integration — Stage 3 (sparse update pixel jitter)
+#if SHARC_UPDATE
+  {
+    uint N = uint(sharcCb.downscaleFactor);
+    if (N > 1u)
+    {
+      uint h = uint(threadIndex.x) ^ (uint(threadIndex.y) << 16u) ^ uint(cb.frameIdx);
+      // PCG-like hash to get a per-block, per-frame random offset
+      h = h ^ (h >> 17u); h *= 0xbf324c81u;
+      h = h ^ (h >> 11u); h *= 0x9c4a3b26u;
+      h = h ^ (h >> 16u);
+      threadIndex = ivec2(threadIndex) * int(N) + ivec2(int(h % N), int((h / N) % N));
+      if (any(uvec2(threadIndex) >= uvec2(cb.camera.resolution)))
+      {
+        return;
+      }
+    }
+  }
+#endif
+  // NV-DXVK end
+
   uvec2 gbufferPixelCoordinate = threadIndex;
 
   bool isNrcUpdate = false;

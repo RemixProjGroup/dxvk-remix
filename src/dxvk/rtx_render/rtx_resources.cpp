@@ -36,6 +36,9 @@
 #include "rtx_terrain_baker.h"
 #include "rtx_scene_manager.h"
 #include "rtx_texture_manager.h"
+// NV-DXVK start: SHARC integration — include for RtxSharc::enable() / capacityLog2()
+#include "rtx_fork_sharc.h"
+// NV-DXVK end
 #include "rtx_debug_view.h"
 #include "rtx_xess.h"
 #include "../util/util_global_time.h"
@@ -1164,6 +1167,33 @@ namespace dxvk {
     neeCacheInfo.size = cellCount * NEE_CACHE_SAMPLES * sizeof(NeeCache_PackedSample);
     m_raytracingOutput.m_neeCacheSample = m_device->createBuffer(neeCacheInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, "NEE Cache Sample Buffer");
     m_raytracingOutput.m_neeCacheThreadTask = createImageResource(ctx, "radiance cache thread task", m_downscaledExtent, VK_FORMAT_R32G32_UINT);
+
+    // NV-DXVK start: SHARC integration — Stage 1 (buffer allocation)
+    // Allocate SHARC buffers only when SHARC is enabled to avoid wasting
+    // ~176 MiB of VRAM on users that do not use this feature.
+    if (RtxSharc::enable()) {
+      DxvkBufferCreateInfo sharcInfo = rtxdiBufferInfo;
+      // Hash entries: 8 bytes per entry (uint64_t)
+      sharcInfo.size = static_cast<VkDeviceSize>(1u << RtxSharc::capacityLog2()) * sizeof(uint64_t);
+      m_raytracingOutput.m_sharcHashBuffer = m_device->createBuffer(sharcInfo,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, "SHARC Hash Buffer");
+      // Lock entries: 4 bytes per entry (uint)
+      sharcInfo.size = static_cast<VkDeviceSize>(1u << RtxSharc::capacityLog2()) * sizeof(uint32_t);
+      m_raytracingOutput.m_sharcLockBuffer = m_device->createBuffer(sharcInfo,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, "SHARC Lock Buffer");
+      // Accumulation: 16 bytes per entry (SharcAccumulationData = uint4)
+      sharcInfo.size = static_cast<VkDeviceSize>(1u << RtxSharc::capacityLog2()) * 16u;
+      m_raytracingOutput.m_sharcAccumBuffer = m_device->createBuffer(sharcInfo,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, "SHARC Accumulation Buffer");
+      // Resolved: 16 bytes per entry (SharcPackedData = float16_t4 + 2x uint)
+      sharcInfo.size = static_cast<VkDeviceSize>(1u << RtxSharc::capacityLog2()) * 16u;
+      m_raytracingOutput.m_sharcResolvedBuffer = m_device->createBuffer(sharcInfo,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXBuffer, "SHARC Resolved Buffer");
+      // NV-DXVK start: SHARC integration — Stage 3 (debug output texture)
+      m_raytracingOutput.m_sharcDebugOutput = createImageResource(ctx, "SHARC Debug Output", m_downscaledExtent, VK_FORMAT_R16G16B16A16_SFLOAT);
+      // NV-DXVK end
+    }
+    // NV-DXVK end
 
     // Displacement
     m_raytracingOutput.m_sharedTextureCoord = createImageResource(ctx, "displacement texture coordinate", m_downscaledExtent, VK_FORMAT_R32G32_SFLOAT);

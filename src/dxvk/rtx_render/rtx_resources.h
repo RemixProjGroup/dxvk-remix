@@ -345,6 +345,20 @@ namespace dxvk
       Rc<DxvkBuffer> m_neeCacheSample;
       Resource m_neeCacheThreadTask;
 
+      // NV-DXVK start: SHARC integration — Stage 1 (buffer declarations)
+      // Sizes at kSharcCapacity = 2^22 = 4,194,304 entries:
+      //   m_sharcHashBuffer    :  8 B/entry =>  32 MiB  (uint64_t hash map)
+      //   m_sharcLockBuffer    :  4 B/entry =>  16 MiB  (uint lock per entry)
+      //   m_sharcAccumBuffer   : 16 B/entry =>  64 MiB  (SharcAccumulationData)
+      //   m_sharcResolvedBuffer: 16 B/entry =>  64 MiB  (SharcPackedData)
+      //   Total: ~176 MiB (only allocated when rtx.sharc.enable = true)
+      Rc<DxvkBuffer> m_sharcHashBuffer;
+      Rc<DxvkBuffer> m_sharcLockBuffer;
+      Rc<DxvkBuffer> m_sharcAccumBuffer;
+      Rc<DxvkBuffer> m_sharcResolvedBuffer;
+      Resource m_sharcDebugOutput;  // NV-DXVK: SHARC debug visualization texture (rgba16f)
+      // NV-DXVK end
+
       Resource m_sharedTextureCoord;
     
       Rc<DxvkBuffer> m_gpuPrintBuffer;

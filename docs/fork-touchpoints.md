@@ -227,6 +227,15 @@ check will enforce it if discipline slips.
 - **Inline tweak** at `ImGUI::showRenderingSettings` "Tonemapping" header — removed the `Tonemapping Mode` combo (Global / Local / Direct) and the standalone "User Brightness" / "User Brightness EV Range" sliders. The header body is now a single always-visible `metaToneMapping().showImguiSettings()` call between two separators. Tuning Mode (tone curve sliders) is also removed from the panel.
   *2026-05-13 tonemap refactor: mode selector removed; operator dropdown is now the primary control. 2026-05-15: local tonemap path removed entirely, so no per-path UI gate remains.*
 
+- **Inline tweak** at `(file scope)` (SHARC include block) — 1-line addition (SHARC Stage 1).
+  *Adds `#include "rtx_render/rtx_fork_sharc.h"` so `RtxSharc` and `IntegrateIndirectMode::SHARC` are visible from the imgui translation unit. Sits with the other `rtx_fork_*.h` includes.*
+
+- **Inline tweak** at `ImGUI::showRenderingSettings` (indirect mode combo) — ~6 LOC (SHARC Stage 1).
+  *Adds `IntegrateIndirectMode::SHARC` as a selectable entry in the "Integrate Indirect Mode" combo box, labelled "SHARC". Displayed after the existing ReSTIR GI and NRC entries.*
+
+- **Inline tweak** at `ImGUI::showRenderingSettings` (SHARC settings tree node) — ~10 LOC (SHARC Stage 5).
+  *Adds a collapsing-header "SHARC" tree node inside the path-tracing settings panel, gated on `integrateIndirectMode() == IntegrateIndirectMode::SHARC`. The body calls `metaSharc().showImguiSettings()` to delegate all SHARC-specific controls to `RtxSharc::showImguiSettings` in `rtx_fork_sharc.cpp`.*
+
 ---
 
 ## src/dxvk/imgui/dxvk_imgui_about.cpp
@@ -291,6 +300,20 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `dxvk_src` files list (rtx_render block) — 2-line addition registering weather sources.
   *Registers `'rtx_render/rtx_fork_weather.cpp'` and `'rtx_render/rtx_fork_weather.h'` in the DXVK build source list.*
 
+- **Inline tweak** at `dxvk_src` files list (rtx_render block) — 2-line addition registering SHARC sources.
+  *Registers `'rtx_render/rtx_fork_sharc.cpp'` and `'rtx_render/rtx_fork_sharc.h'` in the DXVK build source list (Stage 1).*
+
+---
+
+## meson.build (root)
+
+**Added:** Stage 2 of SHARC integration (see `docs/SharcIntegration.md`).
+
+**Category:** inline tweak
+
+- **Inline tweak** — 3-line addition in `rtx_shaders_command_arguments` block: adds `sharc_include_path_string` variable (= `external/sharc/include`) and appends it as an `-include` directory to the shader compiler invocation.
+  *Makes `SharcCommon.h`, `HashGridCommon.h`, and `SharcTypes.h` resolvable from the Slang shader shim without relative-path gymnastics.*
+
 ---
 
 ## src/dxvk/rtx_render/graph/rtx_component_list.h
@@ -342,6 +365,18 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** at `(file scope)` (weather header include) — 1-line addition near the existing `rtx_fork_*.h` includes.
   *Adds `#include "rtx_fork_weather.h"` so `WeatherBlender` and the `fork_weather` namespace are available in this translation unit.*
+
+- **Inline tweak** at `RtxContext::dispatchPathTracing` — 5-line addition after `dispatchIntegrate(rtOutput)`.
+  *SHARC Stage 2 (resolve pass): calls `m_common->metaSharc().dispatch(this, rtOutput)` when `metaSharc().isEnabled()` is true. Placeholder ordering — moved to before the indirect integrator in Stage 3.*
+
+- **Inline tweak** at `RtxContext` frame dispatch (post-volumetrics, pre-path-tracing) — ~8-line block.
+  *SHARC Stage 4 (cache clear on reset): calls `m_common->metaSharc().clearBuffers(this, rtOutput)` when `m_resetHistory && sharc.isEnabled()`, ensuring the first Update pass after a scene change sees a zeroed cache with no stale radiance.*
+
+- **Inline tweak** at `RtxContext` frame dispatch (NRC gate) — ~4-line block.
+  *SHARC Stage 4: wraps `metaNeuralRadianceCache().dispatchTrainingAndResolve()` in `if (!m_common->metaSharc().isEnabled())` so NRC does not compete with SHARC for the indirect signal.*
+
+- **Inline tweak** at `RtxContext` frame dispatch (ReSTIR GI gate) — ~4-line block.
+  *SHARC Stage 4: wraps `metaReSTIRGIRayQuery().dispatch()` in `if (!m_common->metaSharc().isEnabled())` so ReSTIR GI does not consume the indirect radiance buffer when SHARC is active.*
 
 - **Inline tweak** at `RtxContext::RtxContext` constructor (weather blender init) — ~1 LOC.
   *Adds `m_weatherBlender = std::make_unique<fork_weather::WeatherBlender>();` so the blender is constructed alongside the atmosphere object.*
@@ -574,6 +609,9 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** — weather-preset cold-default alignment (2026-05-26). Ten cold defaults aligned to `WEATHER_PRESET_VALUES_overcast` in `rtx_fork_weather.h` (the macro the codebase comments call "current default look"): `cloudShadowStrength` 1.0 → 0.10, `cloudCoverageMean` 0.85 → 0.64, `cloudCoverageSpread` 1.0 → 0.16, `cloudTypeMean` 0.75 → 0.5, `cloudTypeSpread` 0.5 → 0.2, `cloudTypeNoiseScale` 0.001 → 0.0034, `cloudDensity` 1.65 → 1.8, `cloudThickness` 2.75 → 3.05, `aerosolDensity` 1.0 → 1.1, `sunIlluminance` (20,20,20) → (15,15,15). Fixes the regression introduced by the 2026-05-19 `cloudShadowStrength` 0→1 flip: users sitting on the dormant "(none / dormant)" weather preset saw ground geometry crushed dark by full-strength cloud-voxel shadows over 85% default coverage. The dormant blender path leaves cold RTX_OPTIONs untouched, so the cold values themselves had to move.
 
+- **Inline tweak** at `IntegrateIndirectMode` enum (`RtxOptions`) — 1-line addition (SHARC Stage 1).
+  *Adds `SHARC = 3` as a third mode in the `IntegrateIndirectMode` enum. When selected, the indirect integrator runs the SHARC Update and Query raygen passes instead of ReSTIR GI or NRC. Used by `DxvkPathtracerIntegrateIndirect::dispatch` to branch into SHARC permutations.*
+
 ---
 
 ## src/dxvk/rtx_render/rtx_global_volumetrics.cpp
@@ -755,6 +793,12 @@ initializer list and can't be lifted into a separate TU.
 - **Inline tweak** at `Resources::getAtmosphereSkyViewLut` (new method body) (~line 818) — 5-line addition.
   *Stub accessor returning `m_atmosphereSkyViewLut`.*
 
+- **Inline tweak** at `(file scope)` (SHARC include) — 1-line addition (SHARC Stage 1).
+  *Adds `#include "rtx_fork_sharc.h"` so `RtxSharc` buffer members and the `kSharcCapacity` constant are visible in the `allocate` method.*
+
+- **Inline tweak** at `Resources::allocate` (SHARC buffer allocation block) — ~20 LOC (SHARC Stage 1).
+  *Allocates the five SHARC GPU buffers when `RtxSharc::enable()` is true: `m_sharcHashBuffer` (8 B/entry × capacity = 32 MiB at log2=22), `m_sharcLockBuffer` (4 B/entry = 16 MiB), `m_sharcAccumBuffer` (16 B/entry = 64 MiB, `SharcAccumulationData`), `m_sharcResolvedBuffer` (16 B/entry = 64 MiB, `SharcPackedData`), and `m_sharcDebugOutput` (RGBA16F render target at a fixed 1280×720 debug resolution). Allocation is skipped when SHARC is disabled to avoid reserving ~176 MiB of VRAM for an inactive feature.*
+
 ---
 
 ## src/dxvk/rtx_render/rtx_resources.h
@@ -768,6 +812,9 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** at `Resources` class (private member fields) (~line 469) — 4-line addition.
   *Adds `m_atmosphereTransmittanceLut`, `m_atmosphereMultiscatteringLut`, and `m_atmosphereSkyViewLut` storage fields to `Resources`.*
+
+- **Inline tweak** at `Resources` class (SHARC private member fields) — 5-line addition (SHARC Stage 1).
+  *Adds four `Rc<DxvkBuffer>` members (`m_sharcHashBuffer`, `m_sharcLockBuffer`, `m_sharcAccumBuffer`, `m_sharcResolvedBuffer`) and one `Resource m_sharcDebugOutput` to the `Resources` class. These are accessed by `RtxSharc::dispatch` (Stage 2) and `DxvkPathtracerIntegrateIndirect::dispatch` (Stage 3) via the `RaytracingOutput` struct.*
 
 ---
 
@@ -934,6 +981,21 @@ initializer list and can't be lifted into a separate TU.
 **Category:** index-only
 
 - **Inline tweak** at `evalSssDiffusionProfile` (~line 167) — 3-line addition for view-model customIndex.
+
+---
+
+## external/sharc/ (vendored, read-only)
+
+**Added:** Stage 0 of SHARC integration (see `docs/SharcIntegration.md`).
+
+**Category:** vendor
+
+- `external/sharc/include/HashGridCommon.h` — NVIDIA RTXGI SHARC SDK v1.6.5.0, spatial hash-grid primitives.
+- `external/sharc/include/SharcCommon.h` — SHARC per-frame radiance cache algorithm (update / resolve / query entry points).
+- `external/sharc/include/SharcTypes.h` — SHARC packed data structures (`SharcPackedData`, `SharcAccumulationData`).
+- `external/sharc/License.md` — NVIDIA RTX SDKs License.
+
+These files are **not modified**. Any fork-specific overrides go through the shim at `src/dxvk/shaders/rtx/external/sharc/sharc_slang_shim.slangh` (added in Stage 2).
   *Synthesizes `customIndex` from `geometryFlags.isViewModel` and threads it to the SSS diffusion-profile light-sampling calls.*
 
 - **Inline tweak** at `evalSingleScatteringTransmission` (first call site, ~line 323) — 3-line addition for view-model customIndex.
@@ -1250,6 +1312,46 @@ namespace block.
 
 ---
 
+## src/dxvk/rtx_render/rtx_fork_sharc.cpp
+
+**Category:** fork-owned (SHARC integration — all stages)
+
+**Added:** Stages 1–5 of SHARC integration (see `docs/SharcIntegration.md`).
+
+- **Inline tweak** at `RtxSharc` implementation (Stage 4 — `clearBuffers`) — ~30 LOC.
+  *Adds `RtxSharc::clearBuffers(RtxContext*, const Resources::RaytracingOutput&)`: zeros all four SHARC GPU buffers via `vkCmdFillBuffer` (hash, lock, accumulation, resolved) and emits a Transfer → RT+Compute memory barrier so the first Update raygen shader sees the cleared state. Tracks buffer lifetimes on the command list.*
+
+- **Inline tweak** at `buildAndUploadCb()` (Stage 5 — frameIndex fix) — 1 LOC.
+  *Replaces `m_device->getCurrentFrameId()` with `m_framesSinceClear` so the SHARC SDK frame-0 init path fires immediately after a cache clear and not only at cold start.*
+
+- **Inline tweak** at `dispatch()` (Stage 5 — frameIndex fix) — 1 LOC.
+  *Appends `++m_framesSinceClear` at the end of `dispatch()` so the per-frame counter advances after both Update and Resolve CBs have been uploaded.*
+
+- **Inline tweak** at `clearBuffers()` (Stage 5 — frameIndex fix) — 1 LOC.
+  *Resets `m_framesSinceClear = 0u` at the top of `clearBuffers()` so the first post-clear frame index is 0.*
+
+- **Inline tweak** at `showImguiSettings()` (Stage 5 — ImGui polish) — ~100 LOC replacement.
+  *Replaces integer SliderInt debug mode with a named Combo (HashGridColor / Occupancy / etc.). Adds `ImGui::SetItemTooltip()` after every control. Adds a greyed-out `shaderBufferInt64Atomics` capability checkbox via `ImGui::BeginDisabled(!supportsInt64Atomics())` so users know whether their GPU supports the lock-free SHARC path.*
+
+- **New method** `supportsInt64Atomics()` (Stage 5) — 3 LOC.
+  *Queries `m_device->features().vulkan12Features.shaderBufferInt64Atomics` and returns the result as `bool`. Used by `showImguiSettings()` to conditionally grey out the int64-atomics capability display.*
+
+---
+
+## src/dxvk/rtx_render/rtx_fork_sharc.h
+
+**Category:** fork-owned (SHARC integration — all stages)
+
+**Added:** Stages 1–5 of SHARC integration (see `docs/SharcIntegration.md`).
+
+- **Inline tweak** at `RtxSharc` class declaration (Stage 4 — `clearBuffers`) — ~7 LOC.
+  *Adds public method declaration `void clearBuffers(RtxContext*, const Resources::RaytracingOutput&)` with documentation comment describing its purpose (zero all 4 SHARC buffers + barrier) and call site (`RtxContext` on history reset).*
+
+- **Inline tweak** at `RtxSharc` class declaration (Stage 5 — frameIndex + int64) — ~12 LOC.
+  *Adds `uint32_t m_framesSinceClear = 0u` private member (frames-since-last-clear counter for `sharcCb.frameIndex` plumbing). Adds public `bool supportsInt64Atomics() const` method declaration (capability check for ImGui greyed checkbox).*
+
+---
+
 ## submodules/rtxdi/rtxdi-sdk/include/volumetrics/rtx/algorithm/volume_integrator.slangh
 
 **Category:** submodule (fork-controlled — `RemixProjGroup/RTXDI` branch `remix`)
@@ -1312,15 +1414,19 @@ composite gate lands in C5.
 
 - **`src/dxvk/shaders/rtx/utility/debug_view_indices.h`** — index-only, fork.
   *Adds `DEBUG_VIEW_CLOUD_RENDER_RT = 876` with a 4-line comment block.*
+  *Stage 5 addition: adds `DEBUG_VIEW_SHARC_DEBUG = 879` with a 5-line comment block describing the SHARC hash-grid overlay.*
 
 - **`src/dxvk/shaders/rtx/pass/debug_view/debug_view.comp.slang`** — fork-owned addition.
   *Adds a `[[vk::binding]]`-decorated `Texture2D<float4> DebugViewCloudRenderRT` declaration and a `case DEBUG_VIEW_CLOUD_RENDER_RT` arm in the main switch that samples the RT via Load and returns its rgb (alpha is the view-ray transmittance, not relevant to the standalone debug view).*
+  *Stage 5 addition: adds `[[vk::binding(DEBUG_VIEW_BINDING_SHARC_DEBUG_INPUT)]] Texture2D<float4> SharcDebugOutput` declaration and a `case DEBUG_VIEW_SHARC_DEBUG` arm that passes through the rgba16f hash-grid debug texture unchanged.*
 
 - **`src/dxvk/shaders/rtx/pass/debug_view/debug_view_binding_indices.h`** — index-only, fork. (Inventory substitution: not listed in the Task 4 spec, but structurally required for the debug view case to access the cloud render RT — mirrors the D_sun/D_ambient pattern at slots 35/36.)
   *Adds `DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT = 37`.*
+  *Stage 5 addition: adds `DEBUG_VIEW_BINDING_SHARC_DEBUG_INPUT = 39`.*
 
 - **`src/dxvk/rtx_render/rtx_debug_view.cpp`** — fork-owned addition.
   *Adds a `TEXTURE2D(DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT)` line in the debug-view shader's BEGIN_PARAMETER block, binds the cloud render RT each dispatch via `fork_hooks::getCloudRenderRT`, and adds a label + multi-line description block to the debug-view selector list ("Atmosphere: Cloud Render RT (Nubis Cubed)").*
+  *Stage 5 additions: `#include "rtx_fork_sharc.h"` at the top of the file; `TEXTURE2D(DEBUG_VIEW_BINDING_SHARC_DEBUG_INPUT)` in the parameter block; a conditional `ctx->bindResourceView` for the SHARC debug output texture (bound when `RtxSharc::enable()` is true and the resource is valid, else null view); and an entry in `debugViewEntries` ("SHARC: Hash Grid Debug Overlay") with a multi-line tooltip describing the six debug modes.*
 
 ---
 
@@ -1496,5 +1602,187 @@ Fork resolution: restore the numerical hemisphere integration in the LUT bake AN
 
 - **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
   *Adds a `RemixGui::DragFloat("Multiscatter Physical Strength", …, 0.0f, 1.0f, "%.2f", sliderFlags)` widget at the end of the Atmosphere → Advanced ImGui tree (right after Ozone Layer Width), with a tooltip explaining the artistic-vs-physical tradeoff. ~6 LOC.*
+
+---
+
+## src/dxvk/dxvk_device.cpp
+
+**Category:** index-only
+
+- **Inline tweak** at `DxvkDevice::DxvkDevice` constructor (member initializer list) — 1-line addition (SHARC Stage 1).
+  *Adds `m_sharc(device)` to the member initializer list to construct the `RtxSharc` member owned by `DxvkDevice`.*
+
+---
+
+## src/dxvk/dxvk_objects.h
+
+**Category:** index-only
+
+- **Inline tweak** at `(file scope)` (SHARC include) — 1-line addition (SHARC Stage 1).
+  *Adds `#include "rtx_render/rtx_fork_sharc.h"` so `RtxSharc` is visible in the `DxvkObjects` class definition.*
+
+- **Inline tweak** at `DxvkObjects` class (public accessor) — ~3 LOC (SHARC Stage 1).
+  *Adds `RtxSharc& metaSharc() { return m_sharc; }` accessor alongside the existing `metaNeuralRadianceCache()` and `metaReSTIRGI()` accessors.*
+
+- **Inline tweak** at `DxvkObjects` class (private member field) — 1-line addition (SHARC Stage 1).
+  *Adds `RtxSharc m_sharc;` as the last private member, constructed in `DxvkDevice::DxvkDevice` via `m_sharc(device)`.*
+
+---
+
+## src/dxvk/rtx_render/rtx_pathtracer_integrate_indirect.h
+
+**Category:** index-only
+
+- **Inline tweak** at `DxvkPathtracerIntegrateIndirect::getPipelineShaders` declaration — 1-line addition (SHARC Stage 3).
+  *Adds `uint32_t sharcMode` parameter to the `getPipelineShaders` method signature. The parameter controls which SHARC permutation (`SHARC_UPDATE=1`, `SHARC_QUERY=1`, or no SHARC) is selected when compiling the raygen pipeline.*
+
+---
+
+## src/dxvk/rtx_render/rtx_pathtracer_integrate_indirect.cpp
+
+**Category:** index-only
+
+- **Inline tweak** at `(file scope)` (SHARC include) — 1-line addition (SHARC Stage 3).
+  *Adds `#include "rtx_fork_sharc.h"` so `RtxSharc`, `SharcDebugMode`, and SHARC binding indices are visible.*
+
+- **Inline tweak** at `(file scope)` (SHARC shader variant includes) — 4-line addition (SHARC Stage 3).
+  *Adds four `#include` lines for the compiled SHARC raygen shader headers: `integrate_indirect_rayquery_raygen_neeCache_sharc_update.h`, `integrate_indirect_rayquery_raygen_neeCache_sharc_query.h`, `integrate_indirect_rayquery_raygen_sharc_update.h`, `integrate_indirect_rayquery_raygen_sharc_query.h`.*
+
+- **Inline tweak** at `DxvkPathtracerIntegrateIndirect` BEGIN_PARAMETER / END_PARAMETER block — ~6-line addition (SHARC Stage 3).
+  *Adds six binding declarations (`SHADER_BUFFER_DESC` × 4 + `SHADER_CONSTANT_BUFFER_DESC` + `SHADER_IMAGE_DESC`) for `INTEGRATE_INDIRECT_BINDING_SHARC_HASH_ENTRIES` through `INTEGRATE_INDIRECT_BINDING_SHARC_DEBUG_OUTPUT` so the SHARC buffers are included in the pipeline binding layout.*
+
+- **Inline tweak** at `DxvkPathtracerIntegrateIndirect::prewarmShaders` — ~4-line addition (SHARC Stage 3).
+  *Precompiles the four SHARC raygen shader variants (update+query × neeCache on/off) during shader prewarm to avoid first-frame stutter.*
+
+- **Inline tweak** at `DxvkPathtracerIntegrateIndirect::dispatch` (SHARC dispatch block) — ~30 LOC (SHARC Stage 3).
+  *When `IntegrateIndirectMode::SHARC` is active: binds `m_sharcHashBuffer`, `m_sharcLockBuffer`, `m_sharcAccumBuffer`, `m_sharcResolvedBuffer` (from `RaytracingOutput`) plus the SHARC constants CB and debug output image, then dispatches the SHARC Update raygen pass (sparse, 1/downscaleFactor² pixels) followed by the SHARC Query raygen pass (full-res) using the selected neeCache×SHARC permutation.*
+
+---
+
+## src/dxvk/shaders/rtx/algorithm/integrator_indirect.slangh
+
+**Category:** inline-tweak
+
+**Rationale:** SHARC integration hooks are conditional compilation blocks (`#if SHARC_UPDATE || SHARC_QUERY`) inside the core path-tracing bounce loop (`integratePath`). They backpropagate radiance into `SharcState` per bounce and terminate paths early on cache hits. The bounce loop is a tight, interdependent function that cannot be extracted to a separate compilation unit; inline tweaks are the only viable pattern here.
+
+- **Inline tweak** at `integratePath` (per-path SHARC state initialization) — ~5 LOC (SHARC Stage 3).
+  *Inside `#if SHARC_UPDATE || SHARC_QUERY`: initializes `PathState.sharcState` at path start and calls `SharcSetThroughput(sharcState, 1.0)` to unit throughput.*
+
+- **Inline tweak** at `integratePath` (per-bounce radiance reset for SHARC Update) — ~3 LOC (SHARC Stage 3).
+  *Inside `#if SHARC_UPDATE`: saves and resets the per-bounce radiance accumulator at the start of each bounce so the cache stores per-bounce contributions rather than cumulative path radiance.*
+
+- **Inline tweak** at `integratePath` (build SharcParameters from module resources) — ~10 LOC (SHARC Stage 3).
+  *Inside `#if SHARC_UPDATE || SHARC_QUERY`: builds `SharcParameters` struct from bound globals (`sharcCb`, buffer handles) before the SHARC hit/query call sites.*
+
+- **Inline tweak** at `integratePath` (SharcUpdateMiss on sky hit) — ~4 LOC (SHARC Stage 3).
+  *Inside `#if SHARC_UPDATE`: calls `SharcUpdateMiss` when the ray misses geometry (sky/miss bounce) so the cache learns sky radiance at the last valid world position.*
+
+- **Inline tweak** at `integratePath` (SharcHitData + roughness gate + query early-out) — ~20 LOC (SHARC Stage 3).
+  *Inside `#if SHARC_UPDATE || SHARC_QUERY`: populates `SharcHitData` from the G-buffer hit, gates on `sharcCb.roughnessThreshold`, and on `#if SHARC_QUERY` calls `SharcGetCachedRadiance` for early path termination when the cache has a valid entry.*
+
+- **Inline tweak** at `integratePath` (SharcUpdateHit: accumulate direct lighting) — ~6 LOC (SHARC Stage 3).
+  *Inside `#if SHARC_UPDATE`: calls `SharcUpdateHit` after direct lighting is resolved to accumulate the shaded radiance contribution into the cache at this bounce.*
+
+- **Inline tweak** at `integratePath` (Query roughness tracking + SharcSetThroughput) — ~8 LOC (SHARC Stage 3).
+  *Inside `#if SHARC_QUERY`: tracks cumulative roughness along the path and calls `SharcSetThroughput` to backpropagate the path throughput for the SDK's radiance-weighted update.*
+
+- **Inline tweak** at `integratePath` (suppress pixel output in SHARC Update pass) — ~4 LOC (SHARC Stage 3).
+  *Inside `#if SHARC_UPDATE`: suppresses writes to the indirect radiance output buffer (`m_indirectRadianceHitDistance`) — the Update pass contributes to the cache only, not to the screen-space buffer.*
+
+---
+
+## src/dxvk/shaders/rtx/algorithm/path_state.slangh
+
+**Category:** index-only
+
+- **Inline tweak** at `PathState` struct — 2-line addition (SHARC Stage 3).
+  *Inside `#if SHARC_UPDATE || SHARC_QUERY`: adds `SharcState sharcState` member to `PathState`. Carries the per-path SHARC accumulator (throughput, radiance backprop) across all bounce iterations.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/integrate/integrate_indirect.slang
+
+**Category:** index-only
+
+- **Inline tweak** at `(file scope)` (SHARC shader variant directives) — ~20-line addition (SHARC Stage 3).
+  *Adds four `//!variant` + `//!>` directive blocks defining the SHARC raygen shader permutations: `integrate_indirect_rayquery_raygen_neeCache_sharc_update.rgen` (`SHARC_UPDATE=1`, NEE cache on), `integrate_indirect_rayquery_raygen_neeCache_sharc_query.rgen` (`SHARC_QUERY=1`, NEE cache on), `integrate_indirect_rayquery_raygen_sharc_update.rgen` (`SHARC_UPDATE=1`, NEE cache off), `integrate_indirect_rayquery_raygen_sharc_query.rgen` (`SHARC_QUERY=1`, NEE cache off).*
+
+---
+
+## src/dxvk/shaders/rtx/pass/integrate/integrate_indirect.slangh
+
+**Category:** index-only
+
+- **Inline tweak** at `integrate_indirect` entry point (sparse pixel jitter for Update pass) — ~5 LOC (SHARC Stage 3).
+  *Inside `#if SHARC_UPDATE`: applies a sub-pixel checkerboard jitter so the SHARC Update pass samples a sparse, temporally rotated subset of pixels matching the `sharcCb.downscaleFactor` stride, rather than full resolution.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/integrate/integrate_indirect_binding_indices.h
+
+**Category:** index-only
+
+- **Inline tweak** at `(file scope)` (SHARC binding index constants) — 6-line addition (SHARC Stage 3).
+  *Adds six `#define` constants for SHARC binding slots 230–235: `INTEGRATE_INDIRECT_BINDING_SHARC_HASH_ENTRIES` (230), `INTEGRATE_INDIRECT_BINDING_SHARC_LOCK` (231), `INTEGRATE_INDIRECT_BINDING_SHARC_ACCUMULATION` (232), `INTEGRATE_INDIRECT_BINDING_SHARC_RESOLVED` (233), `INTEGRATE_INDIRECT_BINDING_SHARC_CONSTANTS` (234), `INTEGRATE_INDIRECT_BINDING_SHARC_DEBUG_OUTPUT` (235).*
+
+---
+
+## src/dxvk/shaders/rtx/pass/integrate/integrate_indirect_bindings.slangh
+
+**Category:** index-only
+
+- **Inline tweak** at `(file scope)` (SHARC buffer binding declarations) — ~22 LOC (SHARC Stage 3).
+  *Inside `#if SHARC_UPDATE || SHARC_QUERY`: includes `rtx/pass/sharc/sharc_constants.h` and `rtx/external/sharc/sharc_slang_shim.slangh`, then declares six Slang binding variables: `u_SharcHashEntries` (`RWStructuredBuffer<uint64_t>`), `u_SharcLock` (`RWStructuredBuffer<uint>`), `u_SharcAccumulation` (`RWStructuredBuffer<SharcAccumulationData>`), `u_SharcResolved` (`RWStructuredBuffer<SharcPackedData>`), `sharcCb` (`ConstantBuffer<SharcConstants>`), and `u_SharcDebugOutput` (`RWTexture2D<float4>`).*
+
+---
+
+## src/dxvk/rtx_render/rtx_bloom.h
+
+**Category:** index-only
+
+- **Inline tweak** at `DxvkBloom` class (public accessors) — 2-line addition (bloom refactor, 2026-05-26).
+  *Adds `getBloomBuffer()` returning `const Resources::Resource&` to expose the final bloom mip for consumption by the tonemapping pass, and `getBloomIntensity()` returning `0.01f * max(burnIntensity(), 0.0f)` to centralize intensity scaling. Both accessors support the bloom-in-tonemap integration so the composite step can be removed from `DxvkBloom::dispatch`.*
+
+---
+
+## src/dxvk/rtx_render/rtx_bloom.cpp
+
+**Category:** index-only
+
+- **Inline tweak** at `DxvkBloom::dispatch` (composite step removal) — 2-line change (bloom refactor, 2026-05-26).
+  *Removes the `dispatchComposite(ctx, linearSampler, inOutColorBuffer, m_bloomBuffer[0])` call. Bloom is now composited inside the tonemapping apply pass (`tonemapping_apply_tonemapping.comp.slang`) as `sceneColor * exposure + bloom`, so the separate composite step is redundant.*
+
+---
+
+## src/dxvk/rtx_render/rtx_types.h
+
+**Category:** index-only
+
+- **Inline tweak** at `GeometryBufferData` constructor (texcoord format handling) — 5-line addition (HaloCE decals, 2026-04-23).
+  *Adds an `else if (texFmt == VK_FORMAT_R8G8B8A8_USCALED)` branch that reads the texcoord buffer as `uint32_t` stride, enabling CPU-side readback of HaloCE's `D3DDECLTYPE_UBYTE4`-encoded UV coordinates for the decal system.*
+
+---
+
+## src/dxvk/rtx_render/rtx_geometry_utils.h
+
+**Category:** index-only
+
+- **Inline tweak** at `RtxGeometryUtils::isTexcoordFormatValid` — 1-line addition (HaloCE decals, 2026-04-23).
+  *Adds `VK_FORMAT_R8G8B8A8_USCALED` to the return expression so the geometry validation pass accepts HaloCE's packed byte UV format without rejecting it as unsupported.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/interleave_geometry.h
+
+**Category:** index-only
+
+- **Inline tweak** at `interleaver::SupportedVkFormats` enum — 1-line addition (HaloCE decals, 2026-04-23).
+  *Adds `VK_FORMAT_R8G8B8A8_USCALED = 39` to the enum so the Slang interleave-geometry compute shader recognises the format.*
+
+- **Inline tweak** at `interleaver::isFormatValid` — 1-line addition (HaloCE decals, 2026-04-23).
+  *Adds a `case SupportedVkFormats::VK_FORMAT_R8G8B8A8_USCALED:` fall-through to the format-validity switch.*
+
+- **Inline tweak** at `interleaver::readElement` — 11-line addition (HaloCE decals, 2026-04-23).
+  *Adds a `case VK_FORMAT_R8G8B8A8_USCALED` decode block that extracts U from byte 2 and V from byte 1 of the packed DWORD via `unorm8ToF32`, reflecting HaloCE's `D3DDECLTYPE_D3DCOLOR` → `D3DDECLTYPE_UBYTE4` UV encoding.*
 
 ---

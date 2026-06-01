@@ -315,6 +315,13 @@
 //                                                texture not being written
 #define DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW 878
 
+// NV-DXVK start: SHARC integration — Stage 5 (debug overlay)
+// Visualizes the SHARC hash-grid debug output rendered by the integrator
+// raygen when rtx.sharc.debugMode is non-zero.  Only meaningful when SHARC
+// is enabled (rtx.sharc.enable = true); shows black when SHARC is off.
+#define DEBUG_VIEW_SHARC_DEBUG  879
+// NV-DXVK end
+
 
 enum class CompositeDebugView : uint32_t {
   Disabled = 0,

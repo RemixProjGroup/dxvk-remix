@@ -305,6 +305,10 @@ rtxcr_include_path_string = join_paths(global_src_root_norm, 'submodules/rtxcr/s
 submodules_include_path = include_directories('submodules')
 submodules_include_path_string = join_paths(global_src_root_norm, 'submodules')
 
+# NV-DXVK start: SHARC integration — expose SHARC SDK headers to the shader compiler
+sharc_include_path_string = join_paths(global_src_root_norm, 'external/sharc/include')
+# NV-DXVK end
+
 rtx_shaders_command_arguments = [
   shader_compile_script,
   # Note: Meson annoyingly represents these "find_program" results as a special object which works fine when used in Meson functions, but
@@ -323,6 +327,7 @@ rtx_shaders_command_arguments = [
   '-include', rtxcr_include_path_string,
   '-include', submodules_include_path_string,
   '-include', volumetrics_include_path_string,
+  '-include', sharc_include_path_string,  # NV-DXVK: SHARC SDK headers
   '-output', rtx_shader_output_directory,
   '-parallel',
 ]

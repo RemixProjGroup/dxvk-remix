@@ -95,6 +95,15 @@
 
 #define INTEGRATE_INSTRUMENTATION                                           220
 
+// NV-DXVK start: SHARC integration — Stage 3
+#define INTEGRATE_INDIRECT_BINDING_SHARC_HASH_ENTRIES                       230
+#define INTEGRATE_INDIRECT_BINDING_SHARC_LOCK                               231
+#define INTEGRATE_INDIRECT_BINDING_SHARC_ACCUMULATION                       232
+#define INTEGRATE_INDIRECT_BINDING_SHARC_RESOLVED                           233
+#define INTEGRATE_INDIRECT_BINDING_SHARC_CONSTANTS                          234
+#define INTEGRATE_INDIRECT_BINDING_SHARC_DEBUG_OUTPUT                       235
+// NV-DXVK end
+
 #define INTEGRATE_INDIRECT_MIN_BINDING                                      INTEGRATE_INDIRECT_BINDING_LINEAR_WRAP_SAMPLER
 
 #if INTEGRATE_INDIRECT_MIN_BINDING <= COMMON_MAX_BINDING

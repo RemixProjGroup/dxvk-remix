@@ -220,8 +220,29 @@
 //!>       NEE_CACHE_ENABLE=0
 //!>       UNORDERED_RESOLVE_WBOIT
 
+// NV-DXVK start: SHARC integration — Stage 3
+//!variant integrate_indirect_rayquery_raygen_neeCache_sharc_update.rgen
+//!>       RAY_PIPELINE
+//!>       NEE_CACHE_ENABLE=1
+//!>       SHARC_UPDATE=1
+
+//!variant integrate_indirect_rayquery_raygen_neeCache_sharc_query.rgen
+//!>       RAY_PIPELINE
+//!>       NEE_CACHE_ENABLE=1
+//!>       SHARC_QUERY=1
+
+//!variant integrate_indirect_rayquery_raygen_sharc_update.rgen
+//!>       RAY_PIPELINE
+//!>       NEE_CACHE_ENABLE=0
+//!>       SHARC_UPDATE=1
+
+//!variant integrate_indirect_rayquery_raygen_sharc_query.rgen
+//!>       RAY_PIPELINE
+//!>       NEE_CACHE_ENABLE=0
+//!>       SHARC_QUERY=1
 
 //!end-variants
+// NV-DXVK end
 
 #define INTEGRATE_INDIRECT
 #define RAB_HAS_PREVIOUS_GBUFFER 1

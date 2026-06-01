@@ -54,6 +54,9 @@
 #include "rtx_render/rtx_rtxdi_rayquery.h"
 #include "rtx_render/rtx_restir_gi_rayquery.h"
 #include "rtx_render/rtx_debug_view.h"
+// NV-DXVK start: SHARC integration
+#include "rtx_render/rtx_fork_sharc.h"
+// NV-DXVK end
 #include "rtx_render/rtx_composite.h"
 #include "dxvk_image.h"
 #include "../util/rc/util_rc_ptr.h"
@@ -344,7 +347,13 @@ namespace dxvk {
           "RTX Neural Radiance Cache (NRC). NRC is an AI based world space radiance cache. It is live trained by the path tracer\n"
           "and allows paths to terminate early by looking up the cached value and saving performance.\n"
           "NRC supports infinite bounces and often provides results closer to that of reference than ReSTIR GI\n"
-          "while increasing performance in scenarios where ray paths have 2 or more bounces on average."}
+          "while increasing performance in scenarios where ray paths have 2 or more bounces on average."},
+        // NV-DXVK start: SHARC integration
+        {IntegrateIndirectMode::SHARC, "SHARC (Spatially Hashed Radiance Cache)",
+          "SHARC provides a world-space radiance cache for efficient indirect lighting.\n"
+          "Disables ReSTIR GI and NRC. Requires RayQuery or RayQuery (RGS) raytrace mode.\n"
+          "Allocates approximately 176 MiB of GPU memory when enabled."}
+        // NV-DXVK end
     } }
   };
 
@@ -3728,6 +3737,16 @@ namespace dxvk {
             ImGui::PopID();
             ImGui::Unindent();
           }
+        // NV-DXVK start: SHARC integration
+        } else if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::SHARC) {
+          if (RemixGui::CollapsingHeader("SHARC", collapsingHeaderClosedFlags)) {
+            ImGui::Indent();
+            ImGui::PushID("SHARC");
+            common->metaSharc().showImguiSettings();
+            ImGui::PopID();
+            ImGui::Unindent();
+          }
+        // NV-DXVK end
         }
 
         ImGui::Unindent();

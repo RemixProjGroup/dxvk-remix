@@ -62,6 +62,12 @@
 // hypothesis before changing composite math.
 #define DEBUG_VIEW_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT                                 38
 
+// NV-DXVK start: SHARC integration — Stage 5 (debug overlay)
+// Hash-grid debug texture written by the SHARC integrator raygen when
+// rtx.sharc.debugMode != Off.  Sampled by DEBUG_VIEW_SHARC_DEBUG (enum 879).
+#define DEBUG_VIEW_BINDING_SHARC_DEBUG_INPUT                                                 39
+// NV-DXVK end
+
 #define DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT                                         19
 #define DEBUG_VIEW_BINDING_VOLUME_AGE_INPUT                                                20
 #define DEBUG_VIEW_BINDING_VOLUME_RADIANCE_Y_INPUT                                         21

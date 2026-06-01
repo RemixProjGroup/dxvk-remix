@@ -46,6 +46,9 @@
 #include <rtx_shaders/debug_view_render_to_output.h>
 
 #include "rtx_options.h"
+// NV-DXVK start: SHARC integration — Stage 5 (debug overlay)
+#include "rtx_fork_sharc.h"
+// NV-DXVK end
 
 namespace dxvk {
   static const bool s_disableAnimation = (env::getEnvVar("DXVK_DEBUG_VIEW_DISABLE_ANIMATION") == "1");
@@ -204,7 +207,14 @@ namespace dxvk {
                                 "(integrate_direct line 72). This view is now a direct grayscale equivalent\n"
                                 "of enum 875 -- they should show the SAME pattern at the SAME brightness.\n"
                                 "If they diverge, suspect a path regression (sampler / binding mismatch\n"
-                                "between the production raygen pass and the debug-view pass)."},
+                                "between the production raygen pass and the debug-view pass)."}, 
+        // NV-DXVK start: SHARC integration — Stage 5 (debug overlay)
+        {DEBUG_VIEW_SHARC_DEBUG, "SHARC: Hash Grid Debug Overlay",
+                                "Renders the SHARC hash-grid debug visualisation selected by rtx.sharc.debugMode.\n"
+                                "Modes: HashGridColor, Occupancy, HashCollisions, BitsOccupancy, CachedRadiance.\n"
+                                "Only meaningful when rtx.sharc.enable = true.  Black when SHARC is off\n"
+                                "or debugMode is Off."},
+        // NV-DXVK end,
         {DEBUG_VIEW_CASCADE_LEVEL, "Terrain: Cascade Level"},
 
         {DEBUG_VIEW_VIRTUAL_HIT_DISTANCE, "Virtual Hit Distance"},
@@ -641,6 +651,9 @@ namespace dxvk {
         TEXTURE3D(DEBUG_VIEW_BINDING_CLOUD_D_AMBIENT_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT)
+        // NV-DXVK start: SHARC integration — Stage 5 (debug overlay binding)
+        TEXTURE2D(DEBUG_VIEW_BINDING_SHARC_DEBUG_INPUT)
+        // NV-DXVK end
 
         RW_TEXTURE2D(DEBUG_VIEW_BINDING_ACCUMULATED_DEBUG_VIEW_INPUT_OUTPUT)
 
@@ -1464,6 +1477,17 @@ namespace dxvk {
       DEBUG_VIEW_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT,
       rtOutput.m_primaryCloudShadowFactor.view,
       nullptr);
+
+    // NV-DXVK start: SHARC integration — Stage 5 (debug overlay)
+    // Bind the SHARC hash-grid debug texture when SHARC is enabled; fall back
+    // to a null view so the sampler returns black when SHARC is off.
+    if (RtxSharc::enable() && rtOutput.m_sharcDebugOutput.isValid()) {
+      ctx->bindResourceView(
+        DEBUG_VIEW_BINDING_SHARC_DEBUG_INPUT,
+        rtOutput.m_sharcDebugOutput.view,
+        nullptr);
+    }
+    // NV-DXVK end
 
     ctx->bindResourceView(DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT, globalVolumetrics.getPreviousVolumeReservoirs().view, nullptr);
     ctx->bindResourceView(DEBUG_VIEW_BINDING_VOLUME_AGE_INPUT, globalVolumetrics.getCurrentVolumeAccumulatedRadianceAge().view, nullptr);

@@ -114,6 +114,15 @@ Texture2D<float4> DebugViewCloudRenderRT;
 [[vk::binding(DEBUG_VIEW_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT)]]
 Texture2D<float> DebugViewPrimaryCloudShadowFactor;
 
+// NV-DXVK start: SHARC integration — Stage 5 (debug overlay)
+// RGBA16F screen-extent texture written by the SHARC integrator raygen when
+// debugMode != Off.  Holds the hash-grid debug color (HashGridColor,
+// Occupancy, HashCollisions, BitsOccupancy, or CachedRadiance) for each pixel.
+// Black when SHARC is disabled or debugMode == Off.
+[[vk::binding(DEBUG_VIEW_BINDING_SHARC_DEBUG_INPUT)]]
+Texture2D<float4> SharcDebugOutput;
+// NV-DXVK end
+
 [[vk::binding(DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT)]]
 Texture3D<uint4> VolumeReservoirs;
 
@@ -871,6 +880,16 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
 
     break;
   }
+  // NV-DXVK start: SHARC integration — Stage 5 (debug overlay)
+  // Reads the SHARC hash-grid debug texture written by the integrator raygen
+  // when rtx.sharc.debugMode != Off.  The debug output is already in display-
+  // ready linear HDR; just pass it through unchanged.
+  case DEBUG_VIEW_SHARC_DEBUG:
+  {
+    value = SharcDebugOutput[threadId];
+    break;
+  }
+  // NV-DXVK end
   default:
     value = DebugView[threadId];
     break;

@@ -1,0 +1,65 @@
+// sharc_slang_shim.slangh
+//
+// Slang adapter for the SHARC SDK shader headers.
+// The SHARC SDK (external/sharc/include/) was written for HLSL/DXC.  Slang
+// accepts HLSL syntax directly, so only a small amount of glue is needed:
+//
+//   - Pin the default macro choices that match our config (lock-buffer path,
+//     material demodulation on).
+//   - The three SDK headers are in a location the shader compiler doesn't
+//     automatically see, so we include them via the shim with their relative
+//     path (relative to this file).
+//
+// Guard: only include when SHARC_QUERY or SHARC_UPDATE is nonzero to avoid
+// compiling the SDK into every permutation.
+//
+// Usage (from an integrator or resolve shader):
+//   #include "rtx/external/sharc/sharc_slang_shim.slangh"
+//
+// See docs/SharcIntegration.md for the full design.
+// NV-DXVK start: SHARC integration — Stage 2
+
+#ifndef SHARC_SLANG_SHIM_SLANGH
+#define SHARC_SLANG_SHIM_SLANGH
+
+// ---- Configuration ---------------------------------------------------------
+// Ship the lock-buffer path (no 64-bit atomics) matching the RTXGI 2.7
+// Pathtracer sample default.  A future option can flip this when
+// VK_KHR_shader_atomic_int64 is confirmed available.
+#ifndef SHARC_ENABLE_64_BIT_ATOMICS
+#define SHARC_ENABLE_64_BIT_ATOMICS 0
+#endif
+
+// Material demodulation is mandatory in v1 (see SharcIntegration.md §11).
+#ifndef SHARC_MATERIAL_DEMODULATION
+#define SHARC_MATERIAL_DEMODULATION 1
+#endif
+
+// GLSL buffer-reference path is not used; make sure it's off.
+#ifndef SHARC_ENABLE_GLSL
+#define SHARC_ENABLE_GLSL 0
+#endif
+
+// ---- Buffer accessor macros -------------------------------------------------
+// The SDK uses these macros so they can be overridden per-backend.
+// For Slang/HLSL the default definitions in SharcCommon.h are already correct
+// (RWStructuredBuffer<T> name and name[offset]) but we provide them here
+// explicitly so the file is self-documenting.
+#ifndef RW_STRUCTURED_BUFFER
+#define RW_STRUCTURED_BUFFER(name, type) RWStructuredBuffer<type> name
+#endif
+
+#ifndef BUFFER_AT_OFFSET
+#define BUFFER_AT_OFFSET(name, offset) name[offset]
+#endif
+
+// ---- SDK includes -----------------------------------------------------------
+// external/sharc/include/ is added as a shader include directory by meson.build
+// (the `-include external/sharc/include` argument in rtx_shaders_command_arguments).
+// So we can include the SDK headers by their bare filename.
+// SharcCommon.h itself includes HashGridCommon.h and SharcTypes.h.
+#include "SharcCommon.h"
+
+#endif // SHARC_SLANG_SHIM_SLANGH
+
+// NV-DXVK end

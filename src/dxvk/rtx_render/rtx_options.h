@@ -175,6 +175,9 @@ namespace dxvk {
     ImportanceSampled = 0,   // Importance sampled integration - provides the noisiest output and used primarily for reference comparisons
     ReSTIRGI = 1,            // Importance Sampled + ReSTIR GI integrations
     NeuralRadianceCache = 2, // Implements a live trained neural network to provide a world space radiance cache and allow the pathtracer to terminate paths earlier into the cache.
+    // NV-DXVK start: SHARC integration — Stage 1
+    SHARC = 3,               // Spatially Hashed Radiance Cache: world-space cache that terminates indirect paths early. Disables ReSTIR GI and NRC when active.
+    // NV-DXVK end
   
     Count
   };

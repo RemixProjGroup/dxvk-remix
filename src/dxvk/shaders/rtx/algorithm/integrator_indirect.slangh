@@ -39,6 +39,8 @@
 #include "rtx/pass/atmosphere/atmosphere_sky.slangh"
 #endif
 
+
+
 // Evaluate direct sun lighting for secondary bounces (atmosphere mode) with soft shadows
 bool evalAtmosphereSunNEESecondary(
   Ray ray,
@@ -410,6 +412,30 @@ void integratePathVertex(
   IndirectPathTextures indirectPathTextures, RayHitInfo rayHitInfo,
   inout PathState pathState)
 {
+  // NV-DXVK start: SHARC integration — Stage 3 (Update pass: reset per-bounce radiance/throughput)
+#if SHARC_UPDATE
+  pathState.radiance   = vec3(0.0f);
+  pathState.throughput = f16vec3(1.h);
+#endif
+  // NV-DXVK end
+
+  // NV-DXVK start: SHARC integration — Stage 3 (build SharcParameters locally from module resources)
+#if SHARC_UPDATE || SHARC_QUERY
+  SharcParameters sharcParams;
+  sharcParams.gridParameters.cameraPosition = sharcCb.cameraPosition.xyz;
+  sharcParams.gridParameters.sceneScale     = sharcCb.sceneScale;
+  sharcParams.gridParameters.logarithmBase  = SHARC_GRID_LOGARITHM_BASE;
+  sharcParams.gridParameters.levelBias      = SHARC_GRID_LEVEL_BIAS;
+  sharcParams.hashMapData.capacity          = sharcCb.capacity;
+  sharcParams.hashMapData.hashEntriesBuffer = u_SharcHashEntries;
+  sharcParams.hashMapData.lockBuffer        = u_SharcLock;
+  sharcParams.accumulationBuffer            = u_SharcAccumulation;
+  sharcParams.resolvedBuffer                = u_SharcResolved;
+  sharcParams.radianceScale                 = sharcCb.radianceScale;
+  sharcParams.enableAntiFireflyFilter       = (sharcCb.enableAntiFireflyFilter != 0);
+#endif
+  // NV-DXVK end
+
   const bool separateUnorderedApproximations = pathState.getSeparateUnorderedApproximationsActive();
 
   // Setup resolve state
@@ -590,6 +616,12 @@ void integratePathVertex(
     Nrc::updateNrcOnMiss(
       pathState.pixelCoordinate, pathState.isNrcUpdate, pathState.nrcPathState, false);
 #endif
+
+    // NV-DXVK start: SHARC integration — Stage 3 (SharcUpdateMiss on sky hit)
+#if SHARC_UPDATE
+    SharcUpdateMiss(sharcParams, pathState.sharcState, skyRadiance);
+#endif
+    // NV-DXVK end
   }
  
   // Handle emissive radiance and attenuation from the Resolve function
@@ -790,6 +822,47 @@ void integratePathVertex(
     const bool isOpaqueMaterial = materialType == surfaceMaterialTypeOpaque;
     const OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction = opaqueSurfaceMaterialInteractionCreate(polymorphicSurfaceMaterialInteraction);
     // polymorphicSurfaceMaterialInteraction is no longer live since this point.
+
+    // NV-DXVK start: SHARC integration — Stage 3 (SharcHitData + roughness gate + optional early-out query)
+#if SHARC_UPDATE || SHARC_QUERY
+    SharcHitData sharcHitData = (SharcHitData)0;
+    if (isOpaqueMaterial)
+    {
+      sharcHitData.positionWorld = surfaceInteraction.position;
+      sharcHitData.normalWorld   = float3(surfaceInteraction.triangleNormal);
+#if SHARC_MATERIAL_DEMODULATION
+      float3 fAvg = opaqueSurfaceMaterialInteraction.baseReflectivity
+                  + (1.0f - opaqueSurfaceMaterialInteraction.baseReflectivity) * (1.0f / 21.0f);
+      sharcHitData.materialDemodulation =
+        max(float3(opaqueSurfaceMaterialInteraction.albedo), 0.05f)
+        + max(float3(opaqueSurfaceMaterialInteraction.baseReflectivity), 0.02f) * calcBt709Luminance(fAvg);
+#endif
+    }
+#endif
+#if SHARC_QUERY
+    // Try to terminate path early via cache lookup (step 6)
+    if (isOpaqueMaterial)
+    {
+      uint  gridLevel = HashGridGetLevel(surfaceInteraction.position, sharcParams.gridParameters);
+      float voxelSize = HashGridGetVoxelSize(gridLevel, sharcParams.gridParameters);
+      bool  isValidHit = rayInteraction.hitDistance > voxelSize * sqrt(3.0f);
+      float a = min(pathState.materialRoughnessPrev, 0.99f); a = a * a;
+      float footprint = (a > 0.0f)
+        ? rayInteraction.hitDistance * sqrt(0.5f * a * a / (1.0f - a * a))
+        : 0.0f;
+      isValidHit = isValidHit && (footprint > voxelSize);
+
+      float3 cachedRadiance;
+      if (isValidHit && SharcGetCachedRadiance(sharcParams, sharcHitData, cachedRadiance, false))
+      {
+        accumulateRadiance(pathState, cachedRadiance);
+        SharcDebugOutput[pathState.pixelCoordinate] = float4(cachedRadiance, 1.0f);
+        pathState.continuePath = false;
+        return;
+      }
+    }
+#endif
+    // NV-DXVK end
     
     // Perform NEE
     
@@ -1034,6 +1107,22 @@ void integratePathVertex(
       return;
     }
 
+    // NV-DXVK start: SHARC integration — Stage 3 (SharcUpdateHit: accumulate direct lighting into cache)
+#if SHARC_UPDATE
+    if (isOpaqueMaterial)
+    {
+      RNG sharcRng = createRNG(pathState.pixelCoordinate, cb.frameIdx,
+        pathState.calculateRNGOffset(kRNGOffsetSampleClosestHitShader) + pathState.bounceIteration + 100u);
+      float randVal = getNextSampleBlueNoise(sharcRng);
+      if (!SharcUpdateHit(sharcParams, pathState.sharcState, sharcHitData, pathState.radiance, randVal))
+      {
+        pathState.continuePath = false;
+        return;
+      }
+    }
+#endif
+    // NV-DXVK end
+
     // Check for path termination
     // Note: Bounce iteration refers to the index of the current vertex in the path,
     // 0 = Primary Hit, 1 = 1st Indirect Hit (1 bounce), etc. The decision to terminate here
@@ -1227,6 +1316,19 @@ void integratePathVertex(
 #if ENABLE_NRC
     NrcSetBrdfPdf(pathState.nrcPathState, pathState.solidAnglePdf);
 #endif
+
+    // NV-DXVK start: SHARC integration — Stage 3 (Query roughness tracking + SharcSetThroughput)
+#if SHARC_QUERY
+    if (isOpaqueMaterial)
+    {
+      pathState.materialRoughnessPrev +=
+        (continuationLobe == opaqueLobeTypeDiffuseReflection) ? 1.0f : opaqueSurfaceMaterialInteraction.isotropicRoughness;
+    }
+#endif
+#if SHARC_UPDATE || SHARC_QUERY
+    SharcSetThroughput(pathState.sharcState, float3(pathState.throughput) * float3(continuationThroughput));
+#endif
+    // NV-DXVK end
 
     accumulateThroughput(pathState, continuationThroughput);
 
@@ -1526,6 +1628,16 @@ void integrateIndirectPath(
 
   initReSTIRGI(pathState, geometryFlags, firstHitPerceptualRoughness, firstSampledLobePdf, firstSampledSolidAnglePdf);
 
+  // NV-DXVK start: SHARC integration — Stage 3 (per-path SHARC state initialization)
+#if SHARC_UPDATE || SHARC_QUERY
+  {
+    SharcInit(pathState.sharcState);
+    pathState.materialRoughnessPrev = 0.0f;
+    // SharcParameters are built per-bounce in integratePathVertex from module-level resources.
+  }
+#endif
+  // NV-DXVK end
+
   // Note: Initialize the continue path flag based on if an indirect ray should actually be cast, e.g. if the PDF
   // and throughput are non-zero (as these being 0 indicates often that the sampled ray direction is invalid and should
   // not be used).
@@ -1667,10 +1779,14 @@ void integrateIndirectPath(
   }
 
   // Store the integrated ray path radiance and hit distance
+  // NV-DXVK start: SHARC integration — Stage 3 (no pixel output in Update pass)
+#if !SHARC_UPDATE
   if (TRUE_OR_CHECK_WHEN_NRC_ENABLED(pathState.isNrcQuery))
   {
     indirectPathTextures.IndirectRadianceHitDistance[gbufferPixelCoordinate] = indirectOutData;
   }
+#endif
+  // NV-DXVK end
   
   writeToNrcOutputsAfterIntegration(pathState);
 

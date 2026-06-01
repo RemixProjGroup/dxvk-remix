@@ -189,3 +189,28 @@ REORDER_COHERENT // Conditionally enabled as it seemed to add a tiny overhead th
                  // even when the resource is not used
 #endif
 RWTexture2D<uint> Instrumentation;
+
+// NV-DXVK start: SHARC integration — Stage 3
+#if SHARC_UPDATE || SHARC_QUERY
+#include "rtx/pass/sharc/sharc_constants.h"
+#include "rtx/external/sharc/sharc_slang_shim.slangh"
+
+layout(binding = INTEGRATE_INDIRECT_BINDING_SHARC_HASH_ENTRIES)
+RWStructuredBuffer<uint64_t> u_SharcHashEntries;
+
+layout(binding = INTEGRATE_INDIRECT_BINDING_SHARC_LOCK)
+RWStructuredBuffer<uint> u_SharcLock;
+
+layout(binding = INTEGRATE_INDIRECT_BINDING_SHARC_ACCUMULATION)
+RWStructuredBuffer<SharcAccumulationData> u_SharcAccumulation;
+
+layout(binding = INTEGRATE_INDIRECT_BINDING_SHARC_RESOLVED)
+RWStructuredBuffer<SharcPackedData> u_SharcResolved;
+
+layout(binding = INTEGRATE_INDIRECT_BINDING_SHARC_CONSTANTS)
+ConstantBuffer<SharcConstants> sharcCb;
+
+layout(rgba16f, binding = INTEGRATE_INDIRECT_BINDING_SHARC_DEBUG_OUTPUT)
+RWTexture2D<float4> SharcDebugOutput;
+#endif
+// NV-DXVK end
