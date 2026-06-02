@@ -65,8 +65,8 @@ struct SharcConstants {
 
   int   frameIndex;              // current frame index (for ping-pong / history)
   int   debugMode;               // 0 = off, see SharcDebugMode in rtx_fork_sharc.h
-  int   enableMaterialDemodulation; // always 1 in v1
-  int   pad0;                    // align to 64 bytes
+  float updateProbability;       // [0,1] stochastic update rejection probability (default 1.0 = all pixels update)
+  int   enableQuery;             // 0 = skip cache early-out in Query pass (benchmark fallback), 1 = enabled
 };
 // C++ size check in rtx_fork_sharc.cpp: static_assert(sizeof(SharcConstants) == 80, ...)
 

@@ -881,10 +881,14 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
     break;
   }
   // NV-DXVK start: SHARC integration — Stage 5 (debug overlay)
-  // Reads the SHARC hash-grid debug texture written by the integrator raygen
-  // when rtx.sharc.debugMode != Off.  The debug output is already in display-
-  // ready linear HDR; just pass it through unchanged.
-  case DEBUG_VIEW_SHARC_DEBUG:
+  // One case per named SHARC debug mode.  All five read the same SharcDebugOutput
+  // texture; the correct visualisation is selected by setting debugMode in the
+  // SharcConstants constant buffer before the integrator raygen runs.
+  case DEBUG_VIEW_SHARC_HASHGRIDCOLOR:
+  case DEBUG_VIEW_SHARC_OCCUPANCY:
+  case DEBUG_VIEW_SHARC_HASHCOLLISIONS:
+  case DEBUG_VIEW_SHARC_BITSOCCUPANCY:
+  case DEBUG_VIEW_SHARC_CACHEDRADIANCE:
   {
     value = SharcDebugOutput[threadId];
     break;

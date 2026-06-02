@@ -1169,10 +1169,15 @@ namespace dxvk {
     m_raytracingOutput.m_neeCacheThreadTask = createImageResource(ctx, "radiance cache thread task", m_downscaledExtent, VK_FORMAT_R32G32_UINT);
 
     // NV-DXVK start: SHARC integration — Stage 1 (buffer allocation)
-    // Allocate SHARC buffers only when SHARC is enabled to avoid wasting
+    // Allocate SHARC buffers only when SHARC mode is selected to avoid wasting
     // ~176 MiB of VRAM on users that do not use this feature.
-    if (RtxSharc::enable()) {
+    if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::SHARC) {
       DxvkBufferCreateInfo sharcInfo = rtxdiBufferInfo;
+      // VK_BUFFER_USAGE_TRANSFER_DST_BIT is required by the Vulkan spec for
+      // vkCmdFillBuffer (used in RtxSharc::clearBuffers to zero all four buffers
+      // at startup and on scene-change).  rtxdiBufferInfo only carries
+      // VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, so we must add it here.
+      sharcInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
       // Hash entries: 8 bytes per entry (uint64_t)
       sharcInfo.size = static_cast<VkDeviceSize>(1u << RtxSharc::capacityLog2()) * sizeof(uint64_t);
       m_raytracingOutput.m_sharcHashBuffer = m_device->createBuffer(sharcInfo,

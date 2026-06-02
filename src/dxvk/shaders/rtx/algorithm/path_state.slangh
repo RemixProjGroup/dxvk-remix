@@ -284,6 +284,12 @@ struct PathState : IBasePayloadState
 #endif
 
   // NV-DXVK start: SHARC integration — Stage 3
+#ifndef SHARC_UPDATE
+#define SHARC_UPDATE 0
+#endif
+#ifndef SHARC_QUERY
+#define SHARC_QUERY 0
+#endif
 #if SHARC_UPDATE || SHARC_QUERY
   SharcState sharcState;         // Per-path SHARC accumulator state (backpropagates radiance)
   float materialRoughnessPrev;   // Query: accumulated roughness footprint for voxel-size gate

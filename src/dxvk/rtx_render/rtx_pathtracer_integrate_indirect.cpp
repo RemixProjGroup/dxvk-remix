@@ -560,23 +560,31 @@ namespace dxvk {
         const uint32_t N = sharc.getDownscaleFactor();
         const VkExtent3D updateDims = { (rayDims.width + N - 1) / N, (rayDims.height + N - 1) / N, 1u };
 
-        // 1. Update pass — fills accumulationBuffer with direct+emissive at each bounce
-        {
-          ScopedGpuProfileZone(ctx, "SHARC Update");
-          ctx->bindRaytracingPipelineShaders(getPipelineShaders(true, serEnabled, ommEnabled, neeCacheEnabled, includePortals, pomEnabled, false, false, 1));
-          ctx->traceRays(updateDims.width, updateDims.height, 1);
+        // Update + Resolve can be skipped to freeze the cache for debugging
+        // (RtxSharc::enableUpdate). Query is always dispatched so that indirect
+        // lighting still gets written; the in-shader cache early-out is gated
+        // separately by sharcCb.enableQuery.
+        const bool runUpdate = RtxSharc::enableUpdate();
+
+        if (runUpdate) {
+          // 1. Update pass — fills accumulationBuffer with direct+emissive at each bounce
+          {
+            ScopedGpuProfileZone(ctx, "SHARC Update");
+            ctx->bindRaytracingPipelineShaders(getPipelineShaders(true, serEnabled, ommEnabled, neeCacheEnabled, includePortals, pomEnabled, false, false, 1));
+            ctx->traceRays(updateDims.width, updateDims.height, 1);
+          }
+
+          // 2. UAV barrier: Update (RT) → Resolve (compute)
+          ctx->emitMemoryBarrier(0, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+            VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+
+          // 3. Resolve pass — collapses accumulationBuffer into resolvedBuffer
+          sharc.dispatch(ctx, rtOutput);
+
+          // 4. UAV barrier: Resolve (compute) → Query (RT)
+          ctx->emitMemoryBarrier(0, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_SHADER_READ_BIT);
         }
-
-        // 2. UAV barrier: Update (RT) → Resolve (compute)
-        ctx->emitMemoryBarrier(0, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-          VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
-
-        // 3. Resolve pass — collapses accumulationBuffer into resolvedBuffer
-        sharc.dispatch(ctx, rtOutput);
-
-        // 4. UAV barrier: Resolve (compute) → Query (RT)
-        ctx->emitMemoryBarrier(0, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-          VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_SHADER_READ_BIT);
 
         // 5. Query pass — normal indirect integration that may early-out via SHARC cache
         {

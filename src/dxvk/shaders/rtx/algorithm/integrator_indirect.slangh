@@ -413,6 +413,12 @@ void integratePathVertex(
   inout PathState pathState)
 {
   // NV-DXVK start: SHARC integration — Stage 3 (Update pass: reset per-bounce radiance/throughput)
+#ifndef SHARC_UPDATE
+#define SHARC_UPDATE 0
+#endif
+#ifndef SHARC_QUERY
+#define SHARC_QUERY 0
+#endif
 #if SHARC_UPDATE
   pathState.radiance   = vec3(0.0f);
   pathState.throughput = f16vec3(1.h);
@@ -820,8 +826,26 @@ void integratePathVertex(
     // Get Opaque material information for future reference
     
     const bool isOpaqueMaterial = materialType == surfaceMaterialTypeOpaque;
-    const OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction = opaqueSurfaceMaterialInteractionCreate(polymorphicSurfaceMaterialInteraction);
+    // NV-DXVK start: SHARC integration — Stage 3 (drop const so SHARC_UPDATE can clamp roughness)
+    OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction = opaqueSurfaceMaterialInteractionCreate(polymorphicSurfaceMaterialInteraction);
+    // NV-DXVK end
     // polymorphicSurfaceMaterialInteraction is no longer live since this point.
+
+    // NV-DXVK start: SHARC integration — clamp surface roughness on Update pass so the
+    // cache is filled with paths the Query side will accept. Matches RTXGI 2.7 pattern:
+    //   material.roughness = max(sharcRoughnessThreshold, material.roughness)  // under SHARC_UPDATE
+#if SHARC_UPDATE
+    if (isOpaqueMaterial)
+    {
+      opaqueSurfaceMaterialInteraction.isotropicRoughness =
+        max(sharcCb.roughnessThreshold, opaqueSurfaceMaterialInteraction.isotropicRoughness);
+      // anisotropicRoughness drives GGX sampling/eval; clamp componentwise to match.
+      opaqueSurfaceMaterialInteraction.anisotropicRoughness = max(
+        vec2(sharcCb.roughnessThreshold, sharcCb.roughnessThreshold),
+        opaqueSurfaceMaterialInteraction.anisotropicRoughness);
+    }
+#endif
+    // NV-DXVK end
 
     // NV-DXVK start: SHARC integration — Stage 3 (SharcHitData + roughness gate + optional early-out query)
 #if SHARC_UPDATE || SHARC_QUERY
@@ -852,13 +876,56 @@ void integratePathVertex(
         : 0.0f;
       isValidHit = isValidHit && (footprint > voxelSize);
 
+      // NV-DXVK: SHARC integration — debug visualisation write.
+      // Mirrors sharcCb.debugMode (set from rtx.sharc.debugMode, which is auto-
+      // driven by the debug-view selector in rtx_debug_view.cpp). Modes 1-4 use
+      // the SDK helpers in HashGridCommon.h; mode 5 (CachedRadiance) is handled
+      // by the cache-lookup branch below. Writes happen on every opaque primary
+      // hit in the Query pass so the entire screen gets coverage, independent of
+      // whether the cache early-out actually fires.
+      if (sharcCb.debugMode != 0 && sharcCb.debugMode != 5)
+      {
+        float3 dbgColor = float3(0.0f);
+        const float3 dbgPos = surfaceInteraction.position;
+        const float3 dbgNrm = float3(surfaceInteraction.triangleNormal);
+        switch (sharcCb.debugMode)
+        {
+          case 1: // HashGridColor
+            dbgColor = HashGridDebugColoredHash(dbgPos, dbgNrm, sharcParams.gridParameters);
+            break;
+          case 2: // Occupancy
+          case 4: // BitsOccupancy (no dedicated SDK helper; reuses Occupancy viz)
+          {
+            uint2 screenSize;
+            SharcDebugOutput.GetDimensions(screenSize.x, screenSize.y);
+            dbgColor = HashGridDebugOccupancy(uint2(pathState.pixelCoordinate), screenSize, sharcParams.hashMapData);
+            break;
+          }
+          case 3: // HashCollisions
+            dbgColor = HashGridDebugHashCollisions(dbgPos, dbgNrm, sharcParams.gridParameters, sharcParams.hashMapData);
+            break;
+          default: break;
+        }
+        SharcDebugOutput[pathState.pixelCoordinate] = float4(dbgColor, 1.0f);
+      }
+
       float3 cachedRadiance;
-      if (isValidHit && SharcGetCachedRadiance(sharcParams, sharcHitData, cachedRadiance, false))
+      // NV-DXVK: SHARC integration — gate cache early-out by enableQuery so the
+      // Query raygen can be exercised without cache lookups for benchmarking.
+      if (isValidHit && (sharcCb.enableQuery != 0) && SharcGetCachedRadiance(sharcParams, sharcHitData, cachedRadiance, false))
       {
         accumulateRadiance(pathState, cachedRadiance);
-        SharcDebugOutput[pathState.pixelCoordinate] = float4(cachedRadiance, 1.0f);
+        if (sharcCb.debugMode == 5)
+        {
+          SharcDebugOutput[pathState.pixelCoordinate] = float4(cachedRadiance, 1.0f);
+        }
         pathState.continuePath = false;
         return;
+      }
+      else if (sharcCb.debugMode == 5)
+      {
+        // CachedRadiance mode + cache miss: clear so we don't show stale data.
+        SharcDebugOutput[pathState.pixelCoordinate] = float4(0.0f, 0.0f, 0.0f, 0.0f);
       }
     }
 #endif
@@ -1321,6 +1388,13 @@ void integratePathVertex(
 #if SHARC_QUERY
     if (isOpaqueMaterial)
     {
+      // Accumulate per-lobe roughness across the path. The accumulator is read at the
+      // next vertex as materialRoughnessPrev to compute the reflected-cone footprint
+      // for the voxel-size gate check. Matches RTXGI 2.7 reference (Pathtracer.hlsl):
+      //   materialRoughnessPrev += (brdfType == DIFFUSE) ? 1.0 : material.roughness;
+      // Accumulation is the correct proxy for path-integrated cone spread; assignment
+      // would only consider the last lobe and reject valid cache hits on long
+      // specular chains.
       pathState.materialRoughnessPrev +=
         (continuationLobe == opaqueLobeTypeDiffuseReflection) ? 1.0f : opaqueSurfaceMaterialInteraction.isotropicRoughness;
     }

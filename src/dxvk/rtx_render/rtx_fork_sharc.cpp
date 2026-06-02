@@ -54,7 +54,7 @@ namespace dxvk {
   } // anonymous namespace
 
   // ---- Size assertions -------------------------------------------------------
-  // Verify that SharcConstants is exactly 64 bytes so the GPU constant buffer
+  // Verify that SharcConstants is exactly 80 bytes so the GPU constant buffer
   // layout matches between C++ and Slang. Update the assert value if the struct
   // is intentionally changed.
   static_assert(sizeof(SharcConstants) == 80,
@@ -63,6 +63,12 @@ namespace dxvk {
   // ---- Constructor -----------------------------------------------------------
   RtxSharc::RtxSharc(DxvkDevice* device)
     : m_device(device) {
+    // Pin capacity at construction — the device-local GPU buffers in
+    // rtx_resources.cpp are sized from this same RTX_OPTION at create time,
+    // so any runtime mutation of capacityLog2 would walk the CB capacity past
+    // the allocated buffer end.
+    m_capacity = 1u << capacityLog2();
+
     // Stage 2: pre-allocate the staging ring for SharcConstants uniform uploads.
     m_stagingCb = std::make_unique<RtxStagingDataAlloc>(
       device,
@@ -74,16 +80,18 @@ namespace dxvk {
 
   // ---- isEnabled() -----------------------------------------------------------
   bool RtxSharc::isEnabled() const {
-    if (!enable()) {
+    if (RtxOptions::integrateIndirectMode() != IntegrateIndirectMode::SHARC) {
       return false;
     }
 
-    // TraceRay mode is structurally incompatible with SHARC: the bounce loop
-    // and SharcState must live in the raygen shader, but TraceRay mode does
-    // substantial shading work in ClosestHit shaders. Disable SHARC in that
-    // mode rather than threading SharcState through the ray payload.
-    if (RtxOptions::renderPassIntegrateIndirectRaytraceMode() ==
-        RenderPassIntegrateIndirectRaytraceMode::TraceRay) {
+    // SHARC requires the RayQueryRayGen integrate-indirect pipeline. The CS-RayQuery
+    // variant has no SHARC code path bound (see rtx_pathtracer_integrate_indirect.cpp),
+    // and TraceRay mode is structurally incompatible (the bounce loop and SharcState
+    // must live in the raygen shader, but TraceRay does shading in ClosestHit).
+    // Returning false here also causes ReSTIR-GI / NRC to remain active, so the user
+    // does not get black indirect when the wrong raytrace mode is selected.
+    if (RtxOptions::renderPassIntegrateIndirectRaytraceMode() !=
+        RenderPassIntegrateIndirectRaytraceMode::RayQueryRayGen) {
       return false;
     }
 
@@ -96,30 +104,15 @@ namespace dxvk {
     ImGui::Separator();
 
     // TraceRay compatibility warning.
-    if (enable() &&
-        RtxOptions::renderPassIntegrateIndirectRaytraceMode() ==
-        RenderPassIntegrateIndirectRaytraceMode::TraceRay) {
+    if (RtxOptions::renderPassIntegrateIndirectRaytraceMode() !=
+        RenderPassIntegrateIndirectRaytraceMode::RayQueryRayGen) {
       ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.6f, 0.1f, 1.0f));
       ImGui::TextWrapped(
-        "WARNING: SHARC is incompatible with TraceRay raytrace mode.\n"
-        "Switch to RayQuery (CS) or RayQuery (RGS) in the Raytrace Mode combo above.");
+        "WARNING: SHARC requires the RayQuery (RGS) raytrace mode.\n"
+        "Switch the Raytrace Mode combo above to RayQuery (RGS); SHARC is disabled in all other modes.");
       ImGui::PopStyleColor();
       ImGui::Separator();
     }
-
-    RemixGui::Checkbox("Enable SHARC", &enableObject());
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip(
-        "Enables the Spatially Hashed Radiance Cache (SHARC) as the indirect\n"
-        "lighting integrator. Replaces ReSTIR GI and NRC when active.\n"
-        "Requires RayQuery (CS) or RayQuery (RGS) raytrace mode.");
-    }
-
-    if (!enable()) {
-      return;
-    }
-
-    ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Cache Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
       ImGui::Indent();
@@ -134,12 +127,12 @@ namespace dxvk {
       }
 
       RemixGui::DragInt("Stale Frame Max", &staleFrameNumMaxObject(),
-                        1.0f, 1, 512, "%d", ImGuiSliderFlags_AlwaysClamp);
+                        1.0f, 8, 512, "%d", ImGuiSliderFlags_AlwaysClamp);
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
           "Maximum number of frames a cache entry can go without being\n"
           "updated before it is evicted. Lower values keep the cache fresh\n"
-          "at the cost of more CPU/GPU overhead. Range: 1-512.");
+          "at the cost of more CPU/GPU overhead. Range: 8-512 (SDK floor is 8).");
       }
 
       RemixGui::DragFloat("Scene Scale", &sceneScaleObject(),
@@ -213,60 +206,25 @@ namespace dxvk {
           "temporal stability.");
       }
 
-      RemixGui::Checkbox("Material Demodulation", &enableMaterialDemodulationObject());
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-          "Stores and retrieves radiance demodulated by albedo so that surface\n"
-          "colour changes (texture swaps, LOD) do not invalidate cached entries.");
-      }
-
       ImGui::Unindent();
     }
 
-    if (ImGui::CollapsingHeader("Debug")) {
-      ImGui::Indent();
-
-      // Named combo for debug mode (clearer than a bare integer slider).
-      static const char* kDebugModeNames[] = {
-        "Off",
-        "HashGridColor",
-        "Occupancy",
-        "HashCollisions",
-        "BitsOccupancy",
-        "CachedRadiance",
-      };
-      int debugModeInt = static_cast<int>(debugMode());
-      if (ImGui::Combo("Debug Mode", &debugModeInt, kDebugModeNames, IM_ARRAYSIZE(kDebugModeNames))) {
-        debugModeObject().setDeferred(static_cast<SharcDebugMode>(debugModeInt));
-      }
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-          "Overlays a SHARC diagnostic image when non-Off.\n"
-          "Select \"SHARC: Hash Grid Debug Overlay\" in the Debug View list to see it.\n"
-          "Off: no overlay\n"
-          "HashGridColor: unique colour per cell (grid resolution check)\n"
-          "Occupancy: fraction of entries written in each cell\n"
-          "HashCollisions: cells that collide in the hash map\n"
-          "BitsOccupancy: atomic lock-bit utilisation\n"
-          "CachedRadiance: actual stored irradiance values");
-      }
-
-      // Stage 5: Int64-atomics capability display.
-      // The lock-free path halves the memory footprint (saves 16 MiB lock buffer)
-      // but requires VK_KHR_shader_atomic_int64 on the device.  Show a greyed
-      // checkbox so users know whether their GPU supports it and can
-      // recompile with SHARC_ENABLE_64_BIT_ATOMICS=1 if desired.
+    // Hardware capability info — shown at the bottom of the SHARC panel.
+    // Read-only: indicates whether the GPU supports lock-free 64-bit atomics.
+    // Recompile with SHARC_ENABLE_64_BIT_ATOMICS=1 to activate the lock-free path.
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::Text("Hardware capabilities:");
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(
+        "Read-only display of GPU features relevant to SHARC.\n"
+        "Recompile with the matching SHARC_ENABLE_64_BIT_ATOMICS define to\n"
+        "switch between the lock-buffer path (0) and the int64 path (1).");
+    }
+    {
       const bool hasInt64 = supportsInt64Atomics();
-      ImGui::Spacing();
-      ImGui::Text("Hardware capabilities:");
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-          "Read-only display of GPU features relevant to SHARC.\n"
-          "Recompile with the matching SHARC_ENABLE_64_BIT_ATOMICS define to\n"
-          "switch between the lock-buffer path (0) and the int64 path (1).");
-      }
       ImGui::BeginDisabled(!hasInt64);
-      bool dummyInt64 = hasInt64;  // reflects HW capability, not the runtime build flag
+      bool dummyInt64 = hasInt64;
       ImGui::Checkbox("64-bit Buffer Atomics (shaderBufferInt64Atomics)", &dummyInt64);
       ImGui::EndDisabled();
       if (ImGui::IsItemHovered()) {
@@ -281,9 +239,8 @@ namespace dxvk {
             "SHARC will use the 32-bit lock-buffer path (SHARC_ENABLE_64_BIT_ATOMICS=0).");
         }
       }
-
-      ImGui::Unindent();
     }
+    ImGui::TextDisabled("(Debug overlays: enable Debug View and search for \"SHARC:\")");
   }
 
   // ---- supportsInt64Atomics() ------------------------------------------------
@@ -310,15 +267,15 @@ namespace dxvk {
     sharcCb.accumulationFrameNum    = accumulationFrameNum();
     sharcCb.staleFrameNumMax        = staleFrameNumMax();
     sharcCb.enableAntiFireflyFilter = enableAntiFireflyFilter() ? 1 : 0;
-    sharcCb.capacity                = static_cast<int>(1u << capacityLog2());
+    sharcCb.capacity                = static_cast<int>(m_capacity);
     sharcCb.downscaleFactor         = downscaleFactor();
     sharcCb.sceneScale              = sceneScale();
     sharcCb.roughnessThreshold      = roughnessThreshold();
     sharcCb.radianceScale           = kSharcRadianceScale;
     sharcCb.frameIndex              = static_cast<int>(m_framesSinceClear);
     sharcCb.debugMode               = static_cast<int>(debugMode());
-    sharcCb.enableMaterialDemodulation = enableMaterialDemodulation() ? 1 : 0;
-    sharcCb.pad0                    = 0;
+    sharcCb.updateProbability       = updateProbability();
+    sharcCb.enableQuery             = enableQuery() ? 1 : 0;
 
     const VkDeviceSize alignment =
       ctx->getDevice()->properties().core.properties.limits.minUniformBufferOffsetAlignment;
@@ -348,6 +305,7 @@ namespace dxvk {
     // Stage 5: reset the frame counter so the SHARC SDK frame-0 init path fires
     // on the very next Update/Resolve pass after the cache is wiped.
     m_framesSinceClear = 0u;
+    m_needsInitialClear = false;
 
     Rc<DxvkCommandList> cmdList = ctx->getCommandList();
 
@@ -396,9 +354,10 @@ namespace dxvk {
     // ---- Bind shader and dispatch -------------------------------------------
     ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, SharcResolveShader::getShader());
 
-    // 1 thread per hash-map entry; shader threadgroup size = [64, 1, 1]
-    const uint32_t capacity = static_cast<uint32_t>(1u << capacityLog2());
-    ctx->dispatch(capacity / 64u, 1u, 1u);
+    // 1 thread per hash-map entry; shader threadgroup size = [256, 1, 1]
+    // (matches RTXGI 2.7 LINEAR_BLOCK_SIZE = 256).
+    const uint32_t capacity = m_capacity;
+    ctx->dispatch(capacity / 256u, 1u, 1u);
 
     // Release staging buffer slice after GPU submission
     ctx->getCommandList()->trackResource<DxvkAccess::Read>(cb.buffer());

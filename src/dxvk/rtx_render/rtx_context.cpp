@@ -651,8 +651,13 @@ namespace dxvk {
         dispatchVolumetrics(rtOutput);
         
         // NV-DXVK start: SHARC integration — Stage 4 (clear stale cache on scene/history reset)
-        if (m_resetHistory && m_common->metaSharc().isEnabled()) {
-          m_common->metaSharc().clearBuffers(this, rtOutput);
+        // Also fires on the very first active frame (needsInitialClear) so that device-local
+        // GPU buffers are zero-filled before any shader reads them.
+        {
+          RtxSharc& sharc = m_common->metaSharc();
+          if ((m_resetHistory || sharc.needsInitialClear()) && sharc.isEnabled()) {
+            sharc.clearBuffers(this, rtOutput);
+          }
         }
         // NV-DXVK end
 

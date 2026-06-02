@@ -70,6 +70,12 @@ namespace dxvk {
     // Returns the downscale factor for the SHARC Update pass sparse dispatch.
     uint32_t getDownscaleFactor() const { return static_cast<uint32_t>(downscaleFactor()); }
 
+    // Returns the boot-time hash-map capacity (1u << capacityLog2() captured at construction).
+    // Used to size CB.capacity so runtime mutation of the capacityLog2 option cannot push
+    // hash inserts past the allocated GPU buffer end (the buffers themselves are sized once,
+    // at create time, in rtx_resources.cpp).
+    uint32_t getCapacity() const { return m_capacity; }
+
     // Stage 5: Returns true when the device supports 64-bit buffer atomics
     // (VK_KHR_shader_atomic_int64 / shaderBufferInt64Atomics).
     // Used to grey out the int64-atomics option in ImGui when unsupported.
@@ -102,7 +108,8 @@ namespace dxvk {
                "Lower values respond faster to lighting changes; higher values are smoother.");
 
     RTX_OPTION("rtx.sharc", int, staleFrameNumMax, 60,
-               "Maximum age (in frames) before a cache entry is considered stale and evicted.");
+               "Maximum age (in frames) before a cache entry is considered stale and evicted.\n"
+               "Note: the SHARC SDK silently clamps this to >= 8 (SHARC_STALE_FRAME_NUM_MIN).");
 
     RTX_OPTION("rtx.sharc", bool, enableAntiFireflyFilter, true,
                "Enables anti-firefly clamping on accumulated radiance in the cache.\n"
@@ -125,17 +132,15 @@ namespace dxvk {
                "Log2 of the hash-map capacity (default 22 => 4,194,304 entries => 176 MiB).\n"
                "Changing this requires restarting the application.");
 
-    RTX_OPTION("rtx.sharc", bool, enableMaterialDemodulation, true,
-               "Enables SHARC material demodulation (divide by albedo before storing, re-apply on lookup).\n"
-               "Keeps stored radiance albedo-agnostic for better cache reuse. Always enabled in v1.");
-
     RTX_OPTION("rtx.sharc", SharcDebugMode, debugMode, SharcDebugMode::Off,
                "SHARC debug visualisation mode.\n"
-               "0: Off, 1: HashGridColor, 2: Occupancy, 3: HashCollisions, 4: BitsOccupancy, 5: CachedRadiance.");
+               "0: Off, 5: CachedRadiance. Modes 1-4 (HashGridColor, Occupancy,\n"
+               "HashCollisions, BitsOccupancy) are reserved for future use and currently no-op.");
 
     RTX_OPTION("rtx.sharc", float, updateProbability, 1.0f,
-               "Probability [0,1] that a given pixel contributes an update sample to the cache.\n"
-               "Reducing below 1 lowers update overhead at the cost of slower cache warm-up.");
+               "Probability [0,1] that a given update-tile pixel fires a ray and writes a cache sample.\n"
+               "Values below 1.0 reduce Update-pass GPU cost at the cost of slower cache warm-up.\n"
+               "Passed to the shader as sharcCb.updateProbability; stochastic rejection is done per-pixel.");
 
     RTX_OPTION("rtx.sharc", bool, enableUpdate, true,
                "Enables the cache update pass (writing new radiance samples).\n"
@@ -145,14 +150,27 @@ namespace dxvk {
                "Enables cache queries during path termination.\n"
                "Disable to measure the overhead of full path tracing without cache lookups.");
 
+    // Returns true on the very first call to isEnabled() before any clearBuffers().
+    // Used by RtxContext to guarantee a zero-fill on the first active frame so that
+    // GPU hash/accumulation/resolved buffers never contain uninitialized garbage.
+    bool needsInitialClear() const { return m_needsInitialClear; }
+
   private:
     DxvkDevice* m_device = nullptr;
     std::unique_ptr<RtxStagingDataAlloc> m_stagingCb;
+
+    // Captured at construction so that runtime mutation of the capacityLog2 RTX_OPTION
+    // cannot drive hash inserts past the GPU buffers allocated in rtx_resources.cpp.
+    uint32_t m_capacity = 0u;
 
     // Stage 5: frames elapsed since the last clearBuffers() call.
     // Used as sharcCb.frameIndex so that the SDK frame-0 init path fires
     // immediately after a cache clear (e.g. on scene change / teleport).
     uint32_t m_framesSinceClear = 0u;
+
+    // True until clearBuffers() has been called at least once.  Ensures the
+    // four device-local GPU buffers are zero-filled before any shader reads them.
+    bool m_needsInitialClear = true;
 
     // Builds SharcConstants and uploads to staging ring; returns the buffer slice.
     DxvkBufferSlice buildAndUploadCb(RtxContext* ctx);

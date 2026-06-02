@@ -191,6 +191,12 @@ REORDER_COHERENT // Conditionally enabled as it seemed to add a tiny overhead th
 RWTexture2D<uint> Instrumentation;
 
 // NV-DXVK start: SHARC integration — Stage 3
+#ifndef SHARC_UPDATE
+#define SHARC_UPDATE 0
+#endif
+#ifndef SHARC_QUERY
+#define SHARC_QUERY 0
+#endif
 #if SHARC_UPDATE || SHARC_QUERY
 #include "rtx/pass/sharc/sharc_constants.h"
 #include "rtx/external/sharc/sharc_slang_shim.slangh"

@@ -316,10 +316,15 @@
 #define DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW 878
 
 // NV-DXVK start: SHARC integration — Stage 5 (debug overlay)
-// Visualizes the SHARC hash-grid debug output rendered by the integrator
-// raygen when rtx.sharc.debugMode is non-zero.  Only meaningful when SHARC
-// is enabled (rtx.sharc.enable = true); shows black when SHARC is off.
-#define DEBUG_VIEW_SHARC_DEBUG  879
+// One entry per SharcDebugMode value (mirrors SharcDebugMode enum in rtx_fork_sharc.h).
+// Selecting any of these views auto-sets rtx.sharc.debugMode to the matching mode;
+// deselecting resets it to Off.  All five read the same SharcDebugOutput texture;
+// the correct content is written by the integrator based on the debugMode constant.
+#define DEBUG_VIEW_SHARC_HASHGRIDCOLOR   880
+#define DEBUG_VIEW_SHARC_OCCUPANCY       881
+#define DEBUG_VIEW_SHARC_HASHCOLLISIONS  882
+#define DEBUG_VIEW_SHARC_BITSOCCUPANCY   883
+#define DEBUG_VIEW_SHARC_CACHEDRADIANCE  884
 // NV-DXVK end
 
 

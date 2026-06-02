@@ -209,12 +209,26 @@ namespace dxvk {
                                 "If they diverge, suspect a path regression (sampler / binding mismatch\n"
                                 "between the production raygen pass and the debug-view pass)."}, 
         // NV-DXVK start: SHARC integration — Stage 5 (debug overlay)
-        {DEBUG_VIEW_SHARC_DEBUG, "SHARC: Hash Grid Debug Overlay",
-                                "Renders the SHARC hash-grid debug visualisation selected by rtx.sharc.debugMode.\n"
-                                "Modes: HashGridColor, Occupancy, HashCollisions, BitsOccupancy, CachedRadiance.\n"
-                                "Only meaningful when rtx.sharc.enable = true.  Black when SHARC is off\n"
-                                "or debugMode is Off."},
-        // NV-DXVK end,
+        // Five separate entries, one per SharcDebugMode value.  Selecting any one of
+        // these automatically drives rtx.sharc.debugMode to the matching mode so the
+        // integrator writes the right visualisation into SharcDebugOutput.
+        {DEBUG_VIEW_SHARC_HASHGRIDCOLOR,  "SHARC: Hash Grid Color",
+                                          "Unique colour per hash-grid cell.\n"
+                                          "Use to verify grid resolution: cells should be roughly one object-diameter in size.\n"
+                                          "Requires SHARC to be enabled (rtx.sharc.enable = true)."},
+        {DEBUG_VIEW_SHARC_OCCUPANCY,      "SHARC: Occupancy",
+                                          "Fraction of radiance entries written in each hash-grid cell this frame.\n"
+                                          "Bright = fully occupied; dark = sparse or unstable cache coverage."},
+        {DEBUG_VIEW_SHARC_HASHCOLLISIONS, "SHARC: Hash Collisions",
+                                          "Highlights cells whose hash-map slots are contested by multiple world positions.\n"
+                                          "High collision density suggests the capacity or sceneScale needs adjustment."},
+        {DEBUG_VIEW_SHARC_BITSOCCUPANCY,  "SHARC: Bits Occupancy",
+                                          "Atomic lock-bit utilisation per hash-map slot.\n"
+                                          "Useful for diagnosing contention on the lock buffer (32-bit atomics path)."},
+        {DEBUG_VIEW_SHARC_CACHEDRADIANCE, "SHARC: Cached Radiance",
+                                          "Actual stored irradiance values retrieved from the resolved cache.\n"
+                                          "Lets you visually inspect cache quality and identify stale or dark regions."},
+        // NV-DXVK end
         {DEBUG_VIEW_CASCADE_LEVEL, "Terrain: Cascade Level"},
 
         {DEBUG_VIEW_VIRTUAL_HIT_DISTANCE, "Virtual Hit Distance"},
@@ -1479,9 +1493,24 @@ namespace dxvk {
       nullptr);
 
     // NV-DXVK start: SHARC integration — Stage 5 (debug overlay)
-    // Bind the SHARC hash-grid debug texture when SHARC is enabled; fall back
-    // to a null view so the sampler returns black when SHARC is off.
-    if (RtxSharc::enable() && rtOutput.m_sharcDebugOutput.isValid()) {
+    // Auto-drive rtx.sharc.debugMode based on the active debug view selection so the
+    // integrator raygen writes the correct visualisation into SharcDebugOutput.
+    // When none of the named SHARC views is selected, reset debugMode to Off so the
+    // integrator skips the (relatively cheap) debug write path entirely.
+    {
+      const uint32_t dvIdx = debugViewIdx();
+      SharcDebugMode sharcMode = SharcDebugMode::Off;
+      switch (dvIdx) {
+        case DEBUG_VIEW_SHARC_HASHGRIDCOLOR:  sharcMode = SharcDebugMode::HashGridColor;   break;
+        case DEBUG_VIEW_SHARC_OCCUPANCY:      sharcMode = SharcDebugMode::Occupancy;       break;
+        case DEBUG_VIEW_SHARC_HASHCOLLISIONS: sharcMode = SharcDebugMode::HashCollisions;  break;
+        case DEBUG_VIEW_SHARC_BITSOCCUPANCY:  sharcMode = SharcDebugMode::BitsOccupancy;   break;
+        case DEBUG_VIEW_SHARC_CACHEDRADIANCE: sharcMode = SharcDebugMode::CachedRadiance;  break;
+        default: break;
+      }
+      RtxSharc::debugModeObject().setImmediately(sharcMode);
+    }
+    if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::SHARC && rtOutput.m_sharcDebugOutput.isValid()) {
       ctx->bindResourceView(
         DEBUG_VIEW_BINDING_SHARC_DEBUG_INPUT,
         rtOutput.m_sharcDebugOutput.view,
