@@ -266,9 +266,11 @@ struct AtmosphereArgs {
   float cloudVoxelGridFrameOffset;  // For round-robin cadence; CPU-side scalar (informational)
   uint  cloudVoxelGridSunDirty;     // 1 when D_sun was (re)baked this frame
   uint  cloudVoxelGridAmbientDirty; // 1 when D_ambient was (re)baked this frame
-  float pad_cloudVoxel0;
-  float pad_cloudVoxel1;
-  float pad_cloudVoxel2;
+  // The three fields below reuse the former pad_cloudVoxel0..2 slots so the
+  // constant-buffer layout is unchanged (same pattern as cloudNoiseWarpStrength).
+  float cloudBottomDarkening;       // [0,1] how dark the cloud base gets vs the top (multi-scatter + ambient)
+  float cloudBottomDarkeningHeight; // (0,1] slab height fraction at which the gradient reaches full brightness
+  float cloudDetailStrength;        // [0,1] edge detail erosion strength (0 = off)
 
   // ----- Nubis Cubed 2023 lighting params (fork — 2026-05-12, C4) -----
   // Consumed by cloud_render.comp.slang via evalNubisCubedSample.
@@ -280,7 +282,9 @@ struct AtmosphereArgs {
   float cloudMsSigmaDeep;          // sigma_ms deep inside cloud (saturated)
   float cloudMsSdfDepth;           // SDF depth in meters at which sigma_ms saturates to deep
   uint  cloudRenderFrameIdx;       // Frame counter for fastJitter() in cloud_render.comp.slang
-  float pad_nubisCubed0;           // 16-byte alignment
+  float cloudDetailScale;          // Edge-detail noise frequency, as a multiple of the base
+                                   // cloudNoiseTileKm frequency. Reuses the former pad_nubisCubed0
+                                   // slot, so the constant-buffer layout is unchanged.
 
   // ----- Cloud render camera basis (fork — 2026-05-12, C4) -----
   // Pre-computed Y-up basis vectors (camera at origin). Per-pixel view direction
@@ -361,7 +365,8 @@ struct AtmosphereArgs {
   float cloudLayer2TypeMean;       // [0,1] mean cloud type for layer 2 (defaults to a cirrus-shaped 0.0)
   float cloudLayer2CoverageMean;   // [0,1] mean coverage for layer 2 (defaults sparse)
   float cloudLayer2DensityScale;   // Per-step density multiplier for layer 2 (cirrus is optically thin)
-  float pad_cloudLayer2_0;         // 16-byte alignment
+  float cloudVerticalStretch;      // >= 1: vertical elongation of noise features (towering cumulus).
+                                   // Reuses the former pad_cloudLayer2_0 slot; CB layout unchanged.
 
   // ----- Worley carve params (Schneider15 lift, fork — 2026-05-15) -----
   // Consumed by rtx_cloud_noise_baker.comp.slang at the one-shot bake. Each

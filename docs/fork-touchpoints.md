@@ -1498,3 +1498,24 @@ Fork resolution: restore the numerical hemisphere integration in the LUT bake AN
   *Adds a `RemixGui::DragFloat("Multiscatter Physical Strength", …, 0.0f, 1.0f, "%.2f", sliderFlags)` widget at the end of the Atmosphere → Advanced ImGui tree (right after Ozone Layer Width), with a tooltip explaining the artistic-vs-physical tradeoff. ~6 LOC.*
 
 ---
+
+## Workstream — Cloud realism: edge detail erosion, bottom darkening, vertical stretch (fork — 2026-06-10)
+
+Three perceptual cloud upgrades, all live-tunable, all reverting to the prior look at their zero/identity values. (1) **Edge detail erosion** — a second tap of the prebaked Worley-carved noise volume at `cloudDetailScale`× the base frequency perturbs the density field *before* the coverage gate, displacing the silhouette iso-surface with 60–500 m cauliflower teeth while saturated cores stay solid. (2) **Bottom darkening** — a vertical light gradient on the Nubis Cubed multi-scatter and ambient terms; the paper's `M` term barely attenuates (`sigma_ms` ≈ 0.05–0.25) and `pow(1 - dim_profile, 0.5)` is top/bottom symmetric, so undersides previously read uniformly lit. The direct beam is exempt so silver linings survive. (3) **Vertical stretch** — lowers the Y noise-sample frequency relative to horizontal so cloud bodies become convective columns rather than round blobs (towering cumulus). New args ride in repurposed pad slots; constant-buffer layout unchanged.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions.
+  *In `sampleCloudDensityTextured`: step 4b applies the detail-erosion tap pre-threshold (`density += strength * 0.6 * (detailNoise - 0.6)`, erosion-biased), and the texcoord mapping divides Y frequency by `cloudVerticalStretch`. `sampleCloudDensityForShadow` applies the identical Y-stretch (the baked D_sun / D_ambient grids must describe the same shapes the view-march renders) but skips the detail tap (cheap path; un-eroded grids over-shadow edges conservatively). In `evalNubisCubedSample`: `bottomGradient = mix(1 - cloudBottomDarkening, 1, smoothstep(0, cloudBottomDarkeningHeight, heightFraction))` multiplies the multi-scatter `M` and `L_ambient` terms only.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned additions.
+  *Repurposes `pad_cloudVoxel0..2` as `cloudBottomDarkening` / `cloudBottomDarkeningHeight` / `cloudDetailStrength`, `pad_nubisCubed0` as `cloudDetailScale`, and `pad_cloudLayer2_0` as `cloudVerticalStretch`. No layout change (same pattern as `cloudNoiseWarpStrength`).*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *Adds 5 RTX_OPTIONs to the `rtx.atmosphere` cluster: `cloudDetailStrength` (0.6), `cloudDetailScale` (4.3), `cloudBottomDarkening` (0.55), `cloudBottomDarkeningHeight` (0.65), `cloudVerticalStretch` (1.6).*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned additions.
+  *Inside `getAtmosphereArgs()`: populates the five new args from RtxOptions, replacing the former pad zero-writes. ~5 LOC net.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
+  *Adds "Edge Detail" + "Vertical Stretch" `DragFloat`s to the Clouds → Coverage & Shape ImGui section and "Bottom Darkening" to Clouds → Lighting. The fine-tune knobs (`cloudDetailScale`, `cloudBottomDarkeningHeight`) stay user.conf-only per the 2026-05-19 menu-simplification discipline.*
+
+---

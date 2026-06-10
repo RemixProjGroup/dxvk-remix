@@ -1022,6 +1022,20 @@ namespace fork_hooks {
             "noise's periodic repeat so it stops reading as horizontal layers "
             "toward the horizon at small tile sizes. 0 = off, 0.75 default. "
             "Too high smears cloud shapes. Applies live.");
+        RemixGui::DragFloat("Edge Detail", &RtxOptions::cloudDetailStrengthObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "High-frequency erosion concentrated at cloud EDGES \xe2\x80\x94 carves "
+            "wispy cauliflower detail into silhouettes while dense cores stay "
+            "solid. 0 = smooth edges (legacy look). Detail frequency is "
+            "tunable via rtx.atmosphere.cloudDetailScale in user.conf.");
+        RemixGui::DragFloat("Vertical Stretch", &RtxOptions::cloudVerticalStretchObject(),
+                            0.01f, 1.0f, 3.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Vertical elongation of cloud bodies. 1 = round blobs (legacy "
+            "look); higher stretches clouds into convective columns so "
+            "cumulus reads as towering. Pairs well with Cloud Type near 1 "
+            "and a deeper cloud layer (Depth 4+ km).");
 
         ImGui::Separator();
         ImGui::TextDisabled("Look");
@@ -1079,6 +1093,14 @@ namespace fork_hooks {
             "Strength of the milky brightness on the underside of cumulus "
             "clouds. 1.0 = Nubis Cubed paper baseline; higher = brighter "
             "cumulus bottoms, lower = flatter lighting.");
+        RemixGui::DragFloat("Bottom Darkening", &RtxOptions::cloudBottomDarkeningObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "How much darker cloud undersides are than tops. Darkens the "
+            "multi-scatter and ambient terms with a vertical gradient; the "
+            "direct sun beam (silver lining) is unaffected. 0 = uniformly "
+            "lit (paper baseline). Gradient reach is tunable via "
+            "rtx.atmosphere.cloudBottomDarkeningHeight in user.conf.");
 
         RemixGui::DragFloat("Ground Shadow", &RtxOptions::cloudShadowStrengthObject(),
                             0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);

@@ -1804,9 +1804,18 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   //    and the slab was 1 km. With our current 3 km slab + Worley carve +
   //    4 octaves of Perlin packed into ~25% of the Y range, there's plenty
   //    of variation.
+  //    cloudVerticalStretch (fork — 2026-06-10) elongates noise features
+  //    vertically by LOWERING the Y sample frequency relative to horizontal
+  //    (the safe direction — the pre-isotropic pancake artifact came from a
+  //    HIGHER vertical frequency). Round blobs become convective columns,
+  //    which is what makes cumulus read as towering rather than flat.
+  //    1.0 = isotropic (legacy look). Must match
+  //    sampleCloudDensityForShadow below so the baked D_sun / D_ambient
+  //    self-shadow grids describe the same shapes the view-march renders.
+  float yTileKm = args.cloudNoiseTileKm * max(args.cloudVerticalStretch, 0.01f);
   vec3 texcoord = vec3(
       frac(perturbed.x / args.cloudNoiseTileKm),
-      frac(perturbed.y / args.cloudNoiseTileKm),
+      frac(perturbed.y / yTileKm),
       frac(perturbed.z / args.cloudNoiseTileKm));
 
   // 3. Tricubic 3D sample. Texture-size literal must match the baker's
@@ -1825,6 +1834,26 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   float detailWeight = 0.10f;  // tune in Task 9 re-tuning loop
   float detail       = perlinNoise3D(perturbed * 720.0f) - 0.5f;
   float density      = texturedNoise + detailWeight * detail;
+
+  // 4b. Edge detail erosion (fork — 2026-06-10, rev 2). A second tap of the
+  //     prebaked Worley-carved volume at cloudDetailScale× the base frequency,
+  //     applied to the noise field BEFORE the coverage gate below. Ordering is
+  //     the whole trick: the gate's smoothstep saturates the field to ~binary,
+  //     so detail applied here displaces the threshold-crossing iso-surface by
+  //     up to ~a full transition-band width at 60-500 m wavelengths — visible
+  //     cauliflower teeth on the silhouette — while saturated cores clamp to 1
+  //     and stay solid. (Rev 1 eroded AFTER the gate, where the near-binary
+  //     field left nothing to chew on; the effect was invisible in-game.)
+  //     The -0.6 bias makes the term erosion-leaning: notches carve deeper
+  //     than bulges grow, so coverage shifts only slightly. The cheap shadow
+  //     sampler (sampleCloudDensityForShadow) deliberately skips this — the
+  //     un-eroded grids slightly over-shadow the detailed edges, which reads
+  //     as conservative self-shadowing rather than light leak.
+  if (args.cloudDetailStrength > 0.0f) {
+    vec3 detailCoord = frac(perturbed * (args.cloudDetailScale / args.cloudNoiseTileKm));
+    float detailNoise = cloudNoise3D.SampleLevel(cloudSampler, detailCoord, 0).r;
+    density += args.cloudDetailStrength * 0.6f * (detailNoise - 0.6f);
+  }
 
   // 5. Coverage threshold + anvil pow + cloud-type vertical profile.
   //    The R channel is the density envelope (gentle altitude shape). The G
@@ -1904,10 +1933,12 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
   // Isotropic Y texcoord — see the long comment in sampleCloudDensityTextured
   // above. Same fix applies here: voxel grid bakes need to see the same 3D
   // density field the runtime samples, so the cloud-on-terrain shadow patches
-  // match the cumulus shapes overhead.
+  // match the cumulus shapes overhead. cloudVerticalStretch is applied
+  // identically for the same reason.
+  float yTileKm = args.cloudNoiseTileKm * max(args.cloudVerticalStretch, 0.01f);
   vec3 texcoord = vec3(
       frac(perturbed.x / args.cloudNoiseTileKm),
-      frac(perturbed.y / args.cloudNoiseTileKm),
+      frac(perturbed.y / yTileKm),
       frac(perturbed.z / args.cloudNoiseTileKm));
 
   // Single trilinear sample (assumes the bound sampler is linear-filter +
@@ -2260,7 +2291,21 @@ NubisCubedLighting evalNubisCubedSample(
   float sunFrac = saturate(cosTheta / max(args.cloudMsSunDotMax, 1e-4f));
   float sigma_ms = lerp(args.cloudMsSigmaShallow, sigma_ms_inner, sunFrac) * args.cloudMsScale;
 
-  float M = dim_profile * exp(-sigma_ms * D_sun);
+  // Height-based bottom darkening (fork — 2026-06-10). The paper's M term
+  // floods the cloud body with near-uniform multi-scatter brightness
+  // (sigma_ms is tiny, so exp(-sigma_ms * D_sun) stays close to 1 even at
+  // the base), and ambient_shape below — pow(1 - dim_profile, 0.5) — is
+  // symmetric top/bottom, so it BOOSTS ambient at the cloud base exactly
+  // where occlusion should win. Net result: flat, uniformly-lit undersides.
+  // Fix with an explicit vertical light gradient on the multi-scatter and
+  // ambient terms only: dark at the slab base, full brightness above
+  // cloudBottomDarkeningHeight. T_primary (the directly-shadowed sun beam)
+  // is deliberately left out so backlit silver linings survive untouched.
+  // cloudBottomDarkening = 0 restores the paper baseline bit-for-bit.
+  float bottomGradient = mix(1.0f - args.cloudBottomDarkening, 1.0f,
+      smoothstep(0.0f, max(args.cloudBottomDarkeningHeight, 1e-3f), heightFraction));
+
+  float M = dim_profile * exp(-sigma_ms * D_sun) * bottomGradient;
   float HG1 = hgPhaseNubis(cosTheta, args.cloudPhaseG1);
   float HG2 = hgPhaseNubis(cosTheta, args.cloudPhaseG2);
   float L_direct = T_primary * HG1 + M * HG2;
@@ -2280,7 +2325,7 @@ NubisCubedLighting evalNubisCubedSample(
   vec3  skyRadiance    = lerp(skyRadianceWarm, skyRadianceCool, coolMix);
 
   float ambient_shape = pow(1.0f - dim_profile, 0.5f);
-  float L_ambient = ambient_shape * exp(-D_ambient);
+  float L_ambient = ambient_shape * exp(-D_ambient) * bottomGradient;
 
   NubisCubedLighting result;
   result.direct  = L_direct  * sunRadiance;

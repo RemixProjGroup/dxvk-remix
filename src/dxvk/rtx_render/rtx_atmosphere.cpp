@@ -509,9 +509,11 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudVoxelGridFrameOffset = 0.0f;
     args.cloudVoxelGridSunDirty    = 0u;
     args.cloudVoxelGridAmbientDirty = 0u;
-    args.pad_cloudVoxel0 = 0.0f;
-    args.pad_cloudVoxel1 = 0.0f;
-    args.pad_cloudVoxel2 = 0.0f;
+    // Bottom darkening + edge detail erosion (fork — 2026-06-10). Live in the
+    // former pad_cloudVoxel0..2 slots so the CB layout is unchanged.
+    args.cloudBottomDarkening       = RtxOptions::cloudBottomDarkening();
+    args.cloudBottomDarkeningHeight = RtxOptions::cloudBottomDarkeningHeight();
+    args.cloudDetailStrength        = RtxOptions::cloudDetailStrength();
   }
 
   // Nubis Cubed 2023 lighting params (fork — 2026-05-12, C4). Sourced from
@@ -525,7 +527,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudMsSigmaDeep     = RtxOptions::cloudMsSigmaDeep();
     args.cloudMsSdfDepth      = RtxOptions::cloudMsSdfDepth();
     args.cloudRenderFrameIdx  = m_cloudRenderFrameIdx;
-    args.pad_nubisCubed0      = 0.0f;
+    args.cloudDetailScale     = RtxOptions::cloudDetailScale();
 
     args.cloudSunsetAmbientStrength    = RtxOptions::cloudSunsetAmbientStrength();
     args.cloudSunsetAmbientReachInvKm  = RtxOptions::cloudSunsetAmbientReachInvKm();
@@ -593,7 +595,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudLayer2TypeMean      = RtxOptions::cloudLayer2TypeMean();
     args.cloudLayer2CoverageMean  = RtxOptions::cloudLayer2CoverageMean();
     args.cloudLayer2DensityScale  = RtxOptions::cloudLayer2DensityScale();
-    args.pad_cloudLayer2_0        = 0.0f;
+    args.cloudVerticalStretch     = RtxOptions::cloudVerticalStretch();
 
     // Worley carve params — consumed only by rtx_cloud_noise_baker. Changing
     // these (or cloudNoiseTileKm) re-bakes the noise volume live via the

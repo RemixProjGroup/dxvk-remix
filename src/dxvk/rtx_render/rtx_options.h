@@ -1543,6 +1543,48 @@ namespace dxvk {
                "0.75 default. Higher = more de-tiling but more organic distortion of "
                "cloud shapes. Applied live (no re-bake needed).");
 
+    // Edge detail erosion (fork — 2026-06-10). Concentrates high-frequency
+    // detail at cloud edges: a second, higher-frequency tap of the prebaked
+    // noise volume erodes the density field where it is weak (silhouettes),
+    // leaving saturated cores untouched. Canonical Nubis detail-erosion remap.
+    RTX_OPTION("rtx.atmosphere", float, cloudDetailStrength, 0.6f,
+               "Edge detail erosion strength [0..1]. Carves high-frequency "
+               "cauliflower detail into cloud EDGES while leaving dense cores "
+               "solid. 0 = off (smooth legacy silhouettes). Note: erosion thins "
+               "the silhouette band slightly, so high values read as marginally "
+               "lower coverage.");
+    RTX_OPTION("rtx.atmosphere", float, cloudDetailScale, 4.3f,
+               "Edge-detail noise frequency as a multiple of the base cloud "
+               "noise frequency (cloudNoiseTileKm). Higher = finer edge "
+               "filigree; lower = chunkier edge billows. Non-integer values "
+               "keep the combined base+detail repeat period long. Default 4.3, "
+               "viable range 2-12. Applies live (no re-bake).");
+
+    // Vertical noise stretch (fork — 2026-06-10). The 3D noise is sampled
+    // isotropically by default, so cloud bodies are round blobs. Real
+    // convective cumulus is vertically elongated; lowering the vertical
+    // sample frequency turns blobs into columns that read as towering.
+    RTX_OPTION("rtx.atmosphere", float, cloudVerticalStretch, 1.6f,
+               "Vertical elongation of cloud noise features [1..3]. 1 = "
+               "isotropic round blobs (legacy look); higher stretches cloud "
+               "bodies into convective columns so cumulus reads as towering "
+               "rather than flat. Applies live; also reshapes the baked "
+               "self-shadow grids so lighting tracks the new shapes.");
+
+    // Height-based bottom darkening (fork — 2026-06-10). Vertical light
+    // gradient on the Nubis Cubed multi-scatter + ambient terms so cumulus
+    // undersides read darker than tops. The direct-beam term is exempt so
+    // backlit silver linings are unaffected.
+    RTX_OPTION("rtx.atmosphere", float, cloudBottomDarkening, 0.55f,
+               "How much darker the cloud base is than the top [0..1]. Applies "
+               "to the multi-scatter and ambient lighting terms only; the "
+               "direct sun beam (silver lining) is unaffected. 0 = off (Nubis "
+               "Cubed paper baseline, uniformly lit undersides).");
+    RTX_OPTION("rtx.atmosphere", float, cloudBottomDarkeningHeight, 0.65f,
+               "Slab height fraction (0..1] at which the bottom-darkening "
+               "gradient reaches full brightness. Lower = darkening hugs the "
+               "very base; higher = gradient spans more of the cloud body.");
+
     // Worley carve (Schneider15 — slide 17 of RDR2 SIGGRAPH 2019).
     // These knobs control how chunky / cell-shaped the prebaked cloud noise is.
     // Changing any of them (or cloudNoiseTileKm) re-bakes the 256^3 noise volume
