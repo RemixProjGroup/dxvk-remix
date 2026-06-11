@@ -930,6 +930,14 @@ namespace fork_hooks {
               "1 = physical multiscattering (Hillaire-style LUT hemisphere integration; wavelength-amplifies each preset's "
               "Rayleigh bias for realistic saturation but harder to art-direct). Intermediate values blend.");
 
+          RemixGui::Checkbox("Minimal Sky LUT Re-bakes", &RtxOptions::skyLutCacheKeySplitEnableObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Re-bake each atmosphere lookup table only when its actual "
+              "inputs change: star-field rotation no longer re-bakes any LUT, "
+              "and sun/moon motion re-bakes only the small sky-view LUT "
+              "instead of the full cascade. No visual difference; uncheck to "
+              "restore the legacy single-gate re-bake for comparison.");
+
           ImGui::TreePop();
         }
 

@@ -37,6 +37,7 @@
 #include <rtx_shaders/cloud_secondary_lut.h>
 #include <rtx_shaders/cloud_height_lut_baker.h>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <chrono>
 
@@ -334,6 +335,62 @@ namespace {
     args.cloudVoxelGridSunDirty      = 0u;
     args.cloudVoxelGridAmbientDirty  = 0u;
     args.cloudVoxelGridFrameOffset   = 0.0f;
+  }
+
+  // Split cache key for the sky-view LUT bake (fork — 2026-06-11, perf).
+  // Extends normalizeForSkyLutCache by zeroing the star / Milky Way fields:
+  // they feed only the runtime miss shading (evalNightSky / evalStarField),
+  // never any LUT bake. starRotation in particular is game-driven per frame
+  // (sidereal animation — see atmosphere_args.h), which made the monolithic
+  // memcmp gate fire every frame at night and re-bake the entire
+  // transmittance → multiscatter → sky-view cascade for nothing.
+  void normalizeForSkyViewLutKey(AtmosphereArgs& args) {
+    normalizeForSkyLutCache(args);
+
+    args.starBrightness     = 0.0f;
+    args.starDensity        = 0.0f;
+    args.starTwinkleSpeed   = 0.0f;
+    args.nightSkyBrightness = 0.0f;
+    args.nightSkyColor      = vec3(0.0f, 0.0f, 0.0f);
+
+    args.starRotation      = 0.0f;
+    args.starAxisElevation = 0.0f;
+    args.starAxisRotation  = 0.0f;
+
+    args.starPsfSharpness            = 0.0f;
+    args.starCloudExtinctionPower    = 0.0f;
+    args.starAmbientCouplingStrength = 0.0f;
+
+    args.milkyWayEnabled              = 0.0f;
+    args.milkyWayDensityBoost         = 0.0f;
+    args.milkyWayBackgroundBrightness = 0.0f;
+    args.milkyWayBackgroundColor      = vec3(0.0f, 0.0f, 0.0f);
+    args.milkyWayDustAmount           = 0.0f;
+    args.milkyWayCoreColor            = vec3(0.0f, 0.0f, 0.0f);
+    args.milkyWayDustColor            = vec3(0.0f, 0.0f, 0.0f);
+  }
+
+  // Split cache key for the transmittance + multiscatter bakes (fork —
+  // 2026-06-11, perf). Neither bake reads the sun direction / illuminance /
+  // disk size (transmittance is parameterized by zenith angle; multiscatter
+  // integrates an isotropic phase over the hemisphere), the analytical /
+  // physical multiscatter blend weight (applied at sky-view bake time), or
+  // any moon field (moon atmospheric coupling lives in evalAtmosphereRadiance,
+  // i.e. the sky-view bake). Zeroing them here means a moving time-of-day sun
+  // or game-driven moons re-bake ONLY the sky-view LUT — the multiscatter
+  // bake alone is 32x32 texels × 64 directions × 20 steps of transmittance
+  // LUT taps, by far the heaviest dispatch of the cascade.
+  void normalizeForTransmittanceMsKey(AtmosphereArgs& args) {
+    normalizeForSkyViewLutKey(args);
+
+    args.sunDirection                 = vec3(0.0f, 0.0f, 0.0f);
+    args.sunIlluminance               = vec3(0.0f, 0.0f, 0.0f);
+    args.sunAngularRadius             = 0.0f;
+    args.mieAnisotropy                = 0.0f;
+    args.multiScatterPhysicalStrength = 0.0f;
+
+    args.moonAtmosphericCouplingStrength = 0.0f;
+    memset(&args.moons[0], 0, sizeof(args.moons));
   }
 } // anonymous namespace
 
@@ -887,7 +944,68 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
   // normalizeForSkyLutCache, so this gate stays false on frames where only
   // wind / time / camera / frame-index advanced — saving the ~0.5 ms of
   // dispatches + barriers per frame that the old memcmp burned.
-  if (needsLutRecompute()) {
+  //
+  // Split cache keys (fork — 2026-06-11, perf). With the split enabled, each
+  // bake compares against a key normalized down to the fields it actually
+  // reads: star / Milky Way animation (game-driven starRotation each frame)
+  // re-bakes nothing, and sun / moon motion (time-of-day) re-bakes only the
+  // sky-view LUT instead of dragging the heavy transmittance + multiscatter
+  // pair along. tmsDirty implies skyViewDirty — the transmittance/MS key is
+  // a strict sub-key of the sky-view key, and the sky-view bake consumes
+  // both LUTs, so the explicit OR keeps the data dependency obvious.
+  if (RtxOptions::skyLutCacheKeySplitEnable()) {
+    AtmosphereArgs currentArgs = getAtmosphereArgs();
+    AtmosphereArgs tmsKey = currentArgs;
+    normalizeForTransmittanceMsKey(tmsKey);
+    AtmosphereArgs skyViewKey = currentArgs;
+    normalizeForSkyViewLutKey(skyViewKey);
+
+    const bool tmsDirty = m_lutsNeedRecompute
+        || memcmp(&tmsKey, &m_cachedTransmittanceMsKey, sizeof(AtmosphereArgs)) != 0;
+    const bool skyViewDirty = tmsDirty
+        || memcmp(&skyViewKey, &m_cachedSkyViewKey, sizeof(AtmosphereArgs)) != 0;
+
+    if (tmsDirty) {
+      dispatchTransmittanceLut(ctx);
+
+      // Barrier: Ensure transmittance LUT is written before reading in subsequent passes
+      ctx->emitMemoryBarrier(0,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_READ_BIT);
+
+      dispatchMultiscatteringLut(ctx);
+
+      // Barrier: Ensure multiscattering LUT is written before reading in sky view pass
+      ctx->emitMemoryBarrier(0,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_READ_BIT);
+
+      m_cachedTransmittanceMsKey = tmsKey;
+    }
+
+    if (skyViewDirty) {
+      dispatchSkyViewLut(ctx);
+
+      // Barrier: order sky-view writes ahead of the cloud-sky-transmittance
+      // bake below when the sky-view LUT actually changed this frame.
+      ctx->emitMemoryBarrier(0,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_READ_BIT);
+
+      m_cachedSkyViewKey = skyViewKey;
+      // Keep the legacy monolithic key coherent so toggling the split option
+      // off mid-session doesn't fire one spurious full re-bake.
+      m_cachedArgs = currentArgs;
+      normalizeForSkyLutCache(m_cachedArgs);
+      m_lutsNeedRecompute = false;
+    }
+  } else if (needsLutRecompute()) {
     dispatchTransmittanceLut(ctx);
 
     // Barrier: Ensure transmittance LUT is written before reading in subsequent passes
@@ -916,9 +1034,15 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
       VK_ACCESS_SHADER_READ_BIT);
 
-    // Cache the normalized snapshot for next frame's gate.
-    m_cachedArgs = getAtmosphereArgs();
+    // Cache the normalized snapshot for next frame's gate. The split keys are
+    // refreshed too so toggling the split option on mid-session is clean.
+    AtmosphereArgs currentArgs = getAtmosphereArgs();
+    m_cachedArgs = currentArgs;
     normalizeForSkyLutCache(m_cachedArgs);
+    m_cachedSkyViewKey = currentArgs;
+    normalizeForSkyViewLutKey(m_cachedSkyViewKey);
+    m_cachedTransmittanceMsKey = currentArgs;
+    normalizeForTransmittanceMsKey(m_cachedTransmittanceMsKey);
     m_lutsNeedRecompute = false;
   }
 

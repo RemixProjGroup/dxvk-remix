@@ -1701,6 +1701,21 @@ namespace dxvk {
                "instead of the legacy analytical approximation. Disable to "
                "restore the legacy per-ray march for comparison.");
 
+    // Split sky-LUT cache keys (fork — 2026-06-11, perf). The three sky LUT
+    // bakes (transmittance / multiscatter / sky-view) were gated by ONE
+    // memcmp over the whole normalized arg struct, with two per-frame
+    // failure modes: the game-driven sidereal starRotation (animated every
+    // frame at night, feeds no LUT bake) re-baked the full cascade every
+    // frame, and a moving time-of-day sun re-baked the heavy transmittance +
+    // multiscatter pair even though neither depends on sun direction.
+    RTX_OPTION("rtx.atmosphere", bool, skyLutCacheKeySplitEnable, true,
+               "Re-bake each atmosphere LUT only when its actual inputs "
+               "change: star-field animation no longer re-bakes any LUT, and "
+               "sun/moon motion re-bakes only the small sky-view LUT instead "
+               "of the full transmittance + multiscatter cascade. No visual "
+               "difference; disable to restore the legacy single-gate "
+               "re-bake behavior for comparison.");
+
     // Nubis Cubed sky-miss composite gate (fork — 2026-05-12, C5).
     // When true, the primary-ray sky-miss path samples the AtmosphereCloudRender
     // RT (written by cloud_render.comp.slang each frame) instead of calling

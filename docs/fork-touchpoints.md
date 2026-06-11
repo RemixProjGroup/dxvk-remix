@@ -1667,6 +1667,21 @@ Follow-up to the stage B landing: with the warp retired at 0 and hex de-tiling u
 
 - **`src/dxvk/shaders/rtx/pass/atmosphere/rtx_cloud_noise_baker.comp.slang`** — comment-only cleanup (walk-down rationale removed).
 
+---
+
+## Workstream — Sky perf: split sky-LUT cache keys (fork — 2026-06-11)
+
+First change of the non-cloud sky optimization workstream. The three sky LUT bakes (transmittance / multiscatter / sky-view) shared one memcmp gate over the whole normalized `AtmosphereArgs`, with two per-frame failure modes: the game-driven sidereal `starRotation` (pushed every frame at night, feeds no LUT bake) re-baked the full cascade every frame, and a moving time-of-day sun re-baked the heavy transmittance + multiscatter pair (multiscatter alone: 32×32 texels × 64 dirs × 20 steps of transmittance taps) even though neither reads sun direction. Each bake now compares a key normalized down to the fields it actually reads. Gated by `skyLutCacheKeySplitEnable` (default on; legacy single-gate path preserved verbatim for A/B).
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds `RTX_OPTION("rtx.atmosphere", bool, skyLutCacheKeySplitEnable, true, …)` next to the other atmosphere perf gates.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned additions.
+  *New `normalizeForSkyViewLutKey` (base normalize + star / Milky Way fields zeroed) and `normalizeForTransmittanceMsKey` (additionally zeroes sun direction / illuminance / disk size, Mie g, MS blend weight, and all moon fields), cached as `m_cachedSkyViewKey` / `m_cachedTransmittanceMsKey`. `computeLuts` gates the transmittance+MS pair and the sky-view bake independently (tms-dirty implies sky-view-dirty; barrier ordering unchanged); both branches keep the other path's caches coherent so the option can be toggled live without a spurious re-bake.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *Adds the "Minimal Sky LUT Re-bakes" checkbox to the Atmosphere → Advanced ImGui tree.*
+
 Note: `rtx.atmosphere.cloudNoiseWarpStrength` lines in existing user confs become unknown-option no-ops after this change.
 
 ---

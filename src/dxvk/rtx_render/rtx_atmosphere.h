@@ -391,6 +391,13 @@ private:
   Rc<DxvkBuffer> m_constantsBuffer;
 
   AtmosphereArgs m_cachedArgs;
+  // Split LUT cache keys (fork — 2026-06-11, perf). Each sky LUT bake gets a
+  // cache key normalized down to the fields it actually reads, so a per-frame
+  // starRotation push no longer re-bakes anything and a moving sun re-bakes
+  // only the sky-view LUT. Used when skyLutCacheKeySplitEnable is on;
+  // m_cachedArgs above remains the legacy monolithic key for the off path.
+  AtmosphereArgs m_cachedSkyViewKey = {};
+  AtmosphereArgs m_cachedTransmittanceMsKey = {};
   // Cloud noise 3D re-bake gate (fork). The 256^3 noise volume bakes its
   // periodic structure from cloudNoiseTileKm + the cloudWorley* inputs, while
   // the runtime sampler divides world position by the *live* cloudNoiseTileKm.
