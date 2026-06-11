@@ -244,6 +244,25 @@ void marchCloudSlab(vec3   viewDirYUp,
   const float kMsA = 0.5f;
   const float kMsC = 0.5f;
 
+  // Coverage / type control fields hoisted out of the march loop (fork —
+  // 2026-06-10, perf). The fields vary at ~300 km wavelength
+  // (cloudCoverage/TypeNoiseScale ~ 0.0033 cycles/km) while a slab ray
+  // spans at most ~100 km at the horizon, so evaluating the 9-hash Worley
+  // field twice per STEP (64 evals/ray at 32 steps) was almost entirely
+  // redundant. Evaluate at the ray's slab entry and exit, lerp per step —
+  // exact at the endpoints; the worst-case interior deviation is a
+  // smoothing of weather-region boundaries ALONG the ray, far below the
+  // jitter noise floor. (The voxel-grid bake integrals already use the
+  // same single-position reuse.)
+  vec3 entryPosCF = args.cameraWorldPosYUpKm + viewDirYUp * tEntry;
+  vec3 exitPosCF  = args.cameraWorldPosYUpKm + viewDirYUp * tExit;
+  vec2 entryXZ = vec2(entryPosCF.x, entryPosCF.z);
+  vec2 exitXZ  = vec2(exitPosCF.x,  exitPosCF.z);
+  float typeNoiseEntry     = cloudControlField2D(entryXZ * args.cloudTypeNoiseScale,     200.0f + slabNoiseSeedOffset);
+  float typeNoiseExit      = cloudControlField2D(exitXZ  * args.cloudTypeNoiseScale,     200.0f + slabNoiseSeedOffset);
+  float coverageNoiseEntry = cloudControlField2D(entryXZ * args.cloudCoverageNoiseScale, 250.0f + slabNoiseSeedOffset);
+  float coverageNoiseExit  = cloudControlField2D(exitXZ  * args.cloudCoverageNoiseScale, 250.0f + slabNoiseSeedOffset);
+
   for (uint i = 0u; i < sampleCount; ++i) {
     if (viewTransmittance < 0.01f) break;  // early-exit (free perf win)
 
@@ -264,13 +283,14 @@ void marchCloudSlab(vec3   viewDirYUp,
     // brings the runtime lookup into alignment with the bake's convention.
     vec3 samplePos = args.cameraWorldPosYUpKm + viewDirYUp * t;
 
-    // Spatial coverage / type fields, sampled per-step. Variation amplitude
+    // Spatial coverage / type fields: per-step lerp between the slab entry
+    // and exit evaluations hoisted above the loop. Variation amplitude
     // (spread) comes from args — kept shared across layers for v1 so layer 2
     // doesn't need its own spread knobs. Mean values are per-slab so layer 2
     // can pick a different baseline (cirrus typeMean ~= 0.05 vs cumulus 0.5).
-    vec2 sampleXZ = vec2(samplePos.x, samplePos.z);
-    float typeNoise     = cloudControlField2D(sampleXZ * args.cloudTypeNoiseScale, 200.0f + slabNoiseSeedOffset);
-    float coverageNoise = cloudControlField2D(sampleXZ * args.cloudCoverageNoiseScale, 250.0f + slabNoiseSeedOffset);
+    float rayFrac = (float(i) + pixelJitter) / float(sampleCount);
+    float typeNoise     = mix(typeNoiseEntry,     typeNoiseExit,     rayFrac);
+    float coverageNoise = mix(coverageNoiseEntry, coverageNoiseExit, rayFrac);
     float typeLocal     = saturate(slabTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
     float coverageLocal = saturate(slabCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 

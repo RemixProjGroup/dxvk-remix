@@ -1560,16 +1560,21 @@ namespace dxvk {
                "keep the combined base+detail repeat period long. Default 4.3, "
                "viable range 2-12. Applies live (no re-bake).");
 
-    // Vertical noise stretch (fork — 2026-06-10). The 3D noise is sampled
-    // isotropically by default, so cloud bodies are round blobs. Real
-    // convective cumulus is vertically elongated; lowering the vertical
-    // sample frequency turns blobs into columns that read as towering.
-    RTX_OPTION("rtx.atmosphere", float, cloudVerticalStretch, 1.6f,
-               "Vertical elongation of cloud noise features [1..3]. 1 = "
-               "isotropic round blobs (legacy look); higher stretches cloud "
-               "bodies into convective columns so cumulus reads as towering "
-               "rather than flat. Applies live; also reshapes the baked "
-               "self-shadow grids so lighting tracks the new shapes.");
+    // Vertical coherence (fork — 2026-06-10, rev 2; EXPERIMENTAL, default
+    // off). Blends the 3D noise sample toward a fixed-Y slice so cloud
+    // cross-sections stay correlated with altitude (connected towers
+    // instead of stacked blobs). Rev 1 (Y-domain stretch) beaded the small
+    // octaves into stacked puffs; rev 2 reads as vertical smearing at
+    // higher values — neither look shipped. Default 1.0 = bit-exact
+    // identity (feature inert) until the towering-cumulus problem is
+    // solved properly, likely at the sky-system level.
+    RTX_OPTION("rtx.atmosphere", float, cloudVerticalStretch, 1.0f,
+               "EXPERIMENTAL vertical connectedness of cloud bodies [1..3]. "
+               "1 = fully 3D noise (default; feature inert); higher anchors "
+               "clouds to a stable vertical footprint so cumulus reads as "
+               "connected towers — but currently smears vertically at high "
+               "values. Applies live; also reshapes the baked self-shadow "
+               "grids so lighting tracks the shapes.");
 
     // Height-based bottom darkening (fork — 2026-06-10). Vertical light
     // gradient on the Nubis Cubed multi-scatter + ambient terms so cumulus

@@ -1519,3 +1519,18 @@ Three perceptual cloud upgrades, all live-tunable, all reverting to the prior lo
   *Adds "Edge Detail" + "Vertical Stretch" `DragFloat`s to the Clouds → Coverage & Shape ImGui section and "Bottom Darkening" to Clouds → Lighting. The fine-tune knobs (`cloudDetailScale`, `cloudBottomDarkeningHeight`) stay user.conf-only per the 2026-05-19 menu-simplification discipline.*
 
 ---
+
+## Workstream — Cloud march/bake perf pass + vertical-coherence rework (fork — 2026-06-10)
+
+Performance pass on the per-frame cloud noise evaluation, each piece validated in-game via a step-by-step bisect ladder after an earlier all-at-once landing broke the cloudscape (root causes: an uncompensated warp-amplitude loss and config drift contaminating the first bisect — see the cloud-realism memory notes). Also replaces the rev-1 `cloudVerticalStretch` Y-domain stretch (stacked-puffs artifact) with a fixed-slice coherence blend, shipped EXPERIMENTAL/default-inert because its look (vertical smearing at high values) isn't approved either.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions.
+  *(1) Anti-tile warp refactored into offset form (`computeCloudNoiseWarpOffsetKm`) and HOISTED to once per ray in the two voxel-grid bake integrals (was 4 perlin evals per tap × 8 taps × 2.1M voxels × 2 grids per frame; the warp's ~25 km shortest wavelength makes per-tap recompute pure waste). `sampleCloudDensityForShadow` gains a `warpOffsetKm` caller-provided parameter. (2) Warp octaves switched from constant-z `perlinNoise3D` planes to new `perlinNoise2D` (4 corners, branch-free gradient pick, ~2.5× cheaper) with `kWarp2DGain = 1.4` compensating the unit-vs-sqrt(2) gradient amplitude — the uncompensated version visibly weakened the warp's load-bearing field shred. (3) The per-sample 720 cycles/km analytic perlin detail is removed (1.4 m wavelength vs ≥100 m steps = unresolvable grain), preserving its hidden −0.05 mean bias as a constant. (4) `cloudVerticalStretch` rev 2: fixed-Y-slice coherence blend with variance re-expansion anchored on the bake's ~0.4 mean, in BOTH density samplers so the self-shadow grids match.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang`** — fork-owned additions.
+  *Coverage/type Worley control fields hoisted out of the march loop: evaluated at slab entry + exit (4 evals/ray), lerped per step (was 2 × 9-hash evals per step × 32 steps).*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *`cloudVerticalStretch` default 1.6 → 1.0 (bit-exact identity) and description rewritten to mark the feature EXPERIMENTAL pending a sky-system-level solution to towering cumulus.*
+
+---
