@@ -1636,3 +1636,12 @@ Exposes the bake's base/detail FBM frequency as a live-rebake multiplier so the 
   *Adds the "Noise Frequency" DragFloat next to the Anti-Tile Warp slider with the walk-down pairing explained in its tooltip.*
 
 ---
+
+## Workstream — Cloud noise hex de-tiling, stage B landing (fork — 2026-06-11)
+
+The in-game warp walk-down validated cleanly at warp **0** with the bake frequency left at its default 1.0 — with hex-tiling killing the repeat at the source, no frequency compensation turned out to be needed. The warp default is retired accordingly; the knob survives as a pure organic-distortion effect. Warp 0 also takes the early-out in `applyCloudNoiseAntiTileWarp`, refunding 4 perlin2D evaluations per march sample.
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *`cloudNoiseWarpStrength` default 0.75 → 0.0; doc strings for it and `cloudNoiseBaseFreqScale` updated to describe the post-retirement roles (warp = optional look knob, hex-tiling owns de-tiling).*
+
+---

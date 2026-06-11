@@ -1555,17 +1555,22 @@ namespace dxvk {
     // frequency content is folded into the bake itself.
     RTX_OPTION("rtx.atmosphere", float, cloudNoiseBaseFreqScale, 1.0f,
                "Multiplier on the cloud noise bake's base + detail FBM "
-               "frequencies [0.25..4]. 1.0 = legacy bake. Raise toward "
-               "1.5-2.5 while lowering cloudNoiseWarpStrength to preserve "
-               "cloud feature size as the warp is retired. Re-bakes the "
-               "noise volume live on change.");
-    RTX_OPTION("rtx.atmosphere", float, cloudNoiseWarpStrength, 0.75f,
-               "Anti-tiling domain-warp strength, as a fraction of cloudNoiseTileKm. "
+               "frequencies [0.25..4]. 1.0 = legacy bake (validated default "
+               "with the warp retired). Raise for smaller/busier cloud "
+               "features, lower for larger ones. Re-bakes the noise volume "
+               "live on change.");
+    // De-tile rework complete (fork — 2026-06-11): with hex-tiling fixing the
+    // repeat at the source, the warp was walked down in-game and validated at 0
+    // with the bake frequency left at 1.0 — no compensation needed. Default is
+    // now 0 (also refunds 4 perlin2D evals per march sample via the early-out);
+    // the knob remains as an optional organic-distortion effect.
+    RTX_OPTION("rtx.atmosphere", float, cloudNoiseWarpStrength, 0.0f,
+               "Domain-warp strength, as a fraction of cloudNoiseTileKm. "
                "Displaces the horizontal cloud-noise sample position by a low-frequency "
-               "non-tiling offset so the texture's periodic repeat stops reading as "
-               "horizontal layers toward the horizon at small tile values. 0 = off; "
-               "0.75 default. Higher = more de-tiling but more organic distortion of "
-               "cloud shapes. Applied live (no re-bake needed).");
+               "non-tiling offset, distorting cloud shapes organically. 0 = off "
+               "(default). Historically this hid the noise texture's periodic repeat; "
+               "cloudHexTilingEnable now solves that at the source, so the warp is "
+               "purely a look knob. Applied live (no re-bake needed).");
 
     // Edge detail erosion (fork — 2026-06-10). Concentrates high-frequency
     // detail at cloud edges: a second, higher-frequency tap of the prebaked
