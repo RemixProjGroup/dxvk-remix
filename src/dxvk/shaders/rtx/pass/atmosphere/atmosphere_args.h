@@ -315,8 +315,16 @@ struct AtmosphereArgs {
   // evalClouds march per ray. 0 = legacy per-ray march (A/B switch).
   // Reuses the former pad_c5_0 slot, so the CB layout is unchanged.
   uint  cloudSecondaryLutEnable;   // 0 or 1
-  uint  pad_c5_1;
-  uint  pad_c5_2;
+  // Downscale (DLSS-input) render extent, i.e. the coordinate space of the
+  // pixelCoord evalSkyRadiance receives (fork — 2026-06-11, half-res cloud
+  // RT). The cloud RT may be allocated SMALLER than this
+  // (cloudRenderResolutionScale); the primary-ray composite divides
+  // pixelCoord by these dims to get normalized screen uv and bilinearly
+  // samples the RT — exact texel-center fetch when the RT is full-size.
+  // 0 means "not yet known" (first frames) and selects the legacy Load
+  // path. Reuse the former pad_c5_1/2 slots; CB layout unchanged.
+  uint  cloudRenderFullDimX;
+  uint  cloudRenderFullDimY;
 
   // ----- Voxel-grid cloud-on-terrain shadows at NEE (fork — 2026-05-12, C6) -----
   // Plumbing for sampleCloudGroundShadow_OptionB, called from the surface and

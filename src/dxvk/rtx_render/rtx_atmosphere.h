@@ -332,6 +332,11 @@ private:
   // realloc inside ensureCloudRenderRT.
   Resources::Resource m_cloudRenderRT;
   VkExtent2D          m_cloudRenderExtent = { 0u, 0u };
+  // Full downscale (DLSS-input) extent the cloud RT is composited into —
+  // the RT itself may be allocated smaller (cloudRenderResolutionScale,
+  // fork — 2026-06-11). Published to shaders via
+  // args.cloudRenderFullDimX/Y for the bilinear upsample at sky-miss.
+  VkExtent2D          m_cloudRenderFullExtent = { 0u, 0u };
 
   // Cloud height LUT (slide 3 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
   // 64x128 R8, baked once at startup.

@@ -979,6 +979,12 @@ namespace fork_hooks {
             "Large performance win on cloudy skies; reflected clouds also "
             "match the main sky exactly. Uncheck to restore the legacy "
             "per-ray cloud march for comparison.");
+        RemixGui::DragFloat("Cloud Render Scale", &RtxOptions::cloudRenderResolutionScaleObject(),
+                            0.05f, 0.25f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Resolution of the cloud render relative to the internal render "
+            "resolution. 0.5 = quarter the pixels (~4x cheaper clouds, "
+            "slightly softer); 1.0 = native (legacy). Applies live.");
 
         ImGui::Separator();
         ImGui::TextDisabled("Coverage & Shape");

@@ -1664,6 +1664,19 @@ namespace dxvk {
                "sin(sun elevation) at which the sunset ambient effect smooth-fades to zero. "
                "Default 0.4 (~24 degrees above horizon). Effect is at full strength when sun is at the horizon.");
 
+    // Half-res cloud render RT (fork — 2026-06-11, perf). The visible cloud
+    // march runs once per cloud-RT pixel; clouds are soft, low-frequency
+    // content, so marching at a fraction of the DLSS-input resolution and
+    // bilinearly upsampling at the sky-miss composite cuts the pass cost
+    // by ~1/scale^2 with little visible difference. The temporal smoothing
+    // path runs AFTER the upsample, at full downscale resolution, so its
+    // stabilization is unaffected.
+    RTX_OPTION("rtx.atmosphere", float, cloudRenderResolutionScale, 0.5f,
+               "Resolution scale of the cloud render target relative to the "
+               "internal (DLSS-input) resolution [0.25..1]. 0.5 = quarter the "
+               "pixels (~4x cheaper cloud march); 1.0 = native (legacy, "
+               "bit-exact). Applies on the next frame; live-tunable.");
+
     // Secondary-ray cloud LUT (fork — 2026-06-10, perf). Every indirect /
     // PSR / reflection ray that reaches sky-miss previously ran the full
     // analytical evalClouds march — a hidden per-ray cost rivaling the

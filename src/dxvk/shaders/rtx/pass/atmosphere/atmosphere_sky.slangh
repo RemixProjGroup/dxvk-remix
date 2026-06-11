@@ -1372,7 +1372,28 @@ vec3 evalSkyRadiance(
   // so the rgb-channel semantics match once the alpha convention is reconciled.
   vec4 cloudLayer;
   if (args.cloudRenderRTEnable != 0u && isPrimaryRay) {
-    vec4 cloudRT = AtmosphereCloudRender.Load(int3(pixelCoord, 0));
+    // Half-res cloud RT upsample (fork — 2026-06-11, perf). The cloud RT may
+    // be allocated at a fraction of the downscale extent
+    // (cloudRenderResolutionScale); pixelCoord is in DOWNSCALE coordinates,
+    // so normalize by the full extent published in args and bilinearly
+    // sample. At scale 1.0 the uv lands on texel centers of the same-size
+    // RT, so the filter returns the texel value — matching the legacy Load
+    // to float precision. uv is clamped a half-texel inside the RT so the
+    // border rows don't blend with the REPEAT-U wrap of the shared sky-view
+    // sampler (screen-space content must not wrap). Zero dims = extent not
+    // yet known (first frames) -> legacy Load.
+    vec4 cloudRT;
+    if (args.cloudRenderFullDimX != 0u && args.cloudRenderFullDimY != 0u) {
+      vec2 uv = (vec2(pixelCoord) + 0.5f)
+              / vec2(float(args.cloudRenderFullDimX), float(args.cloudRenderFullDimY));
+      uint2 rtDim;
+      AtmosphereCloudRender.GetDimensions(rtDim.x, rtDim.y);
+      vec2 halfTexel = 0.5f / vec2(rtDim);
+      uv = clamp(uv, halfTexel, vec2(1.0f) - halfTexel);
+      cloudRT = AtmosphereCloudRender.SampleLevel(AtmosphereSkyViewSampler, uv, 0.0f);
+    } else {
+      cloudRT = AtmosphereCloudRender.Load(int3(pixelCoord, 0));
+    }
     cloudLayer = vec4(cloudRT.rgb, 1.0f - cloudRT.a);
   } else if (args.cloudSecondaryLutEnable != 0u && !isPrimaryRay) {
     // Secondary-ray cloud LUT (fork — 2026-06-10, perf). Indirect / PSR /

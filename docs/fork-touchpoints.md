@@ -1573,3 +1573,24 @@ Every indirect / PSR / reflection ray reaching sky-miss previously ran the full 
   *`fork_hooks::bindAtmosphereLuts` binds the LUT at `BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT`; adds the "Fast Cloud Reflections" checkbox to the Clouds ImGui tree.*
 
 ---
+
+## Workstream — Half-res cloud render RT (fork — 2026-06-11, perf)
+
+The visible cloud march ran once per DLSS-input pixel at up to 32 steps. Clouds are soft, low-frequency content, so the cloud RT is now allocated at `cloudRenderResolutionScale` (default 0.5) of the downscale extent and bilinearly upsampled at the sky-miss composite — ~4× fewer marched pixels at the default. The temporal-smoothing path runs after the upsample at full downscale resolution, so its stabilization is unchanged. Scale 1.0 lands the sample uv on texel centers of a same-size RT and matches the legacy `Load` to float precision (live A/B via the "Cloud Render Scale" slider).
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *The primary-ray cloud-RT branch in `evalSkyRadiance` normalizes pixelCoord by `args.cloudRenderFullDimX/Y` and bilinearly samples the RT via the sky-view sampler (uv clamped a half-texel inside so screen content never wraps through REPEAT-U); falls back to the legacy `Load` while the published extent is still zero (first frames).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned addition.
+  *Repurposes `pad_c5_1/2` as `cloudRenderFullDimX/Y` (the downscale extent the RT is composited into). No layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds `RTX_OPTION("rtx.atmosphere", float, cloudRenderResolutionScale, 0.5f, …)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned additions.
+  *`ensureCloudRenderRT` records the full downscale extent in new `m_cloudRenderFullExtent` and allocates the RT at the clamped scale (a live scale change reallocates via the existing extent-mismatch path); `getAtmosphereArgs` publishes the full extent. Dispatch group math already keys off the (now scaled) `m_cloudRenderExtent`.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *Adds the "Cloud Render Scale" DragFloat to the Clouds ImGui tree.*
+
+---

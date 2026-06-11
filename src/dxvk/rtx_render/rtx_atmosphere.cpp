@@ -585,8 +585,11 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // Secondary-ray cloud LUT gate (fork — 2026-06-10, perf). Lives in the
     // former pad_c5_0 slot so the CB layout is unchanged.
     args.cloudSecondaryLutEnable = RtxOptions::cloudSecondaryLutEnable() ? 1u : 0u;
-    args.pad_c5_1 = 0u;
-    args.pad_c5_2 = 0u;
+    // Downscale extent for the half-res cloud-RT composite (fork —
+    // 2026-06-11). Zero until ensureCloudRenderRT has seen a real extent;
+    // the shader falls back to the legacy Load path in that case.
+    args.cloudRenderFullDimX = m_cloudRenderFullExtent.width;
+    args.cloudRenderFullDimY = m_cloudRenderFullExtent.height;
   }
 
   // Voxel-grid cloud-on-terrain shadow plumbing (fork — 2026-05-12, C6).
@@ -1189,13 +1192,26 @@ void RtxAtmosphere::ensureCloudRenderRT(Rc<DxvkContext> ctx,
     return;
   }
 
-  const bool extentsMatch = (m_cloudRenderExtent.width  == downscaleExtent.width)
-                         && (m_cloudRenderExtent.height == downscaleExtent.height);
+  // Half-res cloud RT (fork — 2026-06-11, perf). The RT is allocated at
+  // cloudRenderResolutionScale of the downscale extent; the sky-miss
+  // composite bilinearly upsamples using the full extent published via
+  // args.cloudRenderFullDimX/Y. Scale 1.0 reproduces the legacy native-res
+  // path bit-exactly (texel-center bilinear == Load). Live-tunable: a scale
+  // change shows up as an extent mismatch below and reallocates.
+  m_cloudRenderFullExtent = downscaleExtent;
+  const float renderScale = std::min(std::max(RtxOptions::cloudRenderResolutionScale(), 0.25f), 1.0f);
+  const VkExtent2D scaledExtent = {
+    std::max(1u, static_cast<uint32_t>(std::lround(downscaleExtent.width  * renderScale))),
+    std::max(1u, static_cast<uint32_t>(std::lround(downscaleExtent.height * renderScale))),
+  };
+
+  const bool extentsMatch = (m_cloudRenderExtent.width  == scaledExtent.width)
+                         && (m_cloudRenderExtent.height == scaledExtent.height);
   if (extentsMatch && m_cloudRenderRT.isValid()) {
     return;
   }
 
-  const VkExtent3D extent3D = { downscaleExtent.width, downscaleExtent.height, 1u };
+  const VkExtent3D extent3D = { scaledExtent.width, scaledExtent.height, 1u };
   m_cloudRenderRT = Resources::createImageResource(
     ctx,
     "Atmosphere Cloud Render RT",
