@@ -938,8 +938,53 @@ namespace fork_hooks {
               "instead of the full cascade. No visual difference; uncheck to "
               "restore the legacy single-gate re-bake for comparison.");
 
+          RemixGui::DragInt("Sun Shadow Ray Cap", &RtxOptions::sunShadowMaxSamplesObject(), 0.1f, 0, 12);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Cap on sun soft-shadow rays per pixel per frame. 0 = legacy "
+              "automatic count (1-12 depending on Mie anisotropy; ~4 at "
+              "typical settings). 1 = recommended: the denoiser averages a "
+              "single jittered ray into the same soft penumbra over a few "
+              "frames. Large performance win in physical-sky mode.");
+
+          RemixGui::DragInt("Moon Shadow Ray Cap", &RtxOptions::moonShadowMaxSamplesObject(), 0.1f, 0, 4);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Cap on moon soft-shadow rays per pixel per frame at night. "
+              "0 = legacy constant 4. 1 = recommended perf setting.");
+
           ImGui::TreePop();
         }
+
+        ImGui::TreePop();
+      }
+
+      // ----- Perf Bisect tree (fork — 2026-06-11, diagnostic) -----
+      // Skip toggles for the per-frame atmosphere dispatches that no
+      // production option can remove, so a live session can attribute
+      // frame time per dispatch. All default ON (= normal rendering).
+      // Skipping freezes the consumer's data (stale clouds / shadows) —
+      // measurement aid, not a quality setting.
+      if (ImGui::TreeNode("Perf Bisect (Diagnostic)")) {
+        ImGui::TextDisabled("Uncheck one at a time; read the frame-time delta.");
+
+        RemixGui::Checkbox("Cloud Voxel Grid Bakes", &RtxOptions::debugDispatchCloudVoxelGridsObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Per-frame D_sun + D_ambient bakes (256x256x32, 8/6 taps per "
+            "voxel). Unchecked: cloud lighting + cumulus terrain shadows "
+            "freeze at their last state.");
+
+        RemixGui::Checkbox("Cloud Render Pass", &RtxOptions::debugDispatchCloudRenderObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Per-frame screen-space cloud march. Runs even when the cloud-RT "
+            "composite option is off, so this is the only toggle that "
+            "removes its cost. Unchecked: primary clouds freeze in place.");
+
+        RemixGui::Checkbox("Cloud Sky Transmittance Bake", &RtxOptions::debugDispatchCloudSkyTransmittanceObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Per-frame 32x16 volumetric sky-ambient occlusion bake. "
+            "Expected near-free.");
+
+        ImGui::TextDisabled("Also useful: Fast Cloud Reflections (Clouds tree),");
+        ImGui::TextDisabled("Minimal Sky LUT Re-bakes (Atmosphere > Advanced).");
 
         ImGui::TreePop();
       }

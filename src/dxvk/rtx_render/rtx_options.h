@@ -1701,6 +1701,51 @@ namespace dxvk {
                "instead of the legacy analytical approximation. Disable to "
                "restore the legacy per-ray march for comparison.");
 
+    // NEE shadow-ray budget clamps (fork — 2026-06-11, perf). With physical
+    // atmosphere on, sun NEE traces an anisotropy-driven 1-12 visibility
+    // rays per primary pixel per frame (plus half that per indirect bounce
+    // vertex), and moon NEE traces a constant 4 at night — bisect-measured
+    // as the dominant share of the skyMode frame-time delta. The denoised
+    // pipeline (NRD / DLSS-RR) temporally converges one blue-noise-jittered
+    // ray per frame to the same soft penumbra, so the multi-ray loop is
+    // oversampling. 0 = legacy uncapped count.
+    RTX_OPTION("rtx.atmosphere", int, sunShadowMaxSamples, 0,
+               "Cap on sun soft-shadow visibility rays per primary pixel "
+               "(secondary bounces use half the capped value, min 1). "
+               "0 = legacy anisotropy-driven count (1-12). 1 is the "
+               "recommended perf setting: the denoiser temporally converges "
+               "a single jittered ray to the same penumbra softness.");
+    RTX_OPTION("rtx.atmosphere", int, moonShadowMaxSamples, 0,
+               "Cap on moon soft-shadow visibility rays per primary pixel "
+               "at night (secondary bounces use half the capped value, "
+               "min 1). 0 = legacy constant 4. 1 is the recommended perf "
+               "setting.");
+
+    // Sky perf bisect toggles (fork — 2026-06-11, diagnostic). The
+    // atmosphere pass runs several per-frame dispatches that no production
+    // option can skip — so frame-time A/B tests (skyMode, cloudEnabled)
+    // mis-attribute their cost. These default-ON toggles let a live ImGui
+    // session bisect the per-dispatch cost: uncheck one, read the
+    // frame-time delta, re-check. Skipping a dispatch leaves its consumer
+    // reading STALE data (frozen clouds / shadows) — diagnostic only, not
+    // a production setting.
+    RTX_OPTION("rtx.atmosphere", bool, debugDispatchCloudVoxelGrids, true,
+               "Diagnostic: dispatch the per-frame D_sun + D_ambient cloud "
+               "voxel-grid bakes (256x256x32 x 8/6 taps each). Uncheck to "
+               "skip both and read the frame-time delta; cloud lighting and "
+               "cumulus terrain shadows freeze at their last state while "
+               "unchecked.");
+    RTX_OPTION("rtx.atmosphere", bool, debugDispatchCloudRender, true,
+               "Diagnostic: dispatch the per-frame screen-space cloud render "
+               "pass. NOTE this pass runs even when cloudRenderRTEnable is "
+               "off, so this toggle is the only way to remove its cost. "
+               "Uncheck to skip; primary-ray clouds freeze in place while "
+               "unchecked.");
+    RTX_OPTION("rtx.atmosphere", bool, debugDispatchCloudSkyTransmittance, true,
+               "Diagnostic: dispatch the per-frame 32x16 cloud-sky-"
+               "transmittance bake (volumetric sky-ambient occlusion). "
+               "Uncheck to skip; expected to be near-free.");
+
     // Split sky-LUT cache keys (fork — 2026-06-11, perf). The three sky LUT
     // bakes (transmittance / multiscatter / sky-view) were gated by ONE
     // memcmp over the whole normalized arg struct, with two per-frame

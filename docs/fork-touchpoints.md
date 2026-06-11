@@ -1685,3 +1685,39 @@ First change of the non-cloud sky optimization workstream. The three sky LUT bak
 Note: `rtx.atmosphere.cloudNoiseWarpStrength` lines in existing user confs become unknown-option no-ops after this change.
 
 ---
+
+## Workstream — Sky perf: per-dispatch bisect toggles (fork — 2026-06-11, diagnostic)
+
+Measurement aid for the sky perf workstream. The atmosphere pass runs several per-frame dispatches that no production option can skip — `dispatchCloudRender` in particular runs whenever its RT is valid, independent of `cloudRenderRTEnable` — so frame-time A/B via the production toggles mis-attributes their cost. Three default-ON `debugDispatch*` toggles let a live ImGui session skip each dispatch individually and read the frame-time delta. Skipping leaves consumers reading stale data (frozen clouds / shadows): diagnostic only, defaults unchanged rendering.
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *`debugDispatchCloudVoxelGrids` / `debugDispatchCloudRender` / `debugDispatchCloudSkyTransmittance`, all default true.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`computeLuts` wraps the D_sun + D_ambient bakes, the cloud render dispatch, and the cloud-sky-transmittance bake in their respective toggles (barriers move inside the gates; ordering unchanged when enabled).*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *New "Perf Bisect (Diagnostic)" ImGui tree with the three checkboxes + pointers to the existing production toggles useful in the same session.*
+
+---
+
+## Workstream — Sky perf: NEE shadow-ray budget clamps (fork — 2026-06-11)
+
+Third change of the sky perf workstream — the first to target where the milliseconds actually are. Bisect results showed all atmosphere compute dispatches together ≈ the known 2 ms cloud budget; the remaining ~2.7 ms (day) / ~3.7 ms (night) of the skyMode A/B delta lives in the integrators: with physical atmosphere on, sun NEE traces an anisotropy-driven 1–12 soft-shadow visibility rays per primary pixel (`getSunSoftShadowParams`; ~4 at typical Mie g) plus half that per indirect bounce vertex, and moon NEE adds a constant 4 (+2 indirect) at night. The denoised pipeline temporally converges one blue-noise-jittered ray per frame, so the loops are oversampled. Two clamp knobs cap the counts at the single source (`sampleAtmosphereSunLight` / `sampleAtmosphereMoonLight`), so primary and the half-rate secondary paths both inherit. Defaults 0 = legacy uncapped (bit-identical); set 1 for the perf win after visual validation.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Repurposes `padMoonNee0` / `padMoonNee1` as `uint sunShadowMaxSamples` / `uint moonShadowMaxSamples`. No layout change.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions.
+  *Clamp applied after `getSunSoftShadowParams` in `sampleAtmosphereSunLight` and after the constant-4 assignment in `sampleAtmosphereMoonLight`; 0 = uncapped.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *`RTX_OPTION("rtx.atmosphere", int, sunShadowMaxSamples, 0, …)` / `moonShadowMaxSamples`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs` populates the two fields (replacing the pad zero-writes).*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *"Sun Shadow Ray Cap" / "Moon Shadow Ray Cap" DragInts in the Atmosphere → Advanced ImGui tree.*
+
+---

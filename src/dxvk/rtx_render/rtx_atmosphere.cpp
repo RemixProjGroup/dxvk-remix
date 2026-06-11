@@ -508,8 +508,10 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.surfaceMoonBrightness           = RtxOptions::surfaceMoonBrightness();
   args.cloudMoonBrightness             = RtxOptions::cloudMoonBrightness();
   args.haloMoonBrightness              = RtxOptions::haloMoonBrightness();
-  args.padMoonNee0                     = 0.0f;
-  args.padMoonNee1                     = 0.0f;
+  // NEE shadow-ray budget clamps (fork — 2026-06-11, perf). Live in the
+  // former padMoonNee0/1 slots so the CB layout is unchanged.
+  args.sunShadowMaxSamples             = static_cast<uint32_t>(std::max(RtxOptions::sunShadowMaxSamples(), 0));
+  args.moonShadowMaxSamples            = static_cast<uint32_t>(std::max(RtxOptions::moonShadowMaxSamples(), 0));
   args.padMoonNee2                     = 0.0f;
 
   // ----- Moon cloud-look + halo shape constants (fork, Phase 3 Task 2) -----
@@ -1046,7 +1048,13 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
     m_lutsNeedRecompute = false;
   }
 
-  dispatchCloudSkyTransmittanceLut(ctx);
+  // Perf-bisect gate (fork — 2026-06-11, diagnostic): each unconditional
+  // per-frame dispatch below gets a default-ON skip toggle so a live ImGui
+  // session can attribute frame-time per dispatch. Skipping leaves the
+  // consumer reading stale data — diagnostic only.
+  if (RtxOptions::debugDispatchCloudSkyTransmittance()) {
+    dispatchCloudSkyTransmittanceLut(ctx);
+  }
 
   // Full-rate cloud voxel grid bake (Nubis Cubed 2023, fork — 2026-05-12;
   // full-rate flip 2026-05-19). The original implementation amortized each
@@ -1062,18 +1070,20 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
   // compute units. Cost is ~8× the prior amortized bake; profile if it
   // becomes a frame-time bottleneck and revisit (a smaller grid resolution
   // or per-tile dispatch would be the first cuts to consider).
-  ctx->emitMemoryBarrier(0,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_WRITE_BIT,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_READ_BIT);
-  dispatchCloudSunDensityGrid(ctx);
-  ctx->emitMemoryBarrier(0,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_WRITE_BIT,
-    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-    VK_ACCESS_SHADER_READ_BIT);
-  dispatchCloudAmbientDensityGrid(ctx);
+  if (RtxOptions::debugDispatchCloudVoxelGrids()) {
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+    dispatchCloudSunDensityGrid(ctx);
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+    dispatchCloudAmbientDensityGrid(ctx);
+  }
 
   // Cloud render compute pass (Nubis Cubed 2023, fork — 2026-05-12, C4).
   // Runs every frame after the voxel grid bakes so it reads up-to-date
@@ -1097,7 +1107,12 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
     dispatchCloudSecondaryLut(ctx);
   }
 
-  if (m_cloudRenderRT.isValid()) {
+  // NOTE (perf-bisect rationale): this dispatch runs whenever the RT is
+  // valid, INDEPENDENT of cloudRenderRTEnable — turning that option off
+  // switches the consumer to analytical clouds but leaves this pass
+  // running, so frame-time A/B via cloudRenderRTEnable never isolates the
+  // pass cost. The debug toggle is the only lever that actually skips it.
+  if (RtxOptions::debugDispatchCloudRender() && m_cloudRenderRT.isValid()) {
     ctx->emitMemoryBarrier(0,
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
       VK_ACCESS_SHADER_WRITE_BIT,

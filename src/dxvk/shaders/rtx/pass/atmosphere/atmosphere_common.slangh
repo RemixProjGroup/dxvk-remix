@@ -997,6 +997,15 @@ AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal
   // Get soft shadow parameters based on Mie anisotropy
   getSunSoftShadowParams(args.mieAnisotropy, result.coneAngle, result.numSamples);
 
+  // Shadow-ray budget clamp (fork — 2026-06-11, perf). The anisotropy-driven
+  // count (1-12) predates the denoised pipeline; one blue-noise-jittered ray
+  // per frame temporally converges to the same penumbra. Applied here at the
+  // single source so the primary path AND the secondary path (which derives
+  // numSamples/2 from this value) both inherit the cap. 0 = legacy uncapped.
+  if (args.sunShadowMaxSamples > 0u) {
+    result.numSamples = min(result.numSamples, int(args.sunShadowMaxSamples));
+  }
+
   return result;
 }
 
@@ -1148,6 +1157,13 @@ AtmosphereMoonSample sampleAtmosphereMoonLight(vec3 surfacePos, vec3 surfaceNorm
   // so the cone is bigger than the sun's. Cap to 0.6 rad (~34deg) for stability.
   result.coneAngle  = clamp(m.angularRadius * 0.5f, 0.005f, 0.6f);
   result.numSamples = 4;  // Constant; moon shadows are softer than sun's.
+
+  // Shadow-ray budget clamp (fork — 2026-06-11, perf). Mirrors the sun-NEE
+  // clamp in sampleAtmosphereSunLight; covers the primary and secondary moon
+  // paths through the same single source. 0 = legacy constant 4.
+  if (args.moonShadowMaxSamples > 0u) {
+    result.numSamples = min(result.numSamples, int(args.moonShadowMaxSamples));
+  }
 
   return result;
 }

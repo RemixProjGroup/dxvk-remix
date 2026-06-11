@@ -177,8 +177,15 @@ struct AtmosphereArgs {
   float cloudMoonBrightness;             // Per-path stylistic multiplier on cloud-moon directional + ambient airglow (Phase 3)
 
   float haloMoonBrightness;               // Per-path stylistic multiplier on disk halo Gaussian glow (Phase 3)
-  float padMoonNee0;                      // 16-byte alignment
-  float padMoonNee1;
+  // NEE shadow-ray budget clamps (fork — 2026-06-11, perf). Sun NEE traces
+  // an anisotropy-driven 1-12 visibility rays per primary pixel (half that
+  // per indirect vertex); moon NEE traces a constant 4. In the denoised
+  // pipeline one jittered ray per frame converges, so these clamp the loop
+  // counts: 0 = legacy uncapped behavior, N = at most N rays on the primary
+  // path (secondary keeps its half-rate derivation from the clamped value).
+  // Live in the former padMoonNee0/1 slots so the CB layout is unchanged.
+  uint  sunShadowMaxSamples;              // 0 = legacy anisotropy-driven count
+  uint  moonShadowMaxSamples;             // 0 = legacy constant 4
   float padMoonNee2;
 
   // ----- Moon cloud-look + halo shape constants (fork, Phase 3 Task 2) -----
