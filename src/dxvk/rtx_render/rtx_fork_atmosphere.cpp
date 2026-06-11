@@ -1045,6 +1045,14 @@ namespace fork_hooks {
             "texture repeat can never show, while preserving the cloud look. "
             "Fixes tiling at the source (the Anti-Tile Warp only hides it). "
             "Uncheck for the legacy periodic field. Applies live.");
+        RemixGui::DragFloat("Noise Frequency", &RtxOptions::cloudNoiseBaseFreqScaleObject(),
+                            0.01f, 0.25f, 4.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Multiplier on the baked cloud noise frequency. 1.0 = current "
+            "look. Pair with the Anti-Tile Warp slider: as you lower the "
+            "warp, raise this toward 1.5-2.5 to keep cloud features the "
+            "same size (the warp secretly shrinks them). Re-bakes the "
+            "noise volume live as you drag (brief hitch per change).");
         RemixGui::DragFloat("Edge Detail", &RtxOptions::cloudDetailStrengthObject(),
                             0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(

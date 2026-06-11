@@ -196,7 +196,12 @@ struct AtmosphereArgs {
                                           // tiled volume (periodicity destroyed at the source), 0 = legacy
                                           // single periodic tap. Reuses the former padCloudLook0 slot;
                                           // CB layout unchanged.
-  float padCloudLook1;
+  float cloudNoiseBaseFreqScale;          // Bake base/detail FBM frequency multiplier (fork —
+                                          // 2026-06-11, stage B). 1.0 = legacy bake. Raised during
+                                          // the anti-tile-warp walk-down to fold the warp's
+                                          // frequency-multiplying Jacobian into the bake. Re-bakes
+                                          // the noise volume live on change. Reuses the former
+                                          // padCloudLook1 slot; CB layout unchanged.
   float padCloudLook2;
 
   // ----- Cloud parameters (fork: procedural FBM cloud layer at fixed altitude) -----

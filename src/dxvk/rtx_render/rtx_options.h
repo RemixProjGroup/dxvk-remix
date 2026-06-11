@@ -1548,6 +1548,17 @@ namespace dxvk {
                "show, with statistics-preserving blending (the cloud look "
                "is unchanged). Disable for the legacy periodic field "
                "(repetition hidden only by the anti-tile warp).");
+    // De-tile rework stage B (fork — 2026-06-11): bake-frequency
+    // compensation for the anti-tile-warp walk-down. The warp's Jacobian
+    // multiplies the field's horizontal frequency 2-3x; the tuned look
+    // depends on that shred, so the warp can only come down if equivalent
+    // frequency content is folded into the bake itself.
+    RTX_OPTION("rtx.atmosphere", float, cloudNoiseBaseFreqScale, 1.0f,
+               "Multiplier on the cloud noise bake's base + detail FBM "
+               "frequencies [0.25..4]. 1.0 = legacy bake. Raise toward "
+               "1.5-2.5 while lowering cloudNoiseWarpStrength to preserve "
+               "cloud feature size as the warp is retired. Re-bakes the "
+               "noise volume live on change.");
     RTX_OPTION("rtx.atmosphere", float, cloudNoiseWarpStrength, 0.75f,
                "Anti-tiling domain-warp strength, as a fraction of cloudNoiseTileKm. "
                "Displaces the horizontal cloud-noise sample position by a low-frequency "

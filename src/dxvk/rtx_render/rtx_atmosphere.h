@@ -403,6 +403,7 @@ private:
   float    m_cachedWorleyFrequency     = 0.0f;
   uint32_t m_cachedWorleyOctaves       = 0u;
   float    m_cachedWorleyCarveStrength = 0.0f;
+  float    m_cachedBaseFreqScale       = 0.0f;
   bool m_initialized = false;
   bool m_lutsNeedRecompute = true;
 };

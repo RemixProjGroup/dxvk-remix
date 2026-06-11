@@ -1615,3 +1615,24 @@ Root-cause fix for the prebaked noise volume's periodic repeat (the artifact the
   *Adds the "Seamless Cloud Field" checkbox to the Clouds ImGui tree, next to the Anti-Tile Warp slider it will eventually retire.*
 
 ---
+
+## Workstream — Cloud noise hex de-tiling, stage B enabler (fork — 2026-06-11)
+
+Exposes the bake's base/detail FBM frequency as a live-rebake multiplier so the anti-tile-warp walk-down can be tuned interactively: the warp's Jacobian multiplies the field's horizontal frequency 2-3x and the tuned look depends on that shred, so as `cloudNoiseWarpStrength` comes down, `cloudNoiseBaseFreqScale` goes up to fold equivalent frequency content into the bake itself. Default 1.0 = bit-identical bake; the actual walk-down is an in-game tuning session, not a code change.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/rtx_cloud_noise_baker.comp.slang`** — fork-owned change.
+  *`baseFreq` / `detailFreq` become `0.5 / 2.0 × clamp(args.cloudNoiseBaseFreqScale, 0.25, 4)` (4x ratio preserved); the periodic-lattice snapping already handles non-default products.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned addition.
+  *Repurposes `padCloudLook1` as `float cloudNoiseBaseFreqScale`. No layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds `RTX_OPTION("rtx.atmosphere", float, cloudNoiseBaseFreqScale, 1.0f, …)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned additions.
+  *`getAtmosphereArgs` populates the new field; `needsCloudNoiseRebake` / `cacheCloudNoiseBakeInputs` gain the new input (`m_cachedBaseFreqScale`) so dragging the slider re-bakes the volume live.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *Adds the "Noise Frequency" DragFloat next to the Anti-Tile Warp slider with the walk-down pairing explained in its tooltip.*
+
+---
