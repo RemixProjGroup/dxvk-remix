@@ -1763,6 +1763,120 @@ float sampleTricubicBSpline(Texture3D<float> tex, SamplerState s,
   return mix(txy1, txy0, g0.z);
 }
 
+// ===========================================================================
+// Stochastic hex-tiling of the cloud noise volume (fork — 2026-06-11,
+// de-tile rework stage A).
+//
+// Root-cause fix for the periodic repeat of the prebaked volume: instead of
+// hiding the repetition behind the anti-tile domain warp, the horizontal
+// plane is partitioned into an equilateral-triangle lattice (~1.6 tiles per
+// edge) and each lattice vertex carries a random texture-space XZ offset.
+// A sample blends the volume taps of its triangle's three vertices with
+// barycentric weights using Heitz & Neyret 2018's variance-preserving
+// operator:
+//
+//   G = mean + sum(w_i * (x_i - mean)) / sqrt(sum(w_i^2))
+//
+// which keeps the blended field's mean and variance equal to the source
+// field's (a plain weighted average would crush variance in blend zones and
+// soften the coverage gate there). Because every cell samples the SAME
+// volume at a random translation, the spectrum/histogram of the field is
+// essentially unchanged — the look is preserved — but the tiling period is
+// destroyed: two world positions one tile apart land in different cells
+// with decorrelated offsets.
+//
+// Weights are sharpened (pow 4, renormalized) so triangle interiors collapse
+// to a single dominant vertex — the samplers take a 1-tap fast path there
+// (w1 > 0.95, ~70% of area) and only blend 3 taps near triangle edges.
+//
+// Lattice scale is a GOLDEN-RATIO multiple of the tile period: an integer
+// multiple would re-introduce banding (the lattice itself would repeat in
+// phase with the texture), and phi is the "most irrational" choice, so
+// lattice-vs-tile resonance is minimized at every tile value.
+//
+// Stage A ships this alongside the (unchanged) anti-tile warp; stage B
+// walks the warp down with bake-frequency compensation once de-tiling is
+// validated. See the cloud-detile-rework plan notes.
+// ===========================================================================
+struct CloudHexTile {
+  float w1, w2, w3;        // sharpened, normalized blend weights (w1 largest)
+  vec2  off1, off2, off3;  // per-vertex random texture-space XZ offsets
+};
+
+CloudHexTile computeCloudHexTile(vec2 hzKm, AtmosphereArgs args) {
+  const float kHexLatticeTiles = 1.618034f;  // golden ratio — see header
+  float latticeKm = max(args.cloudNoiseTileKm * kHexLatticeTiles, 1e-3f);
+  vec2 uv = hzKm / latticeKm;
+
+  // Skew the plane so integer cells form an equilateral-triangle lattice
+  // (Heitz 2018's gridToSkewedGrid, written out without a matrix).
+  vec2 skewed = vec2(uv.x - 0.57735027f * uv.y, uv.y * 1.15470054f);
+  vec2 baseId = floor(skewed);
+  vec2 fr = fract(skewed);
+
+  vec3 w;
+  vec2 v1, v2, v3;
+  float lower = 1.0f - fr.x - fr.y;
+  if (lower > 0.0f) {
+    w  = vec3(lower, fr.y, fr.x);
+    v1 = baseId;
+    v2 = baseId + vec2(0.0f, 1.0f);
+    v3 = baseId + vec2(1.0f, 0.0f);
+  } else {
+    w  = vec3(-lower, 1.0f - fr.y, 1.0f - fr.x);
+    v1 = baseId + vec2(1.0f, 1.0f);
+    v2 = baseId + vec2(1.0f, 0.0f);
+    v3 = baseId + vec2(0.0f, 1.0f);
+  }
+
+  // Sharpen: pow-4 + renormalize. Narrows blend zones to ~edge bands so the
+  // 1-tap fast path covers most of the plane, and reduces the ghosting that
+  // wide 3-way blends of a non-Gaussian field would show.
+  w = w * w;
+  w = w * w;
+  w /= (w.x + w.y + w.z);
+
+  // Sort so w1 is the dominant vertex (the fast-path / footprint anchor).
+  // Two compare-swaps suffice to get the max into slot 1; the relative
+  // order of slots 2/3 is irrelevant to the symmetric blend.
+  if (w.y > w.x) { float t = w.x; w.x = w.y; w.y = t; vec2 tv = v1; v1 = v2; v2 = tv; }
+  if (w.z > w.x) { float t = w.x; w.x = w.z; w.z = t; vec2 tv = v1; v1 = v3; v3 = tv; }
+
+  CloudHexTile hex;
+  hex.w1 = w.x; hex.w2 = w.y; hex.w3 = w.z;
+  // Per-vertex random translation of the tiling, in texture-space units.
+  // Lattice ids are integers, so hash31's int-truncation never collides
+  // neighboring vertices. Two decorrelated seeds give the two channels.
+  hex.off1 = vec2(hash31(vec3(v1, 7.31f)), hash31(vec3(v1, 19.77f)));
+  hex.off2 = vec2(hash31(vec3(v2, 7.31f)), hash31(vec3(v2, 19.77f)));
+  hex.off3 = vec2(hash31(vec3(v3, 7.31f)), hash31(vec3(v3, 19.77f)));
+  return hex;
+}
+
+// Mean of the Worley-carved bake — shared anchor for the hex blend and the
+// vertical-coherence re-expansion (which already used 0.4; keep in lockstep
+// with any re-bake that shifts the field statistics).
+static const float kCloudNoiseFieldMean = 0.4f;
+
+// Variance-preserving 3-tap blend of the noise volume at the hex offsets.
+// Trilinear taps — only the blend zones (~30% of area) come through here,
+// and the 3-way blend masks the trilinear-vs-tricubic softness difference.
+float sampleCloudNoiseHexBlend(CloudHexTile hex, vec3 texcoord,
+                               Texture3D<float> cloudNoise3D,
+                               SamplerState cloudSampler) {
+  float x1 = cloudNoise3D.SampleLevel(cloudSampler,
+      vec3(frac(texcoord.x + hex.off1.x), texcoord.y, frac(texcoord.z + hex.off1.y)), 0).r;
+  float x2 = cloudNoise3D.SampleLevel(cloudSampler,
+      vec3(frac(texcoord.x + hex.off2.x), texcoord.y, frac(texcoord.z + hex.off2.y)), 0).r;
+  float x3 = cloudNoise3D.SampleLevel(cloudSampler,
+      vec3(frac(texcoord.x + hex.off3.x), texcoord.y, frac(texcoord.z + hex.off3.y)), 0).r;
+  float norm = sqrt(hex.w1 * hex.w1 + hex.w2 * hex.w2 + hex.w3 * hex.w3);
+  return kCloudNoiseFieldMean
+       + (hex.w1 * (x1 - kCloudNoiseFieldMean)
+        + hex.w2 * (x2 - kCloudNoiseFieldMean)
+        + hex.w3 * (x3 - kCloudNoiseFieldMean)) / max(norm, 1e-4f);
+}
+
 // Anti-tiling domain warp (fork). The prebaked cloud noise is periodic at
 // cloudNoiseTileKm, so at small tiles the periodic repeat telescopes into
 // visible horizontal layers toward the horizon — the residual that remains
@@ -1889,12 +2003,34 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
       frac(perturbed.y / args.cloudNoiseTileKm),
       frac(perturbed.z / args.cloudNoiseTileKm));
 
-  // 3. Tricubic 3D sample. Texture-size literal must match the baker's
+  // 3. Base 3D sample. Texture-size literal must match the baker's
   //    dispatch resolution (RtxAtmosphere::kCloudNoise3DSize = 256). If the
   //    bake resolution ever changes, update both sites in lockstep.
-  float texturedNoise = sampleTricubicBSpline(
-      cloudNoise3D, cloudSampler,
-      texcoord, vec3(256.0f));
+  //
+  //    Hex de-tiling (fork — 2026-06-11, stage A): when enabled, the sample
+  //    position's triangle-lattice cell supplies random texture offsets that
+  //    destroy the volume's tile period (see computeCloudHexTile). Triangle
+  //    interiors (dominant weight > 0.95 after sharpening) take the 1-tap
+  //    tricubic fast path at the dominant offset; edge bands blend 3
+  //    trilinear taps variance-preservingly. Off = exact legacy single
+  //    tricubic tap.
+  CloudHexTile hex = (CloudHexTile)0;
+  bool hexOn = args.cloudHexTilingEnable > 0.5f;
+  float texturedNoise;
+  if (hexOn) {
+    hex = computeCloudHexTile(vec2(perturbed.x, perturbed.z), args);
+    if (hex.w1 > 0.95f) {
+      vec3 hexCoord = vec3(frac(texcoord.x + hex.off1.x), texcoord.y,
+                           frac(texcoord.z + hex.off1.y));
+      texturedNoise = sampleTricubicBSpline(cloudNoise3D, cloudSampler,
+                                            hexCoord, vec3(256.0f));
+    } else {
+      texturedNoise = sampleCloudNoiseHexBlend(hex, texcoord, cloudNoise3D, cloudSampler);
+    }
+  } else {
+    texturedNoise = sampleTricubicBSpline(cloudNoise3D, cloudSampler,
+                                          texcoord, vec3(256.0f));
+  }
 
   // 3b. Vertical coherence (fork — 2026-06-10, rev 2 of cloudVerticalStretch).
   //     Rev 1 stretched the Y sample domain, which elongates EVERY octave
@@ -1920,11 +2056,17 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
     // (~[0.11, 0.53] at altitude 1.3 / thickness 5 / tile 12) so the local
     // 3D sample and the footprint slice stay decorrelated within the slab.
     const float kFootprintSliceY = 0.85f;
-    const float kFieldMean = 0.4f;
+    // Hex de-tiling: shift the footprint slice by the DOMINANT vertex's
+    // offset so the footprint tracks the same randomized field the base
+    // sample reads (a full 3-tap footprint blend isn't worth it for this
+    // default-inert stabilizer).
+    vec2 fpXZ = hexOn ? vec2(frac(texcoord.x + hex.off1.x), frac(texcoord.z + hex.off1.y))
+                      : vec2(texcoord.x, texcoord.z);
     float footprint = cloudNoise3D.SampleLevel(cloudSampler,
-        vec3(texcoord.x, kFootprintSliceY, texcoord.z), 0).r;
+        vec3(fpXZ.x, kFootprintSliceY, fpXZ.y), 0).r;
     float blended = mix(texturedNoise, footprint, k);
-    texturedNoise = kFieldMean + (blended - kFieldMean) / sqrt(k * k + (1.0f - k) * (1.0f - k));
+    texturedNoise = kCloudNoiseFieldMean
+                  + (blended - kCloudNoiseFieldMean) / sqrt(k * k + (1.0f - k) * (1.0f - k));
   }
 
   // 4. (fork — 2026-06-10, perf) The per-frame 1-octave analytic detail
@@ -2052,9 +2194,29 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
       frac(perturbed.y / args.cloudNoiseTileKm),
       frac(perturbed.z / args.cloudNoiseTileKm));
 
-  // Single trilinear sample (assumes the bound sampler is linear-filter +
-  // repeat-address per RtxAtmosphere's cloud-noise sampler setup).
-  float density = cloudNoise3D.SampleLevel(cloudSampler, texcoord, 0).r;
+  // Base sample (trilinear — this is the cheap variant; assumes the bound
+  // sampler is linear-filter + repeat-address per RtxAtmosphere's
+  // cloud-noise sampler setup).
+  //
+  // Hex de-tiling (fork — 2026-06-11, stage A) — must mirror
+  // sampleCloudDensityTextured's base tap (same lattice, same offsets,
+  // same blend) so the baked D_sun / D_ambient grids shadow the same
+  // de-tiled field the view march renders. Both paths are trilinear here.
+  CloudHexTile hex = (CloudHexTile)0;
+  bool hexOn = args.cloudHexTilingEnable > 0.5f;
+  float density;
+  if (hexOn) {
+    hex = computeCloudHexTile(vec2(perturbed.x, perturbed.z), args);
+    if (hex.w1 > 0.95f) {
+      density = cloudNoise3D.SampleLevel(cloudSampler,
+          vec3(frac(texcoord.x + hex.off1.x), texcoord.y,
+               frac(texcoord.z + hex.off1.y)), 0).r;
+    } else {
+      density = sampleCloudNoiseHexBlend(hex, texcoord, cloudNoise3D, cloudSampler);
+    }
+  } else {
+    density = cloudNoise3D.SampleLevel(cloudSampler, texcoord, 0).r;
+  }
 
   // Vertical coherence blend — must mirror sampleCloudDensityTextured's
   // step 3b (same k mapping, same fixed slice, same mean-anchored
@@ -2064,11 +2226,13 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
   if (S > 1.001f) {
     float k = 1.0f - 1.0f / S;
     const float kFootprintSliceY = 0.85f;
-    const float kFieldMean = 0.4f;
+    vec2 fpXZ = hexOn ? vec2(frac(texcoord.x + hex.off1.x), frac(texcoord.z + hex.off1.y))
+                      : vec2(texcoord.x, texcoord.z);
     float footprint = cloudNoise3D.SampleLevel(cloudSampler,
-        vec3(texcoord.x, kFootprintSliceY, texcoord.z), 0).r;
+        vec3(fpXZ.x, kFootprintSliceY, fpXZ.y), 0).r;
     float blended = mix(density, footprint, k);
-    density = kFieldMean + (blended - kFieldMean) / sqrt(k * k + (1.0f - k) * (1.0f - k));
+    density = kCloudNoiseFieldMean
+            + (blended - kCloudNoiseFieldMean) / sqrt(k * k + (1.0f - k) * (1.0f - k));
   }
 
   // Coverage threshold + vertical profile lifted from sampleCloudDensityTextured.

@@ -1039,6 +1039,12 @@ namespace fork_hooks {
             "noise's periodic repeat so it stops reading as horizontal layers "
             "toward the horizon at small tile sizes. 0 = off, 0.75 default. "
             "Too high smears cloud shapes. Applies live.");
+        RemixGui::Checkbox("Seamless Cloud Field", &RtxOptions::cloudHexTilingEnableObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Randomizes the cloud noise tiling on a triangle lattice so the "
+            "texture repeat can never show, while preserving the cloud look. "
+            "Fixes tiling at the source (the Anti-Tile Warp only hides it). "
+            "Uncheck for the legacy periodic field. Applies live.");
         RemixGui::DragFloat("Edge Detail", &RtxOptions::cloudDetailStrengthObject(),
                             0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(

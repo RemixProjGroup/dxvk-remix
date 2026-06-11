@@ -1594,3 +1594,24 @@ The visible cloud march ran once per DLSS-input pixel at up to 32 steps. Clouds 
   *Adds the "Cloud Render Scale" DragFloat to the Clouds ImGui tree.*
 
 ---
+
+## Workstream — Cloud noise hex de-tiling, stage A (fork — 2026-06-11)
+
+Root-cause fix for the prebaked noise volume's periodic repeat (the artifact the anti-tile warp was added to hide). The horizontal plane is partitioned into an equilateral-triangle lattice (golden-ratio multiple of the tile period, so lattice and texture can't resonate); each vertex carries a hash-derived random texture-space XZ offset, and samples blend their triangle's three offset taps with Heitz & Neyret 2018's variance-preserving operator (mean/variance of the field preserved → look unchanged; periodicity destroyed). Weights are pow-4 sharpened so triangle interiors (~70% of area) take a 1-tap fast path; only edge bands pay 3 trilinear taps. Ships alongside the UNCHANGED anti-tile warp — stage B walks the warp down with bake-frequency compensation after in-game validation (the warp's frequency-multiplying Jacobian is load-bearing for the look; see the cloud-realism memory notes).
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions.
+  *New `CloudHexTile` / `computeCloudHexTile` (skewed triangle grid + per-vertex hash offsets + pow-4 weight sharpening + dominant-vertex sort), `kCloudNoiseFieldMean` (0.4 — shared anchor with the vertical-coherence re-expansion), and `sampleCloudNoiseHexBlend` (3-tap variance-preserving blend). `sampleCloudDensityTextured`'s base tap branches: hex fast path = tricubic at the dominant offset, blend zones = 3-tap trilinear blend, off = legacy tricubic. `sampleCloudDensityForShadow` mirrors the same lattice/offsets/blend trilinearly so the baked D_sun / D_ambient grids shadow the same de-tiled field. The vertical-coherence footprint slice follows the dominant vertex's offset in both samplers. The detail-erosion tap stays single-tap (its sub-3 km repeat is not the visible artifact; revisit at stage B).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned addition.
+  *Repurposes `padCloudLook0` as `float cloudHexTilingEnable`. No layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds `RTX_OPTION("rtx.atmosphere", bool, cloudHexTilingEnable, true, …)` before `cloudNoiseWarpStrength`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned addition.
+  *`getAtmosphereArgs` populates the gate from RtxOptions (replacing the former pad zero-write).*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *Adds the "Seamless Cloud Field" checkbox to the Clouds ImGui tree, next to the Anti-Tile Warp slider it will eventually retire.*
+
+---

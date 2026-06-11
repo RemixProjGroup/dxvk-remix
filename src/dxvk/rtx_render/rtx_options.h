@@ -1535,6 +1535,19 @@ namespace dxvk {
                "World-space tile period (km) for the prebaked 3D cloud noise texture. "
                "Smaller = more visible repetition; larger = lower-frequency cloud detail. "
                "Default 12.0; viable range 6-24. Re-bakes the cloud noise volume live on change.");
+    // Hex de-tiling (fork — 2026-06-11, de-tile rework stage A). Root-cause
+    // fix for the prebaked noise volume's periodic repeat: a stochastic
+    // triangle-lattice randomization (Heitz & Neyret 2018 variance-preserving
+    // blending) destroys the tile period at the source while preserving the
+    // field's statistics. Ships alongside the (unchanged) anti-tile warp;
+    // stage B walks the warp down with bake-frequency compensation once this
+    // is validated in-game.
+    RTX_OPTION("rtx.atmosphere", bool, cloudHexTilingEnable, true,
+               "Stochastically randomize the cloud noise tiling on a "
+               "triangle lattice so the 12 km texture repeat can never "
+               "show, with statistics-preserving blending (the cloud look "
+               "is unchanged). Disable for the legacy periodic field "
+               "(repetition hidden only by the anti-tile warp).");
     RTX_OPTION("rtx.atmosphere", float, cloudNoiseWarpStrength, 0.75f,
                "Anti-tiling domain-warp strength, as a fraction of cloudNoiseTileKm. "
                "Displaces the horizontal cloud-noise sample position by a low-frequency "

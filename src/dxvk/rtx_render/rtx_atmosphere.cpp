@@ -466,7 +466,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.moonCloudAnisotropy             = RtxOptions::moonCloudAnisotropy();
   args.moonHaloMagnitude               = RtxOptions::moonHaloMagnitude()     * haloGlow;
   args.moonAmbientAirglow              = RtxOptions::moonAmbientAirglow()    * haloGlow;
-  args.padCloudLook0                   = 0.0f;
+  // Hex de-tiling gate (fork — 2026-06-11, stage A). Lives in the former
+  // padCloudLook0 slot so the CB layout is unchanged.
+  args.cloudHexTilingEnable            = RtxOptions::cloudHexTilingEnable() ? 1.0f : 0.0f;
   args.padCloudLook1                   = 0.0f;
   args.padCloudLook2                   = 0.0f;
 

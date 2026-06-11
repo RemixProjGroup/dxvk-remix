@@ -191,7 +191,11 @@ struct AtmosphereArgs {
   float moonHaloMagnitude;                // Disk halo Gaussian strength (was kHaloMagnitude in atmosphere_sky.slangh)
 
   float moonAmbientAirglow;               // Ambient airglow per-moon strength (was 0.0015 literal in nightLight)
-  float padCloudLook0;                    // 16-byte alignment
+  float cloudHexTilingEnable;             // Hex de-tiling of the cloud noise volume (fork — 2026-06-11,
+                                          // stage A): 1 = stochastic triangle-lattice randomization of the
+                                          // tiled volume (periodicity destroyed at the source), 0 = legacy
+                                          // single periodic tap. Reuses the former padCloudLook0 slot;
+                                          // CB layout unchanged.
   float padCloudLook1;
   float padCloudLook2;
 
