@@ -193,3 +193,13 @@ Texture3D<float> AtmosphereCloudDAmbient;
 // passes that include only the atmosphere binding header.
 layout(binding = BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER)
 SamplerState AtmosphereSkyViewSampler;
+
+// Secondary-ray cloud LUT (fork — 2026-06-10, perf). 256x128 RGBA16F dome:
+// rgb = premultiplied cloud radiance, a = view transmittance, keyed
+// (azimuth, elevation = (pi/2)*v^2) via cloudDomeDirToUv. Baked per frame by
+// cloud_secondary_lut.comp.slang with the same Nubis march the visible cloud
+// RT uses. Consumed by evalSkyRadiance's non-primary branch in place of the
+// per-ray analytical evalClouds march; sampled with AtmosphereSkyViewSampler
+// (REPEAT-U wraps the azimuth seam, CLAMP-V pins the horizon/zenith rows).
+layout(binding = BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)
+Texture2D<float4> AtmosphereCloudSecondaryLut;

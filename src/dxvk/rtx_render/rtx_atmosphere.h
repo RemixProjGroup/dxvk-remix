@@ -140,6 +140,18 @@ public:
   const Resources::Resource& getCloudHeightLut() const { return m_cloudHeightLut; }
 
   /**
+   * \brief Get the secondary-ray cloud LUT (fork — 2026-06-10, perf).
+   *
+   * 256x128 RGBA16F dome keyed (azimuth, elevation = (pi/2)*v^2) holding the
+   * full Nubis cloud march per direction: rgb = premultiplied cloud radiance,
+   * a = view transmittance. Baked once per frame by
+   * cloud_secondary_lut.comp.slang; consumed by evalSkyRadiance's non-primary
+   * branch (indirect / PSR / reflection sky-miss) in place of the per-ray
+   * analytical evalClouds march.
+   */
+  const Resources::Resource& getCloudSecondaryLut() const { return m_cloudSecondaryLut; }
+
+  /**
    * \brief Ensure the cloud render RT exists at the requested downscale extent.
    *
    * Recreates the RT on resize. Cheap when the extent is unchanged. Called
@@ -252,6 +264,10 @@ private:
   // Runs each frame from computeLuts after the voxel grid bakes; produces
   // m_cloudRenderRT (screen-space premultiplied cloud rgb + transmittance a).
   void dispatchCloudRender(Rc<DxvkContext> ctx);
+  // Secondary-ray cloud LUT bake (fork — 2026-06-10, perf). Runs each frame
+  // from computeLuts after the voxel grid bakes (it reads D_sun / D_ambient
+  // like the visible march). Gated on cloudSecondaryLutEnable.
+  void dispatchCloudSecondaryLut(Rc<DxvkContext> ctx);
 
   // LUT dimensions
   static constexpr uint32_t kTransmittanceLutWidth = 512;   // Increased from 256 for better precision
@@ -288,6 +304,15 @@ private:
   static constexpr uint32_t kCloudHeightLutWidth  = 64;
   static constexpr uint32_t kCloudHeightLutHeight = 128;
 
+  // Secondary-ray cloud LUT (fork — 2026-06-10, perf). 256 azimuth x 128
+  // elevation RGBA16F = 256 KB VRAM. Elevation rows concentrate near the
+  // horizon (elevation = (pi/2)*v^2 — see cloudDomeUvToDir). Sized for
+  // secondary-ray fidelity: indirect bounces and reflections are roughness-
+  // filtered downstream, so ~1.4 degree azimuth texels are below the
+  // perceptual floor there.
+  static constexpr uint32_t kCloudSecondaryLutWidth  = 256;
+  static constexpr uint32_t kCloudSecondaryLutHeight = 128;
+
   // Scale heights for exponential density profiles (in km)
   static constexpr float kRayleighScaleHeight = 8.0f;
   static constexpr float kMieScaleHeight = 1.2f;
@@ -311,6 +336,10 @@ private:
   // Cloud height LUT (slide 3 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
   // 64x128 R8, baked once at startup.
   Resources::Resource m_cloudHeightLut;
+
+  // Secondary-ray cloud LUT (fork — 2026-06-10, perf). 256x128 RGBA16F,
+  // baked every frame by dispatchCloudSecondaryLut.
+  Resources::Resource m_cloudSecondaryLut;
 
   // Per-frame camera basis for cloud_render.comp.slang. Pushed via
   // setCloudRenderCameraBasis() from updateAtmosphereConstants before

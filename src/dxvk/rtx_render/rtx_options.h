@@ -1664,6 +1664,20 @@ namespace dxvk {
                "sin(sun elevation) at which the sunset ambient effect smooth-fades to zero. "
                "Default 0.4 (~24 degrees above horizon). Effect is at full strength when sun is at the horizon.");
 
+    // Secondary-ray cloud LUT (fork — 2026-06-10, perf). Every indirect /
+    // PSR / reflection ray that reaches sky-miss previously ran the full
+    // analytical evalClouds march — a hidden per-ray cost rivaling the
+    // visible cloud pass. With this on, those rays sample a 256x128 dome
+    // LUT baked once per frame with the same Nubis Cubed march the visible
+    // clouds use (cloud_secondary_lut.comp.slang).
+    RTX_OPTION("rtx.atmosphere", bool, cloudSecondaryLutEnable, true,
+               "Replace the per-ray analytical cloud march on secondary rays "
+               "(indirect bounces, PSR, reflections) with a small per-frame "
+               "baked dome LUT. Large performance win on cloudy skies; also "
+               "makes reflected/indirect clouds match the primary Nubis look "
+               "instead of the legacy analytical approximation. Disable to "
+               "restore the legacy per-ray march for comparison.");
+
     // Nubis Cubed sky-miss composite gate (fork — 2026-05-12, C5).
     // When true, the primary-ray sky-miss path samples the AtmosphereCloudRender
     // RT (written by cloud_render.comp.slang each frame) instead of calling

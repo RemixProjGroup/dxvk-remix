@@ -506,6 +506,37 @@ float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args) {
   return computeCloudHeightFraction(samplePos, args, args.cloudAltitude, args.cloudThickness);
 }
 
+// =============================================================================
+// Cloud dome-LUT direction mapping (fork — 2026-06-10).
+//
+// The secondary-ray cloud LUT is keyed (azimuth, elevation) over the upper
+// hemisphere with elevation resolution concentrated near the horizon:
+// elevation = (pi/2) * v^2. Horizon-grazing rays carry the most cloud
+// detail per texel (the slab spans ~90 km edge-on at the horizon vs ~4 km
+// at zenith), so v^2 spends ~70% of the rows below 30 degrees elevation.
+//
+// Writer (cloud_secondary_lut.comp.slang) and sampler (evalSkyRadiance in
+// atmosphere_sky.slangh) must agree exactly — both call these two helpers.
+// Lives here (not cloud_march_common.slangh) because the sample side does
+// not include the march library.
+// =============================================================================
+vec3 cloudDomeUvToDir(vec2 uv) {
+  float azimuth   = uv.x * 2.0f * kPi;
+  float elevation = (0.5f * kPi) * uv.y * uv.y;
+  float cosEl = cos(elevation);
+  return vec3(sin(azimuth) * cosEl, sin(elevation), cos(azimuth) * cosEl);
+}
+
+vec2 cloudDomeDirToUv(vec3 dirYUp) {
+  float elevation = asin(clamp(dirYUp.y, 0.0f, 1.0f));
+  float v = sqrt(elevation / (0.5f * kPi));
+  // Same azimuth convention as cloudDomeUvToDir: az 0 = +Z, increasing
+  // toward +X. u may land in [-0.5, 0.5); the sky-view sampler's REPEAT-U
+  // address mode wraps it across the azimuth seam.
+  float u = atan2(dirYUp.x, dirYUp.z) / (2.0f * kPi);
+  return vec2(u, v);
+}
+
 // Nubis sliding-keypoint vertical density profile. Type slides the rise/peak/fall
 // keypoints from stratus values (narrow band low in slab) to cumulus values (full
 // vertical extent). Stratocumulus emerges naturally at type=0.5.

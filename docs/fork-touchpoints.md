@@ -1534,3 +1534,42 @@ Performance pass on the per-frame cloud noise evaluation, each piece validated i
   *`cloudVerticalStretch` default 1.6 → 1.0 (bit-exact identity) and description rewritten to mark the feature EXPERIMENTAL pending a sky-system-level solution to towering cumulus.*
 
 ---
+
+## Workstream — Secondary-ray cloud LUT (fork — 2026-06-10, perf)
+
+Every indirect / PSR / reflection ray reaching sky-miss previously ran the full analytical `evalClouds` march in `evalSkyRadiance` — a hidden per-ray cost estimated to rival the visible cloud pass. Those rays now sample a 256×128 RGBA16F dome LUT (azimuth × elevation, horizon-concentrated `elevation = (π/2)·v²`) baked once per frame with the same Nubis Cubed march the visible cloud RT uses. Deliberate look change: secondary rays now see the same clouds the primaries see instead of the legacy Wrenninge analytical approximation; `rtx.atmosphere.cloudSecondaryLutEnable = False` restores the legacy per-ray march. Cloud parallax across scene-scale ray-origin offsets is negligible versus km-scale cloud distances — the same camera-anchored approximation the per-frame voxel grids already make.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — NEW fork-owned file.
+  *Shared cloud-march library extracted from `cloud_render.comp.slang`: `CloudShadeContext` + `buildCloudShadeContext` (the pixel-independent sun/sky/moon precompute that previously lived in main()), `sampleCloudSunOpticalDepth_local`, `marchCloudSlab` (with generic `tMinClamp` / `tMaxClamp` segment params; 0/0 reproduces the pre-extraction march bit-for-bit), and the `marchCloudLayers` layer-1+2 wrapper. Included after `atmosphere_common.slangh` under the established binding-then-include layout.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_secondary_lut.comp.slang`** — NEW fork-owned file.
+  *Per-frame dome LUT bake. Bindings 0–11 in lockstep with `cloud_render.comp.slang` (slot 6 is its own RW output). Marches the full slab per dome texel at `cloudViewSamples` steps via the shared `marchCloudLayers`; clear-sky early-out mirrors `cloud_render`; frame-constant per-texel jitter keeps the LUT temporally stable.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang`** — fork-owned changes.
+  *March implementation moved to `cloud_march_common.slangh`; main() now builds the shade context via `buildCloudShadeContext` and calls `marchCloudLayers` with 0/0 clamps — behavior-neutral extraction, bit-identical output.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned addition.
+  *`cloudDomeUvToDir` / `cloudDomeDirToUv` dome-direction mapping shared by the LUT writer and the `evalSkyRadiance` sampler (lives here because the sample side does not include the march library).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned addition.
+  *New middle branch in `evalSkyRadiance`'s cloud-layer selection: non-primary rays with `cloudSecondaryLutEnable` sample `AtmosphereCloudSecondaryLut` via `cloudDomeDirToUv` + the sky-view sampler (REPEAT-U wraps the azimuth seam) and reconcile alpha exactly like the existing cloud-RT branch (opacity = 1 − transmittance). Below-horizon directions clamp to the horizon row.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned addition.
+  *Repurposes `pad_c5_0` as `uint cloudSecondaryLutEnable`. No layout change (same pattern as `cloudNoiseWarpStrength`).*
+
+- **`src/dxvk/shaders/rtx/pass/common_binding_indices.h`** — upstream-touched, inline tweak (~12 LOC).
+  *Adds `BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT 215` next to the other fork atmosphere bindings and appends `TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)` to `COMMON_RAYTRACING_BINDINGS`.*
+
+- **`src/dxvk/shaders/rtx/pass/common_bindings.slangh`** — upstream-touched, inline tweak (~10 LOC).
+  *Declares `Texture2D<float4> AtmosphereCloudSecondaryLut` at the new binding, alongside the other fork atmosphere declarations.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds `RTX_OPTION("rtx.atmosphere", bool, cloudSecondaryLutEnable, true, …)` directly before the C5 `cloudRenderRTEnable`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned additions.
+  *`CloudSecondaryLutShader` class, `m_cloudSecondaryLut` resource (256×128 RGBA16F) + `getCloudSecondaryLut()` accessor + `kCloudSecondaryLut*` constants, `dispatchCloudSecondaryLut` (per-frame, after the voxel-grid bakes behind the existing write→read barrier, gated on the option), `getAtmosphereArgs` populates the gate from RtxOptions, and `bindResources` binds the new slot.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
+  *`fork_hooks::bindAtmosphereLuts` binds the LUT at `BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT`; adds the "Fast Cloud Reflections" checkbox to the Clouds ImGui tree.*
+
+---

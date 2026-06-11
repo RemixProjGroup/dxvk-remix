@@ -309,7 +309,12 @@ struct AtmosphereArgs {
   // this gate — the cloud RT is at primary-ray pixel coords, sampling it for
   // a different ray direction at the same pixel would return the wrong cloud.
   uint  cloudRenderRTEnable;       // 0 or 1
-  uint  pad_c5_0;                  // 16-byte alignment
+  // Secondary-ray cloud LUT gate (fork — 2026-06-10, perf). When 1, the
+  // non-primary branch in evalSkyRadiance samples the per-frame
+  // AtmosphereCloudSecondaryLut dome instead of running the analytical
+  // evalClouds march per ray. 0 = legacy per-ray march (A/B switch).
+  // Reuses the former pad_c5_0 slot, so the CB layout is unchanged.
+  uint  cloudSecondaryLutEnable;   // 0 or 1
   uint  pad_c5_1;
   uint  pad_c5_2;
 

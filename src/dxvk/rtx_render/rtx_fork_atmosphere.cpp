@@ -193,6 +193,7 @@ namespace fork_hooks {
     auto cloudDSun                = ctx.m_atmosphere->getCloudDSun();      // Fork: Nubis Cubed sun-direction optical depth grid
     auto cloudDAmbient            = ctx.m_atmosphere->getCloudDAmbient();  // Fork: Nubis Cubed zenith optical depth grid
     auto cloudRenderRT            = ctx.m_atmosphere->getCloudRenderRT();  // Fork: Nubis Cubed screen-space cloud render (C4)
+    auto cloudSecondaryLut        = ctx.m_atmosphere->getCloudSecondaryLut();  // Fork: secondary-ray cloud dome LUT (perf, 2026-06-10)
 
     // Always bind the LUTs (they're declared in shaders unconditionally)
     if (transmittanceLut.isValid()) {
@@ -221,6 +222,9 @@ namespace fork_hooks {
     }
     if (cloudRenderRT.isValid()) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_RENDER_RT, cloudRenderRT.view, nullptr);
+    }
+    if (cloudSecondaryLut.isValid()) {
+      ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT, cloudSecondaryLut.view, nullptr);
     }
 
     // Cloud history (fork). Allocate at the current downscaled render extent
@@ -968,6 +972,13 @@ namespace fork_hooks {
       // cleanup commit + cloud-settings-audit memory.
       if (ImGui::TreeNode("Clouds")) {
         RemixGui::Checkbox("Enable Clouds", &RtxOptions::cloudEnabledObject());
+        RemixGui::Checkbox("Fast Cloud Reflections", &RtxOptions::cloudSecondaryLutEnableObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Reflections and indirect light sample a small per-frame cloud "
+            "lookup table instead of re-marching the cloud volume per ray. "
+            "Large performance win on cloudy skies; reflected clouds also "
+            "match the main sky exactly. Uncheck to restore the legacy "
+            "per-ray cloud march for comparison.");
 
         ImGui::Separator();
         ImGui::TextDisabled("Coverage & Shape");

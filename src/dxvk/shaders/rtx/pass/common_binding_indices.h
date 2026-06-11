@@ -116,6 +116,16 @@
 // the same texture.
 #define BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER 214
 
+// Secondary-ray cloud LUT (fork — 2026-06-10, perf). 256x128 RGBA16F dome
+// keyed (azimuth, elevation = (pi/2)*v^2) holding the full Nubis cloud march
+// per direction: rgb = premultiplied cloud radiance, a = view transmittance
+// (same convention as BINDING_ATMOSPHERE_CLOUD_RENDER_RT). Baked once per
+// frame by cloud_secondary_lut.comp.slang; consumed by evalSkyRadiance's
+// NON-primary branch (indirect / PSR / reflection sky-miss) in place of the
+// per-ray analytical evalClouds march. Sampled with the sky-view sampler
+// (REPEAT-U handles the azimuth seam).
+#define BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT 215
+
 #define COMMON_MAX_BINDING                       BINDING_SAMPLER_READBACK_BUFFER
 #define COMMON_NUM_BINDINGS                      (COMMON_MAX_BINDING + 1)
 
@@ -173,6 +183,7 @@
   TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_RENDER_RT)                     \
   TEXTURE3D(BINDING_ATMOSPHERE_CLOUD_D_SUN)                         \
   TEXTURE3D(BINDING_ATMOSPHERE_CLOUD_D_AMBIENT)                     \
-  SAMPLER(BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER)
+  SAMPLER(BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER)                      \
+  TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)
 
 #endif

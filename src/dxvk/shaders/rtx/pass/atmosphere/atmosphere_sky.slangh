@@ -1374,6 +1374,24 @@ vec3 evalSkyRadiance(
   if (args.cloudRenderRTEnable != 0u && isPrimaryRay) {
     vec4 cloudRT = AtmosphereCloudRender.Load(int3(pixelCoord, 0));
     cloudLayer = vec4(cloudRT.rgb, 1.0f - cloudRT.a);
+  } else if (args.cloudSecondaryLutEnable != 0u && !isPrimaryRay) {
+    // Secondary-ray cloud LUT (fork — 2026-06-10, perf). Indirect / PSR /
+    // reflection sky-miss rays read the per-frame 256x128 dome LUT baked by
+    // cloud_secondary_lut.comp.slang instead of running the full analytical
+    // evalClouds march per ray — that hidden march cost rivaled the visible
+    // cloud pass. The LUT stores the same (premultiplied rgb, TRANSMITTANCE)
+    // convention as the cloud RT above, so the same alpha reconciliation
+    // applies. Parallax from the ray origin being a surface point rather
+    // than the camera is negligible (scene-scale offsets vs km-scale cloud
+    // distances). Deliberate look change vs legacy: secondary rays now see
+    // the same Nubis Cubed clouds the primary rays see, not the legacy
+    // Wrenninge analytical approximation. Below-horizon directions clamp to
+    // the horizon row via cloudDomeDirToUv's y-clamp — downward sky-miss
+    // rays are horizon-adjacent in practice. Azimuth seam wraps via the
+    // sampler's REPEAT-U address mode.
+    vec2 domeUv = cloudDomeDirToUv(viewDirYUp);
+    vec4 lut = AtmosphereCloudSecondaryLut.SampleLevel(AtmosphereSkyViewSampler, domeUv, 0.0f);
+    cloudLayer = vec4(lut.rgb, 1.0f - lut.a);
   } else {
     cloudLayer = evalClouds(viewDirYUp, args, pixelCoord, frameIdx);
   }
