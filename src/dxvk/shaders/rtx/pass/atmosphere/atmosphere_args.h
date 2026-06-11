@@ -197,9 +197,7 @@ struct AtmosphereArgs {
                                           // single periodic tap. Reuses the former padCloudLook0 slot;
                                           // CB layout unchanged.
   float cloudNoiseBaseFreqScale;          // Bake base/detail FBM frequency multiplier (fork —
-                                          // 2026-06-11, stage B). 1.0 = legacy bake. Raised during
-                                          // the anti-tile-warp walk-down to fold the warp's
-                                          // frequency-multiplying Jacobian into the bake. Re-bakes
+                                          // 2026-06-11, stage B). 1.0 = legacy bake. Re-bakes
                                           // the noise volume live on change. Reuses the former
                                           // padCloudLook1 slot; CB layout unchanged.
   float padCloudLook2;
@@ -259,9 +257,9 @@ struct AtmosphereArgs {
   // (skyAmbientStrength = 0 means the feature is off by default).
   float cloudSkyAmbientStrength;                 // Overall multiplier on the sky-ambient term [0..3]. 0 = feature off.
   float cloudSkyAmbientCloudOcclusionStrength;   // Strength of cloud occlusion of sky ambient [0..1]. 1 = physical.
-  float cloudNoiseWarpStrength;  // Anti-tiling domain-warp amplitude as a fraction of
-                                 // cloudNoiseTileKm (0 = off). Reuses the former padCloudC2
-                                 // slot, so the constant-buffer layout is unchanged.
+  float padCloudC2;              // Former cloudNoiseWarpStrength (anti-tile domain warp,
+                                 // removed 2026-06-11 — hex de-tiling made it dead code).
+                                 // Kept as padding so the constant-buffer layout is unchanged.
 
   // ----- Cloud voxel grid (Nubis Cubed 2023, fork — 2026-05-12) -----
   // 256x256x32 R16F precomputed grids storing summed optical depth along the
@@ -276,7 +274,7 @@ struct AtmosphereArgs {
   uint  cloudVoxelGridSunDirty;     // 1 when D_sun was (re)baked this frame
   uint  cloudVoxelGridAmbientDirty; // 1 when D_ambient was (re)baked this frame
   // The three fields below reuse the former pad_cloudVoxel0..2 slots so the
-  // constant-buffer layout is unchanged (same pattern as cloudNoiseWarpStrength).
+  // constant-buffer layout is unchanged.
   float cloudBottomDarkening;       // [0,1] how dark the cloud base gets vs the top (multi-scatter + ambient)
   float cloudBottomDarkeningHeight; // (0,1] slab height fraction at which the gradient reaches full brightness
   float cloudDetailStrength;        // [0,1] edge detail erosion strength (0 = off)

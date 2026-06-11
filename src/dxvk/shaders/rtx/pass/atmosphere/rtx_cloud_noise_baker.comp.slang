@@ -86,10 +86,7 @@ void main(uint3 threadId : SV_DispatchThreadID) {
   // tile values, with min 2 to avoid a degenerate single-cell period.
   // Base-frequency scale (fork — 2026-06-11, de-tile rework stage B).
   // Multiplies the base AND detail FBM frequencies together (preserving
-  // their 4x ratio) so the warp walk-down can fold the anti-tile warp's
-  // ~2x frequency-multiplying Jacobian into the bake itself: as
-  // cloudNoiseWarpStrength comes down, raising this restores the shredded
-  // feature size the look was calibrated against. 1.0 = legacy bake
+  // their 4x ratio) to control cloud feature size. 1.0 = legacy bake
   // (bit-identical). Re-bakes live via the needsCloudNoiseRebake gate.
   float freqScale = clamp(args.cloudNoiseBaseFreqScale, 0.25f, 4.0f);
   float baseFreq   = 0.5f * freqScale;

@@ -1505,34 +1505,6 @@ float perlinNoise3D(vec3 p) {
   return mix(nxy0, nxy1, f.z);
 }
 
-// 2D Perlin gradient noise (fork — 2026-06-10, warp-cost optimization).
-// 4 corners instead of 8 and a branch-free gradient pick instead of the
-// 12-way compare chain — roughly 2.5x cheaper than evaluating a constant-z
-// plane of perlinNoise3D, which is all the anti-tile warp ever did. Output
-// range approximately [-1, 1]. NOTE: gradients are unit-length vs the 3D
-// version's sqrt(2)-magnitude edge gradients, so per-octave amplitude runs
-// ~20-30% lower — compensated at the call site (kWarp2DGain) so the warp's
-// Jacobian shred strength matches the validated 3D-octave field.
-vec2 perlinGradient2D(vec2 ip) {
-  // 8 directions at 45-degree steps, picked branch-free from the hash.
-  float angle = hash31(vec3(ip, 0.0f)) * 8.0f;
-  float a = floor(angle) * (kPi / 4.0f);
-  return vec2(cos(a), sin(a));
-}
-
-float perlinNoise2D(vec2 p) {
-  vec2 pi = floor(p);
-  vec2 pf = p - pi;
-  vec2 f  = pf * pf * (3.0f - 2.0f * pf); // cubic-Hermite fade
-
-  float n00 = dot(perlinGradient2D(pi + vec2(0.0f, 0.0f)), pf - vec2(0.0f, 0.0f));
-  float n10 = dot(perlinGradient2D(pi + vec2(1.0f, 0.0f)), pf - vec2(1.0f, 0.0f));
-  float n01 = dot(perlinGradient2D(pi + vec2(0.0f, 1.0f)), pf - vec2(0.0f, 1.0f));
-  float n11 = dot(perlinGradient2D(pi + vec2(1.0f, 1.0f)), pf - vec2(1.0f, 1.0f));
-
-  return mix(mix(n00, n10, f.x), mix(n01, n11, f.x), f.y);
-}
-
 // 3D Perlin FBM. Mirrors fbmNoise2D's octave-loop shape (lacunarity 2.0,
 // gain 0.5, 6-octave cap, no amplitude normalization, per-octave seed
 // stride 17.31) but uses the gradient-noise primitive perlinNoise3D rather
@@ -1767,10 +1739,10 @@ float sampleTricubicBSpline(Texture3D<float> tex, SamplerState s,
 // Stochastic hex-tiling of the cloud noise volume (fork — 2026-06-11,
 // de-tile rework stage A).
 //
-// Root-cause fix for the periodic repeat of the prebaked volume: instead of
-// hiding the repetition behind the anti-tile domain warp, the horizontal
-// plane is partitioned into an equilateral-triangle lattice (~1.6 tiles per
-// edge) and each lattice vertex carries a random texture-space XZ offset.
+// Root-cause fix for the periodic repeat of the prebaked volume: the
+// horizontal plane is partitioned into an equilateral-triangle lattice
+// (~1.6 tiles per edge) and each lattice vertex carries a random
+// texture-space XZ offset.
 // A sample blends the volume taps of its triangle's three vertices with
 // barycentric weights using Heitz & Neyret 2018's variance-preserving
 // operator:
@@ -1794,9 +1766,9 @@ float sampleTricubicBSpline(Texture3D<float> tex, SamplerState s,
 // phase with the texture), and phi is the "most irrational" choice, so
 // lattice-vs-tile resonance is minimized at every tile value.
 //
-// Stage A ships this alongside the (unchanged) anti-tile warp; stage B
-// walks the warp down with bake-frequency compensation once de-tiling is
-// validated. See the cloud-detile-rework plan notes.
+// This replaced the former anti-tile domain warp (a horizontal sample
+// displacement that hid the repeat), which was removed once de-tiling was
+// validated in-game. See the cloud-detile-rework plan notes.
 // ===========================================================================
 struct CloudHexTile {
   float w1, w2, w3;        // sharpened, normalized blend weights (w1 largest)
@@ -1877,62 +1849,6 @@ float sampleCloudNoiseHexBlend(CloudHexTile hex, vec3 texcoord,
         + hex.w3 * (x3 - kCloudNoiseFieldMean)) / max(norm, 1e-4f);
 }
 
-// Anti-tiling domain warp (fork). The prebaked cloud noise is periodic at
-// cloudNoiseTileKm, so at small tiles the periodic repeat telescopes into
-// visible horizontal layers toward the horizon — the residual that remains
-// after the runtime re-bake fix. Displace the HORIZONTAL sample position by a
-// low-frequency, NON-tiling offset whose wavelength spans several tiles, so
-// two world positions one tile apart no longer sample identical texels and the
-// repeat dissolves into organic variation. Amplitude is a fraction of the tile
-// (args.cloudNoiseWarpStrength) so it scales with the knob; 0 disables. Y is
-// left unwarped so the altitude / height-profile mapping stays intact. Applied
-// identically in the full runtime sampler and the cheap voxel-bake sampler so
-// the density and its baked self-shadows agree.
-// Offset-form evaluator (fork — 2026-06-10, warp-cost optimization). Returns
-// the horizontal warp displacement in km. Split from the inout-apply form so
-// the D_sun / D_ambient bake integrals can compute it ONCE per ray and reuse
-// it across their 8 taps: the warp's shortest wavelength is ~2.1 tiles
-// (~25 km at the 12 km default) while a bake ray spans at most a few km, so
-// the per-tap variation is sub-percent of a wavelength — far below anything
-// visible in a smoothed occlusion proxy. The warp FIELD itself is unchanged
-// (same perlinNoise3D octaves, same seeds) — only where it gets evaluated
-// moved.
-vec2 computeCloudNoiseWarpOffsetKm(vec2 hzKm, AtmosphereArgs args) {
-  if (args.cloudNoiseWarpStrength <= 0.0f) {
-    return vec2(0.0f);
-  }
-  // Two-octave fractal warp. A single smooth wave only decorrelates repeats at
-  // one spacing — adjacent horizon repeats get shoved by nearly the same amount,
-  // leaving a faint residual no matter the amplitude. Two octaves at NON-integer
-  // tile multiples break the periodicity across scales: the long octave
-  // (~5.3 tiles) scrambles large structure; the short octave (~2.1 tiles, near a
-  // half-period-per-tile offset) lands adjacent repeats out of phase. Non-integer
-  // multiples matter — a wavelength that's an integer multiple of the tile would
-  // itself repeat at the tile period and re-introduce banding.
-  const float kWarp1Tiles = 5.3f;  // large-scale break
-  const float kWarp2Tiles = 2.1f;  // adjacent-repeat break
-  float inv1 = 1.0f / max(args.cloudNoiseTileKm * kWarp1Tiles, 1e-3f);
-  float inv2 = 1.0f / max(args.cloudNoiseTileKm * kWarp2Tiles, 1e-3f);
-  // 2D-perlin octaves (fork — 2026-06-10, ~2.5x cheaper than the former
-  // constant-z perlinNoise3D planes). The large constant lattice offsets
-  // decorrelate the four fields, standing in for the old z-plane seeds.
-  // kWarp2DGain compensates the unit-length 2D gradients vs the 3D
-  // version's sqrt(2) edge gradients so the displacement amplitude — and
-  // with it the Jacobian shred the cloud look is calibrated against —
-  // stays at the validated strength.
-  const float kWarp2DGain = 1.4f;
-  float wx = perlinNoise2D(hzKm * inv1)                      + 0.5f * perlinNoise2D(hzKm * inv2 + vec2(23.7f, 89.2f));
-  float wz = perlinNoise2D(hzKm * inv1 + vec2(11.3f, 47.9f)) + 0.5f * perlinNoise2D(hzKm * inv2 + vec2(31.1f, 71.4f));
-  float ampKm = args.cloudNoiseWarpStrength * args.cloudNoiseTileKm * kWarp2DGain;
-  return vec2(wx, wz) * ampKm;
-}
-
-void applyCloudNoiseAntiTileWarp(inout vec3 perturbed, AtmosphereArgs args) {
-  vec2 offsetKm = computeCloudNoiseWarpOffsetKm(vec2(perturbed.x, perturbed.z), args);
-  perturbed.x += offsetKm.x;
-  perturbed.z += offsetKm.y;
-}
-
 // Stage C replacement for sampleCloudDensity AND sampleCloudDensityShadow.
 // Reads a tricubic sample of the prebaked 3D Perlin FBM, layers a small
 // per-frame analytic detail FBM for shape-jitter, and applies the same
@@ -1979,10 +1895,6 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   //    than in this helper's contract.
   vec3 windOffset = vec3(args.cloudWindOffset.x, 0.0f, args.cloudWindOffset.y);
   vec3 perturbed  = worldPosKm + windOffset;
-
-  // 1b. Anti-tiling domain warp (fork) — dissolve the periodic repeat at small
-  //     tiles before the texcoord wrap below reads it as horizontal layers.
-  applyCloudNoiseAntiTileWarp(perturbed, args);
 
   // 2. World-pos -> texcoord. ISOTROPIC mapping: all three axes use the same
   //    cloudNoiseTileKm period. The previous slabAlt-relative Y mapping
@@ -2157,19 +2069,10 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
 // variant, but trilinear-only and no per-frame analytical detail (this is
 // the cheap variant used by voxel grid bakes). Voxel grid bakers always
 // invoke the layer-1 wrapper below — the grids only cover the primary slab.
-//
-// warpOffsetKm (fork — 2026-06-10, warp-cost optimization): the anti-tile
-// warp displacement, PRECOMPUTED BY THE CALLER via
-// computeCloudNoiseWarpOffsetKm. The bake integrals march 8 taps along a
-// ray spanning at most a few km, while the warp field's shortest wavelength
-// is ~25 km — recomputing the warp per tap (4 perlin evals each) was pure
-// waste and dominated the per-frame voxel-grid bake cost. Callers compute
-// the offset once at the ray start and pass it to every tap.
 float sampleCloudDensityForShadow(vec3 worldPosKm,
                                    float heightFraction,
                                    float typeLocal,
                                    float coverageLocal,
-                                   vec2 warpOffsetKm,
                                    float slabAltitudeKm,
                                    float slabThicknessKm,
                                    float densityScale,
@@ -2178,12 +2081,6 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
                                    SamplerState cloudSampler) {
   vec3 windOffset = vec3(args.cloudWindOffset.x, 0.0f, args.cloudWindOffset.y);
   vec3 perturbed  = worldPosKm + windOffset;
-
-  // Anti-tiling domain warp (fork) — same field as the full sampler so the
-  // baked self-shadows track the warped density the runtime shows, applied
-  // from the caller-precomputed offset (see header comment).
-  perturbed.x += warpOffsetKm.x;
-  perturbed.z += warpOffsetKm.y;
 
   // Isotropic Y texcoord — see the long comment in sampleCloudDensityTextured
   // above. Same fix applies here: voxel grid bakes need to see the same 3D
@@ -2250,18 +2147,15 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
 }
 
 // Args-default overload — preserves layer-1 behavior for the voxel grid
-// bakers and any future shadow callers. warpOffsetKm is the caller-hoisted
-// anti-tile warp displacement (see the slab overload's header comment).
+// bakers and any future shadow callers.
 float sampleCloudDensityForShadow(vec3 worldPosKm,
                                    float heightFraction,
                                    float typeLocal,
                                    float coverageLocal,
-                                   vec2 warpOffsetKm,
                                    AtmosphereArgs args,
                                    Texture3D<float> cloudNoise3D,
                                    SamplerState cloudSampler) {
   return sampleCloudDensityForShadow(worldPosKm, heightFraction, typeLocal, coverageLocal,
-                                      warpOffsetKm,
                                       args.cloudAltitude, args.cloudThickness, 1.0f,
                                       args, cloudNoise3D, cloudSampler);
 }
@@ -2387,21 +2281,12 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
   float typeLocal     = saturate(args.cloudTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
   float coverageLocal = saturate(args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 
-  // Anti-tile warp hoisted to once per ray (fork — 2026-06-10): the 8 taps
-  // span at most a few km while the warp's shortest wavelength is ~25 km,
-  // so the per-tap offset is effectively constant. Same single-position
-  // reuse rationale as the coverage/type sample above. Input matches the
-  // sampler's internal convention (world + wind, horizontal components).
-  vec2 warpOffsetKm = computeCloudNoiseWarpOffsetKm(
-      vec2(worldPosYUpKm.x + args.cloudWindOffset.x,
-           worldPosYUpKm.z + args.cloudWindOffset.y), args);
-
   [unroll]
   for (int i = 0; i < kSamples; ++i) {
     vec3 samplePos = worldPosYUpKm + (float(i) + 0.5f) * stepLen * sunDirYUp;
     float hf = computeCloudHeightFraction(samplePos, args);
     float density = sampleCloudDensityForShadow(samplePos, hf,
-                                                 typeLocal, coverageLocal, warpOffsetKm,
+                                                 typeLocal, coverageLocal,
                                                  args, cloudNoise3D, cloudSampler);
     opticalDepth += density * stepLen;
   }
@@ -2437,19 +2322,12 @@ float sampleCloudAmbientOpticalDepthAtWorld(vec3 worldPosYUpKm,
   float typeLocal     = saturate(args.cloudTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
   float coverageLocal = saturate(args.cloudCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 
-  // Anti-tile warp hoisted to once per ray (fork — 2026-06-10). The zenith
-  // march doesn't move horizontally at all, so the warp input is IDENTICAL
-  // for every tap — once per ray is exact here, not even an approximation.
-  vec2 warpOffsetKm = computeCloudNoiseWarpOffsetKm(
-      vec2(worldPosYUpKm.x + args.cloudWindOffset.x,
-           worldPosYUpKm.z + args.cloudWindOffset.y), args);
-
   [unroll]
   for (int i = 0; i < kSamples; ++i) {
     vec3 samplePos = worldPosYUpKm + vec3(0.0f, (float(i) + 0.5f) * stepLen, 0.0f);
     float hf = computeCloudHeightFraction(samplePos, args);
     float density = sampleCloudDensityForShadow(samplePos, hf,
-                                                 typeLocal, coverageLocal, warpOffsetKm,
+                                                 typeLocal, coverageLocal,
                                                  args, cloudNoise3D, cloudSampler);
     opticalDepth += density * stepLen;
   }

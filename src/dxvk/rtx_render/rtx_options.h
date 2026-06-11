@@ -1535,42 +1535,23 @@ namespace dxvk {
                "World-space tile period (km) for the prebaked 3D cloud noise texture. "
                "Smaller = more visible repetition; larger = lower-frequency cloud detail. "
                "Default 12.0; viable range 6-24. Re-bakes the cloud noise volume live on change.");
-    // Hex de-tiling (fork — 2026-06-11, de-tile rework stage A). Root-cause
-    // fix for the prebaked noise volume's periodic repeat: a stochastic
+    // Hex de-tiling (fork — 2026-06-11, de-tile rework). Root-cause fix for
+    // the prebaked noise volume's periodic repeat: a stochastic
     // triangle-lattice randomization (Heitz & Neyret 2018 variance-preserving
     // blending) destroys the tile period at the source while preserving the
-    // field's statistics. Ships alongside the (unchanged) anti-tile warp;
-    // stage B walks the warp down with bake-frequency compensation once this
-    // is validated in-game.
+    // field's statistics. Replaced the former anti-tile domain warp
+    // (cloudNoiseWarpStrength), removed once this was validated in-game.
     RTX_OPTION("rtx.atmosphere", bool, cloudHexTilingEnable, true,
                "Stochastically randomize the cloud noise tiling on a "
                "triangle lattice so the 12 km texture repeat can never "
                "show, with statistics-preserving blending (the cloud look "
                "is unchanged). Disable for the legacy periodic field "
-               "(repetition hidden only by the anti-tile warp).");
-    // De-tile rework stage B (fork — 2026-06-11): bake-frequency
-    // compensation for the anti-tile-warp walk-down. The warp's Jacobian
-    // multiplies the field's horizontal frequency 2-3x; the tuned look
-    // depends on that shred, so the warp can only come down if equivalent
-    // frequency content is folded into the bake itself.
+               "(visible repetition at the tile period).");
     RTX_OPTION("rtx.atmosphere", float, cloudNoiseBaseFreqScale, 1.0f,
                "Multiplier on the cloud noise bake's base + detail FBM "
-               "frequencies [0.25..4]. 1.0 = legacy bake (validated default "
-               "with the warp retired). Raise for smaller/busier cloud "
-               "features, lower for larger ones. Re-bakes the noise volume "
-               "live on change.");
-    // De-tile rework complete (fork — 2026-06-11): with hex-tiling fixing the
-    // repeat at the source, the warp was walked down in-game and validated at 0
-    // with the bake frequency left at 1.0 — no compensation needed. Default is
-    // now 0 (also refunds 4 perlin2D evals per march sample via the early-out);
-    // the knob remains as an optional organic-distortion effect.
-    RTX_OPTION("rtx.atmosphere", float, cloudNoiseWarpStrength, 0.0f,
-               "Domain-warp strength, as a fraction of cloudNoiseTileKm. "
-               "Displaces the horizontal cloud-noise sample position by a low-frequency "
-               "non-tiling offset, distorting cloud shapes organically. 0 = off "
-               "(default). Historically this hid the noise texture's periodic repeat; "
-               "cloudHexTilingEnable now solves that at the source, so the warp is "
-               "purely a look knob. Applied live (no re-bake needed).");
+               "frequencies [0.25..4]. 1.0 = legacy bake. Raise for "
+               "smaller/busier cloud features, lower for larger ones. "
+               "Re-bakes the noise volume live on change.");
 
     // Edge detail erosion (fork — 2026-06-10). Concentrates high-frequency
     // detail at cloud edges: a second, higher-frequency tap of the prebaked

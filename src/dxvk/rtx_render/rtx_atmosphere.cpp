@@ -522,7 +522,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // physical cloud occlusion when the feature is enabled.
     args.cloudSkyAmbientStrength = RtxOptions::cloudSkyAmbientStrength();
     args.cloudSkyAmbientCloudOcclusionStrength = RtxOptions::cloudSkyAmbientCloudOcclusionStrength();
-    args.cloudNoiseWarpStrength = RtxOptions::cloudNoiseWarpStrength();
+    args.padCloudC2 = 0.0f;
 
     // Cloud voxel grid extent (Nubis Cubed 2023, fork — 2026-05-12).
     // Horizontal: track cloudNoiseTileKm so the grid's frac-wrap stays aligned

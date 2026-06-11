@@ -1645,3 +1645,28 @@ The in-game warp walk-down validated cleanly at warp **0** with the bake frequen
   *`cloudNoiseWarpStrength` default 0.75 → 0.0; doc strings for it and `cloudNoiseBaseFreqScale` updated to describe the post-retirement roles (warp = optional look knob, hex-tiling owns de-tiling).*
 
 ---
+
+## Workstream — Anti-tile warp removal (fork — 2026-06-11)
+
+Follow-up to the stage B landing: with the warp retired at 0 and hex de-tiling user-validated as the root-cause fix, the entire warp implementation is dead code and is removed. All deleted code was fork-owned; no upstream lines return.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned removal.
+  *Deletes `perlinGradient2D` / `perlinNoise2D` (warp-only helpers), `computeCloudNoiseWarpOffsetKm` / `applyCloudNoiseAntiTileWarp`, the warp call in `sampleCloudDensityTextured`, the `warpOffsetKm` parameter from both `sampleCloudDensityForShadow` overloads, and the per-ray warp hoists in the D_sun / D_ambient bake integrals.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`cloudNoiseWarpStrength` reverts to padding (`padCloudC2`, its original slot) — CB layout unchanged.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned removal.
+  *Drops the `cloudNoiseWarpStrength` RTX_OPTION; `cloudHexTilingEnable` / `cloudNoiseBaseFreqScale` doc strings scrubbed of warp pairing references.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs` zeroes `padCloudC2` instead of populating the warp strength.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned removal.
+  *Drops the "Anti-Tile Warp" slider from the Clouds ImGui tree; "Seamless Cloud Field" / "Noise Frequency" tooltips scrubbed of warp references.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/rtx_cloud_noise_baker.comp.slang`** — comment-only cleanup (walk-down rationale removed).
+
+Note: `rtx.atmosphere.cloudNoiseWarpStrength` lines in existing user confs become unknown-option no-ops after this change.
+
+---

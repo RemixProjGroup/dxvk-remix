@@ -1032,27 +1032,18 @@ namespace fork_hooks {
             "World-space tile size for the 3D cloud noise. Smaller = visible "
             "repetition; larger = lower-frequency detail. Re-bakes the noise "
             "volume live on change.");
-        RemixGui::DragFloat("Anti-Tile Warp", &RtxOptions::cloudNoiseWarpStrengthObject(),
-                            0.01f, 0.0f, 1.5f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Anti-tiling domain warp, as a fraction of Texture Scale. Breaks the "
-            "noise's periodic repeat so it stops reading as horizontal layers "
-            "toward the horizon at small tile sizes. 0 = off, 0.75 default. "
-            "Too high smears cloud shapes. Applies live.");
         RemixGui::Checkbox("Seamless Cloud Field", &RtxOptions::cloudHexTilingEnableObject());
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Randomizes the cloud noise tiling on a triangle lattice so the "
             "texture repeat can never show, while preserving the cloud look. "
-            "Fixes tiling at the source (the Anti-Tile Warp only hides it). "
             "Uncheck for the legacy periodic field. Applies live.");
         RemixGui::DragFloat("Noise Frequency", &RtxOptions::cloudNoiseBaseFreqScaleObject(),
                             0.01f, 0.25f, 4.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Multiplier on the baked cloud noise frequency. 1.0 = current "
-            "look. Pair with the Anti-Tile Warp slider: as you lower the "
-            "warp, raise this toward 1.5-2.5 to keep cloud features the "
-            "same size (the warp secretly shrinks them). Re-bakes the "
-            "noise volume live as you drag (brief hitch per change).");
+            "look. Raise for smaller/busier cloud features, lower for "
+            "larger ones. Re-bakes the noise volume live as you drag "
+            "(brief hitch per change).");
         RemixGui::DragFloat("Edge Detail", &RtxOptions::cloudDetailStrengthObject(),
                             0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
