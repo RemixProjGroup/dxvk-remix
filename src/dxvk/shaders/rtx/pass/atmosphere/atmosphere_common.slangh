@@ -2011,7 +2011,8 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
                                  Texture3D<float> cloudNoise3D,
                                  SamplerState cloudSampler,
                                  Texture2D<float4> placementMap,
-                                 out float shapeHeightFraction) {
+                                 out float shapeHeightFraction,
+                                 out float columnSpan) {
   // shapeHeightFraction (fork — 2026-06-11, column-shaping rework): the
   // height fraction all vertical SHAPING and LIGHTING should key on. Legacy
   // mode: the slab-relative input unchanged. Column mode: re-normalized to
@@ -2019,7 +2020,15 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   // rise/bulk/top profile at its own altitude. Callers feed it to
   // evalNubisCubedSample so the dim profile / bottom darkening track each
   // cloud rather than painting global altitude bands across the sky.
+  //
+  // columnSpan (rev 2 — 2026-06-12): this column's vertical extent as a
+  // fraction of the slab (topFrac - baseFrac); 1.0 in legacy mode. Feeds the
+  // per-column underside-brightness modulation in evalNubisCubedSample —
+  // thick columns darken their base fully, thin columns stay bright
+  // (transmitted-light cue), which gives the deck underside km-scale
+  // cellular relief instead of one flat-lit sheet.
   shapeHeightFraction = heightFraction;
+  columnSpan = 1.0f;
 
   // 1. Wind perturbation (translation only — texture is tilable).
   //    The legacy analytic sampler applied a height-dependent shear on top of
@@ -2076,6 +2085,7 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
     }
     shapeHeightFraction = saturate((heightFraction - col.baseFrac)
                                    / max(col.topFrac - col.baseFrac, 1e-3f));
+    columnSpan = saturate(col.topFrac - col.baseFrac);
     gateCoverage = col.presence;
   }
 
@@ -2199,9 +2209,9 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   return saturate(density) * densityScale;
 }
 
-// Slab-parametric convenience overload without the shapeHeightFraction out
-// param — for callers (shadow taps, optical-depth marches) that don't need
-// the per-cloud height back.
+// Slab-parametric convenience overload without the shape out params — for
+// callers (shadow taps, optical-depth marches) that don't need the per-cloud
+// height or column span back.
 float sampleCloudDensityTextured(vec3 worldPosKm,
                                  float heightFraction,
                                  float typeLocal,
@@ -2214,10 +2224,11 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
                                  SamplerState cloudSampler,
                                  Texture2D<float4> placementMap) {
   float shapeHfUnused;
+  float columnSpanUnused;
   return sampleCloudDensityTextured(worldPosKm, heightFraction, typeLocal, coverageLocal,
                                      slabAltitudeKm, slabThicknessKm, densityScale,
                                      args, cloudNoise3D, cloudSampler, placementMap,
-                                     shapeHfUnused);
+                                     shapeHfUnused, columnSpanUnused);
 }
 
 // Args-default overload — preserves the layer-1 behavior every existing
@@ -2678,8 +2689,16 @@ struct NubisCubedLighting {
 //
 // `isZUp` is forwarded to sampleDSun / sampleDAmbient — pass false when
 // samplePos is already in Y-up space (the cloud math's standard convention).
+//
+// `columnSpan` (fork — 2026-06-12, column-shaping rev 2): the sample's
+// column vertical extent as a slab fraction (from the density sampler's out
+// param; 1.0 in legacy mode). Modulates the bottom-darkening amount so the
+// underside brightness follows per-column water depth — see the
+// bottomGradient comment below. Pass 1.0 to reproduce the uniform legacy
+// darkening exactly.
 NubisCubedLighting evalNubisCubedSample(
     vec3 samplePos, float heightFraction, float density,
+    float columnSpan,
     vec3 viewDir, vec3 sunDir,
     vec3 sunRadiance, vec3 skyRadianceWarm, vec3 skyRadianceCool,
     AtmosphereArgs args, bool isZUp) {
@@ -2713,7 +2732,23 @@ NubisCubedLighting evalNubisCubedSample(
   // cloudBottomDarkeningHeight. T_primary (the directly-shadowed sun beam)
   // is deliberately left out so backlit silver linings survive untouched.
   // cloudBottomDarkening = 0 restores the paper baseline bit-for-bit.
-  float bottomGradient = mix(1.0f - args.cloudBottomDarkening, 1.0f,
+  //
+  // Per-column underside contrast (fork — 2026-06-12, column-shaping
+  // rev 2). A CONSTANT darkening amount paints the entire deck underside
+  // one flat brightness — with the dominant M term otherwise near-uniform,
+  // an overcast base renders as a single flat-lit sheet and the eye reads
+  // it as a 2D layer. Real deck undersides carry km-scale cellular
+  // relief because base brightness follows per-column water depth: thick
+  // columns occlude the down-welling light (dark bases), thin columns
+  // transmit it (bright bases). Scale the darkening amount by the column
+  // span so that structure appears, driven by the SAME placement field
+  // that shapes the clouds (so it moves with wind and matches the baked
+  // shadows). cloudColumnUndersideContrast = 0 (or legacy mode's
+  // columnSpan = 1) restores the uniform gradient exactly.
+  float spanFactor = mix(1.0f, saturate(columnSpan),
+                         saturate(args.cloudColumnUndersideContrast));
+  float effBottomDarkening = args.cloudBottomDarkening * spanFactor;
+  float bottomGradient = mix(1.0f - effBottomDarkening, 1.0f,
       smoothstep(0.0f, max(args.cloudBottomDarkeningHeight, 1e-3f), heightFraction));
 
   float M = dim_profile * exp(-sigma_ms * D_sun) * bottomGradient;

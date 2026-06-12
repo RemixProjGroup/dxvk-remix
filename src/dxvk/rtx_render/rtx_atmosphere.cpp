@@ -766,7 +766,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // 2026-06-11, column-shaping rework); CB layout unchanged.
     args.cloudColumnFeather = RtxOptions::cloudColumnFeather();
     args.cameraWorldPosYUpKm = m_cameraWorldPosYUpKm;
-    args.pad_c6_1 = 0.0f;
+    // Per-column underside contrast riding the former pad_c6_1 slot (fork —
+    // 2026-06-12, column-shaping rev 2); CB layout unchanged.
+    args.cloudColumnUndersideContrast = RtxOptions::cloudColumnUndersideContrast();
   }
 
   // Cloud Height LUT + two-layer cloud map (slides 1 + 3 lift, fork — 2026-05-15).

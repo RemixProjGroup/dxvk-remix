@@ -1831,3 +1831,27 @@ Root-cause rework of the "stacked separated layers" read that made the volumetri
   *`bindAtmosphereLuts` binds the placement map at the common slot; new "Cloud Columns" ImGui group (Volumetric Cloud Columns checkbox + Cloud Cell Size / Top Variation / Top Shape / Base Undulation / Edge Feather sliders); Vertical Stretch tooltip notes columns supersede it.*
 
 ---
+
+## Workstream — Per-column underside contrast (column-shaping rev 2) (fork — 2026-06-12)
+
+First in-game pass on the column model reported a residual "layered" read on the overcast underside. Diagnosis: the deck base's dominant light is the Nubis multi-scatter M term, which is horizontally near-uniform at production settings (sigma_ms is tiny so exp(-sigma_ms·D_sun) ≈ 1; the bottom-darkening gradient is a pure function of height) — so the underside renders as one flat-lit sheet with only fine erosion lace on top: a dark lace plane over a bright plane reads as two stacked 2D layers. Real deck undersides carry km-scale cellular relief because base brightness follows per-column water depth (thick columns occlude downwelling light, thin columns transmit it). The fix scales the bottom-darkening amount by each sample's column span (already derived by the column model), so the underside brightness is driven by the same placement field that shapes the clouds — moving with wind, matching the baked shadows.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned changes.
+  *`sampleCloudDensityTextured`'s primary overload gains an `out float columnSpan` (topFrac − baseFrac; 1.0 legacy); `evalNubisCubedSample` gains a `columnSpan` parameter and scales `cloudBottomDarkening` by `mix(1, span, cloudColumnUndersideContrast)` before building the bottom gradient. Contrast 0 or span 1 reproduce the uniform legacy darkening exactly.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned change.
+  *`marchCloudSlab` threads the span from the density sampler into the lighting call.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Repurposes `pad_c6_1` → `cloudColumnUndersideContrast`. No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *`RTX_OPTION("rtx.atmosphere", float, cloudColumnUndersideContrast, 0.65f, …)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs` fills the new field (replacing the pad zero-write).*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *"Underside Contrast" DragFloat in the Cloud Columns ImGui group.*
+
+---

@@ -1593,6 +1593,13 @@ namespace dxvk {
                "Coverage-remap feather band at cloud-cluster edges "
                "[0.05..1]. Narrow = crisp solid-cored clouds; wide = soft "
                "wispy transitions. Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, cloudColumnUndersideContrast, 0.65f,
+               "How strongly per-cloud thickness shows on the deck "
+               "underside [0..1]: thick columns get dark bases, thin "
+               "columns stay bright (transmitted light) — the km-scale "
+               "cellular relief that keeps an overcast base from reading "
+               "as one flat-lit sheet. 0 = uniform legacy bottom "
+               "darkening. Applies live.");
 
     // Edge detail erosion (fork — 2026-06-10). Concentrates high-frequency
     // detail at cloud edges: a second, higher-frequency tap of the prebaked

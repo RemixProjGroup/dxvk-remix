@@ -379,7 +379,12 @@ struct AtmosphereArgs {
                                    // former pad_c6_0 slot; CB layout unchanged.
 
   vec3  cameraWorldPosYUpKm;       // Camera position in Y-up km, world-absolute
-  float pad_c6_1;                  // 16-byte alignment
+  float cloudColumnUndersideContrast; // [0,1] how strongly per-column thickness modulates the
+                                   // underside (bottom-darkening) brightness — thick columns
+                                   // darken fully, thin columns stay bright (transmitted-light
+                                   // cue). 0 = legacy uniform darkening. (fork — 2026-06-12,
+                                   // column-shaping rework rev 2.) Reuses the former pad_c6_1
+                                   // slot; CB layout unchanged.
 
   // ----- Cloud Height LUT (slide 3 lift — RDR2 SIGGRAPH 2019) -----
   // Replaces the procedural cloudTypeProfile() trapezoid in

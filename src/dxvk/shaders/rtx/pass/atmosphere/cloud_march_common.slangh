@@ -404,11 +404,14 @@ void marchCloudSlab(vec3   viewDirYUp,
     // shapeHf (fork — 2026-06-11, column-shaping rework): per-cloud height
     // fraction from the density sampler — re-normalized to this column's own
     // [base, top] when column shaping is on, identical to hf when off.
+    // columnSpan (rev 2): the column's vertical extent as a slab fraction,
+    // for the per-column underside-brightness modulation in the lighting.
     float shapeHf;
+    float columnSpan;
     float density = sampleCloudDensityTextured(samplePos, hf, typeLocal, coverageLocal,
                                                 slabAltitudeKm, slabThicknessKm, slabDensityScale,
                                                 args, AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler,
-                                                AtmosphereCloudPlacementMap, shapeHf);
+                                                AtmosphereCloudPlacementMap, shapeHf, columnSpan);
     if (density < 0.001f) continue;
 
     // Nubis Cubed lighting at this sample. samplePos is already Y-up, so
@@ -426,7 +429,7 @@ void marchCloudSlab(vec3   viewDirYUp,
     // contribute attenuation toward zenith and sun direction at most, and
     // cirrus is too thin to need precomputed shadow data of its own.
     NubisCubedLighting lighting = evalNubisCubedSample(
-        samplePos, shapeHf, density,
+        samplePos, shapeHf, density, columnSpan,
         viewDirYUp, ctx.sunDirYUp, ctx.sunRadiance,
         ctx.skyRadianceWarm, ctx.skyRadianceCool,
         args, /*isZUp=*/false);

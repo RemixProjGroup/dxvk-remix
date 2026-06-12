@@ -1119,6 +1119,13 @@ namespace fork_hooks {
             "Width of the transition band at cloud-cluster edges. Narrow = "
             "crisp, solid-cored clouds with sharp gaps; wide = soft, wispy "
             "transitions between cloud and sky. Applies live.");
+        RemixGui::DragFloat("Underside Contrast", &RtxOptions::cloudColumnUndersideContrastObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "How strongly per-cloud thickness shows on the layer underside: "
+            "thick clouds get dark bases, thin ones stay bright, giving the "
+            "base of an overcast deck large-scale cellular relief instead "
+            "of one flat-lit sheet. 0 = uniform darkening. Applies live.");
 
         ImGui::Separator();
         ImGui::TextDisabled("Look");
