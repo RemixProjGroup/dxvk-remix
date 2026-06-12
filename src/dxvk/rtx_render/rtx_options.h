@@ -1553,6 +1553,47 @@ namespace dxvk {
                "smaller/busier cloud features, lower for larger ones. "
                "Re-bakes the noise volume live on change.");
 
+    // Per-column cloud model (fork — 2026-06-11, column-shaping rework).
+    // Root-cause fix for the "stacked separated layers" read: previously
+    // every vertical shaping signal (density envelope, coverage-threshold
+    // scale, anvil pow, dim profile, bottom darkening) keyed on the GLOBAL
+    // slab height fraction — one vertical recipe pinned to absolute
+    // altitude across the whole sky — while the thresholded 3D noise placed
+    // mass independently per altitude (stacked disconnected puffs in a
+    // column). The column model derives a per-column cloud base/top from a
+    // baked 2D placement map (cluster field, top jitter, base lift) and
+    // re-keys all vertical shaping + the Nubis lighting proxies on each
+    // cloud's OWN normalized height.
+    RTX_OPTION("rtx.atmosphere", bool, cloudColumnShapingEnable, true,
+               "Per-cloud column model: every cloud gets its own base, "
+               "tower height and complete vertical shape from a placement "
+               "map, instead of all clouds being cut by the same two global "
+               "altitude planes. Fixes the stacked-flat-layers read. "
+               "Disable for the legacy global-slab shaping.");
+    RTX_OPTION("rtx.atmosphere", float, cloudCellSizeKm, 2.0f,
+               "Average cloud-cluster footprint in km [0.5..6] for the "
+               "placement map bake. Smaller = many small clouds; larger = "
+               "fewer, broader banks. Re-bakes the placement map live on "
+               "change (the effective value snaps so an integer number of "
+               "clusters fits the noise tile).");
+    RTX_OPTION("rtx.atmosphere", float, cloudColumnTopVariation, 0.45f,
+               "Per-cloud tower-height jitter [0..1]. 0 = all cloud tops at "
+               "one altitude (flat deck); higher = a varied skyline. "
+               "Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, cloudColumnTopShape, 0.6f,
+               "Exponent mapping column presence to cloud-top height "
+               "[0.1..2]. Low = thin cluster edges still tower (blockier); "
+               "high = only dense cores rise (domed tops, feathered "
+               "edges). Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, cloudColumnBaseVariation, 0.12f,
+               "Max local cloud-base lift as a fraction of the layer depth "
+               "[0..0.4]. 0 = machined-flat cloud ceiling; higher = gently "
+               "undulating bases. Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, cloudColumnFeather, 0.35f,
+               "Coverage-remap feather band at cloud-cluster edges "
+               "[0.05..1]. Narrow = crisp solid-cored clouds; wide = soft "
+               "wispy transitions. Applies live.");
+
     // Edge detail erosion (fork — 2026-06-10). Concentrates high-frequency
     // detail at cloud edges: a second, higher-frequency tap of the prebaked
     // noise volume erodes the density field where it is weak (silhouettes),

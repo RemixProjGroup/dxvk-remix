@@ -36,6 +36,7 @@
 #include <rtx_shaders/cloud_render.h>
 #include <rtx_shaders/cloud_secondary_lut.h>
 #include <rtx_shaders/cloud_height_lut_baker.h>
+#include <rtx_shaders/cloud_placement_map_baker.h>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -115,6 +116,7 @@ namespace dxvk {
         RW_TEXTURE3D(1)
         TEXTURE3D(2)
         SAMPLER(3)
+        TEXTURE2D(4)
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(CloudSunDensityGridShader);
@@ -127,6 +129,7 @@ namespace dxvk {
         RW_TEXTURE3D(1)
         TEXTURE3D(2)
         SAMPLER(3)
+        TEXTURE2D(4)
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(CloudAmbientDensityGridShader);
@@ -163,6 +166,7 @@ namespace dxvk {
         SAMPLER(9)
         TEXTURE2D(10)
         SAMPLER(11)
+        TEXTURE2D(12)
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(CloudRenderShader);
@@ -189,6 +193,7 @@ namespace dxvk {
         SAMPLER(9)
         TEXTURE2D(10)
         SAMPLER(11)
+        TEXTURE2D(12)
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(CloudSecondaryLutShader);
@@ -202,10 +207,24 @@ namespace dxvk {
       SHADER_SOURCE(CloudHeightLutBakerShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_height_lut_baker)
 
       BEGIN_PARAMETER()
-        RW_TEXTURE2D(0)
+        CONSTANT_BUFFER(0)
+        RW_TEXTURE2D(1)
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(CloudHeightLutBakerShader);
+
+    // Fork (column-shaping rework, 2026-06-11): bake of the 512x512 RGBA8
+    // cloud placement map (cluster field / top jitter / base lift). At init
+    // + re-baked live when cloudCellSizeKm or cloudNoiseTileKm changes.
+    class CloudPlacementMapBakerShader : public ManagedShader {
+      SHADER_SOURCE(CloudPlacementMapBakerShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_placement_map_baker)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        RW_TEXTURE2D(1)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudPlacementMapBakerShader);
   }
 
 RtxAtmosphere::RtxAtmosphere(DxvkDevice* device)
@@ -230,7 +249,10 @@ void RtxAtmosphere::initialize(Rc<DxvkContext> ctx) {
   createLutResources(ctx);
   dispatchCloudNoise3DBake(ctx);
   cacheCloudNoiseBakeInputs();  // seed the re-bake gate with the launch-time inputs
+  dispatchCloudPlacementMapBake(ctx);
+  cacheCloudPlacementBakeInputs();
   dispatchCloudHeightLutBake(ctx);
+  m_cachedHeightLutColumnMode = RtxOptions::cloudColumnShapingEnable();
   m_initialized = true;
   m_lutsNeedRecompute = true;
 }
@@ -593,7 +615,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // Bake frequency scale (fork — 2026-06-11, stage B). Lives in the former
   // padCloudLook1 slot so the CB layout is unchanged.
   args.cloudNoiseBaseFreqScale         = RtxOptions::cloudNoiseBaseFreqScale();
-  args.padCloudLook2                   = 0.0f;
+  // Per-column cloud model gate (fork — 2026-06-11, column-shaping rework).
+  // Lives in the former padCloudLook2 slot so the CB layout is unchanged.
+  args.cloudColumnShapingEnable        = RtxOptions::cloudColumnShapingEnable() ? 1.0f : 0.0f;
 
   // Cloud parameters
   {
@@ -643,7 +667,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // physical cloud occlusion when the feature is enabled.
     args.cloudSkyAmbientStrength = RtxOptions::cloudSkyAmbientStrength();
     args.cloudSkyAmbientCloudOcclusionStrength = RtxOptions::cloudSkyAmbientCloudOcclusionStrength();
-    args.padCloudC2 = 0.0f;
+    // Cloud cluster footprint for the placement map bake (column-shaping
+    // rework). Lives in the former padCloudC2 slot; CB layout unchanged.
+    args.cloudCellSizeKm = RtxOptions::cloudCellSizeKm();
 
     // Cloud voxel grid extent (Nubis Cubed 2023, fork — 2026-05-12).
     // Horizontal: track cloudNoiseTileKm so the grid's frac-wrap stays aligned
@@ -694,11 +720,13 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // shader does just a weighted sum.
   {
     args.cloudRenderForwardYUp = m_cloudRenderForwardYUp;
-    args.pad_cr0 = 0.0f;
     args.cloudRenderRightYUp   = m_cloudRenderRightYUp;
-    args.pad_cr1 = 0.0f;
     args.cloudRenderUpYUp      = m_cloudRenderUpYUp;
-    args.pad_cr2 = 0.0f;
+    // Column-shaping scalars riding the former pad_cr0..2 slots (fork —
+    // 2026-06-11, column-shaping rework); CB layout unchanged.
+    args.cloudColumnTopVariation   = RtxOptions::cloudColumnTopVariation();
+    args.cloudColumnTopShape       = RtxOptions::cloudColumnTopShape();
+    args.cloudColumnBaseVariation  = RtxOptions::cloudColumnBaseVariation();
   }
 
   // Nubis Cubed sky-miss composite gate (fork — 2026-05-12, C5).
@@ -734,7 +762,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudShadowMarchStrength = RtxOptions::cloudShadowMarchStrength();
     const float sceneScale = std::max(RtxOptions::sceneScale(), 1e-5f);
     args.worldUnitsPerKm = 100000.0f * sceneScale;
-    args.pad_c6_0 = 0.0f;
+    // Column presence feather band riding the former pad_c6_0 slot (fork —
+    // 2026-06-11, column-shaping rework); CB layout unchanged.
+    args.cloudColumnFeather = RtxOptions::cloudColumnFeather();
     args.cameraWorldPosYUpKm = m_cameraWorldPosYUpKm;
     args.pad_c6_1 = 0.0f;
   }
@@ -801,6 +831,19 @@ void RtxAtmosphere::cacheCloudNoiseBakeInputs() {
   m_cachedWorleyOctaves       = RtxOptions::cloudWorleyOctaves();
   m_cachedWorleyCarveStrength = RtxOptions::cloudWorleyCarveStrength();
   m_cachedBaseFreqScale       = RtxOptions::cloudNoiseBaseFreqScale();
+}
+
+bool RtxAtmosphere::needsCloudPlacementRebake() const {
+  // Compares only the inputs cloud_placement_map_baker.comp.slang reads:
+  // cloudCellSizeKm (cluster footprint) and cloudNoiseTileKm (the map's tile
+  // period — the cells-per-tile rounding depends on both).
+  return m_cachedPlacementCellSizeKm != RtxOptions::cloudCellSizeKm()
+      || m_cachedPlacementTileKm     != RtxOptions::cloudNoiseTileKm();
+}
+
+void RtxAtmosphere::cacheCloudPlacementBakeInputs() {
+  m_cachedPlacementCellSizeKm = RtxOptions::cloudCellSizeKm();
+  m_cachedPlacementTileKm     = RtxOptions::cloudNoiseTileKm();
 }
 
 void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
@@ -976,6 +1019,26 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
     VkClearColorValue{}, // clearValue
     1 // mipLevels
   );
+
+  // Fork (2026-06-11, column-shaping rework): cloud placement map (512x512
+  // RGBA8, 1 MB). R = cluster field, G = top-height jitter, B = base lift,
+  // tiled at cloudNoiseTileKm. Baked at init by dispatchCloudPlacementMapBake
+  // and re-baked live when cloudCellSizeKm / cloudNoiseTileKm change. Drives
+  // the per-column cloud model inside the density samplers.
+  VkExtent3D cloudPlacementMapExtent = { kCloudPlacementMapSize, kCloudPlacementMapSize, 1 };
+  m_cloudPlacementMap = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud Placement Map",
+    cloudPlacementMapExtent,
+    VK_FORMAT_R8G8B8A8_UNORM,
+    1, // numLayers
+    VK_IMAGE_TYPE_2D,
+    VK_IMAGE_VIEW_TYPE_2D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags (SAMPLED implicit)
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
 }
 
 void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
@@ -1003,6 +1066,34 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
     // The voxel grids integrate the noise volume — force their re-bake this
     // frame regardless of the motion-granularity gate below.
     memset(&m_cachedVoxelGridKey, 0, sizeof(m_cachedVoxelGridKey));
+  }
+
+  // Column-shaping rework (fork — 2026-06-11): re-bake the cloud placement
+  // map when its inputs change (cloudCellSizeKm / cloudNoiseTileKm), and the
+  // height LUT when the column-shaping mode flips (it bakes a different
+  // curve family per mode). Same write→read barrier + voxel-grid key clear
+  // as the noise re-bake above — the D_sun / D_ambient grids integrate the
+  // column shapes, so they must refresh the same frame.
+  {
+    bool cloudShapeInputsRebaked = false;
+    if (needsCloudPlacementRebake()) {
+      dispatchCloudPlacementMapBake(ctx);
+      cacheCloudPlacementBakeInputs();
+      cloudShapeInputsRebaked = true;
+    }
+    if (m_cachedHeightLutColumnMode != RtxOptions::cloudColumnShapingEnable()) {
+      dispatchCloudHeightLutBake(ctx);
+      m_cachedHeightLutColumnMode = RtxOptions::cloudColumnShapingEnable();
+      cloudShapeInputsRebaked = true;
+    }
+    if (cloudShapeInputsRebaked) {
+      ctx->emitMemoryBarrier(0,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_WRITE_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_ACCESS_SHADER_READ_BIT);
+      memset(&m_cachedVoxelGridKey, 0, sizeof(m_cachedVoxelGridKey));
+    }
   }
 
   // Sky LUTs (transmittance / multiscattering / sky-view) only rebake when
@@ -1357,7 +1448,8 @@ void RtxAtmosphere::dispatchCloudSunDensityGrid(Rc<DxvkContext> ctx) {
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
 
   // Bind resources: ConstantBuffer<AtmosphereArgs> at 0, RWTexture3D<float>
-  // at 1, Texture3D<float> cloud noise volume at 2, linear/REPEAT sampler at 3.
+  // at 1, Texture3D<float> cloud noise volume at 2, linear/REPEAT sampler at 3,
+  // cloud placement map at 4 (column-shaping rework).
   ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
   ctx->bindResourceView(1, m_cloudDSun.view, nullptr);
   ctx->bindResourceView(2, m_cloudNoise3D.view, nullptr);
@@ -1374,8 +1466,10 @@ void RtxAtmosphere::dispatchCloudSunDensityGrid(Rc<DxvkContext> ctx) {
   samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
   Rc<DxvkSampler> cloudSampler = m_device->createSampler(samplerInfo);
   ctx->bindResourceSampler(3, cloudSampler);
+  ctx->bindResourceView(4, m_cloudPlacementMap.view, nullptr);
 
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNoise3D.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudPlacementMap.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudDSun.image);
 
   ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudSunDensityGridShader::getShader());
@@ -1407,8 +1501,10 @@ void RtxAtmosphere::dispatchCloudAmbientDensityGrid(Rc<DxvkContext> ctx) {
   samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
   Rc<DxvkSampler> cloudSampler = m_device->createSampler(samplerInfo);
   ctx->bindResourceSampler(3, cloudSampler);
+  ctx->bindResourceView(4, m_cloudPlacementMap.view, nullptr);
 
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNoise3D.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudPlacementMap.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudDAmbient.image);
 
   ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudAmbientDensityGridShader::getShader());
@@ -1531,10 +1627,12 @@ void RtxAtmosphere::dispatchCloudRender(Rc<DxvkContext> ctx) {
   ctx->bindResourceSampler(9, skyViewSampler);
   ctx->bindResourceView(10, m_cloudHeightLut.isValid() ? m_cloudHeightLut.view : nullptr, nullptr);
   ctx->bindResourceSampler(11, heightLutSampler);
+  ctx->bindResourceView(12, m_cloudPlacementMap.view, nullptr);
 
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNoise3D.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDSun.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDAmbient.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudPlacementMap.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudRenderRT.image);
   if (m_skyViewLut.isValid()) {
     ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_skyViewLut.image);
@@ -1600,10 +1698,12 @@ void RtxAtmosphere::dispatchCloudSecondaryLut(Rc<DxvkContext> ctx) {
   ctx->bindResourceSampler(9, skyViewSampler);
   ctx->bindResourceView(10, m_cloudHeightLut.isValid() ? m_cloudHeightLut.view : nullptr, nullptr);
   ctx->bindResourceSampler(11, heightLutSampler);
+  ctx->bindResourceView(12, m_cloudPlacementMap.view, nullptr);
 
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNoise3D.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDSun.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDAmbient.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudPlacementMap.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudSecondaryLut.image);
   if (m_skyViewLut.isValid()) {
     ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_skyViewLut.image);
@@ -1654,19 +1754,22 @@ void RtxAtmosphere::dispatchCloudNoise3DBake(Rc<DxvkContext> ctx) {
 void RtxAtmosphere::dispatchCloudHeightLutBake(Rc<DxvkContext> ctx) {
   ScopedGpuProfileZone(ctx, "Atmosphere Cloud Height LUT Bake");
 
-  // One-shot bake at atmosphere init. Procedurally fills the 64x128 R8 LUT
-  // with the per-type altitude shape family — base shape matches the
-  // procedural cloudTypeProfile (visual parity at type values 0 / 0.5 / 1),
-  // plus a Gaussian anvil lift for type > 0.7 so cumulonimbus reads with a
-  // proper top widening rather than relying on the coverage-side anvil pow
-  // trick alone.
+  // Baked at atmosphere init + re-baked when cloudColumnShapingEnable flips
+  // (see computeLuts). Procedurally fills the 64x128 RG8 LUT with the
+  // per-type altitude shape family: the legacy trapezoid + anvil bump in
+  // global-slab mode, or the single-lobe per-cloud envelope in column mode
+  // (the curve-family switch lives in cloud_height_lut_baker.comp.slang).
   //
-  // The baker shader has no dependency on the atmosphere args CB (the
-  // curve formulas are baked in directly), so the only binding is the
-  // RWTexture2D output at slot 0. cloud_height_lut_baker.comp.slang
-  // declares `[numthreads(8, 8, 1)]`, matching the dispatch dimensions below.
+  // The baker reads only cloudColumnShapingEnable from the args CB at
+  // slot 0; output RWTexture2D moved to slot 1 (column-shaping rework).
+  // cloud_height_lut_baker.comp.slang declares `[numthreads(8, 8, 1)]`,
+  // matching the dispatch dimensions below.
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
 
-  ctx->bindResourceView(0, m_cloudHeightLut.view, nullptr);
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudHeightLut.view, nullptr);
   ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudHeightLut.image);
 
   ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudHeightLutBakerShader::getShader());
@@ -1674,6 +1777,28 @@ void RtxAtmosphere::dispatchCloudHeightLutBake(Rc<DxvkContext> ctx) {
   const uint32_t groupsX = (kCloudHeightLutWidth  + 7u) / 8u;
   const uint32_t groupsY = (kCloudHeightLutHeight + 7u) / 8u;
   ctx->dispatch(groupsX, groupsY, 1);
+}
+
+void RtxAtmosphere::dispatchCloudPlacementMapBake(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud Placement Map Bake");
+
+  // Baked at atmosphere init + re-baked when a bake input changes (the
+  // needsCloudPlacementRebake() gate in computeLuts). Fills the 512x512
+  // RGBA8 placement map with the cluster / top-jitter / base-lift fields
+  // defined in cloud_placement_map_baker.comp.slang.
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudPlacementMap.view, nullptr);
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudPlacementMap.image);
+
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudPlacementMapBakerShader::getShader());
+
+  // Shader declares [numthreads(8, 8, 1)].
+  const uint32_t groupCount = (kCloudPlacementMapSize + 7u) / 8u;
+  ctx->dispatch(groupCount, groupCount, 1);
 }
 
 void RtxAtmosphere::onFrameAdvanceForCloudHistory(uint32_t currentFrameId) {
@@ -1792,6 +1917,9 @@ void RtxAtmosphere::bindResources(Rc<DxvkContext> ctx, VkPipelineBindPoint pipel
   }
   if (m_cloudSecondaryLut.isValid()) {
     ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT, m_cloudSecondaryLut.view, nullptr);
+  }
+  if (m_cloudPlacementMap.isValid()) {
+    ctx->bindResourceView(BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP, m_cloudPlacementMap.view, nullptr);
   }
   // Cloud history bindings are wired in fork_hooks::bindAtmosphereLuts (the
   // active call site) and depend on the downscaled-extent ensure step. Left

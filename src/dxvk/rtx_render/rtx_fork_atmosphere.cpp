@@ -194,6 +194,7 @@ namespace fork_hooks {
     auto cloudDAmbient            = ctx.m_atmosphere->getCloudDAmbient();  // Fork: Nubis Cubed zenith optical depth grid
     auto cloudRenderRT            = ctx.m_atmosphere->getCloudRenderRT();  // Fork: Nubis Cubed screen-space cloud render (C4)
     auto cloudSecondaryLut        = ctx.m_atmosphere->getCloudSecondaryLut();  // Fork: secondary-ray cloud dome LUT (perf, 2026-06-10)
+    auto cloudPlacementMap        = ctx.m_atmosphere->getCloudPlacementMap();  // Fork: per-column cloud placement map (2026-06-11)
 
     // Always bind the LUTs (they're declared in shaders unconditionally)
     if (transmittanceLut.isValid()) {
@@ -225,6 +226,9 @@ namespace fork_hooks {
     }
     if (cloudSecondaryLut.isValid()) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT, cloudSecondaryLut.view, nullptr);
+    }
+    if (cloudPlacementMap.isValid()) {
+      ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP, cloudPlacementMap.view, nullptr);
     }
 
     // Cloud history (fork). Allocate at the current downscaled render extent
@@ -1073,7 +1077,48 @@ namespace fork_hooks {
             "Vertical elongation of cloud bodies. 1 = round blobs (legacy "
             "look); higher stretches clouds into convective columns so "
             "cumulus reads as towering. Pairs well with Cloud Type near 1 "
-            "and a deeper cloud layer (Depth 4+ km).");
+            "and a deeper cloud layer (Depth 4+ km). With Volumetric Cloud "
+            "Columns on, columns already cohere vertically — try 1.0 first.");
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Cloud Columns");
+        RemixGui::Checkbox("Volumetric Cloud Columns", &RtxOptions::cloudColumnShapingEnableObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Per-cloud column model: every cloud gets its own base, its own "
+            "tower height and a complete vertical shape, instead of all "
+            "clouds being cut by the same two global altitude planes. Fixes "
+            "the 'stacked flat layers' read. Uncheck for the legacy "
+            "global-slab shaping (A/B comparison).");
+        RemixGui::DragFloat("Cloud Cell Size", &RtxOptions::cloudCellSizeKmObject(),
+                            0.05f, 0.5f, 6.0f, "%.2f km", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Average footprint of a cloud cluster in km. Smaller = many "
+            "small clouds; larger = fewer, broader cloud banks. Re-bakes "
+            "the placement map live on change.");
+        RemixGui::DragFloat("Top Variation", &RtxOptions::cloudColumnTopVariationObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "How much cloud-top heights vary from cloud to cloud. 0 = all "
+            "tops at the same altitude (flat deck); higher = a varied "
+            "skyline of taller and shorter clouds. Applies live.");
+        RemixGui::DragFloat("Top Shape", &RtxOptions::cloudColumnTopShapeObject(),
+                            0.01f, 0.1f, 2.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "How cloud height follows cloud thickness toward the cluster "
+            "core. Low = even the thin edges tower (blocky); high = only "
+            "the dense cores rise (domed, feathered edges). Default 0.6.");
+        RemixGui::DragFloat("Base Undulation", &RtxOptions::cloudColumnBaseVariationObject(),
+                            0.01f, 0.0f, 0.4f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "How much local cloud bases drift above the layer altitude, as "
+            "a fraction of the layer depth. 0 = machined-flat ceiling; "
+            "higher = gently undulating cloud bases. Applies live.");
+        RemixGui::DragFloat("Edge Feather", &RtxOptions::cloudColumnFeatherObject(),
+                            0.01f, 0.05f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Width of the transition band at cloud-cluster edges. Narrow = "
+            "crisp, solid-cored clouds with sharp gaps; wide = soft, wispy "
+            "transitions between cloud and sky. Applies live.");
 
         ImGui::Separator();
         ImGui::TextDisabled("Look");

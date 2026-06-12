@@ -75,7 +75,8 @@ float sampleCloudSunOpticalDepth_local(vec3 cloudHitPos, vec3 sunDir,
     vec3 p = cloudHitPos + sunDir * (kStepKm * float(i + 1));
     float d = sampleCloudDensityTextured(p, computeCloudHeightFraction(p, args),
                                           typeLocal, coverageLocal, args,
-                                          AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler);
+                                          AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler,
+                                          AtmosphereCloudPlacementMap);
     opticalDepth += d;
   }
 
@@ -400,13 +401,24 @@ void marchCloudSlab(vec3   viewDirYUp,
     float coverageLocal = saturate(slabCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
 
     float hf = computeCloudHeightFraction(samplePos, args, slabAltitudeKm, slabThicknessKm);
+    // shapeHf (fork — 2026-06-11, column-shaping rework): per-cloud height
+    // fraction from the density sampler — re-normalized to this column's own
+    // [base, top] when column shaping is on, identical to hf when off.
+    float shapeHf;
     float density = sampleCloudDensityTextured(samplePos, hf, typeLocal, coverageLocal,
                                                 slabAltitudeKm, slabThicknessKm, slabDensityScale,
-                                                args, AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler);
+                                                args, AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler,
+                                                AtmosphereCloudPlacementMap, shapeHf);
     if (density < 0.001f) continue;
 
     // Nubis Cubed lighting at this sample. samplePos is already Y-up, so
     // isZUp = false for the D_sun / D_ambient lookups.
+    //
+    // The lighting evaluator receives shapeHf (per-cloud height), not the
+    // slab hf: the dim profile, SDF proxy and bottom darkening then track
+    // each cloud's own base/top instead of painting horizontal lighting
+    // bands across the whole sky at fixed altitudes — those global bands
+    // were half of the "stacked separated layers" read.
     //
     // NOTE: the D_sun / D_ambient voxel grids are baked over the primary
     // (layer 1) slab only — layer 2 samples will read whichever residual
@@ -414,7 +426,7 @@ void marchCloudSlab(vec3   viewDirYUp,
     // contribute attenuation toward zenith and sun direction at most, and
     // cirrus is too thin to need precomputed shadow data of its own.
     NubisCubedLighting lighting = evalNubisCubedSample(
-        samplePos, hf, density,
+        samplePos, shapeHf, density,
         viewDirYUp, ctx.sunDirYUp, ctx.sunRadiance,
         ctx.skyRadianceWarm, ctx.skyRadianceCool,
         args, /*isZUp=*/false);

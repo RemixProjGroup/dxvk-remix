@@ -94,6 +94,12 @@ Texture2D<float2> AtmosphereCloudHeightLut;
 layout(binding = 11)
 SamplerState AtmosphereCloudHeightLutSampler;
 
+// Cloud placement map (fork — 2026-06-11, column-shaping rework). Same
+// resource + slot as cloud_render.comp.slang so the dome LUT march sees
+// the identical per-column cloud field the visible pass renders.
+layout(binding = 12)
+Texture2D<float4> AtmosphereCloudPlacementMap;
+
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
 #include "rtx/pass/atmosphere/cloud_march_common.slangh"
 

@@ -126,6 +126,15 @@
 // (REPEAT-U handles the azimuth seam).
 #define BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT 215
 
+// Cloud placement map (fork — 2026-06-11, column-shaping rework). 512x512
+// RGBA8 tiled at cloudNoiseTileKm: R = cluster field (where clouds are, at
+// cloud scale), G = per-cloud top-height jitter, B = base lift. Baked by
+// cloud_placement_map_baker.comp.slang (live re-bake on input change).
+// Drives the per-column cloud model in the density samplers; this common
+// slot serves the analytical evalClouds fallback path in atmosphere_sky.slangh.
+// Sampled with the linear/REPEAT cloud noise sampler.
+#define BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP 216
+
 #define COMMON_MAX_BINDING                       BINDING_SAMPLER_READBACK_BUFFER
 #define COMMON_NUM_BINDINGS                      (COMMON_MAX_BINDING + 1)
 
@@ -184,6 +193,7 @@
   TEXTURE3D(BINDING_ATMOSPHERE_CLOUD_D_SUN)                         \
   TEXTURE3D(BINDING_ATMOSPHERE_CLOUD_D_AMBIENT)                     \
   SAMPLER(BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER)                      \
-  TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)
+  TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)                 \
+  TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP)
 
 #endif

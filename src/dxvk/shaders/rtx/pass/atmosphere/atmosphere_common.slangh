@@ -1865,6 +1865,114 @@ float sampleCloudNoiseHexBlend(CloudHexTile hex, vec3 texcoord,
         + hex.w3 * (x3 - kCloudNoiseFieldMean)) / max(norm, 1e-4f);
 }
 
+// ===========================================================================
+// Per-column cloud model (fork — 2026-06-11, column-shaping rework).
+//
+// Root-cause fix for the "stacked separated layers" read: previously EVERY
+// vertical shaping signal — density envelope, coverage-threshold scale,
+// anvil pow, dim profile, bottom darkening — was keyed on the GLOBAL slab
+// height fraction, so every cloud in the sky shared one vertical recipe
+// pinned to absolute altitude (flat global base/top planes, identical
+// lighting bands), while the thresholded isotropic 3D noise placed mass
+// independently per altitude (vertically disconnected puffs in a column).
+// The eye integrates both as flat horizontal layers.
+//
+// The column model gives each cloud its own identity:
+//   * The 2D placement map (cloud_placement_map_baker.comp.slang) supplies a
+//     cluster field F (where clouds are, at cloud scale), a top-height
+//     jitter J, and a base lift B — tiled at cloudNoiseTileKm and de-tiled
+//     by the SAME hex lattice as the 3D noise so cluster and texture travel
+//     together.
+//   * Per column: presence = coverage remap of F (0 = no cloud here,
+//     1 = solid core); local base/top derived from B, presence and J. Cloud
+//     edges feather to nothing because their tops sink to their bases.
+//   * The sample's height fraction is re-normalized to the COLUMN
+//     ([base, top] -> [0,1]); the height profile, anvil pow, coverage
+//     threshold and the Nubis lighting proxies all key on this per-cloud
+//     height, so each cloud carries a complete rise/bulk/domed-top shape at
+//     its own altitude. The 3D noise keeps its texture/erosion role but no
+//     longer decides placement — vertical coherence holds by construction.
+// ===========================================================================
+
+// Design mean of the placement map's R-channel cluster field — anchor for
+// the variance-preserving hex blend. Monte-Carlo of the baker's field
+// construction (worley-core + fbm at the shipped offsets/gains) lands at
+// ~0.60 after saturation; an anchor that mismatches the true mean shifts
+// presence in blend zones by (anchor - mean)(1 - 1/norm), which would read
+// as cloud-density seams along the hex lattice. Keep in lockstep with the
+// field construction in cloud_placement_map_baker.comp.slang.
+static const float kCloudPlacementFieldMean = 0.6f;
+
+// Placement-map tap at the hex-de-tiled texture coordinate. texXZ is the
+// tile-space UV (frac(perturbed.xz / cloudNoiseTileKm)); the hex offsets are
+// the same texture-space offsets the 3D noise taps use, so both fields
+// decorrelate across lattice cells in lockstep. The R channel (cluster
+// field, gets thresholded by the coverage remap downstream) blends
+// variance-preservingly; G/B are smooth modulators where a plain weighted
+// average is fine (weights are normalized).
+vec4 sampleCloudPlacement(vec2 texXZ, CloudHexTile hex, bool hexOn,
+                          Texture2D<float4> placementMap,
+                          SamplerState placementSampler) {
+  if (!hexOn) {
+    return placementMap.SampleLevel(placementSampler, texXZ, 0);
+  }
+  if (hex.w1 > 0.95f) {
+    return placementMap.SampleLevel(placementSampler,
+        vec2(frac(texXZ.x + hex.off1.x), frac(texXZ.y + hex.off1.y)), 0);
+  }
+  vec4 p1 = placementMap.SampleLevel(placementSampler,
+      vec2(frac(texXZ.x + hex.off1.x), frac(texXZ.y + hex.off1.y)), 0);
+  vec4 p2 = placementMap.SampleLevel(placementSampler,
+      vec2(frac(texXZ.x + hex.off2.x), frac(texXZ.y + hex.off2.y)), 0);
+  vec4 p3 = placementMap.SampleLevel(placementSampler,
+      vec2(frac(texXZ.x + hex.off3.x), frac(texXZ.y + hex.off3.y)), 0);
+  float norm = sqrt(hex.w1 * hex.w1 + hex.w2 * hex.w2 + hex.w3 * hex.w3);
+  float F = kCloudPlacementFieldMean
+          + (hex.w1 * (p1.r - kCloudPlacementFieldMean)
+           + hex.w2 * (p2.r - kCloudPlacementFieldMean)
+           + hex.w3 * (p3.r - kCloudPlacementFieldMean)) / max(norm, 1e-4f);
+  vec2 gb = hex.w1 * vec2(p1.g, p1.b)
+          + hex.w2 * vec2(p2.g, p2.b)
+          + hex.w3 * vec2(p3.g, p3.b);
+  return vec4(saturate(F), gb.x, gb.y, 1.0f);
+}
+
+// Column parameters derived from a placement sample + the weather-scale
+// coverage. baseFrac/topFrac are fractions of the slab; presence is the
+// per-column cloud amount that replaces the weather coverage in the noise
+// threshold (so the gate carves each cloud's own feather band instead of
+// uniformly carving a 300 km weather region).
+struct CloudColumn {
+  float presence;  // [0,1] — 0: no cloud in this column, 1: solid core
+  float baseFrac;  // column cloud-base as a slab height fraction
+  float topFrac;   // column cloud-top as a slab height fraction
+};
+
+CloudColumn computeCloudColumn(vec4 placement, float coverageLocal,
+                               AtmosphereArgs args) {
+  CloudColumn col;
+  // Coverage remap (Schneider-style): the cluster field F crosses the
+  // (1 - coverage) waterline and feathers to full presence over the band.
+  // coverage 1 -> almost every column has presence; coverage 0.3 -> only
+  // cluster cores survive.
+  float band = max(args.cloudColumnFeather, 0.02f);
+  col.presence = saturate((placement.r - (1.0f - coverageLocal)) / band);
+
+  // Local base lift: small undulation of the cloud base.
+  col.baseFrac = saturate(placement.b * args.cloudColumnBaseVariation);
+
+  // Local top: grows with presence (edges feather to nothing) shaped by the
+  // top exponent, jittered per cluster so equal-presence clouds still get
+  // different tower heights.
+  float topJitter = mix(1.0f - saturate(args.cloudColumnTopVariation), 1.0f,
+                        saturate(placement.g));
+  col.topFrac = col.baseFrac
+              + (1.0f - col.baseFrac)
+              * pow(col.presence, max(args.cloudColumnTopShape, 0.05f))
+              * topJitter;
+  return col;
+}
+
 // Stage C replacement for sampleCloudDensity AND sampleCloudDensityShadow.
 // Reads a tricubic sample of the prebaked 3D Perlin FBM, layers a small
 // per-frame analytic detail FBM for shape-jitter, and applies the same
@@ -1901,7 +2009,18 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
                                  float densityScale,
                                  AtmosphereArgs args,
                                  Texture3D<float> cloudNoise3D,
-                                 SamplerState cloudSampler) {
+                                 SamplerState cloudSampler,
+                                 Texture2D<float4> placementMap,
+                                 out float shapeHeightFraction) {
+  // shapeHeightFraction (fork — 2026-06-11, column-shaping rework): the
+  // height fraction all vertical SHAPING and LIGHTING should key on. Legacy
+  // mode: the slab-relative input unchanged. Column mode: re-normalized to
+  // this column's own [base, top] so every cloud carries a complete
+  // rise/bulk/top profile at its own altitude. Callers feed it to
+  // evalNubisCubedSample so the dim profile / bottom darkening track each
+  // cloud rather than painting global altitude bands across the sky.
+  shapeHeightFraction = heightFraction;
+
   // 1. Wind perturbation (translation only — texture is tilable).
   //    The legacy analytic sampler applied a height-dependent shear on top of
   //    the wind offset; that term was intentionally dropped when this textured
@@ -1931,6 +2050,35 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
       frac(perturbed.y / args.cloudNoiseTileKm),
       frac(perturbed.z / args.cloudNoiseTileKm));
 
+  // 2b. Per-column cloud model (fork — 2026-06-11, column-shaping rework).
+  //     The hex tile is computed BEFORE the 3D taps (hoisted from step 3)
+  //     because the placement tap shares its lattice offsets. When the
+  //     column says "no cloud at this height in this column", we return
+  //     before paying for any 3D volume taps — at partial coverage most
+  //     march steps exit here, which more than refunds the placement tap.
+  CloudHexTile hex = (CloudHexTile)0;
+  bool hexOn = args.cloudHexTilingEnable > 0.5f;
+  if (hexOn) {
+    hex = computeCloudHexTile(vec2(perturbed.x, perturbed.z), args);
+  }
+
+  float gateCoverage = coverageLocal;
+  bool columnOn = args.cloudColumnShapingEnable > 0.5f;
+  if (columnOn) {
+    vec4 placement = sampleCloudPlacement(vec2(texcoord.x, texcoord.z), hex, hexOn,
+                                          placementMap, cloudSampler);
+    CloudColumn col = computeCloudColumn(placement, coverageLocal, args);
+    if (col.presence <= 0.001f) {
+      return 0.0f;
+    }
+    if (heightFraction <= col.baseFrac || heightFraction >= col.topFrac) {
+      return 0.0f;
+    }
+    shapeHeightFraction = saturate((heightFraction - col.baseFrac)
+                                   / max(col.topFrac - col.baseFrac, 1e-3f));
+    gateCoverage = col.presence;
+  }
+
   // 3. Base 3D sample. Texture-size literal must match the baker's
   //    dispatch resolution (RtxAtmosphere::kCloudNoise3DSize = 256). If the
   //    bake resolution ever changes, update both sites in lockstep.
@@ -1942,11 +2090,8 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   //    tricubic fast path at the dominant offset; edge bands blend 3
   //    trilinear taps variance-preservingly. Off = exact legacy single
   //    tricubic tap.
-  CloudHexTile hex = (CloudHexTile)0;
-  bool hexOn = args.cloudHexTilingEnable > 0.5f;
   float texturedNoise;
   if (hexOn) {
-    hex = computeCloudHexTile(vec2(perturbed.x, perturbed.z), args);
     if (hex.w1 > 0.95f) {
       vec3 hexCoord = vec3(frac(texcoord.x + hex.off1.x), texcoord.y,
                            frac(texcoord.z + hex.off1.y));
@@ -2033,11 +2178,18 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   //    lever with visible silhouette teeth (slide-3 anvil mechanism: a low G
   //    at the cumulus top lowers the threshold, so more pixels survive the
   //    coverage gate and the silhouette widens horizontally).
-  vec2 heightProfile = cloudHeightProfileFull(heightFraction, typeLocal, args);
+  //
+  //    Column mode: everything keys on shapeHeightFraction (per-cloud height)
+  //    and gateCoverage (per-column presence), so the envelope, the anvil
+  //    band and the threshold feathering land at each cloud's OWN base/top
+  //    instead of at two global altitudes — that global keying was the core
+  //    of the stacked-layers read. Legacy mode: shapeHeightFraction ==
+  //    heightFraction and gateCoverage == coverageLocal, bit-identical.
+  vec2 heightProfile = cloudHeightProfileFull(shapeHeightFraction, typeLocal, args);
 
   float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
-                            smoothstep(0.7f, 0.8f, heightFraction));
-  float coverageAnvil = pow(coverageLocal, anvilExponent);
+                            smoothstep(0.7f, 0.8f, shapeHeightFraction));
+  float coverageAnvil = pow(gateCoverage, anvilExponent);
 
   float coverageThreshold = mix(0.80f, 0.0f, coverageAnvil) * heightProfile.g;
   density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, density);
@@ -2045,6 +2197,27 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   density *= heightProfile.r;
 
   return saturate(density) * densityScale;
+}
+
+// Slab-parametric convenience overload without the shapeHeightFraction out
+// param — for callers (shadow taps, optical-depth marches) that don't need
+// the per-cloud height back.
+float sampleCloudDensityTextured(vec3 worldPosKm,
+                                 float heightFraction,
+                                 float typeLocal,
+                                 float coverageLocal,
+                                 float slabAltitudeKm,
+                                 float slabThicknessKm,
+                                 float densityScale,
+                                 AtmosphereArgs args,
+                                 Texture3D<float> cloudNoise3D,
+                                 SamplerState cloudSampler,
+                                 Texture2D<float4> placementMap) {
+  float shapeHfUnused;
+  return sampleCloudDensityTextured(worldPosKm, heightFraction, typeLocal, coverageLocal,
+                                     slabAltitudeKm, slabThicknessKm, densityScale,
+                                     args, cloudNoise3D, cloudSampler, placementMap,
+                                     shapeHfUnused);
 }
 
 // Args-default overload — preserves the layer-1 behavior every existing
@@ -2055,10 +2228,11 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
                                  float coverageLocal,
                                  AtmosphereArgs args,
                                  Texture3D<float> cloudNoise3D,
-                                 SamplerState cloudSampler) {
+                                 SamplerState cloudSampler,
+                                 Texture2D<float4> placementMap) {
   return sampleCloudDensityTextured(worldPosKm, heightFraction, typeLocal, coverageLocal,
                                      args.cloudAltitude, args.cloudThickness, 1.0f,
-                                     args, cloudNoise3D, cloudSampler);
+                                     args, cloudNoise3D, cloudSampler, placementMap);
 }
 
 // ===========================================================================
@@ -2094,7 +2268,8 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
                                    float densityScale,
                                    AtmosphereArgs args,
                                    Texture3D<float> cloudNoise3D,
-                                   SamplerState cloudSampler) {
+                                   SamplerState cloudSampler,
+                                   Texture2D<float4> placementMap) {
   vec3 windOffset = vec3(args.cloudWindOffset.x, 0.0f, args.cloudWindOffset.y);
   vec3 perturbed  = worldPosKm + windOffset;
 
@@ -2107,6 +2282,36 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
       frac(perturbed.y / args.cloudNoiseTileKm),
       frac(perturbed.z / args.cloudNoiseTileKm));
 
+  // Hex tile hoisted ahead of the taps (shared by placement + noise) — must
+  // mirror sampleCloudDensityTextured.
+  CloudHexTile hex = (CloudHexTile)0;
+  bool hexOn = args.cloudHexTilingEnable > 0.5f;
+  if (hexOn) {
+    hex = computeCloudHexTile(vec2(perturbed.x, perturbed.z), args);
+  }
+
+  // Per-column cloud model — must mirror sampleCloudDensityTextured (same
+  // placement tap, same column derivation, same early-outs) so the baked
+  // D_sun / D_ambient grids shadow the same column shapes the view march
+  // renders. The shape height fraction stays local here: the voxel bakes
+  // integrate density only and never evaluate the lighting proxies.
+  float shapeHeightFraction = heightFraction;
+  float gateCoverage = coverageLocal;
+  if (args.cloudColumnShapingEnable > 0.5f) {
+    vec4 placement = sampleCloudPlacement(vec2(texcoord.x, texcoord.z), hex, hexOn,
+                                          placementMap, cloudSampler);
+    CloudColumn col = computeCloudColumn(placement, coverageLocal, args);
+    if (col.presence <= 0.001f) {
+      return 0.0f;
+    }
+    if (heightFraction <= col.baseFrac || heightFraction >= col.topFrac) {
+      return 0.0f;
+    }
+    shapeHeightFraction = saturate((heightFraction - col.baseFrac)
+                                   / max(col.topFrac - col.baseFrac, 1e-3f));
+    gateCoverage = col.presence;
+  }
+
   // Base sample (trilinear — this is the cheap variant; assumes the bound
   // sampler is linear-filter + repeat-address per RtxAtmosphere's
   // cloud-noise sampler setup).
@@ -2115,11 +2320,8 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
   // sampleCloudDensityTextured's base tap (same lattice, same offsets,
   // same blend) so the baked D_sun / D_ambient grids shadow the same
   // de-tiled field the view march renders. Both paths are trilinear here.
-  CloudHexTile hex = (CloudHexTile)0;
-  bool hexOn = args.cloudHexTilingEnable > 0.5f;
   float density;
   if (hexOn) {
-    hex = computeCloudHexTile(vec2(perturbed.x, perturbed.z), args);
     if (hex.w1 > 0.95f) {
       density = cloudNoise3D.SampleLevel(cloudSampler,
           vec3(frac(texcoord.x + hex.off1.x), texcoord.y,
@@ -2148,13 +2350,14 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
             + (blended - kCloudNoiseFieldMean) / sqrt(k * k + (1.0f - k) * (1.0f - k));
   }
 
-  // Coverage threshold + vertical profile lifted from sampleCloudDensityTextured.
-  // R = envelope multiplier, G = coverage threshold scale (slide 3 lift).
-  vec2 heightProfile = cloudHeightProfileFull(heightFraction, typeLocal, args);
+  // Coverage threshold + vertical profile lifted from sampleCloudDensityTextured
+  // (column mode: keyed on per-cloud height + per-column presence — see the
+  // step-5 comment there). R = envelope, G = coverage threshold scale.
+  vec2 heightProfile = cloudHeightProfileFull(shapeHeightFraction, typeLocal, args);
 
   float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
-                            smoothstep(0.7f, 0.8f, heightFraction));
-  float coverageAnvil = pow(coverageLocal, anvilExponent);
+                            smoothstep(0.7f, 0.8f, shapeHeightFraction));
+  float coverageAnvil = pow(gateCoverage, anvilExponent);
   float coverageThreshold = mix(0.80f, 0.0f, coverageAnvil) * heightProfile.g;
   density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, density);
   density *= heightProfile.r;
@@ -2170,10 +2373,11 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
                                    float coverageLocal,
                                    AtmosphereArgs args,
                                    Texture3D<float> cloudNoise3D,
-                                   SamplerState cloudSampler) {
+                                   SamplerState cloudSampler,
+                                   Texture2D<float4> placementMap) {
   return sampleCloudDensityForShadow(worldPosKm, heightFraction, typeLocal, coverageLocal,
                                       args.cloudAltitude, args.cloudThickness, 1.0f,
-                                      args, cloudNoise3D, cloudSampler);
+                                      args, cloudNoise3D, cloudSampler, placementMap);
 }
 
 // ===========================================================================
@@ -2260,7 +2464,8 @@ vec3 cloudVoxelUVWToWorld(vec3 uvw, AtmosphereArgs args) {
 float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
                                          AtmosphereArgs args,
                                          Texture3D<float> cloudNoise3D,
-                                         SamplerState cloudSampler) {
+                                         SamplerState cloudSampler,
+                                         Texture2D<float4> placementMap) {
   const int kSamples = 8;
   float opticalDepth = 0.0f;
 
@@ -2303,7 +2508,8 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
     float hf = computeCloudHeightFraction(samplePos, args);
     float density = sampleCloudDensityForShadow(samplePos, hf,
                                                  typeLocal, coverageLocal,
-                                                 args, cloudNoise3D, cloudSampler);
+                                                 args, cloudNoise3D, cloudSampler,
+                                                 placementMap);
     opticalDepth += density * stepLen;
   }
 
@@ -2316,7 +2522,8 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
 float sampleCloudAmbientOpticalDepthAtWorld(vec3 worldPosYUpKm,
                                              AtmosphereArgs args,
                                              Texture3D<float> cloudNoise3D,
-                                             SamplerState cloudSampler) {
+                                             SamplerState cloudSampler,
+                                             Texture2D<float4> placementMap) {
   const int kSamples = 6;
   float opticalDepth = 0.0f;
 
@@ -2344,7 +2551,8 @@ float sampleCloudAmbientOpticalDepthAtWorld(vec3 worldPosYUpKm,
     float hf = computeCloudHeightFraction(samplePos, args);
     float density = sampleCloudDensityForShadow(samplePos, hf,
                                                  typeLocal, coverageLocal,
-                                                 args, cloudNoise3D, cloudSampler);
+                                                 args, cloudNoise3D, cloudSampler,
+                                                 placementMap);
     opticalDepth += density * stepLen;
   }
 

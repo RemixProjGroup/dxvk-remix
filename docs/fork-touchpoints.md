@@ -1786,3 +1786,48 @@ Post-workstream follow-up at the user's request: the perf-bisect freeze of the p
   *`normalizeForVoxelGridKey` (sky-view key base + wind/camera re-injected quantized), `m_cachedVoxelGridKey`, the dirty gate around the two grid dispatches in `computeLuts`, and the force-clear on cloud-noise re-bake.*
 
 ---
+
+## Workstream — Per-column cloud model (column-shaping rework) (fork — 2026-06-12)
+
+Root-cause rework of the "stacked separated layers" read that made the volumetric cloud system look like flat 2D planes. Previously EVERY vertical shaping signal — the height-LUT density envelope (which at cumulus types even baked TWO density peaks separated by a thinner neck), the coverage-threshold scale band, the anvil pow gate, the Nubis dim profile and the bottom-darkening gradient — keyed on the GLOBAL slab height fraction, so every cloud in the sky shared one vertical recipe pinned to absolute altitude (flat global base/top planes, horizontal lighting bands), while the thresholded isotropic 3D noise placed mass independently per altitude (vertically disconnected stacked puffs within a column). The rework introduces a baked 512×512 RGBA8 **cloud placement map** (R = Worley-cell cluster field, G = per-cloud top-height jitter, B = base lift; tiled at `cloudNoiseTileKm`, de-tiled by the SAME hex lattice as the 3D noise so cluster and texture travel together) and derives per-column cloud presence + local base/top from it; the sample height is re-normalized to each column's own [base, top] and ALL vertical shaping plus the Nubis lighting proxies key on that per-cloud height. The 3D noise keeps its texture/erosion role but no longer decides placement. Gated by `cloudColumnShapingEnable` (default on; legacy global-slab path preserved bit-exact for A/B).
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_placement_map_baker.comp.slang`** — NEW fork-owned file.
+  *Periodic 2D Worley + value-noise FBM construction of the cluster / top-jitter / base-lift fields; integer cells-per-tile snapping from `cloudCellSizeKm` so the map tiles seamlessly.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions + changes.
+  *New `kCloudPlacementFieldMean`, `sampleCloudPlacement` (hex-de-tiled tap; R variance-preserving blend, G/B weighted average), `CloudColumn` / `computeCloudColumn` (coverage remap of the cluster field over a `cloudColumnFeather` band; base lift; presence^`cloudColumnTopShape` × jitter top). Both density samplers hoist the hex tile, sample placement, early-out outside the column (before any 3D taps — a perf win at partial coverage), re-normalize the height fraction to the column span, and gate on per-column presence instead of weather coverage; the primary overload returns the per-cloud `shapeHeightFraction` via a new out param. Both samplers + both voxel-bake optical-depth helpers gain a `Texture2D<float4> placementMap` parameter.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned change.
+  *`marchCloudSlab` consumes the out-param overload and passes the per-cloud `shapeHf` to `evalNubisCubedSample`, so the dim profile / SDF proxy / bottom darkening track each cloud's own base/top instead of painting global altitude bands. The moon-shadow tap plumbs the placement map.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_height_lut_baker.comp.slang`** — fork-owned change.
+  *Gains the args CB (binding 0; output moves to 1) and a second curve family for column mode: single-lobe envelope (smoothstep rise, fall reaching exactly 0 at hf=1 for cumulus) replacing the legacy trapezoid + secondary anvil bump — the two-peak profile was itself a baked-in stacked-strata structure. Legacy family preserved verbatim for the gate-off path; G channel (threshold widening near each cloud's own top) unchanged and now carries the anvil look alone in column mode.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *`evalClouds` + `sampleCloudSunOpticalDepth` pass `AtmosphereCloudPlacementMap` (from common bindings) into the density sampler — the analytical fallback gets the column model automatically.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang` / `cloud_secondary_lut.comp.slang`** — fork-owned additions.
+  *Declare `AtmosphereCloudPlacementMap` at local binding 12 (sampled with the slot-2 cloud-noise sampler).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_sun_density_grid.comp.slang` / `cloud_ambient_density_grid.comp.slang`** — fork-owned additions.
+  *Declare the placement map at local binding 4 and pass it through the optical-depth helpers so the baked D_sun / D_ambient grids shadow the same column shapes the view march renders.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Repurposes `padCloudLook2` → `cloudColumnShapingEnable`, `padCloudC2` → `cloudCellSizeKm`, `pad_cr0..2` → `cloudColumnTopVariation` / `cloudColumnTopShape` / `cloudColumnBaseVariation`, `pad_c6_0` → `cloudColumnFeather`. No CB layout change.*
+
+- **`src/dxvk/shaders/rtx/pass/common_binding_indices.h`** — fork-owned addition (index-only).
+  *Adds `BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP = 216` + a `TEXTURE2D` entry in `COMMON_RAYTRACING_BINDINGS`.*
+
+- **`src/dxvk/shaders/rtx/pass/common_bindings.slangh`** — fork-owned addition (index-only).
+  *Declares `AtmosphereCloudPlacementMap` at the new slot for the raytrace TUs (analytical evalClouds fallback).*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *`cloudColumnShapingEnable` (true), `cloudCellSizeKm` (2.0), `cloudColumnTopVariation` (0.45), `cloudColumnTopShape` (0.6), `cloudColumnBaseVariation` (0.12), `cloudColumnFeather` (0.35).*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned additions + changes.
+  *`m_cloudPlacementMap` (512² RGBA8) + `kCloudPlacementMapSize`, `dispatchCloudPlacementMapBake` (init + live re-bake via `needsCloudPlacementRebake` on `cloudCellSizeKm` / `cloudNoiseTileKm`), height-LUT re-bake on `cloudColumnShapingEnable` flip (`m_cachedHeightLutColumnMode`; the baker now binds the args CB at 0 / output at 1), voxel-grid key force-clear when either shape input re-bakes, placement binds: slot 12 in `dispatchCloudRender` / `dispatchCloudSecondaryLut`, slot 4 in both voxel-grid bakes, `BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP` in `bindResources`, and `getAtmosphereArgs` fills for the six repurposed fields. Shader-class parameter lists updated accordingly.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
+  *`bindAtmosphereLuts` binds the placement map at the common slot; new "Cloud Columns" ImGui group (Volumetric Cloud Columns checkbox + Cloud Cell Size / Top Variation / Top Shape / Base Undulation / Edge Feather sliders); Vertical Stretch tooltip notes columns supersede it.*
+
+---

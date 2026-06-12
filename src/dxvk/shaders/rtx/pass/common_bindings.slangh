@@ -203,3 +203,13 @@ SamplerState AtmosphereSkyViewSampler;
 // (REPEAT-U wraps the azimuth seam, CLAMP-V pins the horizon/zenith rows).
 layout(binding = BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)
 Texture2D<float4> AtmosphereCloudSecondaryLut;
+
+// Cloud placement map (fork — 2026-06-11, column-shaping rework). 512x512
+// RGBA8 tiled at cloudNoiseTileKm, baked by
+// cloud_placement_map_baker.comp.slang (re-baked live when its inputs
+// change): R = cluster field, G = top-height jitter, B = base lift. Drives
+// the per-column cloud model inside the density samplers; consumed here by
+// the analytical evalClouds fallback + its shadow taps. Sampled with the
+// linear/REPEAT cloud noise sampler (BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER).
+layout(binding = BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP)
+Texture2D<float4> AtmosphereCloudPlacementMap;

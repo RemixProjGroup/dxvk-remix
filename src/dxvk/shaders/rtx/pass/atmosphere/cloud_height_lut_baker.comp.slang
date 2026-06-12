@@ -28,7 +28,11 @@
 // rtx.atmosphere.cloudHeightLutEnable is true and the consumer TU defines
 // ATMOSPHERE_CLOUD_HEIGHT_LUT_AVAILABLE (currently only cloud_render.comp.slang).
 //
-// Curve family:
+// Two curve families, selected by cloudColumnShapingEnable (fork —
+// 2026-06-11, column-shaping rework; the bake re-runs live when the flag
+// flips):
+//
+// LEGACY (global-slab mode):
 //   * Base shape is the same trapezoid the procedural curve emits — visual
 //     parity at type values 0 / 0.5 / 1 is the bake's primary contract so
 //     default-on doesn't regress today's Nubis Cubed look.
@@ -37,14 +41,28 @@
 //     anvil pow trick (which lives at the coverage step) can't produce on its
 //     own. Strength ramps with (type - 0.7) so stratus / stratocumulus stay
 //     unchanged.
-//   * Cumulonimbus end (type > 0.9) widens the fall slightly to push the
-//     anvil cap further out toward hf = 0.95.
 //
-// One-shot bake at startup — invoked once from RtxAtmosphere::initialize.
+// COLUMN (per-cloud mode):
+//   * The height axis is the PER-CLOUD height fraction (base..top of each
+//     column), so the envelope must be a SINGLE lobe: rounded rise from the
+//     cloud base, bulk plateau, smooth fall to zero exactly at the cloud
+//     top. The legacy family's secondary anvil bump near hf=0.85 — two
+//     density peaks separated by a thinner "neck" — literally baked a
+//     two-strata structure into every cumulus and was a core source of the
+//     stacked-layers read. In column mode the anvil look comes from the G
+//     channel alone (threshold widening near each cloud's own top), which
+//     widens silhouettes without splitting the density profile.
+//
+// Baked at startup + re-baked when cloudColumnShapingEnable changes —
+// see RtxAtmosphere::computeLuts.
 
 #include "rtx/utility/shader_types.h"
+#include "rtx/pass/atmosphere/atmosphere_args.h"
 
-layout(binding = 0, rg8)
+layout(binding = 0)
+ConstantBuffer<AtmosphereArgs> atmosphereArgs;
+
+layout(binding = 1, rg8)
 RWTexture2D<float2> cloudHeightLutOutput;
 
 // =============================================================================
@@ -80,6 +98,21 @@ float densityEnvelope(float hf, float type) {
   float anvilBump = 0.35f * anvilWeight * exp(-0.5f * dx * dx);
 
   return saturate(base + anvilBump);
+}
+
+// Column-mode envelope: ONE lobe over the per-cloud height axis. Smooth
+// rounded rise from the cloud base (smoothstep instead of a linear ramp so
+// undersides read soft), bulk plateau, smooth fall that reaches exactly 0
+// at hf=1 for cumulus — the column's topFrac IS the cloud top, so the
+// envelope must vanish there or the silhouette gets a hard horizontal cut.
+// No secondary anvil bump (see header).
+float densityEnvelopeColumn(float hf, float type) {
+  float riseEnd   = mix(0.06f, 0.16f, type);
+  float fallStart = mix(0.18f, 0.72f, type);
+  float fallEnd   = mix(0.32f, 1.0f, type);
+  float rise = smoothstep(0.0f, max(riseEnd, 1e-4f), hf);
+  float fall = 1.0f - smoothstep(fallStart, max(fallEnd, fallStart + 1e-4f), hf);
+  return saturate(rise * fall);
 }
 
 // =============================================================================
@@ -124,13 +157,18 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     return;
   }
 
+  AtmosphereArgs args = atmosphereArgs;
+
   // (typeSlice, heightIdx) -> (type, heightFrac).
   // X axis (64 slices): cloud type continuum from stratus (0) to cumulonimbus (1).
-  // Y axis (128 entries): height fraction within the cloud slab.
+  // Y axis (128 entries): height fraction — within the cloud slab (legacy)
+  // or within each column's own base..top span (column mode).
   float type = (float(dispatchId.x) + 0.5f) / float(outputDim.x);
   float hf   = (float(dispatchId.y) + 0.5f) / float(outputDim.y);
 
-  float r = densityEnvelope(hf, type);
+  float r = (args.cloudColumnShapingEnable > 0.5f)
+          ? densityEnvelopeColumn(hf, type)
+          : densityEnvelope(hf, type);
   float g = coverageThresholdScale(hf, type);
   cloudHeightLutOutput[dispatchId.xy] = float2(saturate(r), saturate(g));
 }

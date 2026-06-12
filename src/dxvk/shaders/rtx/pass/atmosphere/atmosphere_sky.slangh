@@ -769,7 +769,8 @@ float sampleCloudSunOpticalDepth(vec3 cloudHitPos, vec3 sunDir,
     // which is correct (no clouds outside the slab).
     float d = sampleCloudDensityTextured(p, computeCloudHeightFraction(p, args),
                                           typeLocal, coverageLocal, args,
-                                          AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler);
+                                          AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler,
+                                          AtmosphereCloudPlacementMap);
     opticalDepth += d;
   }
 
@@ -1070,7 +1071,8 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args, uint2 pixelCoord, uint frameI
 
     float hf = computeCloudHeightFraction(samplePos, args);
     float density = sampleCloudDensityTextured(samplePos, hf, typeLocal, coverageLocal, args,
-                                                AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler);
+                                                AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler,
+                                                AtmosphereCloudPlacementMap);
     if (density < 0.001f) {
       cacheValid = false;
       continue;

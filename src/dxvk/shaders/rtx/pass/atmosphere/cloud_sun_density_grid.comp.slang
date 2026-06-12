@@ -49,6 +49,13 @@ Texture3D<float> cloudNoise3DSrv;
 layout(binding = 3)
 SamplerState cloudNoise3DSamplerState;
 
+// Cloud placement map (fork — 2026-06-11, column-shaping rework). Same
+// resource the view march samples; the column model inside
+// sampleCloudDensityForShadow reads it so the baked shadows match the
+// per-column cloud shapes overhead.
+layout(binding = 4)
+Texture2D<float4> cloudPlacementMapSrv;
+
 // Grid dimensions kept in lockstep with RtxAtmosphere::kCloudVoxelGridX/Y/Z.
 static const uint kGridX = 256u;
 static const uint kGridY = 256u;
@@ -75,7 +82,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
 
   // March integral. Returns 0 if the ray never reaches the slab top.
   float opticalDepth = sampleCloudSunOpticalDepthAtWorld(
-      worldPosYUp, sunDirYUp, args, cloudNoise3DSrv, cloudNoise3DSamplerState);
+      worldPosYUp, sunDirYUp, args, cloudNoise3DSrv, cloudNoise3DSamplerState,
+      cloudPlacementMapSrv);
 
   cloudDSunGridOutput[dispatchId] = opticalDepth;
 }

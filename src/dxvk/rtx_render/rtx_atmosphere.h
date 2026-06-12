@@ -152,6 +152,20 @@ public:
   const Resources::Resource& getCloudSecondaryLut() const { return m_cloudSecondaryLut; }
 
   /**
+   * \brief Get the cloud placement map (fork — 2026-06-11, column-shaping
+   * rework).
+   *
+   * 512x512 RGBA8 tiled at cloudNoiseTileKm: R = cluster field (where clouds
+   * are, at cloud scale), G = per-cloud top-height jitter, B = base lift.
+   * Baked by cloud_placement_map_baker.comp.slang at init and re-baked live
+   * when cloudCellSizeKm / cloudNoiseTileKm change. Drives the per-column
+   * cloud model inside the density samplers (each cloud gets its own
+   * base/top and a per-cloud height axis for all vertical shaping +
+   * lighting).
+   */
+  const Resources::Resource& getCloudPlacementMap() const { return m_cloudPlacementMap; }
+
+  /**
    * \brief Ensure the cloud render RT exists at the requested downscale extent.
    *
    * Recreates the RT on resize. Cheap when the extent is unchanged. Called
@@ -254,7 +268,12 @@ private:
   void dispatchCloudNoise3DBake(Rc<DxvkContext> ctx);  // Stage C: baked at init + on bake-input change
   bool needsCloudNoiseRebake() const;                  // true when a bake input (tile / worley*) changed
   void cacheCloudNoiseBakeInputs();                    // snapshot the current bake inputs after a bake
-  void dispatchCloudHeightLutBake(Rc<DxvkContext> ctx);  // Fork: one-shot at init (slide 3 lift)
+  void dispatchCloudHeightLutBake(Rc<DxvkContext> ctx);  // Fork: at init + on cloudColumnShapingEnable change (slide 3 lift)
+  // Cloud placement map bake (fork — 2026-06-11, column-shaping rework).
+  // At init + on bake-input change (cloudCellSizeKm / cloudNoiseTileKm).
+  void dispatchCloudPlacementMapBake(Rc<DxvkContext> ctx);
+  bool needsCloudPlacementRebake() const;
+  void cacheCloudPlacementBakeInputs();
   void dispatchCloudSkyTransmittanceLut(Rc<DxvkContext> ctx);  // Fork: per-frame
   // Cloud voxel grid bakes (Nubis Cubed 2023, fork — 2026-05-12). Round-robin
   // every 8 frames. Driven from computeLuts based on the device frame ID.
@@ -313,6 +332,12 @@ private:
   static constexpr uint32_t kCloudSecondaryLutWidth  = 256;
   static constexpr uint32_t kCloudSecondaryLutHeight = 128;
 
+  // Cloud placement map (fork — 2026-06-11, column-shaping rework). 512x512
+  // RGBA8 = 1 MB VRAM, tiled at cloudNoiseTileKm (~23 m/texel at the 12 km
+  // default — ample for ~2 km cloud clusters). Keep in lockstep with
+  // kPlacementMapSize in cloud_placement_map_baker.comp.slang.
+  static constexpr uint32_t kCloudPlacementMapSize = 512;
+
   // Scale heights for exponential density profiles (in km)
   static constexpr float kRayleighScaleHeight = 8.0f;
   static constexpr float kMieScaleHeight = 1.2f;
@@ -345,6 +370,10 @@ private:
   // Secondary-ray cloud LUT (fork — 2026-06-10, perf). 256x128 RGBA16F,
   // baked every frame by dispatchCloudSecondaryLut.
   Resources::Resource m_cloudSecondaryLut;
+
+  // Cloud placement map (fork — 2026-06-11, column-shaping rework). 512x512
+  // RGBA8, baked at init + on input change by dispatchCloudPlacementMapBake.
+  Resources::Resource m_cloudPlacementMap;
 
   // Per-frame camera basis for cloud_render.comp.slang. Pushed via
   // setCloudRenderCameraBasis() from updateAtmosphereConstants before
@@ -416,6 +445,14 @@ private:
   uint32_t m_cachedWorleyOctaves       = 0u;
   float    m_cachedWorleyCarveStrength = 0.0f;
   float    m_cachedBaseFreqScale       = 0.0f;
+  // Cloud placement map re-bake gate (fork — 2026-06-11, column-shaping
+  // rework). Same pattern as the noise gate above: snapshot the last-baked
+  // inputs, re-bake only on actual change.
+  float    m_cachedPlacementCellSizeKm = 0.0f;
+  float    m_cachedPlacementTileKm     = 0.0f;
+  // Height-LUT re-bake gate: the LUT bakes a different curve family per
+  // column-shaping mode, so a flag flip re-bakes it (cheap 64x128 dispatch).
+  bool     m_cachedHeightLutColumnMode = false;
   bool m_initialized = false;
   bool m_lutsNeedRecompute = true;
 };

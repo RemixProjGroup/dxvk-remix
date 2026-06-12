@@ -213,7 +213,12 @@ struct AtmosphereArgs {
                                           // 2026-06-11, stage B). 1.0 = legacy bake. Re-bakes
                                           // the noise volume live on change. Reuses the former
                                           // padCloudLook1 slot; CB layout unchanged.
-  float padCloudLook2;
+  float cloudColumnShapingEnable;         // Per-column cloud model gate (fork — 2026-06-11,
+                                          // column-shaping rework). 1 = clouds are columns with
+                                          // their own base/top from the placement map and all
+                                          // vertical shaping keyed on per-cloud height; 0 = legacy
+                                          // global-slab shaping. Reuses the former padCloudLook2
+                                          // slot; CB layout unchanged.
 
   // ----- Cloud parameters (fork: procedural FBM cloud layer at fixed altitude) -----
   vec3 cloudColor;          // Cloud base color (typically white)
@@ -270,9 +275,10 @@ struct AtmosphereArgs {
   // (skyAmbientStrength = 0 means the feature is off by default).
   float cloudSkyAmbientStrength;                 // Overall multiplier on the sky-ambient term [0..3]. 0 = feature off.
   float cloudSkyAmbientCloudOcclusionStrength;   // Strength of cloud occlusion of sky ambient [0..1]. 1 = physical.
-  float padCloudC2;              // Former cloudNoiseWarpStrength (anti-tile domain warp,
-                                 // removed 2026-06-11 — hex de-tiling made it dead code).
-                                 // Kept as padding so the constant-buffer layout is unchanged.
+  float cloudCellSizeKm;         // Average cloud-cluster footprint size (km) for the placement
+                                 // map bake (fork — 2026-06-11, column-shaping rework). Re-bakes
+                                 // the placement map live on change. Reuses the former padCloudC2
+                                 // slot (ex-cloudNoiseWarpStrength); CB layout unchanged.
 
   // ----- Cloud voxel grid (Nubis Cubed 2023, fork — 2026-05-12) -----
   // 256x256x32 R16F precomputed grids storing summed optical depth along the
@@ -313,14 +319,17 @@ struct AtmosphereArgs {
   // The `Right` and `Up` vectors are pre-multiplied by tan(halfFovX/Y) so the
   // shader doesn't need fov/aspect knowledge. All in Y-up world (cloud math
   // convention — camera at origin).
+  // The three scalars riding the camera-basis vec3 padding below belong to
+  // the column-shaping rework (fork — 2026-06-11); they reuse the former
+  // pad_cr0..2 slots so the CB layout is unchanged.
   vec3  cloudRenderForwardYUp;
-  float pad_cr0;
+  float cloudColumnTopVariation;   // [0,1] per-cloud tower-height jitter amount (0 = uniform tops)
 
   vec3  cloudRenderRightYUp;       // Pre-scaled by tan(halfFovX) * aspectRatio
-  float pad_cr1;
+  float cloudColumnTopShape;       // Exponent mapping column presence -> top height (lower = taller edges)
 
   vec3  cloudRenderUpYUp;          // Pre-scaled by tan(halfFovY)
-  float pad_cr2;
+  float cloudColumnBaseVariation;  // [0,~0.4] max local cloud-base lift as a fraction of the slab
 
   // ----- Nubis Cubed sky-miss composite gate (fork — 2026-05-12, C5) -----
   // When 1, the primary-ray branch in evalSkyRadiance reads the prerendered
@@ -365,7 +374,9 @@ struct AtmosphereArgs {
   uint  cloudVoxelShadowsEnable;   // 0 or 1
   float cloudShadowMarchStrength;  // Beer-Lambert exponent multiplier
   float worldUnitsPerKm;           // game units per km
-  float pad_c6_0;                  // 16-byte alignment
+  float cloudColumnFeather;        // Coverage-remap feather band width for column presence
+                                   // (fork — 2026-06-11, column-shaping rework). Reuses the
+                                   // former pad_c6_0 slot; CB layout unchanged.
 
   vec3  cameraWorldPosYUpKm;       // Camera position in Y-up km, world-absolute
   float pad_c6_1;                  // 16-byte alignment

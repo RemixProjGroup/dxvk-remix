@@ -136,6 +136,14 @@ Texture2D<float2> AtmosphereCloudHeightLut;
 layout(binding = 11)
 SamplerState AtmosphereCloudHeightLutSampler;
 
+// Cloud placement map (fork — 2026-06-11, column-shaping rework). 512x512
+// RGBA8 baked by cloud_placement_map_baker.comp.slang, tiled at
+// cloudNoiseTileKm: R = cluster field, G = top-height jitter, B = base
+// lift. Drives the per-column cloud model in sampleCloudDensityTextured.
+// Sampled with the cloud-noise sampler (linear/REPEAT, slot 2).
+layout(binding = 12)
+Texture2D<float4> AtmosphereCloudPlacementMap;
+
 // Include the helper library AFTER the texture globals are declared so the
 // ATMOSPHERE_AVAILABLE-gated helper bodies (sampleDSun / sampleDAmbient /
 // fastJitter / cloudHeightProfile / etc.) resolve to our local declarations.
