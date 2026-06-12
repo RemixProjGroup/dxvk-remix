@@ -930,37 +930,12 @@ namespace fork_hooks {
               "1 = physical multiscattering (Hillaire-style LUT hemisphere integration; wavelength-amplifies each preset's "
               "Rayleigh bias for realistic saturation but harder to art-direct). Intermediate values blend.");
 
-          RemixGui::Checkbox("Minimal Sky LUT Re-bakes", &RtxOptions::skyLutCacheKeySplitEnableObject());
-          RemixGui::SetTooltipToLastWidgetOnHover(
-              "Re-bake each atmosphere lookup table only when its actual "
-              "inputs change: star-field rotation no longer re-bakes any LUT, "
-              "and sun/moon motion re-bakes only the small sky-view LUT "
-              "instead of the full cascade. No visual difference; uncheck to "
-              "restore the legacy single-gate re-bake for comparison.");
-
-          RemixGui::DragInt("Sun Shadow Ray Cap", &RtxOptions::sunShadowMaxSamplesObject(), 0.1f, 0, 12);
-          RemixGui::SetTooltipToLastWidgetOnHover(
-              "Cap on sun soft-shadow rays per pixel per frame. 0 = legacy "
-              "automatic count (1-12 depending on Mie anisotropy; ~4 at "
-              "typical settings). 1 = recommended: the denoiser averages a "
-              "single jittered ray into the same soft penumbra over a few "
-              "frames. Large performance win in physical-sky mode.");
-
-          RemixGui::DragInt("Moon Shadow Ray Cap", &RtxOptions::moonShadowMaxSamplesObject(), 0.1f, 0, 4);
-          RemixGui::SetTooltipToLastWidgetOnHover(
-              "Cap on moon soft-shadow rays per pixel per frame at night. "
-              "0 = legacy constant 4. 1 = recommended perf setting.");
-
-          RemixGui::DragFloat("Sky Re-bake Granularity", &RtxOptions::skyViewRebakeGranularityDegObject(),
-                              0.01f, 0.0f, 2.0f, "%.2f deg", sliderFlags);
-          RemixGui::SetTooltipToLastWidgetOnHover(
-              "How far the sun/moon must move (degrees) before the sky-view "
-              "lookup table re-bakes. 0 = legacy: re-bake every frame while "
-              "the sun animates. 0.1 = recommended: ~one re-bake per second "
-              "of game time, imperceptible color steps, large saving with a "
-              "moving time-of-day sun. Slider/preset changes always re-bake "
-              "immediately. Requires 'Minimal Sky LUT Re-bakes' (on by "
-              "default).");
+          // Sky perf workstream knobs (fork — 2026-06-11) are conf-only by
+          // design: skyLutCacheKeySplitEnable, sunShadowMaxSamples,
+          // moonShadowMaxSamples, skyViewRebakeGranularityDeg and the
+          // debug* bisect toggles all default to their validated production
+          // values and stay out of the UI (user decision after the in-game
+          // validation pass — "this is in a good enough spot now").
 
           ImGui::TreePop();
         }
@@ -968,59 +943,11 @@ namespace fork_hooks {
         ImGui::TreePop();
       }
 
-      // ----- Perf Bisect tree (fork — 2026-06-11, diagnostic) -----
-      // Skip toggles for the per-frame atmosphere dispatches that no
-      // production option can remove, so a live session can attribute
-      // frame time per dispatch. All default ON (= normal rendering).
-      // Skipping freezes the consumer's data (stale clouds / shadows) —
-      // measurement aid, not a quality setting.
-      if (ImGui::TreeNode("Perf Bisect (Diagnostic)")) {
-        ImGui::TextDisabled("Uncheck one at a time; read the frame-time delta.");
-
-        RemixGui::Checkbox("Cloud Voxel Grid Bakes", &RtxOptions::debugDispatchCloudVoxelGridsObject());
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Per-frame D_sun + D_ambient bakes (256x256x32, 8/6 taps per "
-            "voxel). Unchecked: cloud lighting + cumulus terrain shadows "
-            "freeze at their last state.");
-
-        RemixGui::Checkbox("Cloud Render Pass", &RtxOptions::debugDispatchCloudRenderObject());
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Per-frame screen-space cloud march. Runs even when the cloud-RT "
-            "composite option is off, so this is the only toggle that "
-            "removes its cost. Unchecked: primary clouds freeze in place.");
-
-        RemixGui::Checkbox("Cloud Sky Transmittance Bake", &RtxOptions::debugDispatchCloudSkyTransmittanceObject());
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Per-frame 32x16 volumetric sky-ambient occlusion bake. "
-            "Expected near-free.");
-
-        RemixGui::Checkbox("Sky LUT Bakes", &RtxOptions::debugDispatchSkyLutsObject());
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Transmittance / multiscatter / sky-view LUT bake cascade. With "
-            "a moving time-of-day sun the sky-view LUT re-bakes every frame "
-            "by design. Unchecked: all three freeze at their last state "
-            "(sky colors stop tracking the sun) — the delta is the per-frame "
-            "bake cost.");
-
-        RemixGui::Checkbox("Atmosphere Sun/Moon NEE", &RtxOptions::debugEnableAtmosphereNeeObject());
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Sun + moon soft-shadow visibility rays in the direct and "
-            "indirect integrators. Unchecked: skipped entirely (sun/moon "
-            "lighting goes black) — the delta is the total NEE ray cost at "
-            "the current Shadow Ray Cap settings.");
-
-        RemixGui::Checkbox("Full Sky Miss Shading", &RtxOptions::debugEnableSkyMissShadingObject());
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Full evalSkyRadiance per sky-miss ray. Unchecked: every "
-            "sky-miss returns flat grey — the delta is the total per-ray "
-            "sky shading cost (LUT taps, night sky, moons, cloud composite, "
-            "temporal smoothing I/O).");
-
-        ImGui::TextDisabled("Also useful: Fast Cloud Reflections (Clouds tree),");
-        ImGui::TextDisabled("Minimal Sky LUT Re-bakes + Shadow Ray Caps (Atmosphere > Advanced).");
-
-        ImGui::TreePop();
-      }
+      // The Perf Bisect (Diagnostic) tree (fork — 2026-06-11) was removed
+      // from the UI after the sky perf workstream closed; the six
+      // rtx.atmosphere.debug* skip toggles it drove remain conf-tunable
+      // (all default ON = normal rendering) for future regression hunting.
+      // See docs/fork-touchpoints.md, sky perf workstream entries.
 
       // ----- Night Sky tree (fork, restructured) -----
       if (ImGui::TreeNode("Night Sky")) {

@@ -1762,3 +1762,15 @@ Production fix for the per-frame sky-view re-bake the frozen-cascade bisect iden
   *"Sky Re-bake Granularity" DragFloat in the Atmosphere → Advanced ImGui tree.*
 
 ---
+
+## Workstream — Sky perf: pin validated defaults + retire workstream UI (fork — 2026-06-11)
+
+Closing commit of the sky perf workstream. In-game validation confirmed the two production levers (sun/moon NEE shadow-ray caps at 1, sky-view re-bake granularity at 0.1°) deliver the measured wins with no visual hit, so their defaults are pinned and the workstream's ImGui surface is retired per the user's call ("this is in a good enough spot now"). All options remain conf-tunable; only the UI is removed.
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Defaults: `sunShadowMaxSamples` 0 → 1, `moonShadowMaxSamples` 0 → 1, `skyViewRebakeGranularityDeg` 0.0 → 0.1. Doc strings note the validation; 0 still selects legacy behavior via conf.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned removal.
+  *Drops from the UI: the "Minimal Sky LUT Re-bakes" checkbox, the "Sun/Moon Shadow Ray Cap" DragInts, the "Sky Re-bake Granularity" DragFloat (Atmosphere → Advanced), and the entire "Perf Bisect (Diagnostic)" tree. The underlying options (`skyLutCacheKeySplitEnable`, the caps, the granularity, and the six `debug*` bisect toggles) stay declared and conf-tunable for future regression hunting.*
+
+---

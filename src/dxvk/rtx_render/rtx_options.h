@@ -1709,17 +1709,18 @@ namespace dxvk {
     // pipeline (NRD / DLSS-RR) temporally converges one blue-noise-jittered
     // ray per frame to the same soft penumbra, so the multi-ray loop is
     // oversampling. 0 = legacy uncapped count.
-    RTX_OPTION("rtx.atmosphere", int, sunShadowMaxSamples, 0,
+    RTX_OPTION("rtx.atmosphere", int, sunShadowMaxSamples, 1,
                "Cap on sun soft-shadow visibility rays per primary pixel "
                "(secondary bounces use half the capped value, min 1). "
-               "0 = legacy anisotropy-driven count (1-12). 1 is the "
-               "recommended perf setting: the denoiser temporally converges "
-               "a single jittered ray to the same penumbra softness.");
-    RTX_OPTION("rtx.atmosphere", int, moonShadowMaxSamples, 0,
+               "Default 1 (in-game validated 2026-06-11: large perf win, no "
+               "penumbra smudging — the denoiser temporally converges a "
+               "single jittered ray to the same softness). 0 = legacy "
+               "anisotropy-driven count (1-12).");
+    RTX_OPTION("rtx.atmosphere", int, moonShadowMaxSamples, 1,
                "Cap on moon soft-shadow visibility rays per primary pixel "
                "at night (secondary bounces use half the capped value, "
-               "min 1). 0 = legacy constant 4. 1 is the recommended perf "
-               "setting.");
+               "min 1). Default 1 (in-game validated 2026-06-11). "
+               "0 = legacy constant 4.");
 
     // Sky perf bisect toggles (fork — 2026-06-11, diagnostic). The
     // atmosphere pass runs several per-frame dispatches that no production
@@ -1774,13 +1775,14 @@ namespace dxvk {
     // timescale). Quantizing the sun/moon directions inside the cache key
     // re-bakes only when they have moved past the granularity step; all
     // other parameter changes (sliders, presets) still re-bake immediately.
-    RTX_OPTION("rtx.atmosphere", float, skyViewRebakeGranularityDeg, 0.0f,
+    RTX_OPTION("rtx.atmosphere", float, skyViewRebakeGranularityDeg, 0.1f,
                "Angular granularity (degrees) of sun/moon motion that "
-               "triggers a sky-view LUT re-bake. 0 = legacy: re-bake every "
-               "frame while the sun animates. 0.1 is the recommended perf "
-               "setting (~one re-bake per second of game time at default "
-               "timescale; the per-step sky color change is imperceptible). "
-               "Non-direction parameter changes always re-bake immediately.");
+               "triggers a sky-view LUT re-bake. Default 0.1 (in-game "
+               "validated 2026-06-11: ~one re-bake per second of game time "
+               "at default timescale, sky tracks the sun smoothly, objective "
+               "frame-time win). 0 = legacy: re-bake every frame while the "
+               "sun animates. Non-direction parameter changes always "
+               "re-bake immediately.");
 
     // Split sky-LUT cache keys (fork — 2026-06-11, perf). The three sky LUT
     // bakes (transmittance / multiscatter / sky-view) were gated by ONE
