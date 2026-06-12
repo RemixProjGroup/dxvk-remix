@@ -398,6 +398,11 @@ private:
   // m_cachedArgs above remains the legacy monolithic key for the off path.
   AtmosphereArgs m_cachedSkyViewKey = {};
   AtmosphereArgs m_cachedTransmittanceMsKey = {};
+  // Voxel-grid re-bake key (fork — 2026-06-11, perf). Wind / camera motion
+  // quantized by cloudVoxelGridRebakeGranularityKm; see
+  // normalizeForVoxelGridKey. Zero-init forces a first-frame bake; the
+  // cloud-noise re-bake path also zeroes it to force same-frame refresh.
+  AtmosphereArgs m_cachedVoxelGridKey = {};
   // Cloud noise 3D re-bake gate (fork). The 256^3 noise volume bakes its
   // periodic structure from cloudNoiseTileKm + the cloudWorley* inputs, while
   // the runtime sampler divides world position by the *live* cloudNoiseTileKm.

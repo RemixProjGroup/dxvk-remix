@@ -1774,3 +1774,15 @@ Closing commit of the sky perf workstream. In-game validation confirmed the two 
   *Drops from the UI: the "Minimal Sky LUT Re-bakes" checkbox, the "Sun/Moon Shadow Ray Cap" DragInts, the "Sky Re-bake Granularity" DragFloat (Atmosphere → Advanced), and the entire "Perf Bisect (Diagnostic)" tree. The underlying options (`skyLutCacheKeySplitEnable`, the caps, the granularity, and the six `debug*` bisect toggles) stay declared and conf-tunable for future regression hunting.*
 
 ---
+
+## Workstream — Cloud perf: voxel-grid re-bake granularity (fork — 2026-06-11)
+
+Post-workstream follow-up at the user's request: the perf-bisect freeze of the per-frame D_sun / D_ambient bakes showed a large win with no short-term visual change — the staleness only accumulates as wind / camera / sun move. Same pattern as the sky-view fix: a cache key (`normalizeForVoxelGridKey`) quantizes the grid bake's motion inputs — wind scroll + camera position by `cloudVoxelGridRebakeGranularityKm`, sun/moon directions by the existing `skyViewRebakeGranularityDeg` — so the grids re-bake once per step of actual motion instead of every frame, staleness bounded by the step. Cloud parameter changes stay exact in the key (same-frame re-bake) and a cloud-noise re-bake force-clears the cached key. In-game validated at 0.1 km (default): ~0.7 ms saved, no visible stepping in cloud lighting or terrain shadows; 0 = legacy every-frame via conf. Note this lever lives on the cloud side — full-rate bakes were the deliberate 2026-05-19 decision against the stuttery fixed-cadence 8-frame round-robin; motion-quantized bounded-error steps passed where fixed cadence failed. Conf-only like the other workstream knobs (no UI).
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *`RTX_OPTION("rtx.atmosphere", float, cloudVoxelGridRebakeGranularityKm, 0.1f, …)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned additions.
+  *`normalizeForVoxelGridKey` (sky-view key base + wind/camera re-injected quantized), `m_cachedVoxelGridKey`, the dirty gate around the two grid dispatches in `computeLuts`, and the force-clear on cloud-noise re-bake.*
+
+---

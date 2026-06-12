@@ -379,6 +379,31 @@ namespace {
         args.moons[i].direction.z = quantizeDirComponent(args.moons[i].direction.z, stepRad);
       }
     }
+  }
+
+  // Cache key for the D_sun / D_ambient voxel grid bakes (fork — 2026-06-11,
+  // perf). Starts from the sky-view key (per-frame fields zeroed, star /
+  // Milky Way fields zeroed, sun + moon directions quantized by
+  // skyViewRebakeGranularityDeg), then RE-INJECTS the two motion inputs the
+  // grid bake genuinely depends on — wind scroll and camera position, which
+  // the base normalization zeroes outright — quantized by the km granularity.
+  // Continuous wind / camera motion then flips the memcmp once per step of
+  // travel instead of every frame; each re-bake uses exact live values, so
+  // grid staleness is bounded by the step. Every cloud parameter stays exact
+  // in the key, so slider changes re-bake the same frame.
+  // quantizeDirComponent is a plain floor-snap — domain-agnostic, used here
+  // on km components.
+  void normalizeForVoxelGridKey(AtmosphereArgs& args) {
+    const vec2 windKm = args.cloudWindOffset;
+    const vec3 camKm  = args.cameraWorldPosYUpKm;
+    normalizeForSkyViewLutKey(args);
+
+    const float stepKm = std::max(RtxOptions::cloudVoxelGridRebakeGranularityKm(), 1e-5f);
+    args.cloudWindOffset.x     = quantizeDirComponent(windKm.x, stepKm);
+    args.cloudWindOffset.y     = quantizeDirComponent(windKm.y, stepKm);
+    args.cameraWorldPosYUpKm.x = quantizeDirComponent(camKm.x, stepKm);
+    args.cameraWorldPosYUpKm.y = quantizeDirComponent(camKm.y, stepKm);
+    args.cameraWorldPosYUpKm.z = quantizeDirComponent(camKm.z, stepKm);
 
     args.starBrightness     = 0.0f;
     args.starDensity        = 0.0f;
@@ -975,6 +1000,9 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
       VK_ACCESS_SHADER_READ_BIT);
     cacheCloudNoiseBakeInputs();
+    // The voxel grids integrate the noise volume — force their re-bake this
+    // frame regardless of the motion-granularity gate below.
+    memset(&m_cachedVoxelGridKey, 0, sizeof(m_cachedVoxelGridKey));
   }
 
   // Sky LUTs (transmittance / multiscattering / sky-view) only rebake when
@@ -1115,7 +1143,24 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
   // compute units. Cost is ~8× the prior amortized bake; profile if it
   // becomes a frame-time bottleneck and revisit (a smaller grid resolution
   // or per-tile dispatch would be the first cuts to consider).
-  if (RtxOptions::debugDispatchCloudVoxelGrids()) {
+  // Voxel-grid re-bake granularity (fork — 2026-06-11, perf). At option 0
+  // the grids re-bake every frame (legacy). At > 0, they re-bake only when
+  // a bake input has moved past its step: wind scroll / camera travel by
+  // the km granularity, sun (and moon) direction by the sky-view angular
+  // granularity, any other parameter exactly. Cloud-body lighting and (when
+  // enabled) terrain cumulus shadows read grids that are stale by at most
+  // one step between re-bakes.
+  bool voxelGridsDirty = true;
+  if (RtxOptions::cloudVoxelGridRebakeGranularityKm() > 0.0f) {
+    AtmosphereArgs voxelKey = getAtmosphereArgs();
+    normalizeForVoxelGridKey(voxelKey);
+    voxelGridsDirty = memcmp(&voxelKey, &m_cachedVoxelGridKey, sizeof(AtmosphereArgs)) != 0;
+    if (voxelGridsDirty) {
+      m_cachedVoxelGridKey = voxelKey;
+    }
+  }
+
+  if (RtxOptions::debugDispatchCloudVoxelGrids() && voxelGridsDirty) {
     ctx->emitMemoryBarrier(0,
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
       VK_ACCESS_SHADER_WRITE_BIT,

@@ -1722,6 +1722,23 @@ namespace dxvk {
                "min 1). Default 1 (in-game validated 2026-06-11). "
                "0 = legacy constant 4.");
 
+    // Cloud voxel-grid re-bake granularity (fork — 2026-06-11, perf). The
+    // D_sun / D_ambient grids re-baked every frame; the perf-bisect freeze
+    // showed a large win with only slowly-accumulating staleness (the bake
+    // inputs — wind scroll, camera position, sun direction — move slowly).
+    // Quantizing those inputs inside a cache key re-bakes once per step of
+    // actual motion instead of once per frame, bounding staleness by the
+    // step. Sun direction shares skyViewRebakeGranularityDeg (same 0.1 deg
+    // perceptual class); this option is the distance step for wind + camera.
+    // Cloud parameter changes and noise-volume re-bakes always force an
+    // immediate grid re-bake.
+    RTX_OPTION("rtx.atmosphere", float, cloudVoxelGridRebakeGranularityKm, 0.1f,
+               "Distance (km) the cloud wind scroll or camera must travel "
+               "before the D_sun/D_ambient cloud lighting grids re-bake. "
+               "Default 0.1 (in-game validated 2026-06-11: ~0.7 ms saved, "
+               "no visible stepping in cloud lighting or terrain shadows). "
+               "0 = legacy: re-bake every frame.");
+
     // Sky perf bisect toggles (fork — 2026-06-11, diagnostic). The
     // atmosphere pass runs several per-frame dispatches that no production
     // option can skip — so frame-time A/B tests (skyMode, cloudEnabled)

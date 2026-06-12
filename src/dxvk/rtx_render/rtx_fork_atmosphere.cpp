@@ -937,6 +937,9 @@ namespace fork_hooks {
           // values and stay out of the UI (user decision after the in-game
           // validation pass — "this is in a good enough spot now").
 
+          // (cloudVoxelGridRebakeGranularityKm is conf-only like the other
+          // workstream knobs above; validated at its 0.1 default.)
+
           ImGui::TreePop();
         }
 
