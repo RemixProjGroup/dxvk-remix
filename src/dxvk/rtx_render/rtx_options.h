@@ -1745,6 +1745,13 @@ namespace dxvk {
                "Diagnostic: dispatch the per-frame 32x16 cloud-sky-"
                "transmittance bake (volumetric sky-ambient occlusion). "
                "Uncheck to skip; expected to be near-free.");
+    RTX_OPTION("rtx.atmosphere", bool, debugDispatchSkyLuts, true,
+               "Diagnostic: run the sky LUT bake cascade (transmittance / "
+               "multiscatter / sky-view). With a continuously-animating "
+               "time-of-day sun the sky-view LUT legitimately re-bakes every "
+               "frame; uncheck to freeze all three LUTs at their last state "
+               "and read the frame-time delta. Sky colors stop tracking the "
+               "sun while unchecked.");
     RTX_OPTION("rtx.atmosphere", bool, debugEnableAtmosphereNee, true,
                "Diagnostic: evaluate atmosphere sun + moon NEE (the "
                "soft-shadow visibility rays) in the direct and indirect "

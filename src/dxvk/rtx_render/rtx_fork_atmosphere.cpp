@@ -983,6 +983,14 @@ namespace fork_hooks {
             "Per-frame 32x16 volumetric sky-ambient occlusion bake. "
             "Expected near-free.");
 
+        RemixGui::Checkbox("Sky LUT Bakes", &RtxOptions::debugDispatchSkyLutsObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Transmittance / multiscatter / sky-view LUT bake cascade. With "
+            "a moving time-of-day sun the sky-view LUT re-bakes every frame "
+            "by design. Unchecked: all three freeze at their last state "
+            "(sky colors stop tracking the sun) — the delta is the per-frame "
+            "bake cost.");
+
         RemixGui::Checkbox("Atmosphere Sun/Moon NEE", &RtxOptions::debugEnableAtmosphereNeeObject());
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Sun + moon soft-shadow visibility rays in the direct and "

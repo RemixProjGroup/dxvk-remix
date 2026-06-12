@@ -959,7 +959,15 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
   // pair along. tmsDirty implies skyViewDirty — the transmittance/MS key is
   // a strict sub-key of the sky-view key, and the sky-view bake consumes
   // both LUTs, so the explicit OR keeps the data dependency obvious.
-  if (RtxOptions::skyLutCacheKeySplitEnable()) {
+  //
+  // Perf-bisect gate (fork — 2026-06-11, diagnostic): a continuously-
+  // animating time-of-day sun re-bakes the sky-view LUT every frame by
+  // design; the toggle freezes the whole cascade so a live session can
+  // read its per-frame cost. Sky colors stop tracking the sun while off.
+  if (!RtxOptions::debugDispatchSkyLuts()) {
+    // Frozen: skip all three bakes and leave caches untouched so the next
+    // enabled frame re-evaluates the gates normally.
+  } else if (RtxOptions::skyLutCacheKeySplitEnable()) {
     AtmosphereArgs currentArgs = getAtmosphereArgs();
     AtmosphereArgs tmsKey = currentArgs;
     normalizeForTransmittanceMsKey(tmsKey);

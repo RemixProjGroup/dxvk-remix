@@ -1744,4 +1744,6 @@ Extends the per-dispatch bisect kit into the integrators: with the dispatch cost
 - **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
   *"Atmosphere Sun/Moon NEE" / "Full Sky Miss Shading" checkboxes in the Perf Bisect (Diagnostic) ImGui tree.*
 
+Follow-up (same day): `debugDispatchSkyLuts` (rtx_options.h, default true) freezes the whole LUT bake cascade — the last untoggleable GPU piece of the atmosphere; with a moving time-of-day sun the sky-view LUT re-bakes every frame by design, and this measures that. `computeLuts` short-circuits the gate block when off (rtx_atmosphere.cpp); "Sky LUT Bakes" checkbox added to the Perf Bisect tree (rtx_fork_atmosphere.cpp).
+
 ---
