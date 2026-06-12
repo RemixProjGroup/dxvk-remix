@@ -1005,16 +1005,29 @@ namespace fork_hooks {
             "Resolution of the cloud render relative to the internal render "
             "resolution. 0.5 = quarter the pixels (~4x cheaper clouds, "
             "slightly softer); 1.0 = native (legacy). Applies live.");
-        RemixGui::DragFloat("March Step Size", &RtxOptions::cloudViewStepKmObject(),
+        RemixGui::DragFloat("Cloud Sample Spacing", &RtxOptions::cloudViewStepKmObject(),
                             0.01f, 0.0f, 1.0f, "%.2f km", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
-            "Target distance between cloud samples along each view ray. "
-            "Rays grazing the horizon span 50+ km of cloud layer; holding a "
-            "step length (instead of a fixed step count) removes the "
-            "horizontal banding that undersampling painted there. Smaller = "
-            "sharper but costlier horizon clouds (count capped via "
-            "rtx.atmosphere.cloudViewSamplesMax). 0 = legacy fixed count. "
+            "Distance between cloud samples along each view ray, in km. "
+            "This is the fix for the horizontal banding near the horizon: "
+            "sightlines there cross 50+ km of cloud layer, and the old "
+            "fixed 32-sample march spaced samples too far apart to resolve "
+            "the clouds.\n\nPERFORMANCE: cost scales with how many samples "
+            "a ray needs -- overhead sightlines are unchanged, but "
+            "horizon-heavy views can take up to Max Cloud Samples / 32 "
+            "times the cloud cost (4x at the defaults). Raise the spacing "
+            "or lower Max Cloud Samples to claw the cost back, or set 0 "
+            "to restore the legacy fixed march (banding returns). "
+            "Cloud Render Scale above also directly offsets this cost. "
             "Applies live.");
+        RemixGui::DragInt("Max Cloud Samples", &RtxOptions::cloudViewSamplesMaxObject(),
+                          1.0f, 32, 256, "%d", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Hard cap on cloud samples per ray -- the performance governor "
+            "for Cloud Sample Spacing. 128 resolves the default spacing "
+            "out to ~38 km of cloud span; lower values cost less but let "
+            "a little banding back in at the far horizon. 32 = legacy "
+            "cost ceiling. Applies live.");
 
         ImGui::Separator();
         ImGui::TextDisabled("Coverage & Shape");

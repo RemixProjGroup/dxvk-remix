@@ -1601,16 +1601,22 @@ namespace dxvk {
     // step LENGTH instead; the count floors at cloudViewSamples and caps
     // at cloudViewSamplesMax.
     RTX_OPTION("rtx.atmosphere", float, cloudViewStepKm, 0.3f,
-               "Target cloud-march step length in km [0.1..1]. Horizon-"
-               "grazing rays get span/step samples (capped below) instead "
-               "of stretching a fixed count over 50+ km — removes the "
-               "horizontal banding aliasing toward the horizon. 0 = legacy "
-               "fixed step count. Applies live.");
+               "Distance between cloud samples along each view ray, in km "
+               "[0.1..1]. Fixes the horizontal banding near the horizon "
+               "(sightlines there cross 50+ km of cloud layer, which the "
+               "legacy fixed 32-sample march could not resolve). "
+               "PERFORMANCE: cost scales with samples per ray — overhead "
+               "views are unchanged, horizon-heavy views can cost up to "
+               "cloudViewSamplesMax/32 times more cloud time (4x at "
+               "defaults). Raise the spacing or lower the cap to trade "
+               "quality for speed; 0 = legacy fixed count (banding "
+               "returns). Applies live.");
     RTX_OPTION("rtx.atmosphere", uint32_t, cloudViewSamplesMax, 128,
-               "Cap on the adaptive cloud-march step count [32..256]. "
-               "Bounds the per-ray cost of horizon-grazing spans; the "
-               "column model's early-outs keep added steps cheap where the "
-               "slab is empty. Applies live.");
+               "Hard cap on cloud samples per ray [32..256] — the "
+               "performance governor for cloudViewStepKm. 128 resolves the "
+               "default spacing out to ~38 km of cloud span; lower costs "
+               "less but lets some banding back in at the far horizon. "
+               "32 = legacy cost ceiling. Applies live.");
     RTX_OPTION("rtx.atmosphere", float, cloudUndersideLightSigma, 0.12f,
                "Extinction of the light filtering down through each cloud, "
                "per km of overlying water [0..0.5]. Drives the analytic "

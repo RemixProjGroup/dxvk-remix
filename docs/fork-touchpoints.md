@@ -1904,4 +1904,6 @@ Companion fix shipped with column-shaping rev 3, prompted by a community diagram
 - **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
   *"March Step Size" DragFloat next to Cloud Render Scale; the cap stays conf-only.*
 
+- **Clarity pass (same day, post-validation):** the in-game fix was user-validated with an accepted perf cost, so the controls now state it plainly: slider renamed "Cloud Sample Spacing" with a PERFORMANCE paragraph in the tooltip (cost scales up to cap/32 ≈ 4x on horizon-heavy views at defaults; how to trade it back), and the cap is exposed as a "Max Cloud Samples" DragInt (the perf governor). Option docstrings updated to match.
+
 ---
