@@ -1747,3 +1747,18 @@ Extends the per-dispatch bisect kit into the integrators: with the dispatch cost
 Follow-up (same day): `debugDispatchSkyLuts` (rtx_options.h, default true) freezes the whole LUT bake cascade — the last untoggleable GPU piece of the atmosphere; with a moving time-of-day sun the sky-view LUT re-bakes every frame by design, and this measures that. `computeLuts` short-circuits the gate block when off (rtx_atmosphere.cpp); "Sky LUT Bakes" checkbox added to the Perf Bisect tree (rtx_fork_atmosphere.cpp).
 
 ---
+
+## Workstream — Sky perf: sky-view re-bake granularity (fork — 2026-06-11)
+
+Production fix for the per-frame sky-view re-bake the frozen-cascade bisect identified (objective frame-time improvement, no visual hit). With a continuously-animating time-of-day sun, the sky-view cache key sees a new `sunDirection` every frame. `skyViewRebakeGranularityDeg` (default 0 = legacy every-frame behavior; recommended 0.1) quantizes the sun and moon directions INSIDE the sky-view cache key, so continuous motion flips the memcmp only when a direction crosses a granularity step — the bake itself always uses exact current values, so each re-bake is exact and staleness between re-bakes is bounded by the step angle. All non-direction fields stay exact (sliders / presets re-bake immediately). Applies to the split-key path (`skyLutCacheKeySplitEnable`, on by default).
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *`RTX_OPTION("rtx.atmosphere", float, skyViewRebakeGranularityDeg, 0.0f, …)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned addition.
+  *`quantizeDirComponent` helper; `normalizeForSkyViewLutKey` quantizes `sunDirection` + all moon directions by the option's step (no-op at 0). The transmittance/MS key is unaffected (it zeroes those fields outright).*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *"Sky Re-bake Granularity" DragFloat in the Atmosphere → Advanced ImGui tree.*
+
+---

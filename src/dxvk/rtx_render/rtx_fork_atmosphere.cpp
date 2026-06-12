@@ -951,6 +951,17 @@ namespace fork_hooks {
               "Cap on moon soft-shadow rays per pixel per frame at night. "
               "0 = legacy constant 4. 1 = recommended perf setting.");
 
+          RemixGui::DragFloat("Sky Re-bake Granularity", &RtxOptions::skyViewRebakeGranularityDegObject(),
+                              0.01f, 0.0f, 2.0f, "%.2f deg", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How far the sun/moon must move (degrees) before the sky-view "
+              "lookup table re-bakes. 0 = legacy: re-bake every frame while "
+              "the sun animates. 0.1 = recommended: ~one re-bake per second "
+              "of game time, imperceptible color steps, large saving with a "
+              "moving time-of-day sun. Slider/preset changes always re-bake "
+              "immediately. Requires 'Minimal Sky LUT Re-bakes' (on by "
+              "default).");
+
           ImGui::TreePop();
         }
 

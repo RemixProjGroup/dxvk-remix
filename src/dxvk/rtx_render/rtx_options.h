@@ -1765,6 +1765,23 @@ namespace dxvk {
                "LUT taps, night sky, moons, cloud composite, temporal "
                "smoothing I/O). Sky renders grey while unchecked.");
 
+    // Sky-view re-bake granularity (fork — 2026-06-11, perf). With a
+    // continuously-animating time-of-day sun, the sky-view LUT re-bakes
+    // every frame because its cache key sees a new sun direction each
+    // frame — bisect-measured as the last reducible chunk of the sky cost,
+    // and an in-game frozen-cascade test confirmed no visual hit from far
+    // sparser re-bakes (the sun moves ~0.1 deg/sec at FNV's default
+    // timescale). Quantizing the sun/moon directions inside the cache key
+    // re-bakes only when they have moved past the granularity step; all
+    // other parameter changes (sliders, presets) still re-bake immediately.
+    RTX_OPTION("rtx.atmosphere", float, skyViewRebakeGranularityDeg, 0.0f,
+               "Angular granularity (degrees) of sun/moon motion that "
+               "triggers a sky-view LUT re-bake. 0 = legacy: re-bake every "
+               "frame while the sun animates. 0.1 is the recommended perf "
+               "setting (~one re-bake per second of game time at default "
+               "timescale; the per-step sky color change is imperceptible). "
+               "Non-direction parameter changes always re-bake immediately.");
+
     // Split sky-LUT cache keys (fork — 2026-06-11, perf). The three sky LUT
     // bakes (transmittance / multiscatter / sky-view) were gated by ONE
     // memcmp over the whole normalized arg struct, with two per-frame

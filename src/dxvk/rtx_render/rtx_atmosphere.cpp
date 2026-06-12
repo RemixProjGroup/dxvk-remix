@@ -337,6 +337,15 @@ namespace {
     args.cloudVoxelGridFrameOffset   = 0.0f;
   }
 
+  // Quantize one direction-vector component to the granularity step.
+  // Component-wise snapping of a unit vector: a step of S radians changes a
+  // component roughly every S radians of angular travel (within ~sqrt(3)x
+  // depending on direction), which is exactly the precision class needed —
+  // the option is a perceptual budget, not a geometric guarantee.
+  float quantizeDirComponent(float v, float stepRad) {
+    return std::floor(v / stepRad + 0.5f) * stepRad;
+  }
+
   // Split cache key for the sky-view LUT bake (fork — 2026-06-11, perf).
   // Extends normalizeForSkyLutCache by zeroing the star / Milky Way fields:
   // they feed only the runtime miss shading (evalNightSky / evalStarField),
@@ -344,8 +353,32 @@ namespace {
   // (sidereal animation — see atmosphere_args.h), which made the monolithic
   // memcmp gate fire every frame at night and re-bake the entire
   // transmittance → multiscatter → sky-view cascade for nothing.
+  //
+  // Sky-view re-bake granularity (fork — 2026-06-11, perf): when
+  // skyViewRebakeGranularityDeg > 0, the sun and moon directions are
+  // quantized INSIDE the key, so continuous time-of-day motion flips the
+  // memcmp only when a direction crosses a granularity step — one re-bake
+  // per ~0.1 deg of travel instead of one per frame. The LUT consumed
+  // between steps is stale by at most the step angle, which the in-game
+  // frozen-cascade bisect showed is imperceptible at far larger errors.
+  // Every non-direction field stays exact, so slider / preset changes
+  // re-bake immediately as before.
   void normalizeForSkyViewLutKey(AtmosphereArgs& args) {
     normalizeForSkyLutCache(args);
+
+    const float granularityDeg = RtxOptions::skyViewRebakeGranularityDeg();
+    if (granularityDeg > 0.0f) {
+      constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+      const float stepRad = granularityDeg * kDegToRad;
+      args.sunDirection.x = quantizeDirComponent(args.sunDirection.x, stepRad);
+      args.sunDirection.y = quantizeDirComponent(args.sunDirection.y, stepRad);
+      args.sunDirection.z = quantizeDirComponent(args.sunDirection.z, stepRad);
+      for (uint32_t i = 0; i < MAX_MOONS; ++i) {
+        args.moons[i].direction.x = quantizeDirComponent(args.moons[i].direction.x, stepRad);
+        args.moons[i].direction.y = quantizeDirComponent(args.moons[i].direction.y, stepRad);
+        args.moons[i].direction.z = quantizeDirComponent(args.moons[i].direction.z, stepRad);
+      }
+    }
 
     args.starBrightness     = 0.0f;
     args.starDensity        = 0.0f;
