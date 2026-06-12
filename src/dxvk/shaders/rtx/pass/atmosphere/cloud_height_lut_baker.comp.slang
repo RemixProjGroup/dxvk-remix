@@ -62,8 +62,14 @@
 layout(binding = 0)
 ConstantBuffer<AtmosphereArgs> atmosphereArgs;
 
-layout(binding = 1, rg8)
-RWTexture2D<float2> cloudHeightLutOutput;
+// RGBA8 (was RG8 — column-shaping rev 3, 2026-06-12):
+//   R = density envelope, G = coverage threshold scale (unchanged),
+//   B = cumulative envelope integral from hf to the cloud top
+//       (∫_hf^1 R(u) du, in column-height units) — the analytic
+//       "water above this height" used by the per-column downwelling
+//       light field in evalNubisCubedSample. A unused (1).
+layout(binding = 1, rgba8)
+RWTexture2D<float4> cloudHeightLutOutput;
 
 // =============================================================================
 // R channel — density envelope multiplier (per-altitude shape mask)
@@ -166,9 +172,27 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
   float type = (float(dispatchId.x) + 0.5f) / float(outputDim.x);
   float hf   = (float(dispatchId.y) + 0.5f) / float(outputDim.y);
 
-  float r = (args.cloudColumnShapingEnable > 0.5f)
-          ? densityEnvelopeColumn(hf, type)
-          : densityEnvelope(hf, type);
+  bool columnMode = args.cloudColumnShapingEnable > 0.5f;
+  float r = columnMode ? densityEnvelopeColumn(hf, type)
+                       : densityEnvelope(hf, type);
   float g = coverageThresholdScale(hf, type);
-  cloudHeightLutOutput[dispatchId.xy] = float2(saturate(r), saturate(g));
+
+  // B — cumulative envelope integral from hf to the top (midpoint rule,
+  // 64 steps over the remaining span; one-shot bake so cost is irrelevant).
+  // Integrates whichever envelope family is active so a mode flip re-bakes
+  // a consistent (R, B) pair. Range: ∫_0^1 R du ≤ 1, fits UNORM8 directly.
+  float integ = 0.0f;
+  {
+    const int kSteps = 64;
+    float span = 1.0f - hf;
+    float du = span / float(kSteps);
+    for (int i = 0; i < kSteps; ++i) {
+      float u = hf + (float(i) + 0.5f) * du;
+      integ += (columnMode ? densityEnvelopeColumn(u, type)
+                           : densityEnvelope(u, type)) * du;
+    }
+  }
+
+  cloudHeightLutOutput[dispatchId.xy] =
+      float4(saturate(r), saturate(g), saturate(integ), 1.0f);
 }

@@ -131,7 +131,9 @@ struct AtmosphereArgs {
   float starPsfSharpness;               // PSF exponent for evalStarField (default 20.0; was hardcoded 800)
   float starCloudExtinctionPower;       // Power exponent on cloud view-T when extincting stars (default 2.5)
   float starAmbientCouplingStrength;    // Star/airglow coupling into cloud nightLight (default 0.01)
-  float padStarCloud0;
+  float cloudViewSamplesMax;            // Cap on the adaptive cloud-march step count (fork —
+                                        // 2026-06-12, adaptive march sampling). Reuses the former
+                                        // padStarCloud0 slot; CB layout unchanged.
 
   // ----- Milky Way controls (fork) -----
   // The galactic band is two independent visual layers: (1) increased star
@@ -379,12 +381,12 @@ struct AtmosphereArgs {
                                    // former pad_c6_0 slot; CB layout unchanged.
 
   vec3  cameraWorldPosYUpKm;       // Camera position in Y-up km, world-absolute
-  float cloudColumnUndersideContrast; // [0,1] how strongly per-column thickness modulates the
-                                   // underside (bottom-darkening) brightness — thick columns
-                                   // darken fully, thin columns stay bright (transmitted-light
-                                   // cue). 0 = legacy uniform darkening. (fork — 2026-06-12,
-                                   // column-shaping rework rev 2.) Reuses the former pad_c6_1
-                                   // slot; CB layout unchanged.
+  float cloudUndersideLightSigma;  // Extinction sigma (per km·density of overlying water) for
+                                   // the analytic per-column downwelling light field that lights
+                                   // cloud undersides in column mode (fork — 2026-06-12,
+                                   // column-shaping rev 3; replaced rev 2's flat span scaling).
+                                   // 0 = legacy constant bottom-darkening gradient. Reuses the
+                                   // former pad_c6_1 slot; CB layout unchanged.
 
   // ----- Cloud Height LUT (slide 3 lift — RDR2 SIGGRAPH 2019) -----
   // Replaces the procedural cloudTypeProfile() trapezoid in
@@ -436,5 +438,12 @@ struct AtmosphereArgs {
   float cloudSunsetAmbientStrength;   // Master multiplier on cool blend (0 = feature off, 1 = baseline)
   float cloudSunsetAmbientReachInvKm; // D_sun reach in 1/km — higher = clouds turn cool faster with shadow depth
   float cloudSunsetAmbientRampHighSun;// sin(sun elevation) at which the effect smooth-fades to zero
-  float pad_cloudSunsetAmbient0;      // 16-byte alignment
+  float cloudViewStepKm;              // Target cloud-march step LENGTH in km (fork — 2026-06-12,
+                                      // adaptive march sampling). The per-ray step count becomes
+                                      // span / step, floored at cloudViewSamples and capped at
+                                      // cloudViewSamplesMax, so horizon-grazing rays (slab spans
+                                      // of 50+ km) stop undersampling 2 km cloud features with
+                                      // 1.6 km steps — the aliasing read as soft horizontal
+                                      // banding. 0 = legacy fixed count. Reuses the former
+                                      // pad_cloudSunsetAmbient0 slot; CB layout unchanged.
 };

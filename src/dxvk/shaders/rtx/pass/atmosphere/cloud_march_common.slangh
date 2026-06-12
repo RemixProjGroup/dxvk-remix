@@ -344,7 +344,25 @@ void marchCloudSlab(vec3   viewDirYUp,
   if (tEntry >= tExit || tExit <= 0.0f) return;
   tEntry = max(tEntry, 0.0f);
 
-  float stepLen = (tExit - tEntry) / float(sampleCount);
+  // Adaptive step count (fork — 2026-06-12, adaptive march sampling). A
+  // FIXED step count across a span that varies from ~4 km (zenith) to
+  // 50+ km (horizon-grazing through the curved shell) means horizon rays
+  // sample ~2 km cloud features with ~1.6 km steps — aliasing that the
+  // jitter + temporal EMA render as soft horizontal BANDS, concentrated
+  // exactly where the sky compresses toward the horizon. Hold a target
+  // step LENGTH instead: count = span / cloudViewStepKm, floored at the
+  // configured base count (zenith cost unchanged) and capped at
+  // cloudViewSamplesMax (perf bound; the column model's pre-tap early-outs
+  // keep the added steps cheap where the slab is empty).
+  // cloudViewStepKm = 0 reproduces the legacy fixed count exactly.
+  uint effSampleCount = sampleCount;
+  if (args.cloudViewStepKm > 0.001f) {
+    uint wanted = uint(ceil((tExit - tEntry) / args.cloudViewStepKm));
+    uint maxSamples = max(uint(args.cloudViewSamplesMax), sampleCount);
+    effSampleCount = clamp(wanted, sampleCount, maxSamples);
+  }
+
+  float stepLen = (tExit - tEntry) / float(effSampleCount);
 
   // Wrenninge phase-octave constants (also referenced by the moon block below).
   const float kMsA = 0.5f;
@@ -369,7 +387,7 @@ void marchCloudSlab(vec3   viewDirYUp,
   float coverageNoiseEntry = cloudControlField2D(entryXZ * args.cloudCoverageNoiseScale, 250.0f + slabNoiseSeedOffset);
   float coverageNoiseExit  = cloudControlField2D(exitXZ  * args.cloudCoverageNoiseScale, 250.0f + slabNoiseSeedOffset);
 
-  for (uint i = 0u; i < sampleCount; ++i) {
+  for (uint i = 0u; i < effSampleCount; ++i) {
     if (viewTransmittance < 0.01f) break;  // early-exit (free perf win)
 
     float t = tEntry + stepLen * (float(i) + pixelJitter);
@@ -394,7 +412,7 @@ void marchCloudSlab(vec3   viewDirYUp,
     // (spread) comes from args — kept shared across layers for v1 so layer 2
     // doesn't need its own spread knobs. Mean values are per-slab so layer 2
     // can pick a different baseline (cirrus typeMean ~= 0.05 vs cumulus 0.5).
-    float rayFrac = (float(i) + pixelJitter) / float(sampleCount);
+    float rayFrac = (float(i) + pixelJitter) / float(effSampleCount);
     float typeNoise     = mix(typeNoiseEntry,     typeNoiseExit,     rayFrac);
     float coverageNoise = mix(coverageNoiseEntry, coverageNoiseExit, rayFrac);
     float typeLocal     = saturate(slabTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);

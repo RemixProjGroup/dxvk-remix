@@ -564,7 +564,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.starPsfSharpness            = RtxOptions::starPsfSharpness();
   args.starCloudExtinctionPower    = RtxOptions::starCloudExtinctionPower();
   args.starAmbientCouplingStrength = RtxOptions::starAmbientCouplingStrength();
-  args.padStarCloud0               = 0.0f;
+  // Adaptive-march sample cap riding the former padStarCloud0 slot (fork —
+  // 2026-06-12, adaptive march sampling); CB layout unchanged.
+  args.cloudViewSamplesMax         = static_cast<float>(RtxOptions::cloudViewSamplesMax());
 
   args.milkyWayEnabled               = RtxOptions::milkyWayEnabled() ? 1.0f : 0.0f;
   args.milkyWayDensityBoost          = RtxOptions::milkyWayDensityBoost();
@@ -710,7 +712,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudSunsetAmbientStrength    = RtxOptions::cloudSunsetAmbientStrength();
     args.cloudSunsetAmbientReachInvKm  = RtxOptions::cloudSunsetAmbientReachInvKm();
     args.cloudSunsetAmbientRampHighSun = RtxOptions::cloudSunsetAmbientRampHighSun();
-    args.pad_cloudSunsetAmbient0       = 0.0f;
+    // Adaptive-march step target riding the former pad_cloudSunsetAmbient0
+    // slot (fork — 2026-06-12, adaptive march sampling); CB layout unchanged.
+    args.cloudViewStepKm               = RtxOptions::cloudViewStepKm();
   }
 
   // Cloud render camera basis (fork — 2026-05-12, C4). Pushed from
@@ -766,9 +770,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // 2026-06-11, column-shaping rework); CB layout unchanged.
     args.cloudColumnFeather = RtxOptions::cloudColumnFeather();
     args.cameraWorldPosYUpKm = m_cameraWorldPosYUpKm;
-    // Per-column underside contrast riding the former pad_c6_1 slot (fork —
-    // 2026-06-12, column-shaping rev 2); CB layout unchanged.
-    args.cloudColumnUndersideContrast = RtxOptions::cloudColumnUndersideContrast();
+    // Per-column downwelling-light sigma riding the former pad_c6_1 slot
+    // (fork — 2026-06-12, column-shaping rev 3); CB layout unchanged.
+    args.cloudUndersideLightSigma = RtxOptions::cloudUndersideLightSigma();
   }
 
   // Cloud Height LUT + two-layer cloud map (slides 1 + 3 lift, fork — 2026-05-15).
@@ -989,7 +993,7 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
     ctx,
     "Atmosphere Cloud Height LUT",
     cloudHeightLutExtent,
-    VK_FORMAT_R8G8_UNORM,
+    VK_FORMAT_R8G8B8A8_UNORM,
     1, // numLayers
     VK_IMAGE_TYPE_2D,
     VK_IMAGE_VIEW_TYPE_2D,

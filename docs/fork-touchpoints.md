@@ -1854,4 +1854,54 @@ First in-game pass on the column model reported a residual "layered" read on the
 - **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
   *"Underside Contrast" DragFloat in the Cloud Columns ImGui group.*
 
+(Superseded the same day by rev 3 below — the flat per-column scaling produced flat dark smudges in-game; the option and its mechanism were replaced before any release.)
+
+---
+
+## Workstream — Analytic downwelling light field (column-shaping rev 3) (fork — 2026-06-12)
+
+Second in-game pass: rev 2's span-scaled darkening produced big FLAT dark smudges — user verdict "worse… changed the point at which this becomes visible, never fixing the root cause." Root cause, finally named precisely: the underside LIGHT FIELD has no 3D structure. Under a deck, T_primary ≈ 0; the dominant M term varies ≤~20-40% (sigma_ms 0.05–0.25 over D_sun ≈ 2) and that residual comes from the 8-tap voxel-grid D_sun (km-scale mush); ambient's exp(-D_ambient) saturates to ~0. With per-point illumination near-constant, the only visible pattern is opacity silhouetted against a flat backdrop — every density/shaping change just swaps the wallpaper. Rev 3 computes the downwelling light analytically from the column model: the height LUT gains a B channel holding the cumulative envelope integral from each per-cloud height to the cloud top, so `downTau = ∫envelope × columnSpan × cloudThickness × cloudDensity` is the exact macroscopic water above any sample at full resolution (no voxel grid, no taps); `exp(-cloudUndersideLightSigma × downTau)` (a diffusion-flavored sigma, far below beam extinction) lights the multi-scatter and ambient terms. Underside brightness now varies continuously with the actual water distribution — dark cores, bright thin spots, in-cell gradients. Legacy mode (column shaping off, or sigma 0) keeps the constant bottom-darkening gradient bit-for-bit.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_height_lut_baker.comp.slang`** — fork-owned change.
+  *Output RG8 → RGBA8; B = midpoint-rule ∫_hf^1 envelope(u) du of the active curve family (re-baked on mode flip as before).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned changes.
+  *New `cloudTypeProfileIntegralFromTop` (closed-form trapezoid integral, the no-LUT fallback) + `cloudHeightProfileDownIntegral` (LUT B channel / fallback). `evalNubisCubedSample`: rev 2's spanFactor block replaced by the `verticalLight` selector — column mode = analytic Beer-Lambert on downTau, legacy = the constant gradient; M multiplies `verticalLight`; ambient = `ambient_shape × verticalLight` in column mode (replacing the saturating `exp(-D_ambient)` tap — same quantity, better estimate; multiplying both would double-count).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang` / `cloud_secondary_lut.comp.slang`** — fork-owned change.
+  *`AtmosphereCloudHeightLut` declarations `Texture2D<float2>` → `Texture2D<float4>`.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`cloudColumnUndersideContrast` (rev 2, pad_c6_1) → `cloudUndersideLightSigma`. No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Drops `cloudColumnUndersideContrast`; adds `RTX_OPTION("rtx.atmosphere", float, cloudUndersideLightSigma, 0.12f, …)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned changes.
+  *Height LUT resource format R8G8 → R8G8B8A8; args fill swaps to the new option.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *"Underside Contrast" slider replaced by "Underside Shading" (sigma). Tooltip notes it supersedes Bottom Darkening while Cloud Columns are on.*
+
+---
+
+## Workstream — Adaptive cloud-march sampling (fork — 2026-06-12)
+
+Companion fix shipped with column-shaping rev 3, prompted by a community diagram suggesting the march be confined to the shell volume — it already is (marchCloudSlab intersects base + top shells), but the adjacent real defect is the FIXED step count across that volume: 32 uniform steps over a span that varies from ~4 km (zenith) to 50+ km (horizon-grazing through the curved shell) puts ~1.6 km steps against ~2 km cloud features at low elevations. The aliasing, averaged by jitter + the temporal EMA, renders as soft horizontal BANDS concentrated toward the horizon — a direct contributor to the "stacked layers" read. The march now holds a target step LENGTH: count = span / cloudViewStepKm, floored at cloudViewSamples (zenith cost unchanged) and capped at cloudViewSamplesMax; the column model's pre-tap early-outs keep added steps cheap where the slab is empty. cloudViewStepKm = 0 restores the legacy fixed count exactly.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned change.
+  *`marchCloudSlab` computes `effSampleCount` from the clamped span and the step target; loop + rayFrac use it. Applies to both consumers (cloud render RT + secondary dome LUT).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Repurposes `pad_cloudSunsetAmbient0` → `cloudViewStepKm` and `padStarCloud0` → `cloudViewSamplesMax`. No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *`cloudViewStepKm` (0.3) + `cloudViewSamplesMax` (128).*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs` fills both (replacing the pad zero-writes).*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *"March Step Size" DragFloat next to Cloud Render Scale; the cap stays conf-only.*
+
 ---

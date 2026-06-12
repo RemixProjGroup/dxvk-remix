@@ -1005,6 +1005,16 @@ namespace fork_hooks {
             "Resolution of the cloud render relative to the internal render "
             "resolution. 0.5 = quarter the pixels (~4x cheaper clouds, "
             "slightly softer); 1.0 = native (legacy). Applies live.");
+        RemixGui::DragFloat("March Step Size", &RtxOptions::cloudViewStepKmObject(),
+                            0.01f, 0.0f, 1.0f, "%.2f km", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Target distance between cloud samples along each view ray. "
+            "Rays grazing the horizon span 50+ km of cloud layer; holding a "
+            "step length (instead of a fixed step count) removes the "
+            "horizontal banding that undersampling painted there. Smaller = "
+            "sharper but costlier horizon clouds (count capped via "
+            "rtx.atmosphere.cloudViewSamplesMax). 0 = legacy fixed count. "
+            "Applies live.");
 
         ImGui::Separator();
         ImGui::TextDisabled("Coverage & Shape");
@@ -1119,13 +1129,16 @@ namespace fork_hooks {
             "Width of the transition band at cloud-cluster edges. Narrow = "
             "crisp, solid-cored clouds with sharp gaps; wide = soft, wispy "
             "transitions between cloud and sky. Applies live.");
-        RemixGui::DragFloat("Underside Contrast", &RtxOptions::cloudColumnUndersideContrastObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::DragFloat("Underside Shading", &RtxOptions::cloudUndersideLightSigmaObject(),
+                            0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
-            "How strongly per-cloud thickness shows on the layer underside: "
-            "thick clouds get dark bases, thin ones stay bright, giving the "
-            "base of an overcast deck large-scale cellular relief instead "
-            "of one flat-lit sheet. 0 = uniform darkening. Applies live.");
+            "How quickly the light filtering down through each cloud dies "
+            "out. The underside brightness then varies continuously with "
+            "the water above every point — dark cores, bright thin spots, "
+            "smooth gradients — instead of one flat-lit sheet. Higher = "
+            "darker, more dramatic undersides; 0 = flat legacy gradient. "
+            "Supersedes Bottom Darkening while Cloud Columns are on. "
+            "Applies live.");
 
         ImGui::Separator();
         ImGui::TextDisabled("Look");

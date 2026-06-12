@@ -130,8 +130,10 @@ SamplerState AtmosphereSkyViewSampler;
 // ATMOSPHERE_CLOUD_HEIGHT_LUT_AVAILABLE is defined. Linear/CLAMP sampler —
 // the LUT is parameterized on a bounded domain, REPEAT would alias the
 // cumulonimbus anvil column back into stratus territory.
+// RGBA8 since column-shaping rev 3 (B = cumulative envelope integral for
+// the analytic downwelling light field; see cloud_height_lut_baker).
 layout(binding = 10)
-Texture2D<float2> AtmosphereCloudHeightLut;
+Texture2D<float4> AtmosphereCloudHeightLut;
 
 layout(binding = 11)
 SamplerState AtmosphereCloudHeightLutSampler;

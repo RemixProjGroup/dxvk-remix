@@ -557,6 +557,35 @@ float cloudTypeProfile(float hf, float type) {
   return saturate(rise * fall);
 }
 
+// Closed-form ∫_hf^1 cloudTypeProfile(u, type) du — the procedural fallback
+// for the height LUT's B channel (cumulative envelope integral, "water above
+// this height" in column-height units). Used by the per-column downwelling
+// light field (column-shaping rev 3) in TUs that don't bind the LUT. The
+// trapezoid integrates piecewise: half-triangle rise, plateau, half-triangle
+// fall.
+float cloudTypeProfileIntegralFromTop(float hf, float type) {
+  float riseEnd   = mix(0.10f, 0.20f, type);
+  float fallStart = mix(0.20f, 0.75f, type);
+  float fallEnd   = mix(0.30f, 0.95f, type);
+  riseEnd   = max(riseEnd, 1e-4f);
+  float fallW = max(fallEnd - fallStart, 1e-4f);
+
+  float integ = 0.0f;
+  // Fall piece: profile = (fallEnd - u) / fallW on [fallStart, fallEnd].
+  {
+    float a = clamp(hf, fallStart, fallEnd);
+    float d = fallEnd - a;
+    integ += d * d / (2.0f * fallW);
+  }
+  // Plateau piece: profile = 1 on [riseEnd, fallStart].
+  integ += max(fallStart - max(hf, riseEnd), 0.0f);
+  // Rise piece: profile = u / riseEnd on [0, riseEnd].
+  if (hf < riseEnd) {
+    integ += (riseEnd * riseEnd - hf * hf) / (2.0f * riseEnd);
+  }
+  return integ;
+}
+
 // Height-profile lookup that selects between a baked LUT (slide 3 lift —
 // RDR2 SIGGRAPH 2019) and the procedural cloudTypeProfile fallback.
 //
@@ -584,9 +613,25 @@ vec2 cloudHeightProfileFull(float hf, float type, AtmosphereArgs args) {
       ? sampleCloudHeightLUT(hf, type)
       : vec2(cloudTypeProfile(hf, type), 1.0f);
 }
+// Cumulative envelope integral from hf to the cloud top (LUT B channel —
+// column-shaping rev 3). "Water above this per-cloud height" in
+// column-height units; feeds the analytic downwelling light field in
+// evalNubisCubedSample. Falls back to the closed-form trapezoid integral
+// when the LUT is disabled (matches the procedural R-channel fallback's
+// curve family, same accepted family mismatch as the R channel itself).
+float cloudHeightProfileDownIntegral(float hf, float type, AtmosphereArgs args) {
+  if (args.cloudHeightLutEnable != 0u) {
+    vec2 uv = vec2(saturate(type), saturate(hf));
+    return AtmosphereCloudHeightLut.SampleLevel(AtmosphereCloudHeightLutSampler, uv, 0).b;
+  }
+  return cloudTypeProfileIntegralFromTop(hf, type);
+}
 #else
 vec2 cloudHeightProfileFull(float hf, float type, AtmosphereArgs args) {
   return vec2(cloudTypeProfile(hf, type), 1.0f);
+}
+float cloudHeightProfileDownIntegral(float hf, float type, AtmosphereArgs args) {
+  return cloudTypeProfileIntegralFromTop(hf, type);
 }
 #endif
 
@@ -2690,12 +2735,12 @@ struct NubisCubedLighting {
 // `isZUp` is forwarded to sampleDSun / sampleDAmbient — pass false when
 // samplePos is already in Y-up space (the cloud math's standard convention).
 //
-// `columnSpan` (fork — 2026-06-12, column-shaping rev 2): the sample's
+// `columnSpan` (fork — 2026-06-12, column-shaping rev 2/3): the sample's
 // column vertical extent as a slab fraction (from the density sampler's out
-// param; 1.0 in legacy mode). Modulates the bottom-darkening amount so the
-// underside brightness follows per-column water depth — see the
-// bottomGradient comment below. Pass 1.0 to reproduce the uniform legacy
-// darkening exactly.
+// param; 1.0 in legacy mode). Scales the analytic downwelling optical depth
+// of the per-column light field — see the verticalLight comment below.
+// Pass 1.0 to reproduce legacy behavior exactly (legacy mode also ignores
+// it entirely).
 NubisCubedLighting evalNubisCubedSample(
     vec3 samplePos, float heightFraction, float density,
     float columnSpan,
@@ -2721,37 +2766,50 @@ NubisCubedLighting evalNubisCubedSample(
   float sunFrac = saturate(cosTheta / max(args.cloudMsSunDotMax, 1e-4f));
   float sigma_ms = lerp(args.cloudMsSigmaShallow, sigma_ms_inner, sunFrac) * args.cloudMsScale;
 
-  // Height-based bottom darkening (fork — 2026-06-10). The paper's M term
-  // floods the cloud body with near-uniform multi-scatter brightness
-  // (sigma_ms is tiny, so exp(-sigma_ms * D_sun) stays close to 1 even at
-  // the base), and ambient_shape below — pow(1 - dim_profile, 0.5) — is
-  // symmetric top/bottom, so it BOOSTS ambient at the cloud base exactly
-  // where occlusion should win. Net result: flat, uniformly-lit undersides.
-  // Fix with an explicit vertical light gradient on the multi-scatter and
-  // ambient terms only: dark at the slab base, full brightness above
-  // cloudBottomDarkeningHeight. T_primary (the directly-shadowed sun beam)
-  // is deliberately left out so backlit silver linings survive untouched.
+  // Vertical light field (fork — column-shaping rev 3, 2026-06-12).
+  //
+  // LEGACY mode: the explicit bottom-darkening gradient (fork — 2026-06-10).
+  // The paper's M term floods the cloud body with near-uniform multi-scatter
+  // brightness (sigma_ms is small, so exp(-sigma_ms * D_sun) varies weakly
+  // even at the base) and ambient_shape below boosts ambient at the base, so
+  // an explicit dark-at-base gradient supplies the missing vertical cue.
   // cloudBottomDarkening = 0 restores the paper baseline bit-for-bit.
   //
-  // Per-column underside contrast (fork — 2026-06-12, column-shaping
-  // rev 2). A CONSTANT darkening amount paints the entire deck underside
-  // one flat brightness — with the dominant M term otherwise near-uniform,
-  // an overcast base renders as a single flat-lit sheet and the eye reads
-  // it as a 2D layer. Real deck undersides carry km-scale cellular
-  // relief because base brightness follows per-column water depth: thick
-  // columns occlude the down-welling light (dark bases), thin columns
-  // transmit it (bright bases). Scale the darkening amount by the column
-  // span so that structure appears, driven by the SAME placement field
-  // that shapes the clouds (so it moves with wind and matches the baked
-  // shadows). cloudColumnUndersideContrast = 0 (or legacy mode's
-  // columnSpan = 1) restores the uniform gradient exactly.
-  float spanFactor = mix(1.0f, saturate(columnSpan),
-                         saturate(args.cloudColumnUndersideContrast));
-  float effBottomDarkening = args.cloudBottomDarkening * spanFactor;
-  float bottomGradient = mix(1.0f - effBottomDarkening, 1.0f,
-      smoothstep(0.0f, max(args.cloudBottomDarkeningHeight, 1e-3f), heightFraction));
+  // COLUMN mode: an ANALYTIC downwelling light field replaces the constant
+  // gradient. The constant gradient (and rev 2's per-column scaling of it)
+  // lights the whole underside of a deck at one or a few flat levels — the
+  // eye reads flat-lit sheets, with the density pattern as wallpaper on
+  // them, regardless of how the density itself is shaped. What real deck
+  // undersides have is a light field that varies CONTINUOUSLY with the
+  // water above each point: dark under the thick cores, bright under thin
+  // spots, smooth gradients in between. The column model makes that water
+  // analytic: the height LUT's B channel carries the cumulative envelope
+  // integral from this per-cloud height to the cloud top, so
+  //
+  //   downTau = ∫envelope × columnSpan × cloudThickness × cloudDensity
+  //
+  // is the macroscopic optical depth above the sample, at full resolution
+  // with no voxel-grid smoothing and no extra taps. Beer-Lambert with a
+  // tunable diffusion-flavored sigma (cloudUndersideLightSigma — the
+  // downwelling flux is multiply-scattered, so its effective extinction is
+  // far below the beam sigma) turns it into the light factor applied to the
+  // multi-scatter and ambient terms. T_primary (the directly-shadowed sun
+  // beam) is exempt in both modes so backlit silver linings survive.
+  // Sigma 0 falls back to the legacy gradient.
+  bool columnLightOn = args.cloudColumnShapingEnable > 0.5f
+                    && args.cloudUndersideLightSigma > 0.0001f;
+  float verticalLight;
+  if (columnLightOn) {
+    float downInteg = cloudHeightProfileDownIntegral(heightFraction, args.cloudTypeMean, args);
+    float downTau = downInteg * saturate(columnSpan)
+                  * args.cloudThickness * args.cloudDensity;
+    verticalLight = exp(-args.cloudUndersideLightSigma * downTau);
+  } else {
+    verticalLight = mix(1.0f - args.cloudBottomDarkening, 1.0f,
+        smoothstep(0.0f, max(args.cloudBottomDarkeningHeight, 1e-3f), heightFraction));
+  }
 
-  float M = dim_profile * exp(-sigma_ms * D_sun) * bottomGradient;
+  float M = dim_profile * exp(-sigma_ms * D_sun) * verticalLight;
   float HG1 = hgPhaseNubis(cosTheta, args.cloudPhaseG1);
   float HG2 = hgPhaseNubis(cosTheta, args.cloudPhaseG2);
   float L_direct = T_primary * HG1 + M * HG2;
@@ -2770,8 +2828,19 @@ NubisCubedLighting evalNubisCubedSample(
   float coolMix        = saturate(coolReachCurve * sunsetFactor * args.cloudSunsetAmbientStrength);
   vec3  skyRadiance    = lerp(skyRadianceWarm, skyRadianceCool, coolMix);
 
+  // Ambient occlusion estimate: legacy keeps the page-142 exp(-D_ambient)
+  // voxel-grid tap (times the explicit gradient). Column mode REPLACES it
+  // with the analytic verticalLight — exp(-D_ambient) is the same
+  // "occlusion of downwelling sky light" quantity, but the raw integral
+  // saturates to ~0 a few hundred meters into a deck (its implicit sigma is
+  // 1/km·density, far above the diffusion regime) and its 8-tap voxel-grid
+  // source is km-scale smooth, so under a deck it contributes neither
+  // light nor structure. Multiplying both would double-count the same
+  // occlusion.
   float ambient_shape = pow(1.0f - dim_profile, 0.5f);
-  float L_ambient = ambient_shape * exp(-D_ambient) * bottomGradient;
+  float L_ambient = columnLightOn
+      ? ambient_shape * verticalLight
+      : ambient_shape * exp(-D_ambient) * verticalLight;
 
   NubisCubedLighting result;
   result.direct  = L_direct  * sunRadiance;

@@ -88,8 +88,10 @@ Texture2D<float> AtmosphereCloudSkyTransmittanceLut;
 layout(binding = 9)
 SamplerState AtmosphereSkyViewSampler;
 
+// RGBA8 since column-shaping rev 3 (B = cumulative envelope integral for
+// the analytic downwelling light field; see cloud_height_lut_baker).
 layout(binding = 10)
-Texture2D<float2> AtmosphereCloudHeightLut;
+Texture2D<float4> AtmosphereCloudHeightLut;
 
 layout(binding = 11)
 SamplerState AtmosphereCloudHeightLutSampler;

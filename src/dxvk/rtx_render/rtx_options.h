@@ -1593,13 +1593,33 @@ namespace dxvk {
                "Coverage-remap feather band at cloud-cluster edges "
                "[0.05..1]. Narrow = crisp solid-cored clouds; wide = soft "
                "wispy transitions. Applies live.");
-    RTX_OPTION("rtx.atmosphere", float, cloudColumnUndersideContrast, 0.65f,
-               "How strongly per-cloud thickness shows on the deck "
-               "underside [0..1]: thick columns get dark bases, thin "
-               "columns stay bright (transmitted light) — the km-scale "
-               "cellular relief that keeps an overcast base from reading "
-               "as one flat-lit sheet. 0 = uniform legacy bottom "
-               "darkening. Applies live.");
+    // Adaptive march sampling (fork — 2026-06-12). A fixed step COUNT
+    // across a slab span that varies ~4 km (zenith) to 50+ km (horizon
+    // through the curved shell) undersamples horizon rays — ~1.6 km steps
+    // against ~2 km cloud features — and the aliasing reads as soft
+    // horizontal banding concentrated toward the horizon. Hold a target
+    // step LENGTH instead; the count floors at cloudViewSamples and caps
+    // at cloudViewSamplesMax.
+    RTX_OPTION("rtx.atmosphere", float, cloudViewStepKm, 0.3f,
+               "Target cloud-march step length in km [0.1..1]. Horizon-"
+               "grazing rays get span/step samples (capped below) instead "
+               "of stretching a fixed count over 50+ km — removes the "
+               "horizontal banding aliasing toward the horizon. 0 = legacy "
+               "fixed step count. Applies live.");
+    RTX_OPTION("rtx.atmosphere", uint32_t, cloudViewSamplesMax, 128,
+               "Cap on the adaptive cloud-march step count [32..256]. "
+               "Bounds the per-ray cost of horizon-grazing spans; the "
+               "column model's early-outs keep added steps cheap where the "
+               "slab is empty. Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, cloudUndersideLightSigma, 0.12f,
+               "Extinction of the light filtering down through each cloud, "
+               "per km of overlying water [0..0.5]. Drives the analytic "
+               "per-column light field that lights cloud undersides in "
+               "column mode: brightness varies continuously with the water "
+               "above every point (dark cores, bright thin spots, smooth "
+               "gradients) instead of one flat-lit sheet. Higher = darker, "
+               "more dramatic undersides; 0 = legacy constant "
+               "bottom-darkening gradient. Applies live.");
 
     // Edge detail erosion (fork — 2026-06-10). Concentrates high-frequency
     // detail at cloud edges: a second, higher-frequency tap of the prebaked
