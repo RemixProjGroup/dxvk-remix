@@ -983,8 +983,22 @@ namespace fork_hooks {
             "Per-frame 32x16 volumetric sky-ambient occlusion bake. "
             "Expected near-free.");
 
+        RemixGui::Checkbox("Atmosphere Sun/Moon NEE", &RtxOptions::debugEnableAtmosphereNeeObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Sun + moon soft-shadow visibility rays in the direct and "
+            "indirect integrators. Unchecked: skipped entirely (sun/moon "
+            "lighting goes black) — the delta is the total NEE ray cost at "
+            "the current Shadow Ray Cap settings.");
+
+        RemixGui::Checkbox("Full Sky Miss Shading", &RtxOptions::debugEnableSkyMissShadingObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Full evalSkyRadiance per sky-miss ray. Unchecked: every "
+            "sky-miss returns flat grey — the delta is the total per-ray "
+            "sky shading cost (LUT taps, night sky, moons, cloud composite, "
+            "temporal smoothing I/O).");
+
         ImGui::TextDisabled("Also useful: Fast Cloud Reflections (Clouds tree),");
-        ImGui::TextDisabled("Minimal Sky LUT Re-bakes (Atmosphere > Advanced).");
+        ImGui::TextDisabled("Minimal Sky LUT Re-bakes + Shadow Ray Caps (Atmosphere > Advanced).");
 
         ImGui::TreePop();
       }

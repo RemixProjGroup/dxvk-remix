@@ -659,7 +659,8 @@ void integrateDirectPath(
     }
     
     // Evaluate direct sun lighting from physical atmosphere
-    if (cb.skyMode == 1) // Physical atmosphere mode
+    // (debugSkyBisectFlags bit 0: perf-bisect skip — fork, diagnostic)
+    if (cb.skyMode == 1 && (cb.atmosphereArgs.debugSkyBisectFlags & 1u) == 0u) // Physical atmosphere mode
     {
       evalAtmosphereSunNEE(
         throughput, pixelCoordinate,

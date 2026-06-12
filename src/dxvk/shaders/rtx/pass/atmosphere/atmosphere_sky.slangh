@@ -1257,6 +1257,16 @@ vec3 evalSkyRadiance(
   uint2 historyResolution = uint2(0u, 0u),
   bool isPrimaryRay = false
 ) {
+  // Perf bisect (fork — 2026-06-11, diagnostic): flat sky miss. Returns a
+  // constant mid-grey immediately so a live session can read the full
+  // per-ray miss-path cost (LUT taps + night sky + moons + cloud composite
+  // + temporal-smoothing I/O) off the frame-time delta. The skipped history
+  // write self-heals on re-enable via the frame-id age check. Always 0 in
+  // production.
+  if ((args.debugSkyBisectFlags & 2u) != 0u) {
+    return vec3(0.5f, 0.5f, 0.5f);
+  }
+
   // Transform view direction to Y-up space if needed
   vec3 viewDirYUp = isZUp ? vec3(viewDir.x, viewDir.z, viewDir.y) : viewDir;
   viewDirYUp = normalize(viewDirYUp);

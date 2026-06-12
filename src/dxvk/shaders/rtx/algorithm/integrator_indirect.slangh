@@ -993,7 +993,9 @@ void integratePathVertex(
     }
     
     // Evaluate direct sun lighting from physical atmosphere for secondary bounces
-    if (cb.skyMode == 1 && isNeeEnabledOnBounce) // Physical atmosphere mode
+    // (debugSkyBisectFlags bit 0: perf-bisect skip — fork, diagnostic)
+    if (cb.skyMode == 1 && isNeeEnabledOnBounce
+        && (cb.atmosphereArgs.debugSkyBisectFlags & 1u) == 0u) // Physical atmosphere mode
     {
       vec3 sunDiffuse = vec3(0.0f);
       vec3 sunSpecular = vec3(0.0f);

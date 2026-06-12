@@ -1721,3 +1721,27 @@ Third change of the sky perf workstream — the first to target where the millis
   *"Sun Shadow Ray Cap" / "Moon Shadow Ray Cap" DragInts in the Atmosphere → Advanced ImGui tree.*
 
 ---
+
+## Workstream — Sky perf: shader-path bisect toggles (fork — 2026-06-11, diagnostic)
+
+Extends the per-dispatch bisect kit into the integrators: with the dispatch costs known (~1.8 ms ≈ cloud budget) and the NEE rays capped, the residual skyMode delta splits across two shader paths that host-side toggles can't reach. Two default-true diagnostic options pack into one CB gate word (`debugSkyBisectFlags`, former `padMoonNee2` slot — layout unchanged): bit 0 skips atmosphere sun+moon NEE at both integrator call sites (sun/moon lighting goes black), bit 1 makes `evalSkyRadiance` return flat grey immediately (isolates the full per-ray miss-path cost; the skipped temporal-history write self-heals on re-enable via the frame-id age check). Defaults = bits clear = production paths, bit-identical.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Repurposes `padMoonNee2` as `uint debugSkyBisectFlags`. No layout change.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned addition.
+  *Flat-grey early return at the top of `evalSkyRadiance` behind bit 1.*
+
+- **`src/dxvk/shaders/rtx/algorithm/integrator_direct.slangh` / `integrator_indirect.slangh`** — fork-owned change (upstream files, one-line condition edits).
+  *The `cb.skyMode == 1` atmosphere-NEE gates additionally require bit 0 clear.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *`debugEnableAtmosphereNee` / `debugEnableSkyMissShading`, both default true.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs` packs the two options into the flag word.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *"Atmosphere Sun/Moon NEE" / "Full Sky Miss Shading" checkboxes in the Perf Bisect (Diagnostic) ImGui tree.*
+
+---

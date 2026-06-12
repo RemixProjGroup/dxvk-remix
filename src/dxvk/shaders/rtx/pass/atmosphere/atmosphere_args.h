@@ -186,7 +186,13 @@ struct AtmosphereArgs {
   // Live in the former padMoonNee0/1 slots so the CB layout is unchanged.
   uint  sunShadowMaxSamples;              // 0 = legacy anisotropy-driven count
   uint  moonShadowMaxSamples;             // 0 = legacy constant 4
-  float padMoonNee2;
+  // Perf-bisect shader toggles (fork — 2026-06-11, diagnostic). Rides the
+  // former padMoonNee2 slot as two packed gates:
+  //   bit 0: skip atmosphere sun+moon NEE entirely (primary + secondary)
+  //   bit 1: flat sky miss — evalSkyRadiance returns a constant grey
+  //          immediately, isolating the full per-ray miss-path cost
+  // Both 0 in production; ImGui "Perf Bisect (Diagnostic)" tree drives them.
+  uint  debugSkyBisectFlags;
 
   // ----- Moon cloud-look + halo shape constants (fork, Phase 3 Task 2) -----
   // Tunable shape parameters for cloud-moon silver-lining contrast and halo glow.

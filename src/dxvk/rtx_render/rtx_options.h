@@ -1745,6 +1745,18 @@ namespace dxvk {
                "Diagnostic: dispatch the per-frame 32x16 cloud-sky-"
                "transmittance bake (volumetric sky-ambient occlusion). "
                "Uncheck to skip; expected to be near-free.");
+    RTX_OPTION("rtx.atmosphere", bool, debugEnableAtmosphereNee, true,
+               "Diagnostic: evaluate atmosphere sun + moon NEE (the "
+               "soft-shadow visibility rays) in the direct and indirect "
+               "integrators. Uncheck to skip entirely and read the "
+               "frame-time delta; sun/moon lighting goes black while "
+               "unchecked.");
+    RTX_OPTION("rtx.atmosphere", bool, debugEnableSkyMissShading, true,
+               "Diagnostic: run the full evalSkyRadiance miss path. Uncheck "
+               "to return flat grey for every sky-miss ray and read the "
+               "frame-time delta (isolates the per-ray sky shading cost: "
+               "LUT taps, night sky, moons, cloud composite, temporal "
+               "smoothing I/O). Sky renders grey while unchecked.");
 
     // Split sky-LUT cache keys (fork — 2026-06-11, perf). The three sky LUT
     // bakes (transmittance / multiscatter / sky-view) were gated by ONE
