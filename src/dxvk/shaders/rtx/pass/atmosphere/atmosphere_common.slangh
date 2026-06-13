@@ -2207,24 +2207,28 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   // dropping the bias would silently shift the coverage calibration.
   float density = texturedNoise - 0.05f;
 
-  // 4b. Edge detail erosion (fork — 2026-06-10, rev 2). A second tap of the
+  // 4b. Edge detail (fork — 2026-06-10, rev 3 — ADDITIVE). A second tap of the
   //     prebaked Worley-carved volume at cloudDetailScale× the base frequency,
   //     applied to the noise field BEFORE the coverage gate below. Ordering is
   //     the whole trick: the gate's smoothstep saturates the field to ~binary,
   //     so detail applied here displaces the threshold-crossing iso-surface by
   //     up to ~a full transition-band width at 60-500 m wavelengths — visible
-  //     cauliflower teeth on the silhouette — while saturated cores clamp to 1
-  //     and stay solid. (Rev 1 eroded AFTER the gate, where the near-binary
+  //     cauliflower billows on the silhouette — while saturated cores clamp to 1
+  //     and stay solid. (Rev 1 applied this AFTER the gate, where the near-binary
   //     field left nothing to chew on; the effect was invisible in-game.)
-  //     The -0.6 bias makes the term erosion-leaning: notches carve deeper
-  //     than bulges grow, so coverage shifts only slightly. The cheap shadow
-  //     sampler (sampleCloudDensityForShadow) deliberately skips this — the
-  //     un-eroded grids slightly over-shadow the detailed edges, which reads
-  //     as conservative self-shadowing rather than light leak.
+  //     Rev 3 MIRRORS the bias across the field mean (0.4): the +0.2 bias point
+  //     (was 0.6 in rev 2's erosion-leaning form) makes the term GROWTH-leaning —
+  //     bumps bulge OUTWARD deeper than notches carve in, so the detail ADDS
+  //     billows to the silhouette instead of eroding teeth into it. Net coverage
+  //     rises slightly (mirror of rev 2's slight thinning); dial
+  //     cloudDetailStrength down if edges read too puffy. The cheap shadow
+  //     sampler (sampleCloudDensityForShadow) still skips this term — so the
+  //     un-grown grids now slightly UNDER-shadow the added bumps (they read as
+  //     un-self-shadowed filigree) rather than rev 2's conservative over-shadow.
   if (args.cloudDetailStrength > 0.0f) {
     vec3 detailCoord = frac(perturbed * (args.cloudDetailScale / args.cloudNoiseTileKm));
     float detailNoise = cloudNoise3D.SampleLevel(cloudSampler, detailCoord, 0).r;
-    density += args.cloudDetailStrength * 0.6f * (detailNoise - 0.6f);
+    density += args.cloudDetailStrength * 0.6f * (detailNoise - 0.2f);
   }
 
   // 5. Coverage threshold + anvil pow + cloud-type vertical profile.

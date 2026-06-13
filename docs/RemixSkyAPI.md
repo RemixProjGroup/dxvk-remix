@@ -42,7 +42,7 @@ plugin without polluting the user's config file.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `rtx.skyMode` | int | `0` | Sky rendering mode. `0` = SkyboxRasterization (traditional skybox); `1` = PhysicalAtmosphere (Hillaire scattering). All `rtx.atmosphere.*` options below only take effect in mode `1`. |
+| `rtx.skyMode` | int | `0` | Sky rendering mode. `0` = SkyboxRasterization (traditional skybox); `1` = Numos (Hillaire scattering). All `rtx.atmosphere.*` options below only take effect in mode `1`. |
 
 ### Sun pose (game-driven, push every frame)
 

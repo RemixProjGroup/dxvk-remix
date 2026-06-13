@@ -83,7 +83,7 @@ vec3 evalSunDisk(vec3 viewDir, AtmosphereArgs args, bool isZUp = false) {
 // ============================================================================
 // Night sky — stars, galactic band, shooting stars, airglow
 // ============================================================================
-// Composited inside the Physical Atmosphere sky path; users on the default
+// Composited inside the Numos sky path; users on the default
 // Skybox Rasterization sky mode see no behavior change.
 
 // 3-component integer-lattice hash (sky-only — the cloud layer doesn't need

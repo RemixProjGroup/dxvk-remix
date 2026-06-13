@@ -689,7 +689,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudVoxelGridFrameOffset = 0.0f;
     args.cloudVoxelGridSunDirty    = 0u;
     args.cloudVoxelGridAmbientDirty = 0u;
-    // Bottom darkening + edge detail erosion (fork — 2026-06-10). Live in the
+    // Bottom darkening + additive edge detail (fork — 2026-06-10). Live in the
     // former pad_cloudVoxel0..2 slots so the CB layout is unchanged.
     args.cloudBottomDarkening       = RtxOptions::cloudBottomDarkening();
     args.cloudBottomDarkeningHeight = RtxOptions::cloudBottomDarkeningHeight();

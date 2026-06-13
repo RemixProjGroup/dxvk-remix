@@ -82,8 +82,8 @@ namespace dxvk {
     void initAtmosphere(RtxContext& ctx);
 
     // Sets constants.skyMode, detects sky mode transitions (clearing skybox
-    // buffers when switching to Physical Atmosphere), and when Physical
-    // Atmosphere is active ensures m_atmosphere exists, calls initialize /
+    // buffers when switching to Numos), and when Numos
+    // is active ensures m_atmosphere exists, calls initialize /
     // computeLuts, and writes atmosphereArgs into the constant block.
     // NOTE: requires RtxContext to declare this as a friend for access to private
     // members m_atmosphere, m_lastSkyMode, m_skyColorFormat, m_skyRtColorFormat,
@@ -100,7 +100,7 @@ namespace dxvk {
     void bindAtmosphereLuts(RtxContext& ctx);
 
     // Returns true when the caller should skip rasterized sky rendering because
-    // Physical Atmosphere mode is active.
+    // Numos mode is active.
     // No private-member access — uses only the public RtxOptions::skyMode() API.
     // No friend declaration needed.
     // Implementation in rtx_fork_atmosphere.cpp.
@@ -269,7 +269,7 @@ namespace dxvk {
 
     // Renders the atmosphere preset buttons and parameter tree inside the
     // "Sky Tuning" collapsing header. Owns the skyModeCombo static and branches
-    // on SkyMode::PhysicalAtmosphere vs SkyboxRasterization.
+    // on SkyMode::Numos vs SkyboxRasterization.
     // No private-member access — uses only public RtxOptions and ImGui APIs.
     // No friend declaration needed.
     // Implementation in rtx_fork_atmosphere.cpp.

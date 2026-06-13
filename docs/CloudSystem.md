@@ -2,7 +2,7 @@
 
 Remix Plus ships a fully procedural volumetric cloud layer with
 physically-based lighting. The system sits on top of the Hillaire
-physical atmosphere (`rtx.skyMode = 1` -- Physical Atmosphere) and
+physical atmosphere (`rtx.skyMode = 1` -- Numos) and
 shares the per-frame LUT cadence with the rest of the atmosphere
 pipeline. There are no cloud assets to author: the field, the
 lighting, the terrain shadows, and the fog interactions are all

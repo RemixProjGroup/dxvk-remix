@@ -48,8 +48,8 @@ namespace fork_hooks {
   // updateAtmosphereConstants
   //
   // Sets constants.skyMode, detects sky-mode transitions (clearing rasterized
-  // skybox buffers when switching to Physical Atmosphere), and when Physical
-  // Atmosphere is active ensures the atmosphere object exists, calls
+  // skybox buffers when switching to Numos), and when Numos
+  // is active ensures the atmosphere object exists, calls
   // initialize/computeLuts, and writes atmosphereArgs into the constant block.
   //
   // Called from RtxContext::updateRaytraceArgsConstantBuffer immediately after
@@ -62,10 +62,10 @@ namespace fork_hooks {
   void updateAtmosphereConstants(RtxContext& ctx, RaytraceArgs& constants) {
     constants.skyMode = static_cast<uint32_t>(RtxOptions::skyMode());
 
-    // Detect sky mode change and clear sky buffers when switching to Physical Atmosphere
+    // Detect sky mode change and clear sky buffers when switching to Numos
     SkyMode currentSkyMode = RtxOptions::skyMode();
     if (currentSkyMode != ctx.m_lastSkyMode) {
-      if (currentSkyMode == SkyMode::PhysicalAtmosphere) {
+      if (currentSkyMode == SkyMode::Numos) {
         // Clear the rasterized skybox buffers when switching to physical atmosphere
         auto skyProbe = ctx.getResourceManager().getSkyProbe(&ctx, ctx.m_skyColorFormat);
         auto skyMatte = ctx.getResourceManager().getSkyMatte(&ctx, ctx.m_skyRtColorFormat);
@@ -87,7 +87,7 @@ namespace fork_hooks {
     }
 
     // Update atmosphere parameters
-    if (RtxOptions::skyMode() == SkyMode::PhysicalAtmosphere) {
+    if (RtxOptions::skyMode() == SkyMode::Numos) {
       if (!ctx.m_atmosphere) {
         ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
       }
@@ -378,13 +378,13 @@ namespace fork_hooks {
   // injectRtxAtmosphereSkySkip
   //
   // Returns true when the caller (RtxContext::rasterizeSky) should skip
-  // rasterized sky rendering because Physical Atmosphere mode is active.
+  // rasterized sky rendering because Numos mode is active.
   //
   // No private-member access — uses only the public RtxOptions::skyMode() API.
   // No friend declaration needed.
   // ---------------------------------------------------------------------------
   bool injectRtxAtmosphereSkySkip() {
-    return RtxOptions::skyMode() == SkyMode::PhysicalAtmosphere;
+    return RtxOptions::skyMode() == SkyMode::Numos;
   }
 
   // ---------------------------------------------------------------------------
@@ -393,7 +393,7 @@ namespace fork_hooks {
   // Renders the sky mode selector and atmosphere preset/parameter UI inside
   // the "Sky Tuning" collapsing header (showRenderingSettings). When the sky
   // mode is SkyboxRasterization, draws only the Sky Brightness slider (upstream
-  // behaviour). When PhysicalAtmosphere is selected, draws the full Hillaire
+  // behaviour). When Numos is selected, draws the full Hillaire
   // atmosphere preset buttons and parameter tree.
   //
   // The skyModeCombo static is owned here (moved from dxvk_imgui.cpp) so that
@@ -411,7 +411,7 @@ namespace fork_hooks {
       "Sky Mode",
       RemixGui::ComboWithKey<SkyMode>::ComboEntries { {
           {SkyMode::SkyboxRasterization, "Skybox Rasterization"},
-          {SkyMode::PhysicalAtmosphere, "Physical Atmosphere"}
+          {SkyMode::Numos, "Numos"}
       } }
     };
 
@@ -769,7 +769,7 @@ namespace fork_hooks {
 
     // Sky mode selection
     skyModeCombo.getKey(&RtxOptions::skyModeObject());
-    RemixGui::SetTooltipToLastWidgetOnHover("Skybox Rasterization: Traditional skybox rendering\nPhysical Atmosphere: Hillaire atmospheric scattering");
+    RemixGui::SetTooltipToLastWidgetOnHover("Skybox Rasterization: Traditional skybox rendering\nNumos: Hillaire atmospheric scattering");
 
     if (RtxOptions::skyMode() == SkyMode::SkyboxRasterization) {
       RemixGui::DragFloat("Sky Brightness", &RtxOptions::skyBrightnessObject(), 0.01f, 0.01f, FLT_MAX, "%.3f", sliderFlags);
@@ -876,7 +876,7 @@ namespace fork_hooks {
       // Sun (lifted out of former "Atmosphere Parameters" tree)
       renderSunUI();
 
-      // Physical Atmosphere controls (renamed; Sun fields moved to renderSunUI above)
+      // Numos controls (renamed; Sun fields moved to renderSunUI above)
       if (ImGui::TreeNode("Atmosphere")) {
 
         RemixGui::DragFloat("Altitude", &RtxOptions::altitudeObject(), 1.0f, 0.0f, 100000.0f, "%.0f m", sliderFlags);
@@ -1015,7 +1015,7 @@ namespace fork_hooks {
             "the clouds.\n\nPERFORMANCE: cost scales with how many samples "
             "a ray needs -- overhead sightlines are unchanged, but "
             "horizon-heavy views can take up to Max Cloud Samples / 32 "
-            "times the cloud cost (4x at the defaults). Raise the spacing "
+            "times the cloud cost (2x at the defaults). Raise the spacing "
             "or lower Max Cloud Samples to claw the cost back, or set 0 "
             "to restore the legacy fixed march (banding returns). "
             "Cloud Render Scale above also directly offsets this cost. "
@@ -1024,8 +1024,8 @@ namespace fork_hooks {
                           1.0f, 32, 256, "%d", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Hard cap on cloud samples per ray -- the performance governor "
-            "for Cloud Sample Spacing. 128 resolves the default spacing "
-            "out to ~38 km of cloud span; lower values cost less but let "
+            "for Cloud Sample Spacing. 64 resolves the default spacing "
+            "out to ~6 km of cloud span; lower values cost less but let "
             "a little banding back in at the far horizon. 32 = legacy "
             "cost ceiling. Applies live.");
 
@@ -1090,8 +1090,8 @@ namespace fork_hooks {
         RemixGui::DragFloat("Edge Detail", &RtxOptions::cloudDetailStrengthObject(),
                             0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
-            "High-frequency erosion concentrated at cloud EDGES \xe2\x80\x94 carves "
-            "wispy cauliflower detail into silhouettes while dense cores stay "
+            "High-frequency detail concentrated at cloud EDGES \xe2\x80\x94 grows "
+            "wispy cauliflower billows OUTWARD from silhouettes while dense cores stay "
             "solid. 0 = smooth edges (legacy look). Detail frequency is "
             "tunable via rtx.atmosphere.cloudDetailScale in user.conf.");
         RemixGui::DragFloat("Vertical Stretch", &RtxOptions::cloudVerticalStretchObject(),

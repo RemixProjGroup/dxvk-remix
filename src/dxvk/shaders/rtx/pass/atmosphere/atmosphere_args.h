@@ -298,7 +298,7 @@ struct AtmosphereArgs {
   // constant-buffer layout is unchanged.
   float cloudBottomDarkening;       // [0,1] how dark the cloud base gets vs the top (multi-scatter + ambient)
   float cloudBottomDarkeningHeight; // (0,1] slab height fraction at which the gradient reaches full brightness
-  float cloudDetailStrength;        // [0,1] edge detail erosion strength (0 = off)
+  float cloudDetailStrength;        // [0,1] additive edge detail strength (0 = off)
 
   // ----- Nubis Cubed 2023 lighting params (fork — 2026-05-12, C4) -----
   // Consumed by cloud_render.comp.slang via evalNubisCubedSample.

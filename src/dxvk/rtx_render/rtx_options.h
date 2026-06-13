@@ -162,7 +162,7 @@ namespace dxvk {
 
   enum class SkyMode : int {
     SkyboxRasterization = 0,
-    PhysicalAtmosphere = 1
+    Numos = 1
   };
 
   enum class EnableVsync : int {
@@ -1209,7 +1209,7 @@ namespace dxvk {
                "Only effective when Sky Auto-Detect and Reproject Sky to Main Camera are both enabled.");
 
     RTX_OPTION("rtx", SkyMode, skyMode, SkyMode::SkyboxRasterization,
-               "Sky rendering mode. SkyboxRasterization uses traditional skybox rasterization, PhysicalAtmosphere uses Hillaire atmospheric scattering.");
+               "Sky rendering mode. SkyboxRasterization uses traditional skybox rasterization, Numos uses Hillaire atmospheric scattering.");
 
     // Atmosphere parameters
     RTX_OPTION("rtx.atmosphere", bool, sunDisc, true, "Include the sun itself in the output.");
@@ -1239,7 +1239,7 @@ namespace dxvk {
     RTX_OPTION("rtx.atmosphere", float, multiScatterPhysicalStrength, 0.0f, "Blend between artistic (0) and physical (1) multiscattering. 0 = analytical inline fit that preserves preset color directly. 1 = LUT-based hemisphere integration (Hillaire-physical) that wavelength-amplifies each preset's Rayleigh bias. Intermediate values blend. Per-preset overrides recommended.");
 
     // ----- Night-sky shading (fork) -----
-    // Stars, Milky Way, shooting stars, airglow. Active when skyMode == PhysicalAtmosphere.
+    // Stars, Milky Way, shooting stars, airglow. Active when skyMode == Numos.
     RTX_OPTION("rtx.atmosphere", float, starBrightness, 0.5f,
                "Overall brightness multiplier for stars. Game-drivable per-frame (plugins can fade stars in/out around sunset/sunrise); persists when saved unless overridden by a runtime push.");
     RTX_OPTION("rtx.atmosphere", float, starDensity, 0.5f,
@@ -1480,7 +1480,7 @@ namespace dxvk {
                "Overall strength of the volumetric sky-ambient illumination term "
                "[0..3]. 0 = feature disabled (baseline rendering). 1 = physical "
                "baseline. Higher values brighten shadowed fog with sky-tinted "
-               "ambient. Gated on rtx.skyMode = 1 (Physical Atmosphere).");
+               "ambient. Gated on rtx.skyMode = 1 (Numos).");
     RTX_OPTION("rtx.atmosphere", float, cloudSkyAmbientCloudOcclusionStrength, 1.0f,
                "Strength of cloud occlusion applied to the volumetric sky-ambient "
                "term [0..1]. 1 = full physical cloud occlusion (overcast scenes "
@@ -1600,21 +1600,21 @@ namespace dxvk {
     // horizontal banding concentrated toward the horizon. Hold a target
     // step LENGTH instead; the count floors at cloudViewSamples and caps
     // at cloudViewSamplesMax.
-    RTX_OPTION("rtx.atmosphere", float, cloudViewStepKm, 0.3f,
+    RTX_OPTION("rtx.atmosphere", float, cloudViewStepKm, 0.1f,
                "Distance between cloud samples along each view ray, in km "
                "[0.1..1]. Fixes the horizontal banding near the horizon "
                "(sightlines there cross 50+ km of cloud layer, which the "
                "legacy fixed 32-sample march could not resolve). "
                "PERFORMANCE: cost scales with samples per ray — overhead "
                "views are unchanged, horizon-heavy views can cost up to "
-               "cloudViewSamplesMax/32 times more cloud time (4x at "
+               "cloudViewSamplesMax/32 times more cloud time (2x at "
                "defaults). Raise the spacing or lower the cap to trade "
                "quality for speed; 0 = legacy fixed count (banding "
                "returns). Applies live.");
-    RTX_OPTION("rtx.atmosphere", uint32_t, cloudViewSamplesMax, 128,
+    RTX_OPTION("rtx.atmosphere", uint32_t, cloudViewSamplesMax, 64,
                "Hard cap on cloud samples per ray [32..256] — the "
-               "performance governor for cloudViewStepKm. 128 resolves the "
-               "default spacing out to ~38 km of cloud span; lower costs "
+               "performance governor for cloudViewStepKm. 64 resolves the "
+               "default spacing out to ~6 km of cloud span; lower costs "
                "less but lets some banding back in at the far horizon. "
                "32 = legacy cost ceiling. Applies live.");
     RTX_OPTION("rtx.atmosphere", float, cloudUndersideLightSigma, 0.12f,
@@ -1627,16 +1627,17 @@ namespace dxvk {
                "more dramatic undersides; 0 = legacy constant "
                "bottom-darkening gradient. Applies live.");
 
-    // Edge detail erosion (fork — 2026-06-10). Concentrates high-frequency
-    // detail at cloud edges: a second, higher-frequency tap of the prebaked
-    // noise volume erodes the density field where it is weak (silhouettes),
-    // leaving saturated cores untouched. Canonical Nubis detail-erosion remap.
+    // Edge detail (fork — 2026-06-10, rev 3 — additive). Concentrates
+    // high-frequency detail at cloud edges: a second, higher-frequency tap of
+    // the prebaked noise volume grows billows OUTWARD from the density field
+    // where it is weak (silhouettes), leaving saturated cores untouched.
+    // Nubis detail remap, bias mirrored across the field mean for growth.
     RTX_OPTION("rtx.atmosphere", float, cloudDetailStrength, 0.6f,
-               "Edge detail erosion strength [0..1]. Carves high-frequency "
-               "cauliflower detail into cloud EDGES while leaving dense cores "
-               "solid. 0 = off (smooth legacy silhouettes). Note: erosion thins "
-               "the silhouette band slightly, so high values read as marginally "
-               "lower coverage.");
+               "Edge detail strength [0..1]. Grows high-frequency "
+               "cauliflower billows OUTWARD from cloud EDGES while leaving dense "
+               "cores solid. 0 = off (smooth legacy silhouettes). Note: the "
+               "added billows thicken the silhouette band slightly, so high "
+               "values read as marginally higher coverage.");
     RTX_OPTION("rtx.atmosphere", float, cloudDetailScale, 4.3f,
                "Edge-detail noise frequency as a multiple of the base cloud "
                "noise frequency (cloudNoiseTileKm). Higher = finer edge "

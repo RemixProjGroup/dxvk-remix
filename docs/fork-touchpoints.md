@@ -216,7 +216,7 @@ check will enforce it if discipline slips.
   *Pins ImGui and ImPlot contexts at the top of `wndProcHandler` to prevent context corruption when plugin activity drifts GImGui off the dev menu's context between frames. Call site passes `m_context` and `m_plotContext` directly — no friend declaration needed.*
 
 - **Block** at `ImGUI::showRenderingSettings` (sky mode UI section) — ~154 LOC. **Migrated** to `fork_hooks::showAtmosphereUI` in `rtx_fork_atmosphere.cpp`.
-  *Adds the Sky Mode combo (Skybox Rasterization / Physical Atmosphere), atmosphere preset buttons (Earth, Mars, Clear Sky, Polluted/Hazy, Alien World, Desert Planet), and the full atmosphere parameter tree (sun, density sliders, advanced coefficients) under the Sky Tuning collapsing header. The `skyModeCombo` static was moved from `dxvk_imgui.cpp` into the fork-owned atmosphere file. No friend declaration needed.*
+  *Adds the Sky Mode combo (Skybox Rasterization / Numos), atmosphere preset buttons (Earth, Mars, Clear Sky, Polluted/Hazy, Alien World, Desert Planet), and the full atmosphere parameter tree (sun, density sliders, advanced coefficients) under the Sky Tuning collapsing header. The `skyModeCombo` static was moved from `dxvk_imgui.cpp` into the fork-owned atmosphere file. No friend declaration needed.*
 
 - **Block** at `ImGUI::showMainMenu` (wrapper tab handling) — ~6 LOC. **Partially migrated** to `fork_hooks::wrapperTabDraw` in `rtx_fork_overlay.cpp`.
   *The `kTab_Wrapper` guard (`remixapi_imgui_HasDrawCallback()` check + `continue`) remains as an inline tweak in the tab loop (structural control flow, not extractable). The case body (`remixapi_imgui_InvokeDrawCallback()`) is wrapped as `fork_hooks::wrapperTabDraw()`. No friend declaration needed.*
@@ -326,13 +326,13 @@ initializer list and can't be lifted into a separate TU.
   *Constructs the `RtxAtmosphere` instance during `RtxContext` initialization.*
 
 - **Hook** at `RtxContext::updateRaytraceArgsConstantBuffer` (sky mode + atmosphere section) → `fork_hooks::updateAtmosphereConstants` in `rtx_fork_atmosphere.cpp`
-  *Sets `constants.skyMode`, detects sky mode transitions (clearing skybox buffers on switch to Physical Atmosphere), and calls `m_atmosphere->initialize` / `computeLuts` / `getAtmosphereArgs` to populate the atmosphere constant block.*
+  *Sets `constants.skyMode`, detects sky mode transitions (clearing skybox buffers on switch to Numos), and calls `m_atmosphere->initialize` / `computeLuts` / `getAtmosphereArgs` to populate the atmosphere constant block.*
 
 - **Hook** at `RtxContext::bindCommonRayTracingResources` (atmosphere LUT bindings) → `fork_hooks::bindAtmosphereLuts` in `rtx_fork_atmosphere.cpp`
   *Ensures the atmosphere object is initialized and binds the three atmosphere LUT textures (`BINDING_ATMOSPHERE_TRANSMITTANCE_LUT`, `BINDING_ATMOSPHERE_MULTISCATTERING_LUT`, `BINDING_ATMOSPHERE_SKY_VIEW_LUT`) for all passes that declare them in common_bindings.*
 
 - **Hook** at `RtxContext::rasterizeSky` (physical atmosphere sky skip) → `fork_hooks::injectRtxAtmosphereSkySkip` in `rtx_fork_atmosphere.cpp`
-  *Returns early from rasterized sky rendering when Physical Atmosphere mode is active. No private-member access; no friend declaration required.*
+  *Returns early from rasterized sky rendering when Numos mode is active. No private-member access; no friend declaration required.*
 
 - **Hook** at `RtxContext::dispatchScreenOverlay` (method body + ScreenOverlayShader class) → `fork_hooks::dispatchScreenOverlay` in `rtx_fork_overlay.cpp`
   *`ScreenOverlayShader` lifted to `rtx_fork_overlay.cpp`; `dispatchScreenOverlay` is now a one-line delegate. The hook alpha-composites a plugin-uploaded RGBA buffer over the final tone-mapped image using the compute shader.*
@@ -533,7 +533,7 @@ initializer list and can't be lifted into a separate TU.
 **Rationale:** All fork additions are an enum definition and `RTX_OPTION(...)` macro declarations inside the `RtxOptions` class body. `RTX_OPTION` expands to an inline static member declaration — it is structurally part of the class definition and cannot be lifted into a separate TU or wrapped in a hook. There is no function body to extract.
 
 - **Inline tweak** at `(file scope namespace dxvk)` (SkyMode enum) — ~5 LOC.
-  *Declares the `SkyMode` enum class (`SkyboxRasterization = 0`, `PhysicalAtmosphere = 1`). Required by `RtxOptions::skyMode` below and by atmosphere hook code in `rtx_fork_atmosphere.cpp` (via the `rtx_options.h` include chain).*
+  *Declares the `SkyMode` enum class (`SkyboxRasterization = 0`, `Numos = 1`). Required by `RtxOptions::skyMode` below and by atmosphere hook code in `rtx_fork_atmosphere.cpp` (via the `rtx_options.h` include chain).*
 
 - **Inline tweak** at `RtxOptions` class body (skyMode RTX_OPTION) — ~2 LOC.
   *Declares `RTX_OPTION("rtx", SkyMode, skyMode, SkyMode::SkyboxRasterization, ...)` immediately after the existing sky-related options block. Consumed by `fork_hooks::updateAtmosphereConstants` in `rtx_fork_atmosphere.cpp`.*
@@ -811,7 +811,7 @@ initializer list and can't be lifted into a separate TU.
 **Category:** index-only
 
 - **Inline tweak** at `tryHandleSky` (~line 145) — 6-line addition for physical atmosphere sky skip.
-  *Returns `TryHandleSkyResult::SkipSubmit` early for any draw with `cameraType == CameraType::Sky` when Physical Atmosphere mode is active, preventing rasterized skybox geometry from being submitted.*
+  *Returns `TryHandleSkyResult::SkipSubmit` early for any draw with `cameraType == CameraType::Sky` when Numos mode is active, preventing rasterized skybox geometry from being submitted.*
 
 ---
 
