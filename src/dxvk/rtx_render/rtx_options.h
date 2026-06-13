@@ -1645,6 +1645,27 @@ namespace dxvk {
                "keep the combined base+detail repeat period long. Default 4.3, "
                "viable range 2-12. Applies live (no re-bake).");
 
+    // Cloud-edge / halo tuning (fork — 2026-06-13). Two live knobs for the soft
+    // fringe around cloud silhouettes: cloudEdgeSoftness sets how wide the
+    // coverage-gate transition band is (the EXTENT of the skirt), and
+    // cloudEdgeAmbientFade fades the horizon-tinted ambient on thin samples (the
+    // discolored COLOR of the skirt). Both apply live, no re-bake.
+    RTX_OPTION("rtx.atmosphere", float, cloudEdgeSoftness, 0.15f,
+               "Cloud silhouette softness [0.02..0.4] — width of the view-path "
+               "coverage-gate transition band. Lower = crisper edges and a "
+               "tighter silhouette; higher = softer edges but a broader faint "
+               "skirt of sub-threshold cloud that can read as a halo. The "
+               "shadow/optical-depth gate is held at 0.25 so self-shadow bakes "
+               "are unaffected. Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, cloudEdgeAmbientFade, 0.15f,
+               "Thin-edge ambient fade [0..0.5]. Sub-threshold skirt samples are "
+               "ambient-dominated, and the ambient is sampled at the horizon (a "
+               "dirty grey-brown), so the soft fringe can read as discolored "
+               "haze. This fades the ambient term toward 0 below the given "
+               "(gated) density, so the faintest edge samples fall to transparent "
+               "instead of horizon-tinted. Direct/moon/night light is untouched, "
+               "so backlit edges keep their glow. 0 = off. Applies live.");
+
     // Vertical coherence (fork — 2026-06-10, rev 2; EXPERIMENTAL, default
     // off). Blends the 3D noise sample toward a fixed-Y slice so cloud
     // cross-sections stay correlated with altitude (connected towers

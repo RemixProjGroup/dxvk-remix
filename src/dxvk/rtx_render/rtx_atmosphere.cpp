@@ -715,6 +715,10 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // Adaptive-march step target riding the former pad_cloudSunsetAmbient0
     // slot (fork — 2026-06-12, adaptive march sampling); CB layout unchanged.
     args.cloudViewStepKm               = RtxOptions::cloudViewStepKm();
+    // Cloud-edge / halo tuning (fork — 2026-06-13). Live knobs for silhouette
+    // softness and the thin-edge ambient haze fade.
+    args.cloudEdgeSoftness             = RtxOptions::cloudEdgeSoftness();
+    args.cloudEdgeAmbientFade          = RtxOptions::cloudEdgeAmbientFade();
   }
 
   // Cloud render camera basis (fork — 2026-05-12, C4). Pushed from

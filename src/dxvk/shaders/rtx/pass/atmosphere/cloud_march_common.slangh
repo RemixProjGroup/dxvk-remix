@@ -482,7 +482,20 @@ void marchCloudSlab(vec3   viewDirYUp,
     // Composite: cloudColor multiplies all surface-scatter terms; nightLight
     // is added uncolored. Identical structure to the legacy single-layer march
     // and the analytical evalClouds in atmosphere_sky.slangh.
-    vec3 sampleColor = args.cloudColor * (lighting.direct + lighting.ambient + moonDirectLight)
+    //
+    // Thin-sample ambient fade (fork — 2026-06-13). The coverage gate leaves a
+    // soft sub-threshold skirt around every silhouette; those thin samples are
+    // ambient-dominated, and the ambient is sampled at the horizon (a dirty
+    // grey-brown), so the skirt reads as a discolored haze halo against clear
+    // sky. Weight the ambient by the sample's own (gated) density so the
+    // faintest edge samples fall toward transparent instead of horizon-tinted.
+    // Direct / moon / night terms are untouched, so backlit edges keep their glow.
+    // Driven live by cloudEdgeAmbientFade; 0 disables the fade (full ambient).
+    float ambientThinFade = args.cloudEdgeAmbientFade > 1e-5f
+                          ? smoothstep(0.0f, args.cloudEdgeAmbientFade, density)
+                          : 1.0f;
+    vec3 sampleColor = args.cloudColor
+                     * (lighting.direct + lighting.ambient * ambientThinFade + moonDirectLight)
                      + ctx.nightLight;
 
     // Beer-Lambert step accumulation.

@@ -1094,6 +1094,22 @@ namespace fork_hooks {
             "wispy cauliflower billows OUTWARD from silhouettes while dense cores stay "
             "solid. 0 = smooth edges (legacy look). Detail frequency is "
             "tunable via rtx.atmosphere.cloudDetailScale in user.conf.");
+        RemixGui::DragFloat("Edge Softness", &RtxOptions::cloudEdgeSoftnessObject(),
+                            0.005f, 0.02f, 0.4f, "%.3f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Width of the coverage-gate transition band \xe2\x80\x94 how soft the "
+            "cloud silhouette is. Lower = crisper edges, tighter silhouette; "
+            "higher = softer edges but a broader faint skirt that can read as a "
+            "halo. Affects the view only; self-shadowing is held at the legacy "
+            "softness so this won't shift cloud lighting.");
+        RemixGui::DragFloat("Edge Haze Fade", &RtxOptions::cloudEdgeAmbientFadeObject(),
+                            0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Fades the (horizon-tinted) ambient on the thinnest edge samples so "
+            "the soft skirt around clouds doesn't read as dirty grey-brown haze "
+            "\xe2\x80\x94 the faintest edges fall toward transparent instead. "
+            "Higher = scrub more of the haze tint (can dim thin wisps); 0 = off. "
+            "Backlit edges keep their glow (only ambient is faded).");
         RemixGui::DragFloat("Vertical Stretch", &RtxOptions::cloudVerticalStretchObject(),
                             0.01f, 1.0f, 3.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(

@@ -2207,43 +2207,23 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   // dropping the bias would silently shift the coverage calibration.
   float density = texturedNoise - 0.05f;
 
-  // 4b. Edge detail (fork — 2026-06-10, rev 3 — ADDITIVE). A second tap of the
-  //     prebaked Worley-carved volume at cloudDetailScale× the base frequency,
-  //     applied to the noise field BEFORE the coverage gate below. Ordering is
-  //     the whole trick: the gate's smoothstep saturates the field to ~binary,
-  //     so detail applied here displaces the threshold-crossing iso-surface by
-  //     up to ~a full transition-band width at 60-500 m wavelengths — visible
-  //     cauliflower billows on the silhouette — while saturated cores clamp to 1
-  //     and stay solid. (Rev 1 applied this AFTER the gate, where the near-binary
-  //     field left nothing to chew on; the effect was invisible in-game.)
-  //     Rev 3 MIRRORS the bias across the field mean (0.4): the +0.2 bias point
-  //     (was 0.6 in rev 2's erosion-leaning form) makes the term GROWTH-leaning —
-  //     bumps bulge OUTWARD deeper than notches carve in, so the detail ADDS
-  //     billows to the silhouette instead of eroding teeth into it. Net coverage
-  //     rises slightly (mirror of rev 2's slight thinning); dial
-  //     cloudDetailStrength down if edges read too puffy. The cheap shadow
-  //     sampler (sampleCloudDensityForShadow) still skips this term — so the
-  //     un-grown grids now slightly UNDER-shadow the added bumps (they read as
-  //     un-self-shadowed filigree) rather than rev 2's conservative over-shadow.
-  if (args.cloudDetailStrength > 0.0f) {
-    vec3 detailCoord = frac(perturbed * (args.cloudDetailScale / args.cloudNoiseTileKm));
-    float detailNoise = cloudNoise3D.SampleLevel(cloudSampler, detailCoord, 0).r;
-    density += args.cloudDetailStrength * 0.6f * (detailNoise - 0.2f);
-  }
-
-  // 5. Coverage threshold + anvil pow + cloud-type vertical profile.
-  //    The R channel is the density envelope (gentle altitude shape). The G
-  //    channel is the per-altitude coverage threshold scale — that's the
-  //    lever with visible silhouette teeth (slide-3 anvil mechanism: a low G
-  //    at the cumulus top lowers the threshold, so more pixels survive the
-  //    coverage gate and the silhouette widens horizontally).
+  // 4a. Coverage threshold + anvil pow + cloud-type vertical profile.
+  //     HOISTED above the edge-detail block (4b) — the additive detail needs
+  //     coverageThreshold to localize itself to the silhouette. All three terms
+  //     depend only on shapeHeightFraction / typeLocal / gateCoverage (NOT on
+  //     density), so evaluating them here is behavior-neutral for the gate.
+  //     The R channel is the density envelope (gentle altitude shape). The G
+  //     channel is the per-altitude coverage threshold scale — that's the
+  //     lever with visible silhouette teeth (slide-3 anvil mechanism: a low G
+  //     at the cumulus top lowers the threshold, so more pixels survive the
+  //     coverage gate and the silhouette widens horizontally).
   //
-  //    Column mode: everything keys on shapeHeightFraction (per-cloud height)
-  //    and gateCoverage (per-column presence), so the envelope, the anvil
-  //    band and the threshold feathering land at each cloud's OWN base/top
-  //    instead of at two global altitudes — that global keying was the core
-  //    of the stacked-layers read. Legacy mode: shapeHeightFraction ==
-  //    heightFraction and gateCoverage == coverageLocal, bit-identical.
+  //     Column mode: everything keys on shapeHeightFraction (per-cloud height)
+  //     and gateCoverage (per-column presence), so the envelope, the anvil
+  //     band and the threshold feathering land at each cloud's OWN base/top
+  //     instead of at two global altitudes — that global keying was the core
+  //     of the stacked-layers read. Legacy mode: shapeHeightFraction ==
+  //     heightFraction and gateCoverage == coverageLocal, bit-identical.
   vec2 heightProfile = cloudHeightProfileFull(shapeHeightFraction, typeLocal, args);
 
   float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
@@ -2251,7 +2231,46 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   float coverageAnvil = pow(gateCoverage, anvilExponent);
 
   float coverageThreshold = mix(0.80f, 0.0f, coverageAnvil) * heightProfile.g;
-  density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, density);
+
+  // 4b. Edge detail (fork — 2026-06-10, rev 3 — ADDITIVE, edge-windowed). A
+  //     second tap of the prebaked Worley-carved volume at cloudDetailScale×
+  //     the base frequency, applied to the noise field BEFORE the coverage gate
+  //     below. Ordering is the whole trick: the gate's smoothstep saturates the
+  //     field to ~binary, so detail displaces the threshold-crossing iso-surface
+  //     by up to ~a transition-band width at 60-500 m wavelengths — visible
+  //     cauliflower billows on the silhouette — while saturated cores stay solid.
+  //     (Rev 1 applied this AFTER the gate, where the near-binary field left
+  //     nothing to chew on; invisible in-game.)
+  //     Rev 3 MIRRORS the bias across the field mean (0.4): the +0.2 bias point
+  //     (was 0.6 in rev 2's erosion-leaning form) makes the term GROWTH-leaning,
+  //     so detail ADDS billows outward instead of eroding teeth in.
+  //     EDGE WINDOW: the additive positive lobe (≈+0.29 at default strength) is
+  //     WIDER than the 0.25 gate band, so ungated it lifts a margin of
+  //     sub-threshold "clear sky" into faint cloud — on soft edges that density
+  //     margin spans a long spatial distance, and the half-res render + bilinear
+  //     upsample smear it into a broad halo around the clouds. Multiplying the
+  //     term by the base field's approach to coverageThreshold (zero ~0.15
+  //     below it, full at it) keeps the close-in billows but kills the far
+  //     wisps. The cheap shadow sampler (sampleCloudDensityForShadow) still
+  //     skips the whole term.
+  if (args.cloudDetailStrength > 0.0f) {
+    vec3 detailCoord = frac(perturbed * (args.cloudDetailScale / args.cloudNoiseTileKm));
+    float detailNoise = cloudNoise3D.SampleLevel(cloudSampler, detailCoord, 0).r;
+    float edgeWindow = smoothstep(coverageThreshold - 0.15f, coverageThreshold, density);
+    density += args.cloudDetailStrength * 0.6f * (detailNoise - 0.2f) * edgeWindow;
+  }
+
+  // 5. Apply the coverage gate (threshold computed in 4a above), then the
+  //    density envelope. The transition-band width sets silhouette softness:
+  //    the wider it is, the broader the faint sub-threshold skirt around each
+  //    cloud (the soft halo). Driven live by cloudEdgeSoftness (default 0.15,
+  //    down from the legacy 0.25; fork — 2026-06-13). VIEW PATH ONLY; the
+  //    shadow/optical-depth overload below keeps 0.25 so the validated
+  //    self-shadow bakes are unchanged (the trimmed edge density is negligible
+  //    for shadowing).
+  density = smoothstep(coverageThreshold,
+                       coverageThreshold + max(args.cloudEdgeSoftness, 1e-3f),
+                       density);
 
   density *= heightProfile.r;
 
