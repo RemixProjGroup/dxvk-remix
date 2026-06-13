@@ -795,6 +795,17 @@ float sampleCloudSunOpticalDepth(vec3 cloudHitPos, vec3 sunDir,
 //  4. Early-exit when transmittance drops below 0.01.
 //  5. Night moonlight contribution is constant per ray (computed outside
 //     the sample loop, applied at each step).
+// Compile-gated (fork — 2026-06-13): evalClouds is the LEGACY analytical
+// view-march, used only as the runtime fallback in evalSkyRadiance below when
+// the cloud RT (primary) AND secondary-LUT (non-primary) paths are both off.
+// Both are on in the validated default, so this never runs at runtime — but it
+// otherwise compiles into every path-tracer megakernel that includes this
+// header (geometry_resolver, integrate_indirect), making every cloud-math edit
+// recompile the whole path tracer. Fencing it behind ATMOSPHERE_CLOUD_VIEW_MARCH
+// (defined nowhere by default) excises it, so editing the cloud march only
+// recompiles the small cloud compute passes. Define the macro to restore the
+// analytical A/B fallback.
+#ifdef ATMOSPHERE_CLOUD_VIEW_MARCH
 vec4 evalClouds(vec3 viewDir, AtmosphereArgs args, uint2 pixelCoord, uint frameIdx) {
   if (args.cloudEnabled < 0.5f || args.cloudCoverageMean < 0.01f || args.cloudViewSamples == 0u) {
     return vec4(0.0f);
@@ -1209,6 +1220,7 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args, uint2 pixelCoord, uint frameI
   float alpha = 1.0f - transmittance;
   return vec4(accumRadiance, alpha);
 }
+#endif // ATMOSPHERE_CLOUD_VIEW_MARCH
 
 // ============================================================================
 // Sky entry point
@@ -1426,7 +1438,16 @@ vec3 evalSkyRadiance(
     vec4 lut = AtmosphereCloudSecondaryLut.SampleLevel(AtmosphereSkyViewSampler, domeUv, 0.0f);
     cloudLayer = vec4(lut.rgb, 1.0f - lut.a);
   } else {
+#ifdef ATMOSPHERE_CLOUD_VIEW_MARCH
     cloudLayer = evalClouds(viewDirYUp, args, pixelCoord, frameIdx);
+#else
+    // Analytical fallback compile-gated out (fork — 2026-06-13). Reached only
+    // when cloudRenderRTEnable (primary) or cloudSecondaryLutEnable (non-primary)
+    // is OFF — i.e. an A/B-vs-legacy toggle, never the validated default. With
+    // the march excised this yields no cloud (transparent) rather than the
+    // legacy analytical clouds. Define ATMOSPHERE_CLOUD_VIEW_MARCH to restore it.
+    cloudLayer = vec4(0.0f, 0.0f, 0.0f, 0.0f);
+#endif
   }
 
   // Temporal cloud smoothing (fork). Per-frame FAST-noise jitter on the cloud
