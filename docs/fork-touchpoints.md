@@ -1907,3 +1907,21 @@ Companion fix shipped with column-shaping rev 3, prompted by a community diagram
 - **Clarity pass (same day, post-validation):** the in-game fix was user-validated with an accepted perf cost, so the controls now state it plainly: slider renamed "Cloud Sample Spacing" with a PERFORMANCE paragraph in the tooltip (cost scales up to cap/32 ≈ 4x on horizon-heavy views at defaults; how to trade it back), and the cap is exposed as a "Max Cloud Samples" DragInt (the perf governor). Option docstrings updated to match.
 
 ---
+
+## Workstream — Night cloud-lighting knob rebase (fork — 2026-06-14)
+
+Night clouds read too bright. The earlier suspicion (the moon-cloud directional term) was wrong: the dominant contributor is the STAR-coupling term, added uniformly and uncolored to every cloud sample (`nightLight += nightSkyColor × starBrightness × starAmbientCouplingStrength × nightFactor`), so it lifts the whole deck — and tints it blue via nightSkyColor — across the entire sky, not just near the moon. At the old default (0.03 × starBrightness 0.5 × nightSkyColor) it produced ~0.006 blue, larger and more pervasive than the moon's ~0.003 silver-lining peak. The knobs were also mis-scaled: the sub-0.01 night-radiance smallness lived inside the user-facing gains, so the only sane values were ~0.001 ("having 0.001 be the only reasonable one is painful"). Fix = rebase to O(1): the smallness moves into internal shader constants so the knobs read as a "multiple of the calibrated night level," and the star default drops to a user-tested 0.25. moonAmbientAirglow is unchanged in effect (it was never the problem). Both the RT march and the legacy analytical evalClouds get the identical edit so the day→night crossfade stays bit-matched.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned change.
+  *`buildCloudShadeContext` nightLight: internal `kStarCloudCoupling = 0.008f` and `kMoonAirglowScale = 0.0015f` factored out of the star-coupling and moon-airglow terms so the user-facing gains become O(1).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *Identical `kStarCloudCoupling` / `kMoonAirglowScale` factoring in the legacy `evalClouds` nightLight block (crossfade parity with the RT path).*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *`starAmbientCouplingStrength` default 0.03 → 0.25; `moonAmbientAirglow` default 0.0015 → 1.0; both docstrings rewritten as "multiple of the calibrated night level."*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *"Star Ambient Coupling" DragFloat range 0–0.1 / %.4f → 0–3 / %.2f so the O(1) default isn't clamped; tooltip updated.*
+
+---

@@ -948,8 +948,13 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args, uint2 pixelCoord, uint frameI
         // stylistic multiplier; ambient airglow shares the cloud knob.
         // Phase 3 Task 2 (2026-05-08): magnitude factor 0.0015 exposed as
         // args.moonAmbientAirglow for in-game tuning.
+        // Rebase (2026-06-14): the 0.0015 night-radiance scale moved into the
+        // internal kMoonAirglowScale constant so the user-facing knob is an
+        // O(1) "multiple of the calibrated night level" (default 1.0) instead
+        // of a sub-0.01 raw gain. Effective value at the default is unchanged.
+        const float kMoonAirglowScale = 0.0015f;
         vec3 sharedFactorAmbient = computeMoonSharedFactor(m, args, m.color);
-        nightLight += sharedFactorAmbient * args.moonAmbientAirglow
+        nightLight += sharedFactorAmbient * args.moonAmbientAirglow * kMoonAirglowScale
                     * moonDot * phaseGlow * args.cloudMoonBrightness * nightFactor;
 
         // Directional contribution — only moons above horizon matter for
@@ -1012,8 +1017,15 @@ vec4 evalClouds(vec3 viewDir, AtmosphereArgs args, uint2 pixelCoord, uint frameI
       // but a per-mille lift here lets the cloud body compete visually with
       // edge-bleeding HDR stars and reads as proper "stars integrated into
       // clouds" rather than "stars floating on top of clouds."
+      // Rebase (2026-06-14): kStarCloudCoupling absorbs the night-radiance
+      // scale (and the calibrated reduction from the too-bright 0.03 raw gain)
+      // so starAmbientCouplingStrength is an O(1) "multiple of the calibrated
+      // night level" (default 1.0). This was the single largest UNIFORM night
+      // cloud term (added uncolored to every sample), so it drove most of the
+      // "clouds glow blue at night" read.
+      const float kStarCloudCoupling = 0.008f;
       nightLight += args.nightSkyColor * args.starBrightness
-                  * args.starAmbientCouplingStrength * nightFactor;
+                  * args.starAmbientCouplingStrength * kStarCloudCoupling * nightFactor;
     }
   }
 

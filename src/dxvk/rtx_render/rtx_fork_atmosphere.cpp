@@ -700,9 +700,10 @@ namespace fork_hooks {
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Exponent on cloud view-transmittance when extincting stars. Higher = stars die through clouds faster.");
         RemixGui::DragFloat("Star Ambient Coupling", &RtxOptions::starAmbientCouplingStrengthObject(),
-                            0.001f, 0.0f, 0.1f, "%.4f", sliderFlags);
+                            0.02f, 0.0f, 3.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
-            "Star/airglow coupling into cloud-march nightLight. 0 = disabled.");
+            "Star/airglow coupling into cloud-march nightLight, as a multiple of the calibrated "
+            "night level (1.0 = calibrated, ~2 doubles it). 0 = disabled.");
         ImGui::TreePop();
       }
     }

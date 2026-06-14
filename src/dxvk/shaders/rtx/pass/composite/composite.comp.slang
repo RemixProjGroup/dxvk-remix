@@ -180,6 +180,24 @@ void loadInputRadiance(
     }
   }
 
+  // Cloud shadow on indirect lighting (fork — issue #37). The direct-only
+  // application above darkens only sun-facing surfaces, so a mesh under a cloud
+  // reads as shadowed on its top but lit on its sides/ambient-lit faces. A cloud
+  // that occludes the sun reduces the sun-driven radiance across the whole
+  // shadowed region, so the diffuse bounce and the reflections of that region
+  // dim too — attenuate both indirect lobes to shadow the entire mesh.
+  //
+  // Use the RAW factor (not pow(factor, cloudShadowFactorStrength)) here: that
+  // exponent is an artistic contrast curve for the high-frequency direct cumulus
+  // shadow, whereas indirect is a smooth regional irradiance reduction. The
+  // strength knob lerps 0 (indirect untouched, pre-fork behavior) .. 1 (full
+  // regional reduction by the cloud transmittance). The factor is now written
+  // for every primary surface regardless of orientation (see the NdotL-independent
+  // computation in sampleAtmosphereSunLight), so away-facing faces shadow too.
+  const float indirectCloudShadow = lerp(1.0f, primaryCloudShadowFactor, cb.cloudShadowIndirectStrength);
+  primaryIndirectDiffuseRadiance *= indirectCloudShadow;
+  primaryIndirectSpecularRadiance *= indirectCloudShadow;
+
   // Signal enablement overrides
   if (!cb.compositePrimaryDirectDiffuse) primaryDirectDiffuseRadiance = 0;
   if (!cb.compositePrimaryDirectSpecular) primaryDirectSpecularRadiance = 0;

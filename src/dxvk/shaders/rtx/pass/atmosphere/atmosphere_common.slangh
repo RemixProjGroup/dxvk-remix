@@ -952,6 +952,21 @@ AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal
     result.direction = normalize(args.sunDirection);
   }
   
+  // Cloud ground-shadow factor (fork — issue #37). Computed HERE, before the
+  // NdotL horizon early-out below, so it is recorded for EVERY primary surface
+  // regardless of orientation. The factor depends only on surfacePos and the
+  // sun direction — never the surface normal — so computing it before the early
+  // return lets away-facing faces (NdotL <= 0, no direct sun) still carry the
+  // real cloud shadow into PrimaryCloudShadowFactor instead of the default 1.0.
+  // composite.comp.slang then uses it to shadow the whole mesh's indirect
+  // lighting, not just its sun-facing faces. See the wire-in notes below.
+#ifdef ATMOSPHERE_AVAILABLE
+  if (args.cloudVoxelShadowsEnable != 0u) {
+    result.cloudShadowFactor = sampleCloudGroundShadow_OptionB(
+        surfacePos, result.direction, args, isZUp);
+  }
+#endif
+
   // Check if sun is above the surface horizon
   float NdotL = dot(surfaceNormal, result.direction);
   if (NdotL <= 0.0f) {
@@ -960,7 +975,7 @@ AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal
     result.solidAnglePdf = 1.0f;
     return result;
   }
-  
+
   // Compute transmittance from surface to sun. When the voxel-grid cloud
   // shadow is enabled, skip the analytical cloud shadow inside the helper
   // and carry the per-pixel newShadow separately via cloudShadowFactor
@@ -1033,10 +1048,11 @@ AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal
   // into the voxel-grid lookup. That invariant is what the prior ratio-
   // correction was protecting; the conditional skip preserves it without
   // the saturate-clamp side effect.
-  if (args.cloudVoxelShadowsEnable != 0u) {
-    result.cloudShadowFactor = sampleCloudGroundShadow_OptionB(
-        surfacePos, result.direction, args, isZUp);
-  }
+  //
+  // result.cloudShadowFactor is now computed earlier, before the NdotL
+  // early-out, so away-facing surfaces also record it (issue #37). Nothing to
+  // do here — the value depends only on surfacePos + sun direction, neither of
+  // which changed below this point.
 #endif
 
   // Get soft shadow parameters based on Mie anisotropy
@@ -1279,8 +1295,15 @@ AtmosphereVolumeSunSample sampleAtmosphereSunLightVolume(vec3 volumePos, vec3 vi
   // as the sun approaches/crosses the geodetic horizon, killing the
   // bright fog/decals when sun is visually below terrain. This is a
   // per-froxel visibility approximation, not an artistic gain.
-  const float sunUpAxis = (isZUp ? args.sunDirection.z : args.sunDirection.y);
-  const float sunElevationGate = smoothstep(0.0f, 0.3f, sunUpAxis);
+  // sunDirection is authored in Y-up space (matching the twilight check above
+  // and line 1145), so the elevation component is always .y regardless of the
+  // world being Z-up. The prior `isZUp ? .z : .y` read the wrong axis in Z-up
+  // scenes, killing the sun's volumetric contribution (issue #35). Always use .y.
+  const float sunUpAxis = args.sunDirection.y;
+  // Ramp the gate across the lowest ~5deg of elevation (sin(5deg) ~= 0.087) so
+  // the contribution fades smoothly through the horizon. The prior 0.3 cutoff
+  // (~17deg) culled volumetric sun far too aggressively near sunrise/sunset.
+  const float sunElevationGate = smoothstep(0.0f, 0.087f, sunUpAxis);
   result.radiance = args.sunIlluminance * transmittance * phase * mieModulation * sunVisibility * args.sunRayBrightness * sunElevationGate;
   result.valid = any(transmittance > vec3(0.0f));
 

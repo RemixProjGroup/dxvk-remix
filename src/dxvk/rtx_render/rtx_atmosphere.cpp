@@ -719,6 +719,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // softness and the thin-edge ambient haze fade.
     args.cloudEdgeSoftness             = RtxOptions::cloudEdgeSoftness();
     args.cloudEdgeAmbientFade          = RtxOptions::cloudEdgeAmbientFade();
+
+    // Independent sun-only scale for volumetric fog in-scattering (issue #35).
+    args.atmosphereSunVolumetricRadianceScale = RtxOptions::atmosphereSunVolumetricRadianceScale();
   }
 
   // Cloud render camera basis (fork — 2026-05-12, C4). Pushed from

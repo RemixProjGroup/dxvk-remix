@@ -456,6 +456,11 @@ struct AtmosphereArgs {
                                       // reaches full strength [0..~0.5]. Below it the ambient fades
                                       // toward 0 so the soft skirt doesn't read as grey-brown haze.
                                       // 0 = off (ambient at full strength on all samples).
-  float pad_cloudEdge0;               // 16-byte alignment
+  // Independent scale on the physical sun's contribution to volumetric fog
+  // in-scattering (fork — issue #35). Applied in volume_integrator.slangh where
+  // the sun term is added to the froxel SH, so it scales ONLY the sun and not
+  // the whole cache the way rtx.volumetrics.fogSunVisibilityGain does. Reuses
+  // the former pad_cloudEdge0 slot; CB layout unchanged. Default 1.0 = baseline.
+  float atmosphereSunVolumetricRadianceScale;
   float pad_cloudEdge1;
 };

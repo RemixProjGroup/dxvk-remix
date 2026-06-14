@@ -495,6 +495,7 @@ namespace dxvk {
     compositeArgs.domeLightArgs = domeLightArgs;
     compositeArgs.skyBrightness = RtxOptions::skyBrightness();
     compositeArgs.cloudShadowFactorStrength = std::max(RtxOptions::cloudShadowFactorStrength(), 0.0f);
+    compositeArgs.cloudShadowIndirectStrength = std::clamp(RtxOptions::cloudShadowIndirectStrength(), 0.0f, 1.0f);
 
     Rc<DxvkBuffer> cb = getCompositeConstantsBuffer();
     ctx->writeToBuffer(cb, 0, sizeof(CompositeArgs), &compositeArgs);

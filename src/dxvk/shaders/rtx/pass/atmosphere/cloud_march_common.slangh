@@ -120,7 +120,26 @@ CloudShadeContext buildCloudShadeContext(AtmosphereArgs args) {
   // scatter atmosphere color matching the paper's pp. 122/132/171-173 renders.
   vec3 sunDirYUp = normalize(args.sunDirection);
   vec3 airTrans = getAtmosphericTransmittanceForDir(sunDirYUp, args);
-  vec3 sunRadiance = args.sunIlluminance * airTrans;
+  // Day/night gate on ALL of the cloud's daytime (sun-derived) lighting —
+  // both the direct sun term and the sky-ambient terms (fork — issue #33,
+  // extended for the night-brightness / retained-sunset-glow regression).
+  //
+  // Two things kept the clouds sunlit at night: (1) airTrans alone does not
+  // fully extinguish the sun below the horizon, and (2) skyRadianceWarm/Cool
+  // are sampled with the direction's y clamped just above the horizon (see the
+  // max(..., 0.05) below), so the sky-view LUT keeps returning the warm horizon
+  // (orange twilight) color no matter how far the sun has set — leaving clouds
+  // glowing orange at -20deg elevation. The original #33 fix gated only the
+  // direct term, which left that orange ambient as the sole night cloud light.
+  //
+  // dayFactor is the exact complement of the moon path's nightFactor =
+  // smoothstep(0.02, -0.05, sun.y) below, so the daytime sun + sky-ambient fade
+  // out precisely as the moon + airglow terms fade in across twilight, with no
+  // popping. Above the horizon (sun.y > 0.02) dayFactor == 1, so daytime is
+  // bit-identical; below ~-3deg it is 0, so deep-night clouds are lit purely by
+  // the moon / night-sky / star terms.
+  float dayFactor = smoothstep(-0.05f, 0.02f, sunDirYUp.y);
+  vec3 sunRadiance = args.sunIlluminance * airTrans * dayFactor;
 
   vec3 sunDirForAmbient = sunDirYUp;
   sunDirForAmbient.y = max(sunDirForAmbient.y, 0.05f);
@@ -128,7 +147,7 @@ CloudShadeContext buildCloudShadeContext(AtmosphereArgs args) {
   vec3 skyRadianceWarm = sampleSkyAmbientForVolume(sunDirForAmbient, args,
                                                     AtmosphereSkyViewLut,
                                                     AtmosphereCloudSkyTransmittanceLut,
-                                                    AtmosphereSkyViewSampler);
+                                                    AtmosphereSkyViewSampler) * dayFactor;
 
   // Anti-sun horizon sample for the per-sample warm/cool blend (fork —
   // 2026-05-21). Mirrors the sun-direction sample's small y-lift to keep
@@ -139,10 +158,12 @@ CloudShadeContext buildCloudShadeContext(AtmosphereArgs args) {
   // so this sample never reaches the composite.
   vec3 antiSunDir = vec3(-sunDirYUp.x, 0.05f, -sunDirYUp.z);
   antiSunDir = normalize(antiSunDir);
+  // Same dayFactor gate as the warm sample (issue #33): fades the daytime
+  // sky-ambient out at night so it can't keep tinting clouds below the horizon.
   vec3 skyRadianceCool = sampleSkyAmbientForVolume(antiSunDir, args,
                                                     AtmosphereSkyViewLut,
                                                     AtmosphereCloudSkyTransmittanceLut,
-                                                    AtmosphereSkyViewSampler);
+                                                    AtmosphereSkyViewSampler) * dayFactor;
 
   // ===== Per-pixel moon-lighting precompute =====
   // Direct port of evalClouds (atmosphere_sky.slangh:756-884). The Nubis Cubed
@@ -191,8 +212,13 @@ CloudShadeContext buildCloudShadeContext(AtmosphereArgs args) {
         float phaseGlow = 0.5f - 0.5f * cos(m.phase * 2.0f * kPi);
 
         // Ambient airglow contribution (uniform across the cloud volume).
+        // Rebase (2026-06-14): the 0.0015 night-radiance scale moved into the
+        // internal kMoonAirglowScale constant so the user-facing knob is an
+        // O(1) "multiple of the calibrated night level" (default 1.0) instead
+        // of a sub-0.01 raw gain. Effective value at the default is unchanged.
+        const float kMoonAirglowScale = 0.0015f;
         vec3 sharedFactorAmbient = computeMoonSharedFactor(m, args, m.color);
-        nightLight += sharedFactorAmbient * args.moonAmbientAirglow
+        nightLight += sharedFactorAmbient * args.moonAmbientAirglow * kMoonAirglowScale
                     * moonDot * phaseGlow * args.cloudMoonBrightness * nightFactor;
 
         // Directional contribution — only above-horizon moons matter.
@@ -224,11 +250,17 @@ CloudShadeContext buildCloudShadeContext(AtmosphereArgs args) {
       // Starlight ambient coupling (fork — mirrors evalClouds in atmosphere_sky.slangh).
       // Adds a faint per-ray ambient lift to cloud body lighting derived from
       // the sky's star contribution so cumulus under starry skies doesn't read
-      // as pitch-black against HDR ~8 stars overhead. starAmbientCouplingStrength
-      // is per-mille by default (0.01); coupled to args.starBrightness so the
+      // as pitch-black against HDR ~8 stars overhead.
+      // Rebase (2026-06-14): kStarCloudCoupling absorbs the night-radiance
+      // scale (and the calibrated reduction from the too-bright 0.03 raw gain)
+      // so starAmbientCouplingStrength is an O(1) "multiple of the calibrated
+      // night level" (default 1.0). This was the single largest UNIFORM night
+      // cloud term (added uncolored to every sample), so it drove most of the
+      // "clouds glow blue at night" read; coupled to args.starBrightness so the
       // lift tracks the user's star slider.
+      const float kStarCloudCoupling = 0.008f;
       nightLight += args.nightSkyColor * args.starBrightness
-                  * args.starAmbientCouplingStrength * nightFactor;
+                  * args.starAmbientCouplingStrength * kStarCloudCoupling * nightFactor;
     }
   }
 

@@ -1256,7 +1256,7 @@ namespace dxvk {
                "Celestial pole elevation from horizon in degrees. 90 = pole at zenith (default, matches pre-rotation behavior).");
     RTX_OPTION("rtx.atmosphere", float, starAxisRotation, 0.0f,
                "Celestial pole azimuth in degrees (0 = North). Only relevant when starAxisElevation != 90.");
-    RTX_OPTION("rtx.atmosphere", float, nightSkyBrightness, 0.008f,
+    RTX_OPTION("rtx.atmosphere", float, nightSkyBrightness, 0.002f,
                "Ambient night-sky brightness from airglow and zodiacal light.");
     RTX_OPTION("rtx.atmosphere", Vector3, nightSkyColor, Vector3(0.15f, 0.2f, 0.4f),
                "Base color tint of the night-sky airglow.");
@@ -1300,12 +1300,14 @@ namespace dxvk {
                "T^2.5, well below cloud body brightness at typical T<0.1 cores while leaving "
                "clear sky (T=1) unaffected. Lower = stars survive thicker clouds; 1.0 = no "
                "extra extinction (pure standard composite).");
-    RTX_OPTION("rtx.atmosphere", float, starAmbientCouplingStrength, 0.005f,
-               "Coupling strength of starlight/airglow into the cloud-march nightLight term. "
-               "Adds a faint per-ray ambient based on (nightSkyColor * starBrightness * this) "
-               "so cloud bodies lift slightly under starry skies, the same way moon-zenith "
-               "fill brightens cloud bodies near the moon. Default 0.01 = per-mille level; "
-               "0 disables the coupling.");
+    RTX_OPTION("rtx.atmosphere", float, starAmbientCouplingStrength, 0.25f,
+               "Coupling strength of starlight/airglow into the cloud-march nightLight term "
+               "(O(1) knob; the sub-0.01 night-radiance scale is folded into the internal "
+               "kStarCloudCoupling constant in the shader). Adds a faint per-ray ambient based "
+               "on (nightSkyColor * starBrightness * this) so cloud bodies lift slightly under "
+               "starry skies. Default 0.25 = user-tested night level; higher brightens, 0 "
+               "disables the coupling. This is the largest uniform night cloud term, so lower "
+               "it first if night clouds glow.");
 
     // ----- Per-moon parameters (fork) -----
     // MAX_MOONS in atmosphere_args.h must equal the number of DECLARE_MOON_OPTIONS
@@ -1398,9 +1400,9 @@ namespace dxvk {
                "Default 50.0 = user-tested baseline for visible ground under FNV tonemapper "
                "at m.brightness=1.0; 1.0 = physically-pure (very dim under typical tonemappers); "
                "raise for brighter ground.");
-    RTX_OPTION("rtx.atmosphere", float, cloudMoonBrightness, 2.0f,
+    RTX_OPTION("rtx.atmosphere", float, cloudMoonBrightness, 0.2f,
                "Per-path stylistic multiplier on cloud-moon directional lighting + ambient airglow. "
-               "Default 2.0 = user-tested baseline for cloud silver-lining under FNV tonemapper "
+               "Default 0.2 = user-tested baseline for cloud silver-lining under FNV tonemapper "
                "at m.brightness=1.0; 1.0 = physically-pure; 0 = no moon-cloud illumination. "
                "Higher values produce a stronger silver-lining peak on the cloud directly in front "
                "of the moon.");
@@ -1427,10 +1429,12 @@ namespace dxvk {
                "Disk halo Gaussian strength multiplier. Tuned alongside haloMoonBrightness; "
                "use this for the underlying SHAPE strength and haloMoonBrightness for the "
                "tonemapper-correction multiplier. Default 0.0015.");
-    RTX_OPTION("rtx.atmosphere", float, moonAmbientAirglow, 0.0015f,
-               "Ambient airglow per-moon strength contribution to nightLight. The cloud "
-               "volume gets a uniform sky-bounce from each enabled moon scaled by this "
-               "constant. Default 0.0015.");
+    RTX_OPTION("rtx.atmosphere", float, moonAmbientAirglow, 1.0f,
+               "Ambient airglow per-moon strength contribution to nightLight, as a multiple of "
+               "the calibrated night level (the 0.0015 night-radiance scale is folded into the "
+               "internal kMoonAirglowScale constant in the shader, so this knob is O(1)). The "
+               "cloud volume gets a uniform sky-bounce from each enabled moon scaled by this. "
+               "Default 1.0 = calibrated level.");
     RTX_OPTION("rtx.atmosphere", float, moonSilverLiningIntensity, 1.0f,
                "Master multiplier on the combined cloud-moon silver-lining contribution "
                "(Lambert diffuse + HG phase). Default 1.0 = current calibrated look. "
@@ -1487,6 +1491,21 @@ namespace dxvk {
                "have visibly darker volumetric ambient than clear-sky scenes). "
                "0 = sky ambient ignores cloud cover (debug only — visually "
                "inverted versus reality).");
+    // Independent scale on the sun's contribution to volumetric in-scattering
+    // (fork — issue #35). rtx.volumetrics.fogSunVisibilityGain multiplies the
+    // whole froxel SH cache at the fog consumer, so it scales the sun AND every
+    // remix scene light together — forcing it low for balanced scene lights
+    // leaves daytime sun-fog too weak. This knob scales ONLY the atmosphere sun
+    // term, applied where it is added to the SH in volume_integrator.slangh, so
+    // sun-fog can be boosted without over-brightening scene-light fog. Default
+    // 1.0 leaves the sun's contribution unchanged (bit-identical baseline).
+    RTX_OPTION_ARGS("rtx.atmosphere", float, atmosphereSunVolumetricRadianceScale, 1.0f,
+               "Independent multiplier on the physical sun's contribution to "
+               "volumetric fog in-scattering. Unlike rtx.volumetrics.fogSunVisibilityGain "
+               "(which scales the whole froxel cache, sun + all scene lights), this "
+               "affects only the atmosphere sun term. Gated on rtx.skyMode = 1 (Numos). "
+               "Default 1.0 = physical sun contribution unchanged.",
+               args.minValue = 0.0f, args.maxValue = 50.0f);
 
     // Wrenninge / Hillaire (Frostbite 2016) multi-scatter approximation for the
     // sun-cloud interaction. Replaces the prior flat-Lambert + single-HG approximation
@@ -1969,6 +1988,27 @@ namespace dxvk {
                "cumulus-shadow contrast in the visible-but-not-aggressive "
                "range. Lets the shadow strength be tuned independently of "
                "the bake magnitude (cloudShadowMarchStrength) without re-baking.");
+
+    // Cloud shadow on indirect lighting (fork — issue #37). The direct-only
+    // application of the per-pixel cloud shadow only darkens sun-facing
+    // surfaces, leaving the ambient/indirect-lit faces of a mesh bright so it
+    // never reads as fully shadowed. A cloud that occludes the sun reduces the
+    // sun-driven radiance across the whole shaded region, so this blends the raw
+    // cloud transmittance onto the primary indirect diffuse + specular lobes.
+    //   0.0 = indirect untouched (pre-fork behavior; only direct is shadowed)
+    //   1.0 = indirect fully reduced by the cloud transmittance (whole mesh
+    //         shadowed). No effect unless cloudVoxelShadowsEnable is on, since
+    //         the factor is a flat 1.0 everywhere otherwise.
+    // Uses the RAW factor, not pow(factor, cloudShadowFactorStrength): that
+    // exponent is an artistic contrast curve for the high-frequency direct
+    // cumulus shadow, whereas indirect is a smooth regional irradiance drop.
+    RTX_OPTION_ARGS("rtx.atmosphere", float, cloudShadowIndirectStrength, 1.0f,
+               "How strongly the cloud ground shadow attenuates primary indirect "
+               "(ambient/bounce) lighting in composite. 0 = indirect untouched "
+               "(only sun-facing surfaces darken). 1 = whole mesh shadowed by the "
+               "cloud transmittance. Only takes effect when cloudVoxelShadowsEnable "
+               "is on. Lower it if scattered-cloud scenes over-darken sky ambient.",
+               args.minValue = 0.0f, args.maxValue = 1.0f);
 
     // Cloud Height LUT (slide 3 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
     // 64x128 R8 lookup table indexed by (cloud type slice, height fraction).
