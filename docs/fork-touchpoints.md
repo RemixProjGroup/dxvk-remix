@@ -1925,3 +1925,12 @@ Night clouds read too bright. The earlier suspicion (the moon-cloud directional 
   *"Star Ambient Coupling" DragFloat range 0–0.1 / %.4f → 0–3 / %.2f so the O(1) default isn't clamped; tooltip updated.*
 
 ---
+
+## Workstream — Cloud edge detail via threshold modulation (rev 4) (fork — 2026-06-14)
+
+The additive edge-detail (rev 3) was trapped in a thin blobby rind hugging the silhouette: its containment window (`smoothstep(coverageThreshold - 0.15, coverageThreshold, density)`) keyed on the pre-detail base density and was one-sided, so detail could only displace the iso-surface from INSIDE — it could never grow billows outward. Widening the window traded the rind for a half-res smear halo (the additive positive lobe lifts a broad sub-threshold clear-sky margin into faint density on soft edges, which the half-res render + bilinear upsample smear). Rev 4 changes the mechanism: the detail tap now wobbles the COVERAGE THRESHOLD (the gate position) instead of the density field, zero-mean about kCloudNoiseFieldMean (0.4). This beats both modes at once — (a) the threshold can drop below the base value so billows grow OUTWARD past the silhouette (no rind), and (b) the gate self-localizes the effect so far-outside samples stay hard-0 (no faint margin to smear) and far-inside stay 1 (no interior holes); the modulation only bites in the gate transition band, so no explicit edge window is needed. Unlike the rejected rev-2 erosion remap it never touches the noise field — it only moves the gate, the same slide-3 anvil lever step 4a uses at low frequency. User-validated in-game ("this is perfect"). Supersedes the prior rind-vs-smear tradeoff; rev 3's window and the rejected tunable-reach knob are both gone.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`sampleCloudDensityTextured` step 4b: additive `density +=` + `edgeWindow` replaced by `coverageThreshold -= cloudDetailStrength * 0.5 * (detailNoise - kCloudNoiseFieldMean)`, clamped `≥ 0`. Internal `kEdgeDetailThreshold = 0.5` (wobble→threshold scale). No new options; `cloudDetailStrength = 0` is bit-identical. Shadow sampler still skips detail.*
+
+---
