@@ -1008,316 +1008,338 @@ namespace fork_hooks {
       // cleanup commit + cloud-settings-audit memory.
       if (ImGui::TreeNode("Clouds")) {
         RemixGui::Checkbox("Enable Clouds", &RtxOptions::cloudEnabledObject());
-        RemixGui::Checkbox("Fast Cloud Reflections", &RtxOptions::cloudSecondaryLutEnableObject());
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Reflections and indirect light sample a small per-frame cloud "
-            "lookup table instead of re-marching the cloud volume per ray. "
-            "Large performance win on cloudy skies; reflected clouds also "
-            "match the main sky exactly. Uncheck to restore the legacy "
-            "per-ray cloud march for comparison.");
-        RemixGui::DragFloat("Cloud Render Scale", &RtxOptions::cloudRenderResolutionScaleObject(),
-                            0.05f, 0.25f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Resolution of the cloud render relative to the internal render "
-            "resolution. 0.5 = quarter the pixels (~4x cheaper clouds, "
-            "slightly softer); 1.0 = native (legacy). Applies live.");
-        RemixGui::DragFloat("Cloud Sample Spacing", &RtxOptions::cloudViewStepKmObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f km", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Distance between cloud samples along each view ray, in km. "
-            "This is the fix for the horizontal banding near the horizon: "
-            "sightlines there cross 50+ km of cloud layer, and the old "
-            "fixed 32-sample march spaced samples too far apart to resolve "
-            "the clouds.\n\nPERFORMANCE: cost scales with how many samples "
-            "a ray needs -- overhead sightlines are unchanged, but "
-            "horizon-heavy views can take up to Max Cloud Samples / 32 "
-            "times the cloud cost (2x at the defaults). Raise the spacing "
-            "or lower Max Cloud Samples to claw the cost back, or set 0 "
-            "to restore the legacy fixed march (banding returns). "
-            "Cloud Render Scale above also directly offsets this cost. "
-            "Applies live.");
-        RemixGui::DragInt("Max Cloud Samples", &RtxOptions::cloudViewSamplesMaxObject(),
-                          1.0f, 32, 256, "%d", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Hard cap on cloud samples per ray -- the performance governor "
-            "for Cloud Sample Spacing. 64 resolves the default spacing "
-            "out to ~6 km of cloud span; lower values cost less but let "
-            "a little banding back in at the far horizon. 32 = legacy "
-            "cost ceiling. Applies live.");
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Coverage & Shape");
-        RemixGui::DragFloat("Coverage", &RtxOptions::cloudCoverageMeanObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How much of the sky has clouds. 0 = clear, 1 = overcast.");
-        RemixGui::DragFloat("Coverage Spread", &RtxOptions::cloudCoverageSpreadObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Spatial variation around the Coverage mean. 0 = uniform across "
-            "the sky, 1 = mixed clear / cloudy patches.");
-        RemixGui::DragFloat("Coverage Patch Size", &RtxOptions::cloudCoverageNoiseScaleObject(),
-                            0.0001f, 0.0001f, 0.01f, "%.4f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Spatial frequency of the coverage variation. SMALLER value = "
-            "LARGER coverage patches (broad weather regions); larger value = "
-            "finer patchwork. Default 0.0033.");
-        RemixGui::DragFloat("Cloud Type", &RtxOptions::cloudTypeMeanObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Cloud shape from stratus to cumulus. 0 = flat stratus, "
-            "0.5 = stratocumulus, 1 = tall cumulus.");
-        RemixGui::DragFloat("Type Spread", &RtxOptions::cloudTypeSpreadObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Spatial variation around the Cloud Type mean. 0 = uniform type "
-            "everywhere, 1 = full stratus-to-cumulus range across the sky.");
-        RemixGui::DragFloat("Type Patch Size", &RtxOptions::cloudTypeNoiseScaleObject(),
-                            0.0001f, 0.0001f, 0.0034f, "%.4f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Spatial frequency of the cloud-type variation. SMALLER value = "
-            "LARGER patches of one cloud type; larger value = finer mix. "
-            "Capped at 0.0034 because faster variation puts visible 2D "
-            "cell structure at sub-cumulus scales. Independent of Coverage "
-            "Patch Size. Default 0.001.");
-        RemixGui::DragFloat("Anvil Spread", &RtxOptions::cloudAnvilBiasObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Cumulus top inflation. 0 = flat tops, 1 = mushroom-cap anvils. "
-            "Most visible on tall cumulus / thunderstorm scenes.");
-        RemixGui::DragFloat("Texture Scale", &RtxOptions::cloudNoiseTileKmObject(),
-                            1.0f, 6.0f, 24.0f, "%.0f km", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "World-space tile size for the 3D cloud noise. Smaller = visible "
-            "repetition; larger = lower-frequency detail. Re-bakes the noise "
-            "volume live on change.");
-        RemixGui::Checkbox("Seamless Cloud Field", &RtxOptions::cloudHexTilingEnableObject());
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Randomizes the cloud noise tiling on a triangle lattice so the "
-            "texture repeat can never show, while preserving the cloud look. "
-            "Uncheck for the legacy periodic field. Applies live.");
-        RemixGui::DragFloat("Noise Frequency", &RtxOptions::cloudNoiseBaseFreqScaleObject(),
-                            0.01f, 0.25f, 4.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Multiplier on the baked cloud noise frequency. 1.0 = current "
-            "look. Raise for smaller/busier cloud features, lower for "
-            "larger ones. Re-bakes the noise volume live as you drag "
-            "(brief hitch per change).");
-        RemixGui::DragFloat("Edge Detail", &RtxOptions::cloudDetailStrengthObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "High-frequency detail concentrated at cloud EDGES \xe2\x80\x94 grows "
-            "wispy cauliflower billows OUTWARD from silhouettes while dense cores stay "
-            "solid. 0 = smooth edges (legacy look). Detail frequency is "
-            "tunable via rtx.atmosphere.cloudDetailScale in user.conf.");
-        RemixGui::DragFloat("Edge Softness", &RtxOptions::cloudEdgeSoftnessObject(),
-                            0.005f, 0.02f, 0.4f, "%.3f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Width of the coverage-gate transition band \xe2\x80\x94 how soft the "
-            "cloud silhouette is. Lower = crisper edges, tighter silhouette; "
-            "higher = softer edges but a broader faint skirt that can read as a "
-            "halo. Affects the view only; self-shadowing is held at the legacy "
-            "softness so this won't shift cloud lighting.");
-        RemixGui::DragFloat("Edge Haze Fade", &RtxOptions::cloudEdgeAmbientFadeObject(),
-                            0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Fades the (horizon-tinted) ambient on the thinnest edge samples so "
-            "the soft skirt around clouds doesn't read as dirty grey-brown haze "
-            "\xe2\x80\x94 the faintest edges fall toward transparent instead. "
-            "Higher = scrub more of the haze tint (can dim thin wisps); 0 = off. "
-            "Backlit edges keep their glow (only ambient is faded).");
-        RemixGui::DragFloat("Vertical Stretch", &RtxOptions::cloudVerticalStretchObject(),
-                            0.01f, 1.0f, 3.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Vertical elongation of cloud bodies. 1 = round blobs (legacy "
-            "look); higher stretches clouds into convective columns so "
-            "cumulus reads as towering. Pairs well with Cloud Type near 1 "
-            "and a deeper cloud layer (Depth 4+ km). With Volumetric Cloud "
-            "Columns on, columns already cohere vertically — try 1.0 first.");
+        // Conditional-disable gates (fork — 2026-06-15, cloud UI rework). Controls
+        // that the shader only consumes in a given mode are greyed (not hidden) so
+        // they stay discoverable but can't be dragged when inert.
+        const bool columnsOn = RtxOptions::cloudColumnShapingEnable();
+        const bool layer2On  = RtxOptions::cloudLayer2Enable();
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Cloud Columns");
-        RemixGui::Checkbox("Volumetric Cloud Columns", &RtxOptions::cloudColumnShapingEnableObject());
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Per-cloud column model: every cloud gets its own base, its own "
-            "tower height and a complete vertical shape, instead of all "
-            "clouds being cut by the same two global altitude planes. Fixes "
-            "the 'stacked flat layers' read. Uncheck for the legacy "
-            "global-slab shaping (A/B comparison).");
-        RemixGui::DragFloat("Cloud Cell Size", &RtxOptions::cloudCellSizeKmObject(),
-                            0.05f, 0.5f, 6.0f, "%.2f km", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Average footprint of a cloud cluster in km. Smaller = many "
-            "small clouds; larger = fewer, broader cloud banks. Re-bakes "
-            "the placement map live on change.");
-        RemixGui::DragFloat("Top Variation", &RtxOptions::cloudColumnTopVariationObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How much cloud-top heights vary from cloud to cloud. 0 = all "
-            "tops at the same altitude (flat deck); higher = a varied "
-            "skyline of taller and shorter clouds. Applies live.");
-        RemixGui::DragFloat("Top Shape", &RtxOptions::cloudColumnTopShapeObject(),
-                            0.01f, 0.1f, 2.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How cloud height follows cloud thickness toward the cluster "
-            "core. Low = even the thin edges tower (blocky); high = only "
-            "the dense cores rise (domed, feathered edges). Default 0.6.");
-        RemixGui::DragFloat("Base Undulation", &RtxOptions::cloudColumnBaseVariationObject(),
-                            0.01f, 0.0f, 0.4f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How much local cloud bases drift above the layer altitude, as "
-            "a fraction of the layer depth. 0 = machined-flat ceiling; "
-            "higher = gently undulating cloud bases. Applies live.");
-        RemixGui::DragFloat("Edge Feather", &RtxOptions::cloudColumnFeatherObject(),
-                            0.01f, 0.05f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Width of the transition band at cloud-cluster edges. Narrow = "
-            "crisp, solid-cored clouds with sharp gaps; wide = soft, wispy "
-            "transitions between cloud and sky. Applies live.");
-        RemixGui::DragFloat("Underside Shading", &RtxOptions::cloudUndersideLightSigmaObject(),
-                            0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How quickly the light filtering down through each cloud dies "
-            "out. The underside brightness then varies continuously with "
-            "the water above every point — dark cores, bright thin spots, "
-            "smooth gradients — instead of one flat-lit sheet. Higher = "
-            "darker, more dramatic undersides; 0 = flat legacy gradient. "
-            "Supersedes Bottom Darkening while Cloud Columns are on. "
-            "Applies live.");
+        ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+        if (ImGui::TreeNode("Basic")) {
+          RemixGui::DragFloat("Coverage", &RtxOptions::cloudCoverageMeanObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How much of the sky has clouds. 0 = clear, 1 = overcast.");
+          RemixGui::DragFloat("Cloud Type", &RtxOptions::cloudTypeMeanObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Cloud shape from stratus to cumulus. 0 = flat stratus, "
+              "0.5 = stratocumulus, 1 = tall cumulus.");
+          RemixGui::DragFloat("Density", &RtxOptions::cloudDensityObject(),
+                              0.05f, 0.0f, 4.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Cloud opacity. Higher = thicker / darker clouds.");
+          RemixGui::DragFloat("Altitude", &RtxOptions::cloudAltitudeObject(),
+                              0.1f, 0.5f, 12.0f, "%.1f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Cloud layer altitude (km above the ground).");
+          RemixGui::DragFloat("Depth", &RtxOptions::cloudThicknessObject(),
+                              0.05f, 0.1f, 5.0f, "%.2f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Vertical depth of the cloud layer in km.");
+          RemixGui::ColorEdit3("Color", &RtxOptions::cloudColorObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Base cloud albedo (RGB). Click the swatch for a color picker.");
+          ImGui::TreePop();
+        }
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Look");
-        RemixGui::DragFloat("Density", &RtxOptions::cloudDensityObject(),
-                            0.05f, 0.0f, 4.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Cloud opacity. Higher = thicker / darker clouds.");
-        RemixGui::DragFloat("Altitude", &RtxOptions::cloudAltitudeObject(),
-                            0.1f, 0.5f, 12.0f, "%.1f km", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Cloud layer altitude (km above the ground).");
-        RemixGui::DragFloat("Depth", &RtxOptions::cloudThicknessObject(),
-                            0.05f, 0.1f, 5.0f, "%.2f km", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Vertical depth of the cloud layer in km.");
-        RemixGui::DragFloat("Curvature", &RtxOptions::cloudCurvatureObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Sky-dome curvature. 0 = real-planet radius (nearly flat ceiling, "
-            "horizon-grazing clouds stretch far); 1 = tight dome (clouds curve "
-            "visibly down to the horizon). Atmosphere math unaffected.");
-        RemixGui::DragFloat3("Color", &RtxOptions::cloudColorObject(),
-                             0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Base cloud albedo (RGB).");
+        if (ImGui::TreeNode("Shaping")) {
+          if (ImGui::TreeNode("Variation")) {
+            RemixGui::DragFloat("Coverage Spread", &RtxOptions::cloudCoverageSpreadObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Spatial variation around the Coverage mean. 0 = uniform across "
+                "the sky, 1 = mixed clear / cloudy patches.");
+            RemixGui::DragFloat("Coverage Patch Size", &RtxOptions::cloudCoverageNoiseScaleObject(),
+                                0.0001f, 0.0001f, 0.01f, "%.4f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Spatial frequency of the coverage variation. SMALLER value = "
+                "LARGER coverage patches (broad weather regions); larger value = "
+                "finer patchwork. Default 0.0033.");
+            RemixGui::DragFloat("Type Spread", &RtxOptions::cloudTypeSpreadObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Spatial variation around the Cloud Type mean. 0 = uniform type "
+                "everywhere, 1 = full stratus-to-cumulus range across the sky.");
+            RemixGui::DragFloat("Type Patch Size", &RtxOptions::cloudTypeNoiseScaleObject(),
+                                0.0001f, 0.0001f, 0.0034f, "%.4f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Spatial frequency of the cloud-type variation. SMALLER value = "
+                "LARGER patches of one cloud type; larger value = finer mix. "
+                "Capped at 0.0034 because faster variation puts visible 2D "
+                "cell structure at sub-cumulus scales. Independent of Coverage "
+                "Patch Size. Default 0.001.");
+            RemixGui::DragFloat("Anvil Spread", &RtxOptions::cloudAnvilBiasObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Cumulus top inflation. 0 = flat tops, 1 = mushroom-cap anvils. "
+                "Most visible on tall cumulus / thunderstorm scenes.");
+            ImGui::TreePop();
+          }
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Wind");
-        RemixGui::DragFloat("Wind Speed", &RtxOptions::cloudWindSpeedObject(),
-                            0.005f, 0.0f, 1.0f, "%.3f km/s", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How fast the cloud field scrolls in km/s.");
-        RemixGui::DragFloat("Wind Direction", &RtxOptions::cloudWindDirectionObject(),
-                            1.0f, 0.0f, 360.0f, "%.1f\xc2\xb0", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Compass direction the wind blows toward in degrees. "
-            "0 = +X, 90 = +Z.");
+          if (ImGui::TreeNode("Detail & Edges")) {
+            RemixGui::DragFloat("Texture Scale", &RtxOptions::cloudNoiseTileKmObject(),
+                                1.0f, 6.0f, 24.0f, "%.0f km", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "World-space tile size for the 3D cloud noise. Smaller = visible "
+                "repetition; larger = lower-frequency detail. Re-bakes the noise "
+                "volume live on change.");
+            RemixGui::Checkbox("Seamless Cloud Field", &RtxOptions::cloudHexTilingEnableObject());
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Randomizes the cloud noise tiling on a triangle lattice so the "
+                "texture repeat can never show, while preserving the cloud look. "
+                "Uncheck for the legacy periodic field. Applies live.");
+            RemixGui::DragFloat("Noise Frequency", &RtxOptions::cloudNoiseBaseFreqScaleObject(),
+                                0.01f, 0.25f, 4.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Multiplier on the baked cloud noise frequency. 1.0 = current "
+                "look. Raise for smaller/busier cloud features, lower for "
+                "larger ones. Re-bakes the noise volume live as you drag "
+                "(brief hitch per change).");
+            RemixGui::DragFloat("Edge Detail", &RtxOptions::cloudDetailStrengthObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "High-frequency detail concentrated at cloud EDGES \xe2\x80\x94 grows "
+                "wispy cauliflower billows OUTWARD from silhouettes while dense cores stay "
+                "solid. 0 = smooth edges (legacy look). Detail frequency is "
+                "tunable via rtx.atmosphere.cloudDetailScale in user.conf.");
+            RemixGui::DragFloat("Edge Softness", &RtxOptions::cloudEdgeSoftnessObject(),
+                                0.005f, 0.02f, 0.4f, "%.3f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Width of the coverage-gate transition band \xe2\x80\x94 how soft the "
+                "cloud silhouette is. Lower = crisper edges, tighter silhouette; "
+                "higher = softer edges but a broader faint skirt that can read as a "
+                "halo. Affects the view only; self-shadowing is held at the legacy "
+                "softness so this won't shift cloud lighting.");
+            RemixGui::DragFloat("Edge Haze Fade", &RtxOptions::cloudEdgeAmbientFadeObject(),
+                                0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Fades the (horizon-tinted) ambient on the thinnest edge samples so "
+                "the soft skirt around clouds doesn't read as dirty grey-brown haze "
+                "\xe2\x80\x94 the faintest edges fall toward transparent instead. "
+                "Higher = scrub more of the haze tint (can dim thin wisps); 0 = off. "
+                "Backlit edges keep their glow (only ambient is faded).");
+            ImGui::TreePop();
+          }
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Lighting");
-        RemixGui::DragFloat("Forward Scatter", &RtxOptions::cloudPhaseG1Object(),
-                            0.01f, 0.0f, 0.99f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Strength of the silver-lining glow when looking toward the sun. "
-            "Higher = sharper rim of bright light around backlit clouds.");
-        RemixGui::DragFloat("Glow Spread", &RtxOptions::cloudPhaseG2Object(),
-                            0.01f, 0.0f, 0.99f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Width of the softer secondary glow lobe around the silver "
-            "lining. Higher = tighter / brighter halo; lower = broader / "
-            "softer in-scatter envelope. Default 0.3.");
-        RemixGui::DragFloat("Multi-Scatter", &RtxOptions::cloudMsScaleObject(),
-                            0.05f, 0.0f, 2.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Strength of the milky brightness on the underside of cumulus "
-            "clouds. 1.0 = Nubis Cubed paper baseline; higher = brighter "
-            "cumulus bottoms, lower = flatter lighting.");
-        RemixGui::DragFloat("Bottom Darkening", &RtxOptions::cloudBottomDarkeningObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How much darker cloud undersides are than tops. Darkens the "
-            "multi-scatter and ambient terms with a vertical gradient; the "
-            "direct sun beam (silver lining) is unaffected. 0 = uniformly "
-            "lit (paper baseline). Gradient reach is tunable via "
-            "rtx.atmosphere.cloudBottomDarkeningHeight in user.conf.");
+          if (ImGui::TreeNode("Columns")) {
+            RemixGui::Checkbox("Volumetric Cloud Columns", &RtxOptions::cloudColumnShapingEnableObject());
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Per-cloud column model: every cloud gets its own base, its own "
+                "tower height and a complete vertical shape, instead of all "
+                "clouds being cut by the same two global altitude planes. Fixes "
+                "the 'stacked flat layers' read. Uncheck for the legacy "
+                "global-slab shaping (A/B comparison).");
+            ImGui::BeginDisabled(!columnsOn);
+            RemixGui::DragFloat("Cloud Cell Size", &RtxOptions::cloudCellSizeKmObject(),
+                                0.05f, 0.5f, 6.0f, "%.2f km", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Average footprint of a cloud cluster in km. Smaller = many "
+                "small clouds; larger = fewer, broader cloud banks. Re-bakes "
+                "the placement map live on change.");
+            RemixGui::DragFloat("Top Variation", &RtxOptions::cloudColumnTopVariationObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "How much cloud-top heights vary from cloud to cloud. 0 = all "
+                "tops at the same altitude (flat deck); higher = a varied "
+                "skyline of taller and shorter clouds. Applies live.");
+            RemixGui::DragFloat("Top Shape", &RtxOptions::cloudColumnTopShapeObject(),
+                                0.01f, 0.1f, 2.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "How cloud height follows cloud thickness toward the cluster "
+                "core. Low = even the thin edges tower (blocky); high = only "
+                "the dense cores rise (domed, feathered edges). Default 0.6.");
+            RemixGui::DragFloat("Base Undulation", &RtxOptions::cloudColumnBaseVariationObject(),
+                                0.01f, 0.0f, 0.4f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "How much local cloud bases drift above the layer altitude, as "
+                "a fraction of the layer depth. 0 = machined-flat ceiling; "
+                "higher = gently undulating cloud bases. Applies live.");
+            RemixGui::DragFloat("Edge Feather", &RtxOptions::cloudColumnFeatherObject(),
+                                0.01f, 0.05f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Width of the transition band at cloud-cluster edges. Narrow = "
+                "crisp, solid-cored clouds with sharp gaps; wide = soft, wispy "
+                "transitions between cloud and sky. Applies live.");
+            RemixGui::DragFloat("Underside Shading", &RtxOptions::cloudUndersideLightSigmaObject(),
+                                0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "How quickly the light filtering down through each cloud dies "
+                "out. The underside brightness then varies continuously with "
+                "the water above every point — dark cores, bright thin spots, "
+                "smooth gradients — instead of one flat-lit sheet. Higher = "
+                "darker, more dramatic undersides; 0 = flat legacy gradient. "
+                "Supersedes Bottom Darkening while Cloud Columns are on. "
+                "Applies live.");
+            ImGui::EndDisabled();
+            ImGui::TreePop();
+          }
+          ImGui::TreePop();
+        }
 
-        RemixGui::DragFloat("Ground Shadow", &RtxOptions::cloudShadowStrengthObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How strongly clouds cast shadows on terrain. 0 = no cloud "
-            "shadows, 1 = full voxel-grid cumulus-shaped shadow patches.");
+        if (ImGui::TreeNode("Lighting")) {
+          RemixGui::DragFloat("Forward Scatter", &RtxOptions::cloudPhaseG1Object(),
+                              0.01f, 0.0f, 0.99f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Strength of the silver-lining glow when looking toward the sun. "
+              "Higher = sharper rim of bright light around backlit clouds.");
+          RemixGui::DragFloat("Glow Spread", &RtxOptions::cloudPhaseG2Object(),
+                              0.01f, 0.0f, 0.99f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Width of the softer secondary glow lobe around the silver "
+              "lining. Higher = tighter / brighter halo; lower = broader / "
+              "softer in-scatter envelope. Default 0.3.");
+          RemixGui::DragFloat("Multi-Scatter", &RtxOptions::cloudMsScaleObject(),
+                              0.05f, 0.0f, 2.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Strength of the milky brightness on the underside of cumulus "
+              "clouds. 1.0 = Nubis Cubed paper baseline; higher = brighter "
+              "cumulus bottoms, lower = flatter lighting.");
+          RemixGui::DragFloat("Ground Shadow", &RtxOptions::cloudShadowStrengthObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How strongly clouds cast shadows on terrain. 0 = no cloud "
+              "shadows, 1 = full voxel-grid cumulus-shaped shadow patches.");
+          ImGui::BeginDisabled(columnsOn);
+          RemixGui::DragFloat("Bottom Darkening", &RtxOptions::cloudBottomDarkeningObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How much darker cloud undersides are than tops. Darkens the "
+              "multi-scatter and ambient terms with a vertical gradient; the "
+              "direct sun beam (silver lining) is unaffected. 0 = uniformly "
+              "lit (paper baseline). Superseded by Underside Shading while "
+              "Cloud Columns are on. Gradient reach is tunable via "
+              "rtx.atmosphere.cloudBottomDarkeningHeight in user.conf.");
+          ImGui::EndDisabled();
+          ImGui::TreePop();
+        }
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Layer 2 (Cirrus)");
-        RemixGui::Checkbox("Enable Layer 2",
-                           &RtxOptions::cloudLayer2EnableObject());
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Adds a second high-altitude cloud deck on top of the main "
-            "layer. Off by default. Voxel-grid terrain shadows still come "
-            "from layer 1 only.");
-        RemixGui::DragFloat("Layer 2 Altitude", &RtxOptions::cloudLayer2AltitudeObject(),
-                            0.1f, 0.5f, 20.0f, "%.1f km", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Layer-2 altitude in km. Default 7.5 km targets the cirrus band.");
-        RemixGui::DragFloat("Layer 2 Depth", &RtxOptions::cloudLayer2ThicknessObject(),
-                            0.05f, 0.05f, 3.0f, "%.2f km", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Vertical depth of the layer-2 slab. Cirrus is thin \xe2\x80\x94 default 0.5 km.");
-        RemixGui::DragFloat("Layer 2 Coverage", &RtxOptions::cloudLayer2CoverageMeanObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How much of the sky has layer-2 clouds. Defaults sparser than "
-            "layer 1 so cirrus reads as patches, not overcast.");
-        RemixGui::DragFloat("Layer 2 Coverage Spread", &RtxOptions::cloudLayer2CoverageSpreadObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Spatial variation around the Layer 2 Coverage mean. Independent "
-            "of Layer 1's Coverage Spread.");
-        RemixGui::DragFloat("Layer 2 Cloud Type", &RtxOptions::cloudLayer2TypeMeanObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Cloud type for layer 2. Low values (~0.05) read as stratiform "
-            "wisps \xe2\x80\x94 appropriate for cirrus.");
-        RemixGui::DragFloat("Layer 2 Type Spread", &RtxOptions::cloudLayer2TypeSpreadObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Spatial variation around the Layer 2 Cloud Type mean. "
-            "Independent of Layer 1's Type Spread.");
-        RemixGui::DragFloat("Layer 2 Density", &RtxOptions::cloudLayer2DensityScaleObject(),
-                            0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Per-step density multiplier for layer 2 only. Cirrus is "
-            "optically thin \xe2\x80\x94 default 0.30 keeps it from competing with the "
-            "main cumulus deck.");
+        if (ImGui::TreeNode("Wind")) {
+          RemixGui::DragFloat("Wind Speed", &RtxOptions::cloudWindSpeedObject(),
+                              0.005f, 0.0f, 1.0f, "%.3f km/s", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How fast the cloud field scrolls in km/s.");
+          RemixGui::DragFloat("Wind Direction", &RtxOptions::cloudWindDirectionObject(),
+                              1.0f, 0.0f, 360.0f, "%.1f\xc2\xb0", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Compass direction the wind blows toward in degrees. "
+              "0 = +X, 90 = +Z.");
+          ImGui::TreePop();
+        }
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Atmosphere");
-        RemixGui::DragFloat("Distance Haze", &RtxOptions::cloudAerialHazePerKmObject(),
-                            0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How much distant cloud samples dim toward atmospheric color "
-            "(per-km haze extinction on cloud radiance). Higher = softer, "
-            "more washed-out distant clouds; 0 = no haze (clouds stay bright "
-            "all the way to horizon). Does NOT prevent the horizon white "
-            "wall \xe2\x80\x94 that's the Horizon Fade slider below. Default 0.05.");
-        RemixGui::DragFloat("Horizon Fade", &RtxOptions::cloudAerialFadePerKmObject(),
-                            0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How quickly distant cloud samples stop piling up extinction "
-            "(per-km fade rate on alpha accumulation). Higher = sky shows "
-            "through earlier at the horizon; 0 = no fade (clouds can pile "
-            "into a solid white wall on horizon-grazing rays through thick "
-            "overcast). Does NOT affect cloud appearance close to camera. "
-            "Default 0.15.");
+        if (ImGui::TreeNode("Layer 2")) {
+          RemixGui::Checkbox("Enable Layer 2",
+                             &RtxOptions::cloudLayer2EnableObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Adds a second high-altitude cloud deck on top of the main "
+              "layer. Off by default. Voxel-grid terrain shadows still come "
+              "from layer 1 only.");
+          ImGui::BeginDisabled(!layer2On);
+          RemixGui::DragFloat("Layer 2 Altitude", &RtxOptions::cloudLayer2AltitudeObject(),
+                              0.1f, 0.5f, 20.0f, "%.1f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Layer-2 altitude in km. Default 7.5 km targets the cirrus band.");
+          RemixGui::DragFloat("Layer 2 Depth", &RtxOptions::cloudLayer2ThicknessObject(),
+                              0.05f, 0.05f, 3.0f, "%.2f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Vertical depth of the layer-2 slab. Cirrus is thin \xe2\x80\x94 default 0.5 km.");
+          RemixGui::DragFloat("Layer 2 Coverage", &RtxOptions::cloudLayer2CoverageMeanObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How much of the sky has layer-2 clouds. Defaults sparser than "
+              "layer 1 so cirrus reads as patches, not overcast.");
+          RemixGui::DragFloat("Layer 2 Coverage Spread", &RtxOptions::cloudLayer2CoverageSpreadObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Spatial variation around the Layer 2 Coverage mean. Independent "
+              "of Layer 1's Coverage Spread.");
+          RemixGui::DragFloat("Layer 2 Cloud Type", &RtxOptions::cloudLayer2TypeMeanObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Cloud type for layer 2. Low values (~0.05) read as stratiform "
+              "wisps \xe2\x80\x94 appropriate for cirrus.");
+          RemixGui::DragFloat("Layer 2 Type Spread", &RtxOptions::cloudLayer2TypeSpreadObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Spatial variation around the Layer 2 Cloud Type mean. "
+              "Independent of Layer 1's Type Spread.");
+          RemixGui::DragFloat("Layer 2 Density", &RtxOptions::cloudLayer2DensityScaleObject(),
+                              0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Per-step density multiplier for layer 2 only. Cirrus is "
+              "optically thin \xe2\x80\x94 default 0.30 keeps it from competing with the "
+              "main cumulus deck.");
+          ImGui::EndDisabled();
+          ImGui::TreePop();
+        }
+
+        if (ImGui::TreeNode("Performance")) {
+          RemixGui::Checkbox("Fast Cloud Reflections", &RtxOptions::cloudSecondaryLutEnableObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Reflections and indirect light sample a small per-frame cloud "
+              "lookup table instead of re-marching the cloud volume per ray. "
+              "Large performance win on cloudy skies; reflected clouds also "
+              "match the main sky exactly. Uncheck to restore the legacy "
+              "per-ray cloud march for comparison.");
+          RemixGui::DragFloat("Cloud Render Scale", &RtxOptions::cloudRenderResolutionScaleObject(),
+                              0.05f, 0.25f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Resolution of the cloud render relative to the internal render "
+              "resolution. 0.5 = quarter the pixels (~4x cheaper clouds, "
+              "slightly softer); 1.0 = native (legacy). Applies live.");
+          RemixGui::DragFloat("Cloud Sample Spacing", &RtxOptions::cloudViewStepKmObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Distance between cloud samples along each view ray, in km. "
+              "This is the fix for the horizontal banding near the horizon: "
+              "sightlines there cross 50+ km of cloud layer, and the old "
+              "fixed 32-sample march spaced samples too far apart to resolve "
+              "the clouds.\n\nPERFORMANCE: cost scales with how many samples "
+              "a ray needs -- overhead sightlines are unchanged, but "
+              "horizon-heavy views can take up to Max Cloud Samples / 32 "
+              "times the cloud cost (2x at the defaults). Raise the spacing "
+              "or lower Max Cloud Samples to claw the cost back, or set 0 "
+              "to restore the legacy fixed march (banding returns). "
+              "Cloud Render Scale above also directly offsets this cost. "
+              "Applies live.");
+          RemixGui::DragInt("Max Cloud Samples", &RtxOptions::cloudViewSamplesMaxObject(),
+                            1.0f, 32, 256, "%d", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Hard cap on cloud samples per ray -- the performance governor "
+              "for Cloud Sample Spacing. 64 resolves the default spacing "
+              "out to ~6 km of cloud span; lower values cost less but let "
+              "a little banding back in at the far horizon. 32 = legacy "
+              "cost ceiling. Applies live.");
+          ImGui::TreePop();
+        }
+
+        if (ImGui::TreeNode("Horizon & Haze")) {
+          RemixGui::DragFloat("Curvature", &RtxOptions::cloudCurvatureObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Sky-dome curvature. 0 = real-planet radius (nearly flat ceiling, "
+              "horizon-grazing clouds stretch far); 1 = tight dome (clouds curve "
+              "visibly down to the horizon). Atmosphere math unaffected.");
+          RemixGui::DragFloat("Distance Haze", &RtxOptions::cloudAerialHazePerKmObject(),
+                              0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How much distant cloud samples dim toward atmospheric color "
+              "(per-km haze extinction on cloud radiance). Higher = softer, "
+              "more washed-out distant clouds; 0 = no haze (clouds stay bright "
+              "all the way to horizon). Does NOT prevent the horizon white "
+              "wall \xe2\x80\x94 that's the Horizon Fade slider below. Default 0.05.");
+          RemixGui::DragFloat("Horizon Fade", &RtxOptions::cloudAerialFadePerKmObject(),
+                              0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How quickly distant cloud samples stop piling up extinction "
+              "(per-km fade rate on alpha accumulation). Higher = sky shows "
+              "through earlier at the horizon; 0 = no fade (clouds can pile "
+              "into a solid white wall on horizon-grazing rays through thick "
+              "overcast). Does NOT affect cloud appearance close to camera. "
+              "Default 0.15.");
+          ImGui::TreePop();
+        }
 
         ImGui::TreePop();
       }
