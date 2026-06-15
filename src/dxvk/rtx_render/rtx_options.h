@@ -1237,6 +1237,8 @@ namespace dxvk {
     RTX_OPTION("rtx.atmosphere", float, ozoneLayerWidth, 15.0f, "Width of the ozone layer in kilometers.");
     RTX_OPTION("rtx.atmosphere", Vector3, sunIlluminance, Vector3(15.0f, 15.0f, 15.0f), "Base Sun illuminance color/intensity.");
     RTX_OPTION("rtx.atmosphere", float, multiScatterPhysicalStrength, 0.0f, "Blend between artistic (0) and physical (1) multiscattering. 0 = analytical inline fit that preserves preset color directly. 1 = LUT-based hemisphere integration (Hillaire-physical) that wavelength-amplifies each preset's Rayleigh bias. Intermediate values blend. Per-preset overrides recommended.");
+    RTX_OPTION("rtx.atmosphere", float, multiScatterStrength, 1.0f, "Artistic global scale on the atmosphere's multiscattering 'fill' term. The physical two-term model adds a broadband (pale-blue) multiscatter term that desaturates warm sunset color. Lower this (e.g. 0.3-0.6) to let warm single-scatter dominate for a punchier sunset; 1.0 = physical. Feeds the sky-view LUT, so clouds inherit it.");
+    RTX_OPTION("rtx.atmosphere", float, sunsetSaturation, 1.0f, "Artistic saturation boost applied to sky radiance, ramped in as the sun approaches the horizon (midday sky is untouched). >1 amplifies the warm horizon hues the physical model renders accurately but undersaturated; 1.0 = no change. Feeds the sky-view LUT, so clouds inherit the warmer ambient.");
 
     // ----- Night-sky shading (fork) -----
     // Stars, Milky Way, shooting stars, airglow. Active when skyMode == Numos.

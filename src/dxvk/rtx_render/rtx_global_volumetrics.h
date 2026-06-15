@@ -141,11 +141,11 @@ namespace dxvk {
                args.minValue = Vector3(0.0f, 0.0f, 0.0f), args.maxValue = Vector3(1.0f, 1.0f, 1.0f));
     RTX_OPTION_ARGS("rtx.volumetrics", float, anisotropy, 0.05f, "The anisotropy of the scattering phase function (-1 being backscattering, 0 being isotropic, 1 being forward scattering).",
                     args.minValue = -1.0f, args.maxValue = 1.0f);
-    RTX_OPTION_ARGS("rtx.volumetrics", float, fogSunVisibilityGain, 5.0f,
+    RTX_OPTION_ARGS("rtx.volumetrics", float, fogSunVisibilityGain, 1.0f,
                     "Artistic visibility gain applied to the sun's contribution to volumetric fog in-scattering. "
-                    "Volumetric fog needs more energy than physical math delivers at normal exposure to read as fog; "
-                    "this dial scales fog-side sun visibility without affecting surface lighting (decals/particles/PSR/SAB read the cache straight). "
-                    "Historical default 5.0 matches the artistic gain the gmod-rtx port originally baked into the cache.",
+                    "Scales fog-side sun visibility without affecting surface lighting (decals/particles/PSR/SAB read the cache straight). "
+                    "Default 1.0 = physical (no boost); raise it if fog reads too weak at normal exposure. "
+                    "The gmod-rtx port historically baked in a ~5x artistic gain here.",
                     args.minValue = 0.0f, args.maxValue = 50.0f);
     RTX_OPTION_ARGS("rtx.volumetrics", float, volumetricConsumerGain, 0.008f,
                     "Gain on the volumetric froxel radiance cache as read by surface consumers "

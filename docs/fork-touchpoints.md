@@ -592,7 +592,7 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** — weather-preset cold-default alignment (2026-05-26). Three RTX_OPTION cold defaults aligned to the `WEATHER_PRESET_VALUES_overcast` block in `rtx_fork_weather.h`: `transmittanceColor` (0.999, 0.999, 0.999) → (0.995, 0.995, 0.995), `transmittanceMeasurementDistanceMeters` 200.0 → 500.0, `anisotropy` 0.0 → 0.05 (mapped from `volumetricAnisotropy` in the preset). Companion to the matching `rtx_options.h` block — same rationale: the dormant "(none / dormant)" weather preset path leaves cold RTX_OPTIONs untouched, so the cold defaults themselves had to move to match overcast.
 
-- **Inline tweak** — new `fogSunVisibilityGain` RTX_OPTION (2026-05-26). `rtx.volumetrics.fogSunVisibilityGain` (default 5.0, range 0.0–50.0) replaces the historical hardcoded artistic gain (x5 with a misleading "10x" comment in the gmod-rtx port) that was previously baked into the per-cache-write expression in fork-owned `atmosphere_common.slangh`. Read by `volume_composite_helpers.slangh::integrateVolumetricNEE` (consumer-side fog application only — surface consumers still read the cache straight). Companions: `rtx_global_volumetrics.cpp` (CB populate), `volume_args.h` (CB field), submodule fork edit at `rtxdi-sdk/include/volumetrics/rtx/algorithm/volume_composite_helpers.slangh`.
+- **Inline tweak** — new `fogSunVisibilityGain` RTX_OPTION (2026-05-26; default lowered 5.0→1.0 on 2026-06-15). `rtx.volumetrics.fogSunVisibilityGain` (default 1.0, range 0.0–50.0) replaces the historical hardcoded artistic gain (x5 with a misleading "10x" comment in the gmod-rtx port) that was previously baked into the per-cache-write expression in fork-owned `atmosphere_common.slangh`. Default is now physical (1.0 = no boost) rather than the gmod-era ~5x. Read by `volume_composite_helpers.slangh::integrateVolumetricNEE` (consumer-side fog application only — surface consumers still read the cache straight). Companions: `rtx_global_volumetrics.cpp` (CB populate), `volume_args.h` (CB field), submodule fork edit at `rtxdi-sdk/include/volumetrics/rtx/algorithm/volume_composite_helpers.slangh`.
 
 ---
 
@@ -1932,5 +1932,26 @@ The additive edge-detail (rev 3) was trapped in a thin blobby rind hugging the s
 
 - **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
   *`sampleCloudDensityTextured` step 4b: additive `density +=` + `edgeWindow` replaced by `coverageThreshold -= cloudDetailStrength * 0.5 * (detailNoise - kCloudNoiseFieldMean)`, clamped `≥ 0`. Internal `kEdgeDetailThreshold = 0.5` (wobble→threshold scale). No new options; `cloudDetailStrength = 0` is bit-identical. Shadow sampler still skips detail.*
+
+---
+
+## Workstream — Artistic sunset color controls (fork — 2026-06-14)
+
+Two artistic knobs to recover sunset warmth/saturation lost when commit `3e37062b` moved sunset reddening onto the physical Hillaire two-term LUT model: the broadband multiscatter "fill" reads pale-blue and desaturates the warm single-scatter, so the physically-correct sunset renders undersaturated. Both apply inside `evalAtmosphereRadiance` (the sky-view LUT bake integral), so the baked LUT carries them and clouds inherit the warmer ambient for free (cloud warm ambient samples the sky-view LUT). Both default to 1.0 = physical (no change). `sunsetSaturation` ramps in only near the horizon (off above ~24°, `sin 0.4`) so midday sky is untouched; `multiScatterStrength` is a global scale on the fill term. This is artistic control on top of the physical model — NOT a revert to the pre-`3e37062b` analytical air-mass reddening.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions.
+  *In `evalAtmosphereRadiance`'s per-sample loop: `multiScatterContrib *= args.multiScatterStrength` after the analytical/LUT blend. Before `return L`: a luma-preserving saturation boost `lerp(vec3(luma), L, satGain)` where `satGain = lerp(1, args.sunsetSaturation, 1 - smoothstep(0, 0.4, sunDir.y))`. Both no-ops at the 1.0 defaults.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned additions.
+  *Repurposes the trailing `pad_cloudEdge1` slot as `multiScatterStrength` (completes the cloud-edge 16-byte row, layout unchanged), then appends a new 16-byte row `sunsetSaturation` + `pad_artistic0..2`. CB grows by one row; all prior field offsets unchanged.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *Adds `multiScatterStrength` (1.0) and `sunsetSaturation` (1.0) RTX_OPTIONs to the `rtx.atmosphere` cluster, immediately after `multiScatterPhysicalStrength`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned additions.
+  *`getAtmosphereArgs()`: sets both args from RtxOptions unconditionally (after `multiScatterPhysicalStrength`), so the sky reddens with clouds disabled. `normalizeForTransmittanceMsKey()`: zeroes both (like `multiScatterPhysicalStrength`) — they feed only the sky-view bake, not the transmittance/MS LUTs, so changing them must not re-bake the heavy pair.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
+  *Adds "Multiscatter Strength" (0–2) and "Sunset Saturation" (0–3) `DragFloat`s to the Atmosphere → Advanced ImGui tree, immediately after "Multiscatter Physical Strength", each with an explanatory tooltip. ~10 LOC.*
 
 ---

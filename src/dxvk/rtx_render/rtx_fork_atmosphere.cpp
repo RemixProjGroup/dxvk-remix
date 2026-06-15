@@ -935,6 +935,21 @@ namespace fork_hooks {
               "1 = physical multiscattering (Hillaire-style LUT hemisphere integration; wavelength-amplifies each preset's "
               "Rayleigh bias for realistic saturation but harder to art-direct). Intermediate values blend.");
 
+          // Artistic sunset color controls (fork — 2026-06-14). Recover the
+          // sunset warmth/saturation lost when reddening moved onto the physical
+          // two-term LUT model; both feed the sky-view LUT so clouds inherit them.
+          RemixGui::DragFloat("Multiscatter Strength", &RtxOptions::multiScatterStrengthObject(), 0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Global scale on the multiscattering 'fill' term. The physical model adds a broadband (pale-blue) "
+              "multiscatter term that desaturates warm sunset color. Lower (e.g. 0.3-0.6) to let warm single-scatter "
+              "dominate for a punchier sunset; 1.0 = physical. Feeds the sky-view LUT, so clouds inherit it.");
+
+          RemixGui::DragFloat("Sunset Saturation", &RtxOptions::sunsetSaturationObject(), 0.01f, 0.0f, 3.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Saturation boost on sky radiance, ramped in only as the sun nears the horizon (midday sky untouched). "
+              ">1 amplifies the warm horizon hues the physical model renders accurately but undersaturated; 1.0 = no change. "
+              "Feeds the sky-view LUT, so clouds inherit the warmer ambient.");
+
           // Sky perf workstream knobs (fork — 2026-06-11) are conf-only by
           // design: skyLutCacheKeySplitEnable, sunShadowMaxSamples,
           // moonShadowMaxSamples, skyViewRebakeGranularityDeg and the

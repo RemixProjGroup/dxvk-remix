@@ -468,6 +468,11 @@ namespace {
     args.sunAngularRadius             = 0.0f;
     args.mieAnisotropy                = 0.0f;
     args.multiScatterPhysicalStrength = 0.0f;
+    // Artistic sky-color knobs apply in evalAtmosphereRadiance (sky-view bake),
+    // not the transmittance/MS LUT bakes — zero them here so changing them does
+    // not needlessly re-bake the heavy transmittance + multiscatter pair.
+    args.multiScatterStrength         = 0.0f;
+    args.sunsetSaturation             = 0.0f;
 
     args.moonAtmosphericCouplingStrength = 0.0f;
     memset(&args.moons[0], 0, sizeof(args.moons));
@@ -523,6 +528,14 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
 
   // Multiscattering blend: 0 = artistic (analytical inline), 1 = physical (LUT hemisphere).
   args.multiScatterPhysicalStrength = RtxOptions::multiScatterPhysicalStrength();
+
+  // Artistic sunset color controls (fork — 2026-06-14). multiScatterStrength
+  // dials back the pale-blue multiscatter fill; sunsetSaturation boosts warm
+  // saturation near the horizon. Both feed the sky-view LUT (and thus clouds).
+  // Defaults (1.0 / 1.0) reproduce the physical look. Set unconditionally so the
+  // sky reddens even when clouds are disabled.
+  args.multiScatterStrength = RtxOptions::multiScatterStrength();
+  args.sunsetSaturation     = RtxOptions::sunsetSaturation();
 
   // View Altitude (converted m to km)
   args.viewAltitude = RtxOptions::altitude() * 0.001f;

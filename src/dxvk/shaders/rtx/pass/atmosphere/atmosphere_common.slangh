@@ -409,6 +409,10 @@ vec3 evalAtmosphereRadiance(
     vec3 contribLut        = args.sunIlluminance * scattering * msLut;
     vec3 multiScatterContrib = lerp(contribAnalytical, contribLut,
                                      args.multiScatterPhysicalStrength);
+    // Artistic multiscatter fill scale (fork — 2026-06-14). The physical fill
+    // reads pale-blue and desaturates the warm single-scatter at sunset; <1 lets
+    // single-scatter dominate for a punchier sunset. 1.0 = physical.
+    multiScatterContrib *= args.multiScatterStrength;
     vec3 scatteredLight = singleScatter + multiScatterContrib;
 
     // Moon contribution to single scattering. Combined-moon direction +
@@ -457,7 +461,23 @@ vec3 evalAtmosphereRadiance(
   if (any(isnan(L)) || any(isinf(L))) {
     L = vec3(0.0f);
   }
-  
+
+  // Artistic sunset saturation boost (fork — 2026-06-14). Ramped in as the sun
+  // nears the horizon (full at/below horizon, off above ~24deg = sin 0.4) so the
+  // midday sky is untouched. Amplifies the warm horizon hues the physical
+  // two-term model renders accurately but undersaturated. sunsetSaturation 1.0 =
+  // no change. Applied here in the sky-view integral so the baked LUT carries it
+  // and clouds inherit the warmer ambient.
+  {
+    const float kSunsetSatRampHighSun = 0.4f; // sin(elevation) where the boost fades out
+    float sunsetT = 1.0f - smoothstep(0.0f, kSunsetSatRampHighSun, sunDir.y);
+    float satGain = lerp(1.0f, args.sunsetSaturation, sunsetT);
+    if (abs(satGain - 1.0f) > 1e-4f) {
+      float luma = dot(L, vec3(0.2126f, 0.7152f, 0.0722f));
+      L = max(vec3(0.0f), lerp(vec3(luma), L, satGain));
+    }
+  }
+
   return L;
 }
 

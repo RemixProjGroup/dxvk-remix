@@ -462,5 +462,20 @@ struct AtmosphereArgs {
   // the whole cache the way rtx.volumetrics.fogSunVisibilityGain does. Reuses
   // the former pad_cloudEdge0 slot; CB layout unchanged. Default 1.0 = baseline.
   float atmosphereSunVolumetricRadianceScale;
-  float pad_cloudEdge1;
+
+  // ----- Artistic sunset color controls (fork — 2026-06-14) -----
+  // Counteract the desaturation introduced when sunset reddening moved onto the
+  // physical Hillaire two-term LUT model (commit 3e37062b): the multiscatter
+  // fill reads pale-blue and washes the warm single-scatter. Both apply inside
+  // evalAtmosphereRadiance, so the sky-view LUT carries them and clouds inherit
+  // the warmer ambient for free. Defaults (1.0) reproduce the physical look.
+  float multiScatterStrength; // Global scale on the multiscatter fill term. <1 = less
+                              // pale-blue wash so warm single-scatter dominates. 1 = physical.
+                              // Reuses the former pad_cloudEdge1 slot; CB layout unchanged.
+
+  float sunsetSaturation;     // Saturation boost on sky radiance, ramped in near the horizon
+                              // (midday untouched). >1 = punchier warm sunset. 1 = no change.
+  float pad_artistic0;
+  float pad_artistic1;
+  float pad_artistic2;
 };
