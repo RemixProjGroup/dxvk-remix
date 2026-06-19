@@ -215,12 +215,11 @@ struct AtmosphereArgs {
                                           // 2026-06-11, stage B). 1.0 = legacy bake. Re-bakes
                                           // the noise volume live on change. Reuses the former
                                           // padCloudLook1 slot; CB layout unchanged.
-  float cloudColumnShapingEnable;         // Per-column cloud model gate (fork — 2026-06-11,
-                                          // column-shaping rework). 1 = clouds are columns with
-                                          // their own base/top from the placement map and all
-                                          // vertical shaping keyed on per-cloud height; 0 = legacy
-                                          // global-slab shaping. Reuses the former padCloudLook2
-                                          // slot; CB layout unchanged.
+  float padCloudLook2;                    // Free slot. Formerly cloudColumnShapingEnable (the
+                                          // per-column-vs-legacy-global-slab gate); the legacy
+                                          // global-slab path was removed 2026-06-19 and the column
+                                          // model is now unconditional, so the gate is gone. Slot
+                                          // retained as pad to keep the CB layout unchanged.
 
   // ----- Cloud parameters (fork: procedural FBM cloud layer at fixed altitude) -----
   vec3 cloudColor;          // Cloud base color (typically white)
@@ -296,8 +295,10 @@ struct AtmosphereArgs {
   uint  cloudVoxelGridAmbientDirty; // 1 when D_ambient was (re)baked this frame
   // The three fields below reuse the former pad_cloudVoxel0..2 slots so the
   // constant-buffer layout is unchanged.
-  float cloudBottomDarkening;       // [0,1] how dark the cloud base gets vs the top (multi-scatter + ambient)
-  float cloudBottomDarkeningHeight; // (0,1] slab height fraction at which the gradient reaches full brightness
+  float cloudBottomDarkening;       // [0,1] strength of the sun-gated underside darkening (multi-scatter + ambient)
+  float pad_cloudVoxel1;            // Free slot. Formerly cloudBottomDarkeningHeight (the legacy
+                                    // constant-gradient reach); removed 2026-06-19 with the legacy
+                                    // shaping path. Pad retained to keep the CB layout unchanged.
   float cloudDetailStrength;        // [0,1] additive edge detail strength (0 = off)
 
   // ----- Nubis Cubed 2023 lighting params (fork — 2026-05-12, C4) -----

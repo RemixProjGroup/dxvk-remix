@@ -268,7 +268,7 @@ private:
   void dispatchCloudNoise3DBake(Rc<DxvkContext> ctx);  // Stage C: baked at init + on bake-input change
   bool needsCloudNoiseRebake() const;                  // true when a bake input (tile / worley*) changed
   void cacheCloudNoiseBakeInputs();                    // snapshot the current bake inputs after a bake
-  void dispatchCloudHeightLutBake(Rc<DxvkContext> ctx);  // Fork: at init + on cloudColumnShapingEnable change (slide 3 lift)
+  void dispatchCloudHeightLutBake(Rc<DxvkContext> ctx);  // Fork: baked once at init (slide 3 lift)
   // Cloud placement map bake (fork — 2026-06-11, column-shaping rework).
   // At init + on bake-input change (cloudCellSizeKm / cloudNoiseTileKm).
   void dispatchCloudPlacementMapBake(Rc<DxvkContext> ctx);
@@ -450,9 +450,6 @@ private:
   // inputs, re-bake only on actual change.
   float    m_cachedPlacementCellSizeKm = 0.0f;
   float    m_cachedPlacementTileKm     = 0.0f;
-  // Height-LUT re-bake gate: the LUT bakes a different curve family per
-  // column-shaping mode, so a flag flip re-bakes it (cheap 64x128 dispatch).
-  bool     m_cachedHeightLutColumnMode = false;
   bool m_initialized = false;
   bool m_lutsNeedRecompute = true;
 };

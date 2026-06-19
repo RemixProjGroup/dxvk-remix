@@ -252,7 +252,6 @@ void RtxAtmosphere::initialize(Rc<DxvkContext> ctx) {
   dispatchCloudPlacementMapBake(ctx);
   cacheCloudPlacementBakeInputs();
   dispatchCloudHeightLutBake(ctx);
-  m_cachedHeightLutColumnMode = RtxOptions::cloudColumnShapingEnable();
   m_initialized = true;
   m_lutsNeedRecompute = true;
 }
@@ -630,9 +629,8 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // Bake frequency scale (fork — 2026-06-11, stage B). Lives in the former
   // padCloudLook1 slot so the CB layout is unchanged.
   args.cloudNoiseBaseFreqScale         = RtxOptions::cloudNoiseBaseFreqScale();
-  // Per-column cloud model gate (fork — 2026-06-11, column-shaping rework).
-  // Lives in the former padCloudLook2 slot so the CB layout is unchanged.
-  args.cloudColumnShapingEnable        = RtxOptions::cloudColumnShapingEnable() ? 1.0f : 0.0f;
+  // padCloudLook2 (formerly cloudColumnShapingEnable) left unset — the column
+  // model is now unconditional; see atmosphere_args.h.
 
   // Cloud parameters
   {
@@ -705,7 +703,8 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // Bottom darkening + additive edge detail (fork — 2026-06-10). Live in the
     // former pad_cloudVoxel0..2 slots so the CB layout is unchanged.
     args.cloudBottomDarkening       = RtxOptions::cloudBottomDarkening();
-    args.cloudBottomDarkeningHeight = RtxOptions::cloudBottomDarkeningHeight();
+    // pad_cloudVoxel1 (formerly cloudBottomDarkeningHeight) left unset — the
+    // constant-gradient reach is gone; see atmosphere_args.h.
     args.cloudDetailStrength        = RtxOptions::cloudDetailStrength();
   }
 
@@ -1102,21 +1101,17 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
   }
 
   // Column-shaping rework (fork — 2026-06-11): re-bake the cloud placement
-  // map when its inputs change (cloudCellSizeKm / cloudNoiseTileKm), and the
-  // height LUT when the column-shaping mode flips (it bakes a different
-  // curve family per mode). Same write→read barrier + voxel-grid key clear
-  // as the noise re-bake above — the D_sun / D_ambient grids integrate the
-  // column shapes, so they must refresh the same frame.
+  // map when its inputs change (cloudCellSizeKm / cloudNoiseTileKm). Same
+  // write→read barrier + voxel-grid key clear as the noise re-bake above — the
+  // D_sun / D_ambient grids integrate the column shapes, so they must refresh
+  // the same frame. (The height LUT no longer re-bakes here: with the legacy
+  // global-slab path removed 2026-06-19 it bakes a single curve family once at
+  // init.)
   {
     bool cloudShapeInputsRebaked = false;
     if (needsCloudPlacementRebake()) {
       dispatchCloudPlacementMapBake(ctx);
       cacheCloudPlacementBakeInputs();
-      cloudShapeInputsRebaked = true;
-    }
-    if (m_cachedHeightLutColumnMode != RtxOptions::cloudColumnShapingEnable()) {
-      dispatchCloudHeightLutBake(ctx);
-      m_cachedHeightLutColumnMode = RtxOptions::cloudColumnShapingEnable();
       cloudShapeInputsRebaked = true;
     }
     if (cloudShapeInputsRebaked) {
@@ -1787,16 +1782,14 @@ void RtxAtmosphere::dispatchCloudNoise3DBake(Rc<DxvkContext> ctx) {
 void RtxAtmosphere::dispatchCloudHeightLutBake(Rc<DxvkContext> ctx) {
   ScopedGpuProfileZone(ctx, "Atmosphere Cloud Height LUT Bake");
 
-  // Baked at atmosphere init + re-baked when cloudColumnShapingEnable flips
-  // (see computeLuts). Procedurally fills the 64x128 RG8 LUT with the
-  // per-type altitude shape family: the legacy trapezoid + anvil bump in
-  // global-slab mode, or the single-lobe per-cloud envelope in column mode
-  // (the curve-family switch lives in cloud_height_lut_baker.comp.slang).
+  // Baked once at atmosphere init (see computeLuts). Procedurally fills the
+  // 64x128 RGBA8 LUT with the single-lobe per-cloud height envelope (R), the
+  // coverage-threshold scale (G), and the cumulative envelope integral (B)
+  // consumed by the column model in cloud_render.comp.slang / atmosphere_common.
   //
-  // The baker reads only cloudColumnShapingEnable from the args CB at
-  // slot 0; output RWTexture2D moved to slot 1 (column-shaping rework).
-  // cloud_height_lut_baker.comp.slang declares `[numthreads(8, 8, 1)]`,
-  // matching the dispatch dimensions below.
+  // The baker takes the args CB at slot 0 (for cloud type/shape params) and
+  // writes the output RWTexture2D at slot 1. cloud_height_lut_baker.comp.slang
+  // declares `[numthreads(8, 8, 1)]`, matching the dispatch dimensions below.
   AtmosphereArgs args = getAtmosphereArgs();
   ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);

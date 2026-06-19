@@ -28,33 +28,20 @@
 // rtx.atmosphere.cloudHeightLutEnable is true and the consumer TU defines
 // ATMOSPHERE_CLOUD_HEIGHT_LUT_AVAILABLE (currently only cloud_render.comp.slang).
 //
-// Two curve families, selected by cloudColumnShapingEnable (fork —
-// 2026-06-11, column-shaping rework; the bake re-runs live when the flag
-// flips):
-//
-// LEGACY (global-slab mode):
-//   * Base shape is the same trapezoid the procedural curve emits — visual
-//     parity at type values 0 / 0.5 / 1 is the bake's primary contract so
-//     default-on doesn't regress today's Nubis Cubed look.
-//   * For cumulus tail (type > 0.7), an additional Gaussian-shaped anvil lift
-//     near the slab top adds the silhouette widening that the procedural
-//     anvil pow trick (which lives at the coverage step) can't produce on its
-//     own. Strength ramps with (type - 0.7) so stratus / stratocumulus stay
-//     unchanged.
-//
-// COLUMN (per-cloud mode):
+// Per-cloud column envelope (fork — 2026-06-11, column-shaping rework; the
+// legacy global-slab curve family was removed 2026-06-19 once the column model
+// became the only cloud shaping path):
 //   * The height axis is the PER-CLOUD height fraction (base..top of each
-//     column), so the envelope must be a SINGLE lobe: rounded rise from the
+//     column), so the envelope is a SINGLE lobe: rounded rise from the
 //     cloud base, bulk plateau, smooth fall to zero exactly at the cloud
-//     top. The legacy family's secondary anvil bump near hf=0.85 — two
-//     density peaks separated by a thinner "neck" — literally baked a
-//     two-strata structure into every cumulus and was a core source of the
-//     stacked-layers read. In column mode the anvil look comes from the G
-//     channel alone (threshold widening near each cloud's own top), which
-//     widens silhouettes without splitting the density profile.
+//     top. The old global-slab family had a secondary anvil bump near
+//     hf=0.85 — two density peaks separated by a thinner "neck" — which
+//     literally baked a two-strata structure into every cumulus and was a
+//     core source of the stacked-layers read. The anvil look now comes from
+//     the G channel alone (threshold widening near each cloud's own top),
+//     which widens silhouettes without splitting the density profile.
 //
-// Baked at startup + re-baked when cloudColumnShapingEnable changes —
-// see RtxAtmosphere::computeLuts.
+// Baked once at atmosphere init — see RtxAtmosphere::computeLuts.
 
 #include "rtx/utility/shader_types.h"
 #include "rtx/pass/atmosphere/atmosphere_args.h"
@@ -74,39 +61,7 @@ RWTexture2D<float4> cloudHeightLutOutput;
 // =============================================================================
 // R channel — density envelope multiplier (per-altitude shape mask)
 // =============================================================================
-// Per-type altitude envelopes. The peak value, peak position, and band width
-// all sweep with cloud type. Wider amplitude swings than the procedural
-// trapezoid so the envelope contribution is actually visible inside the
-// coverage-gated density. The values below were tuned so:
-//   type=0    -> thin stratus band low in slab
-//   type=0.5  -> stratocumulus mid-slab, broader band
-//   type=1    -> cumulus full vertical extent, peak at mid, secondary peak
-//                at hf~0.85 hinting at the anvil cap
-float densityEnvelope(float hf, float type) {
-  // Rise / hold / fall keypoints sweep with type — wider band as type rises.
-  // fallStart pulled in to 0.70 for cumulus (was 0.80) so the trapezoid
-  // tapers earlier and creates a visible "mushroom neck" silhouette before
-  // the anvil bump re-widens at hf~0.85. Without the earlier taper the body
-  // sits as a flat-top plateau and the anvil reads as a hat sitting on a
-  // box; with the earlier taper it reads as a tower with a cap.
-  float riseEnd   = mix(0.05f, 0.12f, type);
-  float fallStart = mix(0.15f, 0.70f, type);
-  float fallEnd   = mix(0.30f, 0.98f, type);
-  float rise = saturate(hf / max(riseEnd, 1e-4f));
-  float fall = saturate((fallEnd - hf) / max(fallEnd - fallStart, 1e-4f));
-  float base = saturate(rise * fall);
-
-  // Cumulus anvil hint — a secondary Gaussian peak at hf ~ 0.85, scaled by
-  // (type - 0.6). Stacks on top of the base trapezoid so cumulus tops get a
-  // visible re-thickening above the neck created by the earlier fallStart.
-  float anvilWeight = saturate((type - 0.6f) / 0.4f);
-  float dx = (hf - 0.85f) / 0.06f;
-  float anvilBump = 0.35f * anvilWeight * exp(-0.5f * dx * dx);
-
-  return saturate(base + anvilBump);
-}
-
-// Column-mode envelope: ONE lobe over the per-cloud height axis. Smooth
+// Column envelope: ONE lobe over the per-cloud height axis. Smooth
 // rounded rise from the cloud base (smoothstep instead of a linear ramp so
 // undersides read soft), bulk plateau, smooth fall that reaches exactly 0
 // at hf=1 for cumulus — the column's topFrac IS the cloud top, so the
@@ -167,20 +122,16 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
 
   // (typeSlice, heightIdx) -> (type, heightFrac).
   // X axis (64 slices): cloud type continuum from stratus (0) to cumulonimbus (1).
-  // Y axis (128 entries): height fraction — within the cloud slab (legacy)
-  // or within each column's own base..top span (column mode).
+  // Y axis (128 entries): height fraction within each column's own base..top span.
   float type = (float(dispatchId.x) + 0.5f) / float(outputDim.x);
   float hf   = (float(dispatchId.y) + 0.5f) / float(outputDim.y);
 
-  bool columnMode = args.cloudColumnShapingEnable > 0.5f;
-  float r = columnMode ? densityEnvelopeColumn(hf, type)
-                       : densityEnvelope(hf, type);
+  float r = densityEnvelopeColumn(hf, type);
   float g = coverageThresholdScale(hf, type);
 
   // B — cumulative envelope integral from hf to the top (midpoint rule,
   // 64 steps over the remaining span; one-shot bake so cost is irrelevant).
-  // Integrates whichever envelope family is active so a mode flip re-bakes
-  // a consistent (R, B) pair. Range: ∫_0^1 R du ≤ 1, fits UNORM8 directly.
+  // Range: ∫_0^1 R du ≤ 1, fits UNORM8 directly.
   float integ = 0.0f;
   {
     const int kSteps = 64;
@@ -188,8 +139,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     float du = span / float(kSteps);
     for (int i = 0; i < kSteps; ++i) {
       float u = hf + (float(i) + 0.5f) * du;
-      integ += (columnMode ? densityEnvelopeColumn(u, type)
-                           : densityEnvelope(u, type)) * du;
+      integ += densityEnvelopeColumn(u, type) * du;
     }
   }
 

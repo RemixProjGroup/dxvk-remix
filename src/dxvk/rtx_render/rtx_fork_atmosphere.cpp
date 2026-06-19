@@ -1012,7 +1012,6 @@ namespace fork_hooks {
         // Conditional-disable gates (fork — 2026-06-15, cloud UI rework). Controls
         // that the shader only consumes in a given mode are greyed (not hidden) so
         // they stay discoverable but can't be dragged when inert.
-        const bool columnsOn = RtxOptions::cloudColumnShapingEnable();
         const bool layer2On  = RtxOptions::cloudLayer2Enable();
 
         ImGui::SetNextItemOpen(true, ImGuiCond_Once);
@@ -1124,14 +1123,9 @@ namespace fork_hooks {
           }
 
           if (ImGui::TreeNode("Columns")) {
-            RemixGui::Checkbox("Volumetric Cloud Columns", &RtxOptions::cloudColumnShapingEnableObject());
-            RemixGui::SetTooltipToLastWidgetOnHover(
-                "Per-cloud column model: every cloud gets its own base, its own "
-                "tower height and a complete vertical shape, instead of all "
-                "clouds being cut by the same two global altitude planes. Fixes "
-                "the 'stacked flat layers' read. Uncheck for the legacy "
-                "global-slab shaping (A/B comparison).");
-            ImGui::BeginDisabled(!columnsOn);
+            // Per-cloud column model (always on since 2026-06-19; the legacy
+            // global-slab shaping was removed). Every cloud gets its own base,
+            // tower height and complete vertical shape from the placement map.
             RemixGui::DragFloat("Cloud Cell Size", &RtxOptions::cloudCellSizeKmObject(),
                                 0.05f, 0.5f, 6.0f, "%.2f km", sliderFlags);
             RemixGui::SetTooltipToLastWidgetOnHover(
@@ -1169,10 +1163,10 @@ namespace fork_hooks {
                 "out. The underside brightness then varies continuously with "
                 "the water above every point — dark cores, bright thin spots, "
                 "smooth gradients — instead of one flat-lit sheet. Higher = "
-                "darker, more dramatic undersides; 0 = flat legacy gradient. "
-                "Supersedes Bottom Darkening while Cloud Columns are on. "
-                "Applies live.");
-            ImGui::EndDisabled();
+                "darker, more dramatic undersides; 0 = underside darkening off "
+                "(flat-lit base). Sets the SHAPE of the darkening; its overall "
+                "strength and sunset fade are set by Bottom Darkening "
+                "(Lighting). Applies live.");
             ImGui::TreePop();
           }
           ImGui::TreePop();
@@ -1201,17 +1195,16 @@ namespace fork_hooks {
           RemixGui::SetTooltipToLastWidgetOnHover(
               "How strongly clouds cast shadows on terrain. 0 = no cloud "
               "shadows, 1 = full voxel-grid cumulus-shaped shadow patches.");
-          ImGui::BeginDisabled(columnsOn);
           RemixGui::DragFloat("Bottom Darkening", &RtxOptions::cloudBottomDarkeningObject(),
                               0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
-              "How much darker cloud undersides are than tops. Darkens the "
-              "multi-scatter and ambient terms with a vertical gradient; the "
-              "direct sun beam (silver lining) is unaffected. 0 = uniformly "
-              "lit (paper baseline). Superseded by Underside Shading while "
-              "Cloud Columns are on. Gradient reach is tunable via "
-              "rtx.atmosphere.cloudBottomDarkeningHeight in user.conf.");
-          ImGui::EndDisabled();
+              "Overall strength of the cloud-underside darkening. Scales the "
+              "analytic per-column light field (whose shape is set by Underside "
+              "Shading) on the multi-scatter and ambient terms; the direct sun "
+              "beam (silver lining) is unaffected. Strongest with the sun "
+              "overhead and fades out toward the horizon, where the low sun "
+              "lights the bases directly (sunset glow). 0 = uniformly lit "
+              "(paper baseline).");
           ImGui::TreePop();
         }
 

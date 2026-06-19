@@ -2055,3 +2055,32 @@ Restructured the flat ~45-control `Clouds` menu (7 non-collapsible `TextDisabled
   *`Clouds` node rebuilt as: `Basic` (open by default: Coverage, Cloud Type, Density, Altitude, Depth, Color) · `Shaping ▸ {Variation, Detail & Edges, Columns}` · `Lighting` · `Wind` · `Layer 2` · `Performance` · `Horizon & Haze` (Curvature moved here from "Look"). The `Color` control is a `ColorEdit3` swatch/picker. Mode-inert controls are greyed via `ImGui::BeginDisabled`: the six Columns sliders when `cloudColumnShapingEnable` is off, `Bottom Darkening` when it is on (Underside Shading supersedes it), and the Layer 2 body when `cloudLayer2Enable` is off. The "Vertical Stretch" slider (`cloudVerticalStretch`) is removed from the menu — the option stays conf-only (experimental / superseded by Columns). All tooltips preserved.*
 
 ---
+
+## Workstream — Remove legacy cloud paths + realistic sun-gated underside darkening (fork — 2026-06-19)
+
+Two dead cloud code paths were removed and the column model made the only path: (1) the **legacy analytical `evalClouds` view-march** in `atmosphere_sky.slangh` (already compile-gated out behind `ATMOSPHERE_CLOUD_VIEW_MARCH`, used as a runtime A/B fallback that was never the validated default — clouds come from the `cloud_render` compute pass on primary rays and the secondary dome LUT on indirect/PSR/reflection rays), and (2) the **legacy global-slab shaping** (`cloudColumnShapingEnable == false`): the trapezoid+anvil height-profile curve family, the gate-off branches in the density/bake samplers, and the constant bottom-darkening gradient. With the legacy gradient gone, **bottom darkening was reworked** into the column model as a physically-motivated underside light field driven by cloud density *and* sun position: the analytic downwelling `exp(-cloudUndersideLightSigma × downTau)` (density / overlying-water term, unchanged shape) now scales by `cloudBottomDarkening` (overall strength) × `smoothstep(0, 0.35, sunElev)` so the darkening is strongest at high sun and **fades out toward the horizon** — the low sun rakes under the deck and the warm ambient / silver-lining terms light the bases (classic lit-orange sunset undersides). `cloudBottomDarkening` default 0.55 → 1.0 so the high-sun look matches the validated rev-3 column underside bit-for-bit; only low-sun behavior is new. The legacy ambient `exp(-D_ambient)` tap is gone (the analytic `verticalLight` replaces it), so `sampleDAmbient` is no longer called from `evalNubisCubedSample`.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *Deleted `evalClouds` (the whole `#ifdef ATMOSPHERE_CLOUD_VIEW_MARCH` block) and its only consumer `sampleCloudSunOpticalDepth`. The cloud-source `else` branch in `evalSkyRadiance` (both RT + secondary-LUT off) is now an unconditional transparent `vec4(0)` fallback, no `#ifdef`. Stale `evalClouds` comment references updated.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_height_lut_baker.comp.slang`** — fork-owned change.
+  *Deleted the legacy `densityEnvelope` (trapezoid+anvil) R-curve and the `cloudColumnShapingEnable` mode select; `densityEnvelopeColumn` is now used unconditionally for both R and the B integral. `coverageThresholdScale` (G) unchanged.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned changes.
+  *Dropped the `cloudColumnShapingEnable` gate in `sampleCloudDensityTextured` and the bake-mirror sampler (column derivation now unconditional). `evalNubisCubedSample`: `verticalLight` reworked from the column/legacy `if-else` to the single realistic sun-gated form (`mix(1, exp(-sigma·downTau), cloudBottomDarkening × smoothstep(0, kUndersideSunFadeElev, sunElev))`, `kUndersideSunFadeElev = 0.35`); ambient term is now `ambient_shape × verticalLight` unconditionally; `sampleDAmbient` call removed (unused).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`cloudColumnShapingEnable` → `padCloudLook2` and `cloudBottomDarkeningHeight` → `pad_cloudVoxel1` (both reverted to pad placeholders). No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Removed `cloudColumnShapingEnable` and `cloudBottomDarkeningHeight` RTX_OPTIONs. `cloudBottomDarkening` default 0.55 → 1.0, description reworked (sun-gated strength). `cloudUndersideLightSigma` description reworked (no more legacy-gradient / column-mode wording).*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp` / `.h`** — fork-owned changes.
+  *Removed the `m_cachedHeightLutColumnMode` member + the height-LUT flip-rebake in `computeLuts` (the LUT bakes one curve family once at init). Dropped the `cloudColumnShapingEnable` / `cloudBottomDarkeningHeight` args fills. Updated the bake doc comments.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *Removed the "Volumetric Cloud Columns" checkbox and the `BeginDisabled`/`EndDisabled` gating around the Columns sliders and Bottom Darkening (all always enabled now). Reworked the Bottom Darkening + Underside Shading tooltips (strength × shape; sunset fade).*
+
+- **`RtxOptions.md`** — hand-edited to match (removed the two options, updated `cloudBottomDarkening` / `cloudUndersideLightSigma`); regenerate in-app for canonical form.
+
+---

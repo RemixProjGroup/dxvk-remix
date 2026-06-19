@@ -27,10 +27,10 @@
 // RGB + view-ray cloud transmittance alpha to AtmosphereCloudRender at the
 // downscale render extent.
 //
-// The view-march replaces the analytical evalClouds() rendering — the
-// Wrenninge octave sum + isotropic deep-scatter floor — with the page-137
-// two-HG-lobe direct term (sigma_ms remap on sun_dot + sdf depth) and the
-// page-142 ambient pow(1 - dim_profile, 0.5) * exp(-D_ambient).
+// The view-march replaced the old analytical sky-pass cloud rendering — the
+// Wrenninge octave sum + isotropic deep-scatter floor (removed 2026-06-19) —
+// with the page-137 two-HG-lobe direct term (sigma_ms remap on sun_dot + sdf
+// depth) and the page-142 ambient pow(1 - dim_profile, 0.5) * exp(-D_ambient).
 //
 // Composited into sky-miss in C5 (gated by default-off RTX_OPTION). C4
 // only ships the RT and a debug view (enum 876) for standalone A/B against

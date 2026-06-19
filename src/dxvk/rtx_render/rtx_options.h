@@ -1574,23 +1574,18 @@ namespace dxvk {
                "smaller/busier cloud features, lower for larger ones. "
                "Re-bakes the noise volume live on change.");
 
-    // Per-column cloud model (fork — 2026-06-11, column-shaping rework).
-    // Root-cause fix for the "stacked separated layers" read: previously
-    // every vertical shaping signal (density envelope, coverage-threshold
-    // scale, anvil pow, dim profile, bottom darkening) keyed on the GLOBAL
-    // slab height fraction — one vertical recipe pinned to absolute
-    // altitude across the whole sky — while the thresholded 3D noise placed
-    // mass independently per altitude (stacked disconnected puffs in a
-    // column). The column model derives a per-column cloud base/top from a
-    // baked 2D placement map (cluster field, top jitter, base lift) and
-    // re-keys all vertical shaping + the Nubis lighting proxies on each
-    // cloud's OWN normalized height.
-    RTX_OPTION("rtx.atmosphere", bool, cloudColumnShapingEnable, true,
-               "Per-cloud column model: every cloud gets its own base, "
-               "tower height and complete vertical shape from a placement "
-               "map, instead of all clouds being cut by the same two global "
-               "altitude planes. Fixes the stacked-flat-layers read. "
-               "Disable for the legacy global-slab shaping.");
+    // Per-column cloud model (fork — 2026-06-11, column-shaping rework; the
+    // legacy global-slab alternative was removed 2026-06-19 and the column
+    // model is now unconditional). Root-cause fix for the "stacked separated
+    // layers" read: the old global-slab path keyed every vertical shaping
+    // signal (density envelope, coverage-threshold scale, anvil pow, dim
+    // profile, bottom darkening) on the GLOBAL slab height fraction — one
+    // vertical recipe pinned to absolute altitude across the whole sky — while
+    // the thresholded 3D noise placed mass independently per altitude (stacked
+    // disconnected puffs in a column). The column model derives a per-column
+    // cloud base/top from a baked 2D placement map (cluster field, top jitter,
+    // base lift) and re-keys all vertical shaping + the Nubis lighting proxies
+    // on each cloud's OWN normalized height.
     RTX_OPTION("rtx.atmosphere", float, cloudCellSizeKm, 2.0f,
                "Average cloud-cluster footprint in km [0.5..6] for the "
                "placement map bake. Smaller = many small clouds; larger = "
@@ -1641,12 +1636,13 @@ namespace dxvk {
     RTX_OPTION("rtx.atmosphere", float, cloudUndersideLightSigma, 0.12f,
                "Extinction of the light filtering down through each cloud, "
                "per km of overlying water [0..0.5]. Drives the analytic "
-               "per-column light field that lights cloud undersides in "
-               "column mode: brightness varies continuously with the water "
-               "above every point (dark cores, bright thin spots, smooth "
-               "gradients) instead of one flat-lit sheet. Higher = darker, "
-               "more dramatic undersides; 0 = legacy constant "
-               "bottom-darkening gradient. Applies live.");
+               "per-column underside light field: brightness varies "
+               "continuously with the water above every point (dark cores, "
+               "bright thin spots, smooth gradients) instead of one flat-lit "
+               "sheet. Higher = darker, more dramatic undersides; 0 = "
+               "underside darkening off (flat-lit base). Overall strength and "
+               "the sun-elevation fade are set by Bottom Darkening. Applies "
+               "live.");
 
     // Edge detail (fork — 2026-06-10, rev 3 — additive). Concentrates
     // high-frequency detail at cloud edges: a second, higher-frequency tap of
@@ -1703,19 +1699,20 @@ namespace dxvk {
                "values. Applies live; also reshapes the baked self-shadow "
                "grids so lighting tracks the shapes.");
 
-    // Height-based bottom darkening (fork — 2026-06-10). Vertical light
-    // gradient on the Nubis Cubed multi-scatter + ambient terms so cumulus
-    // undersides read darker than tops. The direct-beam term is exempt so
-    // backlit silver linings are unaffected.
-    RTX_OPTION("rtx.atmosphere", float, cloudBottomDarkening, 0.55f,
-               "How much darker the cloud base is than the top [0..1]. Applies "
-               "to the multi-scatter and ambient lighting terms only; the "
-               "direct sun beam (silver lining) is unaffected. 0 = off (Nubis "
-               "Cubed paper baseline, uniformly lit undersides).");
-    RTX_OPTION("rtx.atmosphere", float, cloudBottomDarkeningHeight, 0.65f,
-               "Slab height fraction (0..1] at which the bottom-darkening "
-               "gradient reaches full brightness. Lower = darkening hugs the "
-               "very base; higher = gradient spans more of the cloud body.");
+    // Underside darkening strength (fork — 2026-06-10; reworked 2026-06-19 to
+    // scale the realistic analytic underside light field instead of a constant
+    // gradient). Modulates the Nubis Cubed multi-scatter + ambient terms so
+    // cumulus undersides read darker than tops. The direct-beam term is exempt
+    // so backlit silver linings are unaffected, and the effect fades out as the
+    // sun nears the horizon so low-sun bases light up (sunset glow).
+    RTX_OPTION("rtx.atmosphere", float, cloudBottomDarkening, 1.0f,
+               "Strength of the cloud-underside darkening [0..1]. Scales the "
+               "analytic per-column light field (shaped by Underside Shading) "
+               "applied to the multi-scatter and ambient terms; the direct sun "
+               "beam (silver lining) is unaffected. The darkening is strongest "
+               "with the sun overhead and fades out toward the horizon, where "
+               "the low sun rakes under the deck and lights the bases (sunset "
+               "glow). 0 = off (uniformly lit undersides).");
 
     // Worley carve (Schneider15 — slide 17 of RDR2 SIGGRAPH 2019).
     // These knobs control how chunky / cell-shaped the prebaked cloud noise is.
