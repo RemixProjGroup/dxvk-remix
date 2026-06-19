@@ -62,14 +62,14 @@ bool evalAtmosphereSunNEE(
     atmosphereArgs,
     isZUp);
 
-  // Stash the per-pixel cumulus shadow ratio for the post-denoise composite
-  // pass (fork — 2026-05-18). sampleAtmosphereSunLight intentionally does NOT
-  // multiply this into sunSample.radiance — the radiance carries only the
-  // smooth legacy uniform shadow so the denoiser sees a clean signal, and the
-  // high-frequency cumulus pattern rides this separate screen-space texture
-  // around the denoiser to land on the post-denoise primary direct radiance.
-  // Defaults to 1.0 when the wire-in is disabled / sun is below horizon.
-  PrimaryCloudShadowFactor[pixelCoordinate] = sunSample.cloudShadowFactor;
+  // Cloud-on-terrain shadow is now folded onto the sun's radiance inside
+  // sampleAtmosphereSunLight (fork — 2026-06-19). It darkens ONLY the sun, so
+  // it is automatically correct indoors (the sun's NEE shadow ray below is
+  // roof-occluded → sun direct ~0 with or without the cloud factor) and never
+  // touches lamps. The old screen-space PrimaryCloudShadowFactor texture, the
+  // sealed-interior zenith up-ray gate, and the viewmodel/decal/normal-flip
+  // origin corrections that compensated for the geometry-blind combined-buffer
+  // application were all deleted in that change.
 
   if (!sunSample.valid) {
     return false;

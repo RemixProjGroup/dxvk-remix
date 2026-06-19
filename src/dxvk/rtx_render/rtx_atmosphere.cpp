@@ -784,6 +784,13 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   {
     args.cloudVoxelShadowsEnable  = RtxOptions::cloudVoxelShadowsEnable() ? 1u : 0u;
     args.cloudShadowMarchStrength = RtxOptions::cloudShadowMarchStrength();
+    // Artistic contrast curve on the cloud-on-terrain shadow (fork — 2026-06-19).
+    // Folded onto the SUN's radiance as pow(cloudTransmittance, k) inside the sun
+    // NEE helpers. Moved here from composite when the cloud shadow was
+    // re-architected onto the sun term (the screen-space PrimaryCloudShadowFactor
+    // texture it used to scale was deleted). >= 0 clamp matches the old composite
+    // populate.
+    args.cloudShadowFactorStrength = std::max(RtxOptions::cloudShadowFactorStrength(), 0.0f);
     const float sceneScale = std::max(RtxOptions::sceneScale(), 1e-5f);
     args.worldUnitsPerKm = 100000.0f * sceneScale;
     // Column presence feather band riding the former pad_c6_0 slot (fork —

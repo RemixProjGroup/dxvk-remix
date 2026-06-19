@@ -57,10 +57,10 @@
 // by DEBUG_VIEW_CLOUD_RENDER_RT (enum 876).
 #define DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT                                            37
 
-// Fork: post-denoise cumulus shadow factor texture (2026-05-18). Sampled by
-// DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW (enum 878) to verify the saturate-clamp
-// hypothesis before changing composite math.
-#define DEBUG_VIEW_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT                                 38
+// Slot 38 was DEBUG_VIEW_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT (fork
+// screen-space cloud-shadow texture, debug view 878). Removed 2026-06-19 with
+// the screen-space cloud-shadow system; number left reserved (no descriptor
+// bound).
 
 #define DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT                                         19
 #define DEBUG_VIEW_BINDING_VOLUME_AGE_INPUT                                                20

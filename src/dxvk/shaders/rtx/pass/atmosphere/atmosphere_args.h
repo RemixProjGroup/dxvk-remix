@@ -475,7 +475,17 @@ struct AtmosphereArgs {
 
   float sunsetSaturation;     // Saturation boost on sky radiance, ramped in near the horizon
                               // (midday untouched). >1 = punchier warm sunset. 1 = no change.
-  float pad_artistic0;
+  // Artistic contrast curve on the cloud-on-terrain shadow (fork — 2026-06-19).
+  // Applied as pow(cloudTransmittance, cloudShadowFactorStrength) where the
+  // factor is folded onto the SUN's radiance in sampleAtmosphereSunLight /
+  // sampleAtmosphereSunLightVolume. This is the same perception-side knob that
+  // previously lived in composite_args.h (it used to scale the screen-space
+  // PrimaryCloudShadowFactor texture); it moved here when the cloud shadow was
+  // re-architected onto the sun term and the screen-space texture was deleted.
+  // 1.0 = raw physical transmittance, >1 deepens cumulus shadows, <1 fades.
+  // Mirrors RtxOptions::cloudShadowFactorStrength(). Reuses the former
+  // pad_artistic0 slot; CB layout unchanged.
+  float cloudShadowFactorStrength;
   float pad_artistic1;
   float pad_artistic2;
 };

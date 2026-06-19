@@ -1991,26 +1991,16 @@ namespace dxvk {
                "range. Lets the shadow strength be tuned independently of "
                "the bake magnitude (cloudShadowMarchStrength) without re-baking.");
 
-    // Cloud shadow on indirect lighting (fork — issue #37). The direct-only
-    // application of the per-pixel cloud shadow only darkens sun-facing
-    // surfaces, leaving the ambient/indirect-lit faces of a mesh bright so it
-    // never reads as fully shadowed. A cloud that occludes the sun reduces the
-    // sun-driven radiance across the whole shaded region, so this blends the raw
-    // cloud transmittance onto the primary indirect diffuse + specular lobes.
-    //   0.0 = indirect untouched (pre-fork behavior; only direct is shadowed)
-    //   1.0 = indirect fully reduced by the cloud transmittance (whole mesh
-    //         shadowed). No effect unless cloudVoxelShadowsEnable is on, since
-    //         the factor is a flat 1.0 everywhere otherwise.
-    // Uses the RAW factor, not pow(factor, cloudShadowFactorStrength): that
-    // exponent is an artistic contrast curve for the high-frequency direct
-    // cumulus shadow, whereas indirect is a smooth regional irradiance drop.
-    RTX_OPTION_ARGS("rtx.atmosphere", float, cloudShadowIndirectStrength, 1.0f,
-               "How strongly the cloud ground shadow attenuates primary indirect "
-               "(ambient/bounce) lighting in composite. 0 = indirect untouched "
-               "(only sun-facing surfaces darken). 1 = whole mesh shadowed by the "
-               "cloud transmittance. Only takes effect when cloudVoxelShadowsEnable "
-               "is on. Lower it if scattered-cloud scenes over-darken sky ambient.",
-               args.minValue = 0.0f, args.maxValue = 1.0f);
+    // cloudShadowIndirectStrength REMOVED (fork — 2026-06-18, was issue #37).
+    // This knob fed a screen-space multiply of the per-pixel cloud shadow factor
+    // onto the primary INDIRECT lobes in composite. It was removed because it
+    // double-counted the cloud occlusion already carried physically by
+    // evalSkyRadiance on indirect rays that escape to the sky, and — being
+    // geometry-blind (the factor projects straight up with no roof knowledge) —
+    // it was the actual root cause of interiors darkening under overcast for
+    // every surface type. See the removal note in composite.comp.slang. The
+    // legitimate outdoor whole-mesh-ambient dimming under a cumulus is preserved
+    // through evalSkyRadiance; no replacement knob is needed.
 
     // Cloud Height LUT (slide 3 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
     // 64x128 R8 lookup table indexed by (cloud type slice, height fraction).

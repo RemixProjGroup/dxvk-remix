@@ -523,6 +523,24 @@ initializer list and can't be lifted into a separate TU.
 
 ---
 
+## src/dxvk/rtx_render/rtx_instance_manager.cpp
+
+**Category:** index-only
+
+- **Inline tweak** at `InstanceManager::onInstanceUpdated` surface-meta block (~line 988, beside `isAnimatedWater`) — REVERTED 2026-06-19, comment-only.
+  *Previously set `currentInstance.surface.isDecalCategory` for the cloud-shadow zenith gate. The gate and flag were deleted when the cloud shadow moved onto the sun term in the NEE (no geometry test needed); only a "removed" comment remains.*
+
+---
+
+## src/dxvk/rtx_render/rtx_materials.h
+
+**Category:** index-only
+
+- **Inline tweak** at `RtSurface` flags block (~line 336) + `RtSurface::writeGPUData` `flags0` packing (~line 121) — REVERTED 2026-06-19, comment-only.
+  *Previously added `bool isDecalCategory` packed into `flags0` bit 2 for the cloud-shadow zenith gate. Removed with the gate; `flags0` bit 2 is free again. Only "removed" comments remain.*
+
+---
+
 ## src/dxvk/rtx_render/rtx_options.h
 
 **Pre-refactor fork footprint:** +32 / -0 LOC (audit 2026-04-18)
@@ -861,8 +879,8 @@ initializer list and can't be lifted into a separate TU.
 - **Block** at `(file scope)` (atmosphere include) — ~1 LOC, planned target `fork_hooks::atmosphereInclude` in `rtx_fork_atmosphere.slangh`.
   *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"`.*
 
-- **Block** at `evalAtmosphereSunNEE` (full function) — ~100 LOC, planned target `fork_hooks::evalAtmosphereSunNEEDirect` in `rtx_fork_atmosphere.slangh`.
-  *Implements primary-bounce sun NEE for physical atmosphere: samples sun direction + cone angle, traces multiple jittered shadow rays for soft shadows, averages visibility, evaluates BRDF split-weight, and accumulates diffuse/specular sun radiance.*
+- **Block** at `evalAtmosphereSunNEE` (full function) — ~40 LOC, planned target `fork_hooks::evalAtmosphereSunNEEDirect` in `rtx_fork_atmosphere.slangh`.
+  *Implements primary-bounce sun NEE for physical atmosphere: samples sun direction + cone angle, traces multiple jittered shadow rays for soft shadows, averages visibility, evaluates BRDF split-weight, and accumulates diffuse/specular sun radiance. As of the 2026-06-19 sun-only cloud-shadow re-architecture this function no longer touches clouds at all — the cloud-on-terrain shadow folds onto the sun's radiance inside `sampleAtmosphereSunLight` (atmosphere_common.slangh), so the per-pixel `PrimaryCloudShadowFactor` write, the sealed-interior zenith up-ray gate, and the viewmodel/decal/normal-flip origin corrections were all deleted here.*
 
 - **Block** at `evalAtmosphereMoonNEE` (full function) — ~100 LOC, planned target `fork_hooks::evalAtmosphereMoonNEEDirect` in `rtx_fork_atmosphere.slangh`.
   *Primary-bounce moon NEE -- mirror of evalAtmosphereSunNEE for the moon. Calls `sampleAtmosphereMoonLight` with a u_pick blue-noise sample so one of the enabled, above-horizon moons is importance-picked per ray (weight = brightness × phaseGlow × elevation). Soft-shadow cone jitter via `getJitteredSunDirection` (direction-agnostic). Accumulated contribution divided by `moonSample.solidAnglePdf` (discrete pick PDF) so multi-moon importance sampling stays unbiased over many frames. Added by 2026-05-07 moon sun-parity workstream.*
@@ -966,6 +984,15 @@ initializer list and can't be lifted into a separate TU.
 
 ---
 
+## src/dxvk/shaders/rtx/concept/surface/surface.h
+
+**Category:** index-only
+
+- **Inline tweak** at `Surface` flags properties (~line 306, after `isVertexColorBakedLighting`) — REVERTED 2026-06-19, comment-only.
+  *Previously added the `Surface::isDecalCategory` property (`data0b.z` bit 2) read by the cloud-shadow zenith gate. Removed with the gate; bit 2 is free again. Only a "freed" comment remains.*
+
+---
+
 ## src/dxvk/shaders/rtx/pass/common_binding_indices.h
 
 **Pre-refactor fork footprint:** +9 / -1 LOC (audit 2026-04-18)
@@ -1009,6 +1036,23 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** at `(file scope)` (atmosphere FAST-noise texture declaration) (~line 138) — 2-line addition (2026-05-09).
   *Declares `AtmosphereFastNoise` as a `Texture2DArray<float2>` resource bound at `BINDING_ATMOSPHERE_FAST_NOISE` (slot 205). Used by the `fastJitter()` helper in `atmosphere_common.slangh` for cloud ray-march sample-distribution jitter.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/composite/composite.comp.slang
+
+**Category:** migrate
+
+- **Block** at `compositePixel` (cloud-shadow application) — REMOVED 2026-06-19, comment-only.
+  *The entire screen-space cloud-shadow application in composite is gone. The **indirect** multiply was removed 2026-06-18 (issue #37, double-count + geometry-blind). The **direct** multiply (`pow(PrimaryCloudShadowFactor, cloudShadowFactorStrength)` onto post-denoise primary direct radiance) was removed 2026-06-19 when the cloud shadow was re-architected onto the SUN's radiance pre-denoise inside `sampleAtmosphereSunLight` — it now darkens only the sun (correct indoors for all surface types, no per-pixel gate). The `PrimaryCloudShadowFactor` texture binding is also removed; only a removal comment remains in the shader.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/composite/composite_args.h
+
+**Category:** index-only
+
+- **Inline tweak** — cloud-shadow CB fields, now both reserved pads. *Two former cloud-shadow CB slots are now reserved `float pad1` / `float pad2` (CB layout ABI-unchanged). `pad1` held `cloudShadowFactorStrength` until 2026-06-19, when the cloud shadow moved onto the sun term in the NEE and the composite application was deleted (the knob now lives in `atmosphere_args.h::cloudShadowFactorStrength`, reusing the former `pad_artistic0` slot there). `pad2` held `cloudShadowIndirectStrength` until 2026-06-18 (issue #37 indirect multiply removal). Rename-to-pad rather than delete keeps the slots ABI-stable.*
 
 ---
 
@@ -1953,6 +1997,53 @@ Two artistic knobs to recover sunset warmth/saturation lost when commit `3e37062
 
 - **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
   *Adds "Multiscatter Strength" (0–2) and "Sunset Saturation" (0–3) `DragFloat`s to the Atmosphere → Advanced ImGui tree, immediately after "Multiscatter Physical Strength", each with an explanatory tooltip. ~10 LOC.*
+
+---
+
+## Workstream — Sun-only cloud-on-terrain shadow re-architecture (fork — 2026-06-19)
+
+Moves the cloud-on-terrain shadow from a post-denoise screen-space texture
+(multiplied onto the combined direct buffer in composite) to a pre-denoise
+fold-in on the SUN's radiance inside the sun NEE. This deletes the whole
+geometry-blindness compensation stack (sealed-interior zenith up-ray gate,
+viewmodel/decal origin correction, camera-side normal flip, dusk/dawn horizon
+gate) and the screen-space plumbing it required. Several of the removed
+screen-space pieces (the `PrimaryCloudShadowFactor` resource + its binding
+indices/tables, debug view 878) were never previously inventoried — a prior
+fridge-list gap, now closed by removal.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`AtmosphereSunSample`: drops the `cloudShadowFactor` member. `sampleAtmosphereSunLight`: folds the cloud shadow onto the sun by `result.radiance *= pow(sampleCloudGroundShadow_OptionB(...), args.cloudShadowFactorStrength)` (gated on `cloudVoxelShadowsEnable`); the early issue-#37 factor computation and the long screen-space wire-in comment are gone. `sampleAtmosphereSunLightVolume`: same `pow(..., cloudShadowFactorStrength)` curve added for parity (was a plain multiply). `sampleCloudGroundShadow_OptionB_impl`: horizon gate removed (the grazing-sun OD blowup now only darkens the already-attenuated sun, never lamps).*
+
+- **`src/dxvk/shaders/rtx/algorithm/integrator_direct.slangh`** — fork-owned change.
+  *`evalAtmosphereSunNEE`: deletes the sealed-interior zenith up-ray gate, the viewmodel/decal camera-origin branches, the triangle-normal flip, and the `PrimaryCloudShadowFactor[pixelCoordinate]` write. The cloud shadow now arrives folded into `sunSample.radiance`.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Repurposes the trailing `pad_artistic0` slot as `cloudShadowFactorStrength` (CB layout ABI-unchanged); the knob moved here from composite_args.h.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs()`: populates `args.cloudShadowFactorStrength = max(RtxOptions::cloudShadowFactorStrength(), 0)` in the cloud-shadow block.*
+
+- **`src/dxvk/shaders/rtx/pass/composite/composite.comp.slang`** — fork-owned change.
+  *Removes the post-denoise `pow(PrimaryCloudShadowFactor, cloudShadowFactorStrength)` multiply on primary direct radiance (and the texelFetch). Only an architecture comment remains.*
+
+- **`src/dxvk/shaders/rtx/pass/composite/composite_args.h`** + **`src/dxvk/rtx_render/rtx_composite.cpp`** — fork-owned change.
+  *`cloudShadowFactorStrength` CB slot renamed to reserved `pad1` (ABI-stable); the composite populate of it is removed.*
+
+- **`src/dxvk/shaders/rtx/pass/composite/composite_bindings.slangh`** + **`composite_binding_indices.h`** + **`rtx_composite.cpp`** — index-only, fork.
+  *Removes the `PrimaryCloudShadowFactor` `Texture2D` declaration, the two `TEXTURE2D(COMPOSITE_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT)` parameter-list entries, and the `bindResourceView`. Binding slot 19 left reserved (number not reused).*
+
+- **`src/dxvk/shaders/rtx/pass/integrate/integrate_direct.slangh`** + **`integrate_direct_bindings.slangh`** + **`integrate_direct_binding_indices.h`** + **`rtx_pathtracer_integrate_direct.cpp`** — index-only, fork.
+  *Removes the per-frame `PrimaryCloudShadowFactor` clear, the `RWTexture2D<float> PrimaryCloudShadowFactor` declaration, the `RW_TEXTURE2D` parameter-list entry, and the `bindResourceView`. Binding slot 73 left reserved.*
+
+- **`src/dxvk/rtx_render/rtx_resources.cpp`** + **`rtx_resources.h`** — index-only, fork.
+  *Removes the `m_primaryCloudShadowFactor` `Resource` member and its `createImageResource` alloc.*
+
+- **`src/dxvk/shaders/rtx/utility/debug_view_indices.h`** + **`debug_view.comp.slang`** + **`debug_view_binding_indices.h`** + **`rtx_debug_view.cpp`** — index-only, fork.
+  *Removes debug view 878 (`DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW`): the enum define (number burned, not reused), the case arm, the `DebugViewPrimaryCloudShadowFactor` declaration, the binding-index define (slot 38 reserved), the `TEXTURE2D` parameter-list entry, the `bindResourceView`, and the selector-list label. Views 875/877 (D_sun grid reads) stay.*
+
+- **`src/dxvk/rtx_render/rtx_instance_manager.cpp`** + **`rtx_materials.h`** + **`src/dxvk/shaders/rtx/concept/surface/surface.h`** — index-only, fork (REVERTED).
+  *Reverts the `Surface::isDecalCategory` flag (CPU set, `flags0` bit 2 pack, shader property) added 2026-06-18; bit 2 is free again. Only "removed/freed" comments remain.*
 
 ---
 

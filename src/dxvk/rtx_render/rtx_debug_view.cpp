@@ -198,13 +198,6 @@ namespace dxvk {
                                 "  R patterned, matches 873  -> consumer works; exp+mix is killing it\n"
                                 "  R patterned but unrelated -> world-anchoring / slab-bottom bug\n"
                                 "  R dark, G even darker     -> magnitude underflow (bake OD tiny)"},
-        {DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW, "Atmosphere: Cloud Shadow Factor (Post-Denoise Diagnostic)",
-                                "Fork diagnostic. After the 2026-05-19 ratio->newShadow simplification,\n"
-                                "the texture holds raw newShadow in [0, 1] from sampleCloudGroundShadow_OptionB\n"
-                                "(integrate_direct line 72). This view is now a direct grayscale equivalent\n"
-                                "of enum 875 -- they should show the SAME pattern at the SAME brightness.\n"
-                                "If they diverge, suspect a path regression (sampler / binding mismatch\n"
-                                "between the production raygen pass and the debug-view pass)."},
         {DEBUG_VIEW_CASCADE_LEVEL, "Terrain: Cascade Level"},
 
         {DEBUG_VIEW_VIRTUAL_HIT_DISTANCE, "Virtual Hit Distance"},
@@ -640,7 +633,6 @@ namespace dxvk {
         TEXTURE3D(DEBUG_VIEW_BINDING_CLOUD_D_SUN_INPUT)
         TEXTURE3D(DEBUG_VIEW_BINDING_CLOUD_D_AMBIENT_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT)
-        TEXTURE2D(DEBUG_VIEW_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT)
 
         RW_TEXTURE2D(DEBUG_VIEW_BINDING_ACCUMULATED_DEBUG_VIEW_INPUT_OUTPUT)
 
@@ -1456,14 +1448,10 @@ namespace dxvk {
       }
     }
 
-    // Fork: post-denoise cumulus shadow factor texture (2026-05-18). Always
-    // allocated alongside the other raytracing-output resources, so the view
-    // is unconditionally bindable here. Sampled by DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW
-    // (enum 878) to verify the saturate-clamp hypothesis in composite.
-    ctx->bindResourceView(
-      DEBUG_VIEW_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT,
-      rtOutput.m_primaryCloudShadowFactor.view,
-      nullptr);
+    // Fork: the post-denoise cumulus shadow factor texture (debug view 878) was
+    // removed 2026-06-19 along with the screen-space cloud-shadow system. The
+    // cloud shadow now folds onto the sun radiance in the NEE; use enum 875/877
+    // (which read the D_sun grid directly) to diagnose cloud-on-terrain shadows.
 
     ctx->bindResourceView(DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT, globalVolumetrics.getPreviousVolumeReservoirs().view, nullptr);
     ctx->bindResourceView(DEBUG_VIEW_BINDING_VOLUME_AGE_INPUT, globalVolumetrics.getCurrentVolumeAccumulatedRadianceAge().view, nullptr);

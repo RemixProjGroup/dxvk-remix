@@ -106,13 +106,10 @@ Texture3D<float> DebugViewCloudDAmbient;
 [[vk::binding(DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT)]]
 Texture2D<float4> DebugViewCloudRenderRT;
 
-// Fork: post-denoise cumulus shadow factor (R16F screen-extent, 2026-05-18).
-// Visualized by DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW (enum 878). Texture is
-// written by integrate_direct's evalAtmosphereSunNEE as newShadow / oldShadow
-// and read by composite through saturate() + pow() — this debug view inspects
-// the value before those operations collapse the > 1 ratio amplification.
-[[vk::binding(DEBUG_VIEW_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT)]]
-Texture2D<float> DebugViewPrimaryCloudShadowFactor;
+// Fork: the post-denoise cumulus shadow factor texture and its debug view
+// (enum 878) were removed 2026-06-19 with the screen-space cloud-shadow system.
+// The cloud shadow now folds onto the sun radiance in the NEE; enum 875/877
+// read the D_sun grid directly for cloud-on-terrain shadow diagnostics.
 
 [[vk::binding(DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT)]]
 Texture3D<uint4> VolumeReservoirs;
@@ -589,27 +586,9 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
       value = vec4(outColor, 1.0f);
     }
     break;
-  case DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW:
-    {
-      // Fork diagnostic (2026-05-18). Visualizes the raw post-denoise cumulus
-      // shadow factor texture written by integrate_direct's evalAtmosphereSunNEE
-      // as newShadow / safeOldShadow. Composite reads this through saturate()
-      // + pow() — this view inspects the value before that collapse. The
-      // central hypothesis being tested is that saturate() clamps clear-pixel
-      // factors (~7.4 at FNV defaults) down to 1.0, erasing the distinction
-      // between clear pixels and light-cumulus pixels and leaving only heavy-
-      // cumulus pixels visible.
-      const float factor = DebugViewPrimaryCloudShadowFactor.Load(int3(threadId, 0)).r;
-      // Iteration #4 (2026-05-19, post-fix): pure grayscale, NO scaling.
-      // After the getTransmittanceToSun split, integrate_direct writes the
-      // raw newShadow ∈ [0, 1] into this texture (not the ratio). This view
-      // is now a direct grayscale equivalent of enum 875 — they should show
-      // the SAME pattern at the SAME brightness; mismatch indicates a path
-      // divergence regression.
-      const float displayValue = saturate(factor);
-      value = vec4(displayValue, displayValue, displayValue, 1.0f);
-    }
-    break;
+  // DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW (enum 878) removed 2026-06-19 with the
+  // screen-space cloud-shadow system. Use enum 875/877 (D_sun grid reads) for
+  // cloud-on-terrain shadow diagnostics.
   case DEBUG_VIEW_NRC_UPDATE_RADIANCE:
   case DEBUG_VIEW_NRC_UPDATE_THROUGHPUT:
   case DEBUG_VIEW_NRC_UPDATE_RADIANCE_MULTIPLIED_BY_THROUGHPUT:

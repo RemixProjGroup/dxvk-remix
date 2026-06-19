@@ -896,13 +896,6 @@ struct AtmosphereSunSample {
   bool valid;           // True if sun is above horizon
   float coneAngle;      // Half-angle of the sun cone for soft shadows (radians)
   int numSamples;       // Number of shadow samples to take for soft shadows
-  // Per-pixel cumulus shadow (fork — 2026-05-18, simplified 2026-05-19).
-  // Raw newShadow ∈ [0, 1] from sampleCloudGroundShadow_OptionB at this
-  // pixel. sampleAtmosphereSunLight intentionally does NOT multiply this
-  // into result.radiance — the cumulus pattern rides the separate
-  // PrimaryCloudShadowFactor texture so NRD/DLSS-RR cannot smear it away.
-  // 1.0 = no per-cumulus modulation (clear voxel grid or wire-in disabled).
-  float cloudShadowFactor;
 };
 
 // Get the sun cone angle and sample count based on Mie anisotropy
@@ -954,11 +947,6 @@ vec3 getJitteredSunDirection(vec3 sunDir, float coneAngle, float u1, float u2) {
 // Sample direct sun lighting for NEE at a surface point
 AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal, AtmosphereArgs args, bool isZUp = false) {
   AtmosphereSunSample result;
-  // Default the cumulus-shadow factor to 1.0 (no per-pixel modulation). Only
-  // the voxel-grid wire-in below overwrites it. Caller is responsible for
-  // writing the factor into PrimaryCloudShadowFactor for the post-denoise
-  // composite to consume.
-  result.cloudShadowFactor = 1.0f;
 
   // Get sun direction in world space
   // args.sunDirection is in Y-up space, convert if needed
@@ -972,21 +960,6 @@ AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal
     result.direction = normalize(args.sunDirection);
   }
   
-  // Cloud ground-shadow factor (fork — issue #37). Computed HERE, before the
-  // NdotL horizon early-out below, so it is recorded for EVERY primary surface
-  // regardless of orientation. The factor depends only on surfacePos and the
-  // sun direction — never the surface normal — so computing it before the early
-  // return lets away-facing faces (NdotL <= 0, no direct sun) still carry the
-  // real cloud shadow into PrimaryCloudShadowFactor instead of the default 1.0.
-  // composite.comp.slang then uses it to shadow the whole mesh's indirect
-  // lighting, not just its sun-facing faces. See the wire-in notes below.
-#ifdef ATMOSPHERE_AVAILABLE
-  if (args.cloudVoxelShadowsEnable != 0u) {
-    result.cloudShadowFactor = sampleCloudGroundShadow_OptionB(
-        surfacePos, result.direction, args, isZUp);
-  }
-#endif
-
   // Check if sun is above the surface horizon
   float NdotL = dot(surfaceNormal, result.direction);
   if (NdotL <= 0.0f) {
@@ -997,15 +970,14 @@ AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal
   }
 
   // Compute transmittance from surface to sun. When the voxel-grid cloud
-  // shadow is enabled, skip the analytical cloud shadow inside the helper
-  // and carry the per-pixel newShadow separately via cloudShadowFactor
-  // (written into PrimaryCloudShadowFactor below). This avoids the prior
-  // ratio-correction pattern where composite had to UN-DO an analytical
-  // bake — saturate(factor) clamped the > 1 un-do values at clear pixels
-  // and erased the per-cumulus contrast.
+  // shadow is enabled, skip the analytical 2D-coverage cloud darkening inside
+  // the helper — the physically-correct per-cumulus D_sun transmittance is
+  // folded onto result.radiance below (fork — 2026-06-19, sun-only direct
+  // re-architecture). When the voxel grid is OFF the analytical shadow stays
+  // baked here, exactly as upstream.
   vec3 transmittance = getTransmittanceToSun(surfacePos, args, isZUp,
       /*skipCloudShadow=*/(args.cloudVoxelShadowsEnable != 0u));
-  
+
   // Apply Mie anisotropy to simulate atmospheric scattering effects
   // High anisotropy = sharp, concentrated sun (forward scattering dominant)
   // Low anisotropy = diffuse sun (scattered in all directions, faint but still present)
@@ -1035,44 +1007,43 @@ AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal
   result.valid = any(transmittance > vec3(0.0f));
 
 #ifdef ATMOSPHERE_AVAILABLE
-  // Voxel-grid cloud-on-terrain shadow wire-in (fork — 2026-05-12, C6;
-  // post-denoise split-out 2026-05-18; ratio→newShadow simplification 2026-05-19).
+  // Cloud-on-terrain shadow — physically-correct application (fork — 2026-06-19).
   //
-  // Per-pixel newShadow from sampleCloudGroundShadow_OptionB lands directly
-  // in result.cloudShadowFactor. The integrator routes it into
-  // PrimaryCloudShadowFactor, and the composite pass multiplies it onto
-  // post-denoise primary direct radiance with the user-tunable
-  // pow(factor, cloudShadowFactorStrength) curve.
+  // A cloud shadow is just attenuation of the SUN along the sun direction, so
+  // the correct place to apply it is HERE, onto the sun's own radiance, inside
+  // the sun NEE. Folding it into result.radiance means:
+  //   * it is multiplied alongside the geometric sun-shadow ray and summed with
+  //     the other lights' contributions in the integrator, then denoised —
+  //     i.e. it darkens ONLY the sun, never lamps/point lights;
+  //   * indoors it is automatically a no-op for every surface type (the sun's
+  //     direct contribution is already ~0 from the roof-occluded NEE shadow
+  //     ray), so the sealed-interior up-ray gate, the viewmodel/decal origin
+  //     correction, and the dusk/dawn horizon gate are all unnecessary and have
+  //     been deleted;
+  //   * the secondary/indirect sun NEE (evalAtmosphereSunNEESecondary) shares
+  //     this helper, so bounce light off cloud-shadowed ground becomes correct
+  //     for free — and there is NO double-count, because the old composite
+  //     indirect multiply was already removed (issue #37) and the legitimate
+  //     sky-bounce reduction lives in evalSkyRadiance.
   //
-  // Why a separate texture (not multiplied into result.radiance here): the
-  // per-cumulus signal is high-frequency edges on terrain. If multiplied
-  // into pre-denoise radiance, NRD / DLSS-RR smear the shadow boundaries
-  // away — the denoiser has no motion vectors or geometry edges to anchor
-  // bilateral filtering on a cumulus shadow. Routing newShadow around the
-  // denoiser preserves the per-pixel detail.
+  // Tradeoff vs the retired PrimaryCloudShadowFactor screen-space texture: the
+  // per-cumulus pattern now passes through NRD / DLSS-RR, which can soften the
+  // crisp shadow edges. That is the accepted cost of doing it in the
+  // physically-correct place; the screen-space hack that avoided it was
+  // geometry- and light-blind and spawned a pile of compensations.
   //
-  // Why no ratio-correction math anymore: getTransmittanceToSun was called
-  // above with skipCloudShadow=true, so result.radiance has NO analytical
-  // cloud darkening baked in. cloudShadowFactor is plain newShadow ∈ [0, 1];
-  // composite's saturate() is harmless and pow() does what the strength
-  // knob promises. The prior ratio newShadow / safeOldShadow existed to
-  // un-do the analytical bake at clear pixels — composite's saturate() then
-  // clamped the > 1 ratios at clear pixels back to 1.0, erasing the per-
-  // cumulus contrast (diagnosed by enum 878 + the user's "binary white-black
-  // moves with clouds" observation on 2026-05-19).
-  //
-  // Sentinel-position protection: the multiscatter analytical path
-  // (computeGroundReflectionAnalytical with vec3(0,0,0)) calls
-  // getTransmittanceToSun with skipCloudShadow LEFT AT DEFAULT (false), so
-  // it continues to see the analytical dimmer and never feeds the sentinel
-  // into the voxel-grid lookup. That invariant is what the prior ratio-
-  // correction was protecting; the conditional skip preserves it without
-  // the saturate-clamp side effect.
-  //
-  // result.cloudShadowFactor is now computed earlier, before the NdotL
-  // early-out, so away-facing surfaces also record it (issue #37). Nothing to
-  // do here — the value depends only on surfacePos + sun direction, neither of
-  // which changed below this point.
+  // cloudShadowFactorStrength is preserved as the artistic contrast curve,
+  // pow(transmittance, k), applied where the factor is folded in (it used to
+  // live in composite). The sentinel-position multiscatter path
+  // (computeGroundReflectionAnalytical, worldPos (0,0,0)) does NOT reach here —
+  // it calls getTransmittanceToSun directly with skipCloudShadow at its default
+  // (false), so it keeps the analytical dimmer and never feeds the sentinel
+  // into the voxel-grid lookup.
+  if (args.cloudVoxelShadowsEnable != 0u) {
+    const float cloudTransmittance = sampleCloudGroundShadow_OptionB(
+        surfacePos, result.direction, args, isZUp);
+    result.radiance *= pow(cloudTransmittance, args.cloudShadowFactorStrength);
+  }
 #endif
 
   // Get soft shadow parameters based on Mie anisotropy
@@ -1328,20 +1299,23 @@ AtmosphereVolumeSunSample sampleAtmosphereSunLightVolume(vec3 volumePos, vec3 vi
   result.valid = any(transmittance > vec3(0.0f));
 
 #ifdef ATMOSPHERE_AVAILABLE
-  // Voxel-grid cloud-on-terrain shadow wire-in for volumetric NEE
-  // (fork — 2026-05-12, C6; ratio→newShadow simplification 2026-05-19).
+  // Voxel-grid cloud-on-terrain shadow on the volumetric sun term
+  // (fork — 2026-05-12, C6; sun-only re-architecture 2026-06-19).
   //
-  // getTransmittanceToSun above was called with skipCloudShadow=true, so
-  // result.radiance has NO analytical cloud darkening baked in. Multiply
-  // the per-cumulus newShadow directly onto the radiance — the volumetric
-  // path has no post-denoise factor texture because the volumetric denoiser
-  // tolerates the high-frequency signal better than NRD does on flat
-  // surfaces (different bilateral domain). Same surface-path simplification
-  // applies: dropping the ratio + cliff-guard + strength-floor math.
+  // Same principle as the surface path in sampleAtmosphereSunLight: the cloud
+  // shadow is attenuation of the SUN, so it is folded directly onto the sun's
+  // volumetric radiance. getTransmittanceToSun above was called with
+  // skipCloudShadow=true so there is no analytical double-count. The volumetric
+  // path always applied newShadow into radiance directly — that was already
+  // architecturally correct; this just adds the same cloudShadowFactorStrength
+  // contrast curve so the artistic knob behaves identically on god-rays and on
+  // surfaces. The volumetric denoiser tolerates the high-frequency signal on its
+  // own bilateral domain, so there is no separate factor texture (there never
+  // was for this path).
   if (args.cloudVoxelShadowsEnable != 0u) {
-    const float newShadow = sampleCloudGroundShadow_OptionB(
+    const float cloudTransmittance = sampleCloudGroundShadow_OptionB(
         volumePos, result.direction, args, isZUp);
-    result.radiance *= newShadow;
+    result.radiance *= pow(cloudTransmittance, args.cloudShadowFactorStrength);
   }
 #endif
 
@@ -3060,8 +3034,21 @@ float sampleCloudGroundShadow_OptionB_impl(vec3 worldPos, vec3 sunDir,
   // single-tap evalCloudGroundShadow it replaces.
   const float transmittance = exp(-opticalDepth * args.cloudDensity * args.cloudShadowMarchStrength);
 
-  // Mix with the existing strength knob so the helper degrades to 1.0
-  // (no shadow) when the user has shadow strength at zero.
+  // Horizon gate REMOVED (fork — 2026-06-19, sun-only re-architecture). The
+  // gate existed only because the factor used to be applied to the COMBINED
+  // primary direct buffer (every light) in composite: near sunrise/sunset the
+  // grazing slant path baked into D_sun scales as ~1/sin(elevation), saturates,
+  // and collapsed the transmittance to ~0 in a band just above the horizon —
+  // which crushed all direct lighting (lamps included) at dusk/dawn. Now the
+  // factor is folded onto the SUN's radiance ALONE, so a collapsed factor at
+  // grazing elevation only darkens the sun — which is already deeply attenuated
+  // by atmospheric transmittance at the horizon, so crushing the residual is
+  // physically reasonable (a low sun behind cloud is correctly dark) and never
+  // touches lamps. The hard dir.y<=0.001 guard in intersectCloudSlabBottomFromBelow
+  // still returns full-sun once the sun crosses below the horizon.
+  //
+  // Mix with the strength knob so the helper degrades to 1.0 (no shadow) when
+  // cloudShadowStrength is zero.
   return mix(1.0f, transmittance, args.cloudShadowStrength);
 }
 
