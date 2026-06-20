@@ -629,8 +629,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // Bake frequency scale (fork — 2026-06-11, stage B). Lives in the former
   // padCloudLook1 slot so the CB layout is unchanged.
   args.cloudNoiseBaseFreqScale         = RtxOptions::cloudNoiseBaseFreqScale();
-  // padCloudLook2 (formerly cloudColumnShapingEnable) left unset — the column
-  // model is now unconditional; see atmosphere_args.h.
+  // Sky <- clouds bleed (fork — 2026-06-19). Reuses the former
+  // cloudColumnShapingEnable (padCloudLook2) slot; see atmosphere_args.h.
+  args.cloudSkyBleedStrength           = RtxOptions::cloudSkyBleedStrength();
 
   // Cloud parameters
   {
@@ -703,8 +704,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // Bottom darkening + additive edge detail (fork — 2026-06-10). Live in the
     // former pad_cloudVoxel0..2 slots so the CB layout is unchanged.
     args.cloudBottomDarkening       = RtxOptions::cloudBottomDarkening();
-    // pad_cloudVoxel1 (formerly cloudBottomDarkeningHeight) left unset — the
-    // constant-gradient reach is gone; see atmosphere_args.h.
+    args.cloudSkyAmbientFill        = RtxOptions::cloudSkyAmbientFill();
     args.cloudDetailStrength        = RtxOptions::cloudDetailStrength();
   }
 
@@ -714,6 +714,8 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   {
     args.cloudPhaseG1         = RtxOptions::cloudPhaseG1();
     args.cloudPhaseG2         = RtxOptions::cloudPhaseG2();
+    args.cloudEnergyConserve  = RtxOptions::cloudEnergyConserve();
+    args.cloudMsLobeWeight    = RtxOptions::cloudMsLobeWeight();
     args.cloudMsSunDotMax     = RtxOptions::cloudMsSunDotMax();
     args.cloudMsSigmaShallow  = RtxOptions::cloudMsSigmaShallow();
     args.cloudMsSigmaDeep     = RtxOptions::cloudMsSigmaDeep();
@@ -1037,19 +1039,19 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
   // convention — harmless because the shader gate (cloudSecondaryLutEnable)
   // and the dispatch gate are the same option, so the LUT is never sampled
   // on a frame it wasn't baked.
+  // Mip chain (fork — 2026-06-19): the sky<-clouds bleed samples a COARSE mip
+  // of this LUT as a wide neighborhood blur (sampling mip 0 directly showed the
+  // 256x128 LUT's coarse texels as faceted cloud edges). 6 levels: 256x128 down
+  // to 8x4. updateMipmap (Gaussian) fills mips 1..5 from mip 0 after each bake.
   VkExtent3D cloudSecondaryLutExtent = { kCloudSecondaryLutWidth, kCloudSecondaryLutHeight, 1 };
-  m_cloudSecondaryLut = Resources::createImageResource(
+  m_cloudSecondaryLut = RtxMipmap::createResource(
     ctx,
     "Atmosphere Cloud Secondary LUT",
     cloudSecondaryLutExtent,
     VK_FORMAT_R16G16B16A16_SFLOAT,
-    1, // numLayers
-    VK_IMAGE_TYPE_2D,
-    VK_IMAGE_VIEW_TYPE_2D,
-    0, // imageCreateFlags
     VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags (SAMPLED implicit)
     VkClearColorValue{}, // clearValue
-    1 // mipLevels
+    6 // mipLevels (256x128 -> 8x4)
   );
 
   // Fork (2026-06-11, column-shaping rework): cloud placement map (512x512
@@ -1720,7 +1722,7 @@ void RtxAtmosphere::dispatchCloudSecondaryLut(Rc<DxvkContext> ctx) {
   ctx->bindResourceView(3, m_cloudDSun.view, nullptr);
   ctx->bindResourceView(4, m_cloudDAmbient.view, nullptr);
   ctx->bindResourceView(5, m_fastNoise.getView(), nullptr);
-  ctx->bindResourceView(6, m_cloudSecondaryLut.view, nullptr);
+  ctx->bindResourceView(6, m_cloudSecondaryLut.views[0], nullptr);  // mip 0 storage write
   ctx->bindResourceView(7, m_skyViewLut.isValid() ? m_skyViewLut.view : nullptr, nullptr);
   ctx->bindResourceView(8, m_cloudSkyTransmittanceLut.isValid() ? m_cloudSkyTransmittanceLut.view : nullptr, nullptr);
   ctx->bindResourceSampler(9, skyViewSampler);
@@ -1749,6 +1751,19 @@ void RtxAtmosphere::dispatchCloudSecondaryLut(Rc<DxvkContext> ctx) {
   const uint32_t groupsX = (kCloudSecondaryLutWidth  + 7u) / 8u;
   const uint32_t groupsY = (kCloudSecondaryLutHeight + 7u) / 8u;
   ctx->dispatch(groupsX, groupsY, 1);
+
+  // Blur mip 0 down the chain so the sky<-clouds bleed can sample a coarse
+  // (wide-blurred) level (fork — 2026-06-19). Barrier mip-0 write -> mip-gen
+  // read first; updateMipmap needs an RtxContext (ctx is always one here —
+  // computeLuts is called with the RtxContext, see rtx_fork_atmosphere.cpp).
+  ctx->emitMemoryBarrier(0,
+    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+  {
+    ScopedGpuProfileZone(ctx, "Atmosphere Cloud Secondary LUT Mipmap");
+    Rc<RtxContext> rtxCtx = static_cast<RtxContext*>(ctx.ptr());
+    RtxMipmap::updateMipmap(rtxCtx, m_cloudSecondaryLut, MipmapMethod::Gaussian);
+  }
 }
 
 void RtxAtmosphere::dispatchCloudNoise3DBake(Rc<DxvkContext> ctx) {

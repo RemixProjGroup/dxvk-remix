@@ -125,64 +125,85 @@ vec3 computeMultiscattering(float altitude, float sunZenithCosAngle, AtmosphereA
   vec3 planetCenter = vec3(0.0f, -args.planetRadius, 0.0f);
   vec3 rayOrigin = vec3(0.0f, altitude, 0.0f);
 
-  // Integrate over hemisphere for volumetric scattering
-  const int numDirSamples = 64;
+  // Gather directions for the multiple-scattering integral. Sample the FULL
+  // sphere as a 2D (zenith x azimuth) quadrature (fork — 2026-06-19, sunset
+  // rework). The original loop swept zenith 0..pi at a SINGLE azimuth
+  // (rayDir = vec3(sinZenith, cosZenith, 0)) — one great circle in the x-y
+  // plane. But `toSun` below lies in the y-z plane (x = 0), so every gather ray
+  // sat at 90deg azimuth from the sun and the integral never looked toward (or
+  // away from) the sun. At sunset that meant the multiscatter gathered ONLY the
+  // blue sky orthogonal to the sun and missed the warm, sun-reddened horizon —
+  // the dominant cause of the pale-blue MS fill that washed the sunset (sky
+  // stayed blue, the warm band could not climb, and clouds inherited the cold
+  // ambient through the sky-view LUT). Distributing the same 64 samples as
+  // 8 zenith x 8 azimuth restores azimuthal coverage so the gather sees the
+  // sun-ward sky. The sinZenith Jacobian and the 2*pi/N normalization are kept,
+  // so a uniform integrand yields a near-identical magnitude (sum over the 8x8
+  // grid = 41.0 vs 40.7 for the old 64x1 sweep, <1%): this corrects the
+  // DIRECTION/color of the integral without shifting the tuned brightness.
+  const int kZenithSamples  = 8;
+  const int kAzimuthSamples = 8;
+  const int numDirSamples   = kZenithSamples * kAzimuthSamples;  // 64
   const int numDistanceSamples = 20;
 
   vec3 multiScatter = vec3(0.0f);
 
-  for (int i = 0; i < numDirSamples; ++i) {
-    float zenithAngle = kPi * (float(i) + 0.5f) / float(numDirSamples);
+  for (int iz = 0; iz < kZenithSamples; ++iz) {
+    float zenithAngle = kPi * (float(iz) + 0.5f) / float(kZenithSamples);
     float cosZenith = cos(zenithAngle);
     float sinZenith = sin(zenithAngle);
 
-    vec3 rayDir = vec3(sinZenith, cosZenith, 0.0f);
+    for (int ia = 0; ia < kAzimuthSamples; ++ia) {
+      float azimuth = 2.0f * kPi * (float(ia) + 0.5f) / float(kAzimuthSamples);
+      vec3 rayDir = vec3(sinZenith * cos(azimuth), cosZenith, sinZenith * sin(azimuth));
 
-    // Intersect with atmosphere
-    float t0, t1;
-    if (!intersectSphere(rayOrigin, rayDir, planetCenter, args.atmosphereRadius, t0, t1)) {
-      continue;
-    }
+      // Intersect with atmosphere
+      float t0, t1;
+      if (!intersectSphere(rayOrigin, rayDir, planetCenter, args.atmosphereRadius, t0, t1)) {
+        continue;
+      }
 
-    t0 = max(0.0f, t0);
+      t0 = max(0.0f, t0);
 
-    // Check planet intersection
-    float tPlanet0, tPlanet1;
-    bool hitsPlanet = intersectSphere(rayOrigin, rayDir, planetCenter, args.planetRadius, tPlanet0, tPlanet1);
-    if (hitsPlanet && tPlanet0 > 0.0f) {
-      t1 = tPlanet0;
-    }
+      // Check planet intersection
+      float tPlanet0, tPlanet1;
+      bool hitsPlanet = intersectSphere(rayOrigin, rayDir, planetCenter, args.planetRadius, tPlanet0, tPlanet1);
+      if (hitsPlanet && tPlanet0 > 0.0f) {
+        t1 = tPlanet0;
+      }
 
-    float dt = (t1 - t0) / float(numDistanceSamples);
+      float dt = (t1 - t0) / float(numDistanceSamples);
 
-    // March along ray
-    for (int j = 0; j < numDistanceSamples; ++j) {
-      float t = t0 + (float(j) + 0.5f) * dt;
-      vec3 samplePos = rayOrigin + rayDir * t;
-      float sampleAltitude = length(samplePos - planetCenter) - args.planetRadius;
+      // March along ray
+      for (int j = 0; j < numDistanceSamples; ++j) {
+        float t = t0 + (float(j) + 0.5f) * dt;
+        vec3 samplePos = rayOrigin + rayDir * t;
+        float sampleAltitude = length(samplePos - planetCenter) - args.planetRadius;
 
-      float densityR = rayleighDensity(sampleAltitude, args);
-      float densityM = mieDensity(sampleAltitude, args);
-      float densityO3 = ozoneDensity(sampleAltitude, args);
+        float densityR = rayleighDensity(sampleAltitude, args);
+        float densityM = mieDensity(sampleAltitude, args);
+        float densityO3 = ozoneDensity(sampleAltitude, args);
 
-      vec3 scatteringR = args.rayleighScattering * densityR;
-      vec3 scatteringM = args.mieScattering * densityM;
-      vec3 scattering = scatteringR + scatteringM;
+        vec3 scatteringR = args.rayleighScattering * densityR;
+        vec3 scatteringM = args.mieScattering * densityM;
+        vec3 scattering = scatteringR + scatteringM;
 
-      // Note: Ozone only absorbs, doesn't scatter, so it's not added to scattering
-      // but it does affect the sun transmittance sampled from the LUT
+        // Note: Ozone only absorbs, doesn't scatter, so it's not added to scattering
+        // but it does affect the sun transmittance sampled from the LUT
 
-      // Sample transmittance to sun
-      vec3 toSun = vec3(0.0f, sunZenithCosAngle, sqrt(max(0.0f, 1.0f - sunZenithCosAngle * sunZenithCosAngle)));
-      float sunZenithCos = dot(normalize(samplePos - planetCenter), toSun);
-      vec3 sunTransmittance = sampleTransmittanceLut(transmittanceLutInput, transmittanceSampler,
-                                                      sampleAltitude, sunZenithCos, args);
+        // Sample transmittance to sun
+        vec3 toSun = vec3(0.0f, sunZenithCosAngle, sqrt(max(0.0f, 1.0f - sunZenithCosAngle * sunZenithCosAngle)));
+        float sunZenithCos = dot(normalize(samplePos - planetCenter), toSun);
+        vec3 sunTransmittance = sampleTransmittanceLut(transmittanceLutInput, transmittanceSampler,
+                                                        sampleAltitude, sunZenithCos, args);
 
-      multiScatter += scattering * sunTransmittance * dt * sinZenith;
+        multiScatter += scattering * sunTransmittance * dt * sinZenith;
+      }
     }
   }
 
-  // Normalize by hemisphere solid angle
+  // Normalize by hemisphere solid angle (constant kept from the 64x1 sweep —
+  // the 8x8 redistribution preserves the sum magnitude; see the sampling note).
   multiScatter *= 2.0f * kPi / float(numDirSamples);
 
   // Add ground reflection contribution (key for sunset colors!)

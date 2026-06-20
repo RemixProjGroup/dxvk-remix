@@ -2084,3 +2084,118 @@ Two dead cloud code paths were removed and the column model made the only path: 
 - **`RtxOptions.md`** — hand-edited to match (removed the two options, updated `cloudBottomDarkening` / `cloudUndersideLightSigma`); regenerate in-app for canonical form.
 
 ---
+
+## Workstream — Cloud sky-dome ambient fill (clouds reflect the sky) (fork — 2026-06-19)
+
+First half of the sky↔cloud color-coupling work. Symptom: under a bright blue daytime sky the cloud undersides read dark / gloomy, and clouds never take on the surrounding sky's color, because the cloud ambient samples the sky-view LUT in only TWO directions — toward the sun (warm) and the anti-sun horizon (cool) — and `buildCloudShadeContext` deliberately skips the overhead/zenith sky (the old comment feared zenith would blue-tint sunset cumulus). So the large bright sky dome that lights real cloud bottoms from below/around is never sampled. Fix: add a zenith sky-view sample and a new ambient term, the "sky-dome fill," that the underside picks up WITHOUT the bottom-darkening attenuation (that skylight reaches the base from below/around, not filtered down through the overlying water). It reads the zenith color, so a bright daytime dome lifts gloomy undersides and tints them with the actual sky; at sunset the zenith sample is dim so the term self-fades and the warm top-down ambient carries the look (the validated sunset is preserved bit-for-bit at fill 0, and nearly so at the 0.5 default since zenith→0 there). The companion sky←clouds half (cloud radiance bleeding into the visible sky) is still pending.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned changes.
+  *`CloudShadeContext` gains `skyRadianceZenith`; `buildCloudShadeContext` samples `sampleSkyAmbientForVolume(vec3(0,1,0), …) * dayFactor` (same cloud-occlusion + day gate as warm/cool) and assigns it; the `evalNubisCubedSample` call passes it through.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`evalNubisCubedSample` gains a `skyRadianceZenith` param; ambient split into `topAmbient = ambient_shape × verticalLight × skyRadiance` (legacy, attenuated) + `domeFill = ambient_shape × cloudSkyAmbientFill × skyRadianceZenith` (NOT attenuated by verticalLight); `result.ambient = topAmbient + domeFill`.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`pad_cloudVoxel1` (the freed cloudBottomDarkeningHeight slot) → `cloudSkyAmbientFill`. No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h` / `rtx_atmosphere.cpp`** — fork-owned changes.
+  *New `RTX_OPTION(float, cloudSkyAmbientFill, 0.5f, …)`; `getAtmosphereArgs` fills `args.cloudSkyAmbientFill`.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *"Sky Fill" DragFloat added to the Clouds → Lighting tree after Bottom Darkening, with tooltip.*
+
+- **`RtxOptions.md`** — hand-edited to add `cloudSkyAmbientFill`; regenerate in-app for canonical form.
+
+---
+
+## Workstream — Sky-reflects-clouds bleed (sky picks up cloud color) (fork — 2026-06-19)
+
+Second half of the sky↔cloud color coupling. Symptom: the visible sky and the cloud layer are composited independently (`radiance = mix(sky, cloud.rgb, cloud.a)` in `evalSkyRadiance`), so a colored deck never tints the clear sky — leaving vivid blue gaps between orange sunset clouds (and a too-clean sky around grey overcast). Fix: before the cloud composite, add a fraction of the LOCAL cloud radiance to `radiance` as colored inscatter. The source is the secondary cloud dome LUT (`AtmosphereCloudSecondaryLut`) sampled in the view direction — it is low-res (256×128), hence inherently smooth, giving a neighborhood-averaged cloud color per direction (bright/colored next to a cloud, ~0 in open sky far from any) with no extra blur pass. Because it is added BEFORE the composite, the composite's own `(1 - cloudAlpha)` factor keeps the bleed in the visible-sky fraction and out of opaque cloud cores. Gated on the secondary LUT being baked (default on) and `cloudSkyBleedStrength > 0`. Pairs with the clouds←sky "sky-dome fill" (Sky Fill); together the two close the loop so clouds and sky share color in both directions at all times of day.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *In `evalSkyRadiance`, after the cloud-source selection and before the temporal-smoothing/composite: sample the secondary dome LUT at `cloudDomeDirToUv(viewDirYUp)` and `radiance += cloudSkyBleedStrength * bleedCloud.rgb`.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`padCloudLook2` (the freed cloudColumnShapingEnable slot) → `cloudSkyBleedStrength`. No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h` / `rtx_atmosphere.cpp`** — fork-owned changes.
+  *New `RTX_OPTION(float, cloudSkyBleedStrength, 0.3f, …)`; `getAtmosphereArgs` fills `args.cloudSkyBleedStrength`.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *"Sky Cloud Bleed" DragFloat added to the Clouds → Lighting tree after "Sky Fill", with tooltip.*
+
+- **`RtxOptions.md`** — hand-edited to add `cloudSkyBleedStrength`; regenerate in-app for canonical form.
+
+---
+
+## Workstream — Sky color correctness: physical multiscatter default (fork — 2026-06-19)
+
+The clear sky read wrong vs reality at all times of day: over-saturated/wrong blue hue, no warm horizon, and a flat zenith→horizon gradient. Two Opus research passes converged on the cause: the DEFAULT multiscatter path was the analytical inline fit (`multiScatterPhysicalStrength` defaulted to 0), which is a flat, isotropic (no phase, no transmittance), strongly blue-biased fill added uniformly in every direction — it raises the floor everywhere (flattening the gradient) and desaturates the warm horizon. The `sunsetSaturation` knob had been added purely to band-aid this (a desaturation mask is itself the tell the base output was wrong). Fix: make the physical Hillaire multiscatter LUT the default and retire the band-aid. Also fixed a real dimensional bug in the analytical path (kept for A/B): its `computeGroundReflectionAnalytical` / `computeAirMultiscatteringAnalytical` baked `sunIlluminance` in, then the caller multiplied by `sunIlluminance` again — `sunIlluminance²` (≈225× at the default 15) — whereas the LUT-baker twins correctly omit it. Separately, the user's per-game config had non-physical coefficient overrides (Mie 4× low, Rayleigh ~35% low, Mie g 0.99); the code defaults are already the canonical Bruneton/Hillaire values, so those were corrected in the game's rtx.conf (not in-repo).
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned changes.
+  *`multiScatterPhysicalStrength` default 0.0 → 1.0 (physical LUT is now the default multiscatter); `sunsetSaturation` default 1.0 → (briefly 0.5) → 1.0 (band-aid retired now that the base is correct). Descriptions rewritten.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`computeGroundReflectionAnalytical` / `computeAirMultiscatteringAnalytical` no longer bake in `sunIlluminance` (the caller applies it once, matching the physical LUT twins and `contribLut`); fixes the `sunIlluminance²` double-count on the analytical A/B path. Call-site comment added so it isn't re-introduced.*
+
+---
+
+## Workstream — Sky-reflects-clouds bleed: mip-blur fix (fork — 2026-06-19)
+
+The first cut of the sky<-clouds bleed sampled the 256x128 secondary cloud dome LUT at mip 0 and added it to the sky. Result: cloud EDGES read pixelated/faceted (a single bilinear tap of a near-binary low-res signal steps across the LUT's coarse texels at silhouettes, and the coarse dome silhouette is misaligned with the sharp screen-space cloud RT), and the sky "barely changed color" (a true gap samples ~0 cloud in its exact direction — no neighborhood spread). An Opus debug pass identified both and prescribed a pre-blurred coarse-mip source. Fix: give the secondary LUT a mip chain, regenerate it (Gaussian) each frame after the bake, and sample a coarse mip (mip 4 = 16x8) for the bleed — one tap = a wide neighborhood blur, which removes the facets AND spreads cloud color smoothly into the gaps next to clouds. Re-enabled by default (`cloudSkyBleedStrength` 0 -> 0.15).
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned changes.
+  *`m_cloudSecondaryLut` becomes an `RtxMipmap::Resource` (6 mips, 256x128 -> 8x4) via `RtxMipmap::createResource`; the bake binds `.views[0]` (mip 0) for the storage write; after the dispatch a write->read barrier + `RtxMipmap::updateMipmap(..., Gaussian)` fills mips 1..5 (ctx is the RtxContext, cast from the DxvkContext param). Added `#include "rtx_mipmap.h"`.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *The shared sky-view sampler gains `mipmapLodMax = VK_LOD_CLAMP_NONE` so explicit-LOD mip sampling works (harmless for the mip-less sky-view LUT / cloud RT).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *The bleed samples `AtmosphereCloudSecondaryLut` at `kBleedMip = 4.0` instead of 0.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`cloudDomeDirToUv` wraps u with `frac()` so dome sampling no longer depends on sampler address mode (the mip-gen uses a CLAMP sampler).*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — `cloudSkyBleedStrength` default 0.0 -> 0.15 (re-enabled).
+
+---
+
+## Workstream — Cloud direct energy conservation + multiscatter sunset gather fix (fork — 2026-06-19)
+
+Two physically-motivated lighting corrections, both addressing "lit things out-bright/mis-color the sky they composite against." WIP: shipped + deployed for in-game look validation, NOT yet eyeballed — values/approach may change after the look-check.
+
+(1) **Cloud direct dual-lobe energy conservation.** The Nubis direct term summed two full-amplitude phase lobes (`L_direct = T_primary*HG1 + M*HG2`); HG1 and HG2 each integrate to 1 over the sphere, so the in-scatter phase integrated to up to (1+M) ≈ 2 — the cloud scattered up to ~2× the energy one scattering event can redistribute, worst at the sunlit edge where both lobes fire at once, so lit clouds out-brightened the physical sky LUT. Reformulated as an energy-conserving convex blend (phase integral 1), lerped from the legacy additive sum by a strength knob for in-game A/B. Brings the sun path onto the bounded-energy footing the moon path already had.
+
+(2) **Multiscatter sunset gather fix.** The MS LUT gather in `computeMultiscattering` swept zenith 0..π at a SINGLE azimuth (`rayDir = vec3(sinZenith, cosZenith, 0)`, x-y plane), but the sun lies in the y-z plane (x=0), so every gather ray sat 90° from the sun and the integral never sampled the sun-ward sky. At sunset it gathered only the blue sky orthogonal to the sun and missed the warm reddened horizon → pale-blue MS fill (sky too blue, warm band couldn't climb, clouds inherited the cold ambient via the sky-view LUT). Fixed to a proper 2D sphere quadrature (8 zenith × 8 azimuth, same 64 samples); the sinZenith Jacobian + 2π/N normalization are kept so a uniform integrand changes <1% — corrects the integral's direction/color without shifting the tuned brightness. Knob-free. (A first attempt — a `multiScatterReddening` tint knob — was reverted as a hack once the gather bug was found.)
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *In `evalNubisCubedSample`, the direct term `T_primary*HG1 + M*HG2` becomes `A*(1 - s*w) + B*(1 - s*(1-w))` with `A = T_primary*HG1`, `B = M*HG2`, `s = cloudEnergyConserve`, `w = cloudMsLobeWeight`. s=0 reproduces the legacy additive sum byte-for-byte.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/multiscattering_lut.comp.slang`** — fork-owned change.
+  *`computeMultiscattering` gather loop: single-azimuth 64× zenith sweep → nested 8 zenith × 8 azimuth full-sphere quadrature; `rayDir` gains an azimuth term. Jacobian + 2π/N normalization unchanged (uniform-integrand magnitude preserved to <1%).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`pad_artistic1` / `pad_artistic2` (trailing slots of the `cloudShadowFactorStrength` 16-byte row) → `cloudEnergyConserve` / `cloudMsLobeWeight`. No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h` / `rtx_atmosphere.cpp`** — fork-owned changes.
+  *New `RTX_OPTION(float, cloudEnergyConserve, 1.0f, …)` and `RTX_OPTION(float, cloudMsLobeWeight, 0.5f, …)` after `cloudPhaseG2`; `getAtmosphereArgs` fills both `args.*`.*
+
+- **`RtxOptions.md`** — PENDING: `cloudEnergyConserve` / `cloudMsLobeWeight` not yet added; regenerate in-app for canonical form.
+
+---
+
+## Workstream — Sunset "neon cloud" fixes: cloud sun-transmittance Mie + dayFactor rolloff (fork — 2026-06-20)
+
+Final two corrections that fixed the right-before-sunset "neon orange clouds" (flat, too bright, too saturated; worst at sun elevation below sun.y ~0.2, recovering once the sun is well below the horizon). Both validated in-game.
+
+(1) **Mie/aerosol extinction added to the cloud + moon sun-direction transmittance.** `getAtmosphericTransmittanceForDir` (the analytical Kasten-Young model that lights clouds + moons; the sky body uses the transmittance LUT) was composing extinction as Rayleigh + ozone only — the Mie term was MISSING, while the LUT (transmittance_lut.comp.slang) correctly includes Rayleigh + Mie + ozone. At a low sun the omitted grey aerosol extinction left the cloud beam under-extinguished, so cloud direct light stayed a bright, fully-saturated red while the LUT-lit sky looked correct. Added the Mie slant optical depth (`mieScaleHeight * airMass`), mirroring the LUT's extinction composition — physically the aerosol extinction that dims a hazy setting sun, and it realigns the cloud/moon sun color with the sky.
+
+(2) **Cloud daytime-lighting rolloff widened through the sunset approach.** `buildCloudShadeContext`'s `dayFactor = smoothstep(-0.05, 0.02, sun.y)` held the cloud's sun + sky-ambient lighting at FULL brightness until the geometric horizon, then crashed to night — so through the whole low-sun band (where airTrans + the sky-view LUT are most saturated) the clouds were lit at full strength = full-bright, full-saturated, flat orange. Widened the upper bound to 0.20 (~11.5°) so the daytime cloud lighting dims PROGRESSIVELY as the sun descends (physically: the scene darkens through sunset); the reddest light is no longer the brightest. Above 0.20 daytime is unchanged (golden hour untouched); horizon dayFactor ~0.2, reaching 0 at -0.05 where the moon/night terms take over.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`getAtmosphericTransmittanceForDir`: add `- args.mieScattering * (args.mieScaleHeight * airMass)` to the transmittance exponent (Rayleigh + Mie + ozone, matching the LUT bake). Stale "mirrors lines 308-328" comment corrected.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned change.
+  *`buildCloudShadeContext`: `dayFactor` smoothstep upper bound 0.02 → 0.20 for a progressive sunset-approach dim of all sun-derived cloud lighting.*
+
+---

@@ -22,6 +22,7 @@
 #pragma once
 
 #include "rtx_resources.h"
+#include "rtx_mipmap.h"
 #include "rtx_common_object.h"
 #include "rtx_fast_noise.h"
 #include "rtx/pass/atmosphere/atmosphere_args.h"
@@ -369,7 +370,7 @@ private:
 
   // Secondary-ray cloud LUT (fork — 2026-06-10, perf). 256x128 RGBA16F,
   // baked every frame by dispatchCloudSecondaryLut.
-  Resources::Resource m_cloudSecondaryLut;
+  RtxMipmap::Resource m_cloudSecondaryLut;
 
   // Cloud placement map (fork — 2026-06-11, column-shaping rework). 512x512
   // RGBA8, baked at init + on input change by dispatchCloudPlacementMapBake.

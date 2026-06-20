@@ -215,11 +215,11 @@ struct AtmosphereArgs {
                                           // 2026-06-11, stage B). 1.0 = legacy bake. Re-bakes
                                           // the noise volume live on change. Reuses the former
                                           // padCloudLook1 slot; CB layout unchanged.
-  float padCloudLook2;                    // Free slot. Formerly cloudColumnShapingEnable (the
-                                          // per-column-vs-legacy-global-slab gate); the legacy
-                                          // global-slab path was removed 2026-06-19 and the column
-                                          // model is now unconditional, so the gate is gone. Slot
-                                          // retained as pad to keep the CB layout unchanged.
+  float cloudSkyBleedStrength;            // [0,1+] strength of cloud-color inscatter bled into the
+                                          // visible sky (sky reflects clouds; sampled from the smooth
+                                          // secondary dome LUT). 0 = off. Reuses the former
+                                          // cloudColumnShapingEnable slot (was padCloudLook2); CB
+                                          // layout unchanged.
 
   // ----- Cloud parameters (fork: procedural FBM cloud layer at fixed altitude) -----
   vec3 cloudColor;          // Cloud base color (typically white)
@@ -296,9 +296,10 @@ struct AtmosphereArgs {
   // The three fields below reuse the former pad_cloudVoxel0..2 slots so the
   // constant-buffer layout is unchanged.
   float cloudBottomDarkening;       // [0,1] strength of the sun-gated underside darkening (multi-scatter + ambient)
-  float pad_cloudVoxel1;            // Free slot. Formerly cloudBottomDarkeningHeight (the legacy
-                                    // constant-gradient reach); removed 2026-06-19 with the legacy
-                                    // shaping path. Pad retained to keep the CB layout unchanged.
+  float cloudSkyAmbientFill;        // [0,1] strength of the sky-dome underside fill (clouds reflect the
+                                    // open sky from below/around, bypassing bottom-darkening; bright by
+                                    // day, fades at sunset). Reuses the former cloudBottomDarkeningHeight
+                                    // slot (was pad_cloudVoxel1); CB layout unchanged.
   float cloudDetailStrength;        // [0,1] additive edge detail strength (0 = off)
 
   // ----- Nubis Cubed 2023 lighting params (fork — 2026-05-12, C4) -----
@@ -487,6 +488,12 @@ struct AtmosphereArgs {
   // Mirrors RtxOptions::cloudShadowFactorStrength(). Reuses the former
   // pad_artistic0 slot; CB layout unchanged.
   float cloudShadowFactorStrength;
-  float pad_artistic1;
-  float pad_artistic2;
+  // ----- Cloud direct-lighting energy conservation (fork — 2026-06-19) -----
+  // Reformulates the direct dual-lobe from the legacy additive sum
+  // (T_primary*HG1 + M*HG2, phase integral up to ~2) into an energy-conserving
+  // convex blend (phase integral 1) — the fix for lit clouds out-brightening
+  // the physical sky LUT. Consumed by evalNubisCubedSample. Both reuse the
+  // former pad_artistic1/2 slots; CB layout unchanged.
+  float cloudEnergyConserve;  // [0,1] 0 = legacy additive look (A/B), 1 = energy-conserving convex blend
+  float cloudMsLobeWeight;    // [0,1] convex weight: forward single-scatter lobe (1-w) vs multi-scatter body fill (w)
 };

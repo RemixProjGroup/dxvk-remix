@@ -94,6 +94,9 @@ struct CloudShadeContext {
   vec3  skyRadianceWarm;     // Sun-direction sky LUT sample (warm at sunset).
   vec3  skyRadianceCool;     // Anti-sun-horizon sky LUT sample (cool at sunset).
                              // Per-sample blend happens in evalNubisCubedSample.
+  vec3  skyRadianceZenith;   // Overhead sky LUT sample — the sky-dome underside
+                             // fill (bright daytime, dim at sunset). Used by
+                             // evalNubisCubedSample's dome-fill term.
   vec3  combinedMoonDir;
   vec3  combinedMoonDiffuseCoeff;
   vec3  combinedMoonPhaseAmt;
@@ -132,13 +135,23 @@ CloudShadeContext buildCloudShadeContext(AtmosphereArgs args) {
   // glowing orange at -20deg elevation. The original #33 fix gated only the
   // direct term, which left that orange ambient as the sole night cloud light.
   //
-  // dayFactor is the exact complement of the moon path's nightFactor =
-  // smoothstep(0.02, -0.05, sun.y) below, so the daytime sun + sky-ambient fade
-  // out precisely as the moon + airglow terms fade in across twilight, with no
-  // popping. Above the horizon (sun.y > 0.02) dayFactor == 1, so daytime is
-  // bit-identical; below ~-3deg it is 0, so deep-night clouds are lit purely by
-  // the moon / night-sky / star terms.
-  float dayFactor = smoothstep(-0.05f, 0.02f, sunDirYUp.y);
+  // Sunset-approach rolloff (fork — 2026-06-20). The upper bound was 0.02, which
+  // held the cloud's daytime lighting at FULL brightness until the geometric
+  // horizon and then crashed to night across [-0.05, 0.02]. That kept the sun +
+  // sky-ambient terms at full strength through the entire low-sun band where
+  // airTrans and the sky-view LUT are at their most saturated orange, so right
+  // before sunset the clouds read as full-brightness, fully-saturated, flat
+  // orange ("neon orange clouds" — worst below sun.y ~0.2, recovering once the
+  // sun is well below the horizon). Widening the upper bound to 0.20 (~11.5deg)
+  // dims the daytime cloud lighting PROGRESSIVELY as the sun descends through
+  // that band (physically: the scene darkens through sunset), so the reddest
+  // light is no longer the brightest. Above 0.20 daytime is unchanged (the good
+  // "golden hour" window is untouched); at the horizon dayFactor ~= 0.2,
+  // reaching 0 at -0.05 where the moon/night terms (nightFactor =
+  // smoothstep(0.02, -0.05, sun.y)) take over. dayFactor and nightFactor are no
+  // longer exact complements in [0.02, 0.20]; the small overlap is a gentle
+  // pre-sunset dim, not a pop.
+  float dayFactor = smoothstep(-0.05f, 0.20f, sunDirYUp.y);
   vec3 sunRadiance = args.sunIlluminance * airTrans * dayFactor;
 
   vec3 sunDirForAmbient = sunDirYUp;
@@ -161,6 +174,16 @@ CloudShadeContext buildCloudShadeContext(AtmosphereArgs args) {
   // Same dayFactor gate as the warm sample (issue #33): fades the daytime
   // sky-ambient out at night so it can't keep tinting clouds below the horizon.
   vec3 skyRadianceCool = sampleSkyAmbientForVolume(antiSunDir, args,
+                                                    AtmosphereSkyViewLut,
+                                                    AtmosphereCloudSkyTransmittanceLut,
+                                                    AtmosphereSkyViewSampler) * dayFactor;
+
+  // Overhead (zenith) sky sample for the sky-dome underside fill (fork —
+  // 2026-06-19, clouds-reflect-sky). This is the bright daytime sky that lights
+  // cloud bottoms from below/around — the term the warm/cool sun-direction
+  // samples above deliberately omit. Dim at sunset, so it self-fades and lets
+  // the warm samples carry the look. Same dayFactor gate as the others.
+  vec3 skyRadianceZenith = sampleSkyAmbientForVolume(vec3(0.0f, 1.0f, 0.0f), args,
                                                     AtmosphereSkyViewLut,
                                                     AtmosphereCloudSkyTransmittanceLut,
                                                     AtmosphereSkyViewSampler) * dayFactor;
@@ -305,6 +328,7 @@ CloudShadeContext buildCloudShadeContext(AtmosphereArgs args) {
   ctx.sunRadiance              = sunRadiance;
   ctx.skyRadianceWarm          = skyRadianceWarm;
   ctx.skyRadianceCool          = skyRadianceCool;
+  ctx.skyRadianceZenith        = skyRadianceZenith;
   ctx.combinedMoonDir          = combinedMoonDir;
   ctx.combinedMoonDiffuseCoeff = combinedMoonDiffuseCoeff;
   ctx.combinedMoonPhaseAmt     = combinedMoonPhaseAmt;
@@ -481,7 +505,7 @@ void marchCloudSlab(vec3   viewDirYUp,
     NubisCubedLighting lighting = evalNubisCubedSample(
         samplePos, shapeHf, density, columnSpan,
         viewDirYUp, ctx.sunDirYUp, ctx.sunRadiance,
-        ctx.skyRadianceWarm, ctx.skyRadianceCool,
+        ctx.skyRadianceWarm, ctx.skyRadianceCool, ctx.skyRadianceZenith,
         args, /*isZUp=*/false);
 
     // ===== Per-sample moon direct light =====

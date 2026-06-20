@@ -296,6 +296,10 @@ namespace fork_hooks {
       samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
       samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
       samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+      // Allow explicit-LOD sampling of mips: the secondary cloud LUT (shared via
+      // this sampler) is mipmapped and the sky<-clouds bleed samples a coarse
+      // mip. Harmless for the mip-less sky-view LUT / cloud RT (only mip 0 used).
+      samplerInfo.mipmapLodMax = VK_LOD_CLAMP_NONE;
       Rc<DxvkSampler> skyViewSampler = ctx.m_device->createSampler(samplerInfo);
       ctx.bindResourceSampler(BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER, skyViewSampler);
     }
@@ -1205,6 +1209,26 @@ namespace fork_hooks {
               "overhead and fades out toward the horizon, where the low sun "
               "lights the bases directly (sunset glow). 0 = uniformly lit "
               "(paper baseline).");
+          RemixGui::DragFloat("Sky Fill", &RtxOptions::cloudSkyAmbientFillObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How strongly cloud undersides pick up the open sky around them. "
+              "Adds the overhead sky color as fill light that bypasses Bottom "
+              "Darkening (skylight reaches the base from below/around, not "
+              "through the cloud), so a bright daytime sky lifts gloomy "
+              "undersides and tints them with the real sky color. Fades on its "
+              "own at sunset. Higher = brighter, more sky-colored bases; 0 = "
+              "undersides ignore the open sky.");
+          RemixGui::DragFloat("Sky Cloud Bleed", &RtxOptions::cloudSkyBleedStrengthObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How strongly the clouds tint the sky around them (the reverse of "
+              "Sky Fill). The sky picks up cloud-colored light next to clouds, "
+              "so an orange sunset deck warms the blue gaps and a grey overcast "
+              "greys the surrounding sky, instead of clouds and sky looking like "
+              "two separate layers. Fades to nothing in open sky far from any "
+              "cloud. Higher = more cloud color in the sky; 0 = off. Needs the "
+              "secondary cloud LUT (Performance).");
           ImGui::TreePop();
         }
 

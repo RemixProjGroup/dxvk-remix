@@ -405,6 +405,10 @@ vec3 evalAtmosphereRadiance(
 
     vec3 singleScatter = args.sunIlluminance * sunTransmittance *
                          (scatteringR * phaseR + scatteringM * phaseM);
+    // Both multiscatter factors are dimensionless transfers (NO sunIlluminance
+    // baked in — fixed 2026-06-19); the single sunIlluminance is applied here
+    // exactly once, identically for both paths. Do NOT add sunIlluminance back
+    // into getAnalyticalMultiscattering / computeMultiscattering.
     vec3 contribAnalytical = args.sunIlluminance * msAnalytical * scattering;
     vec3 contribLut        = args.sunIlluminance * scattering * msLut;
     vec3 multiScatterContrib = lerp(contribAnalytical, contribLut,
@@ -551,9 +555,11 @@ vec2 cloudDomeDirToUv(vec3 dirYUp) {
   float elevation = asin(clamp(dirYUp.y, 0.0f, 1.0f));
   float v = sqrt(elevation / (0.5f * kPi));
   // Same azimuth convention as cloudDomeUvToDir: az 0 = +Z, increasing
-  // toward +X. u may land in [-0.5, 0.5); the sky-view sampler's REPEAT-U
-  // address mode wraps it across the azimuth seam.
-  float u = atan2(dirYUp.x, dirYUp.z) / (2.0f * kPi);
+  // toward +X. atan2 gives u in [-0.5, 0.5); wrap to [0, 1) here with frac so
+  // sampling correctness no longer depends on the sampler's address mode
+  // (robustness — fork 2026-06-19; the shared sky-view sampler is REPEAT-U, but
+  // the mip-gen for the bleed uses a CLAMP sampler, so don't rely on wrap).
+  float u = frac(atan2(dirYUp.x, dirYUp.z) / (2.0f * kPi));
   return vec2(u, v);
 }
 
@@ -754,8 +760,10 @@ vec3 getAtmosphericTransmittanceForDir(vec3 dirYUp, AtmosphereArgs args) {
   float zenithCosAngle = dirYUp.y;
 
   // Kasten-Young air mass above horizon, exponential continuation below.
-  // Mirrors lines 308-328 of evalAtmosphereRadiance verbatim — single
-  // source of truth for sun-direction transmittance physics.
+  // This analytical Kasten-Young model is the sun-direction transmittance used
+  // by the CLOUD + MOON paths; the sky body uses the per-sample transmittance
+  // LUT (its old inline analytical twin was removed when the sky moved to the
+  // LUT in 3e37062b, so this is now the sole copy).
   float airMass;
   if (zenithCosAngle > 0.01f) {
     float zenithRad = acos(clamp(zenithCosAngle, -1.0f, 1.0f));
@@ -768,10 +776,22 @@ vec3 getAtmosphericTransmittanceForDir(vec3 dirYUp, AtmosphereArgs args) {
   }
   airMass = min(airMass, 200.0f);
 
-  // Optical depth for ground-level samples: H * density(0) * airMass = H * airMass.
-  float opticalDepthToSun = H * airMass;
+  // Slant optical depth per species = scaleHeight * density(0) * airMass
+  // (density(0) = 1 at ground), composing extinction as Rayleigh + Mie + ozone —
+  // identical to the per-sample transmittance LUT bake (transmittance_lut.comp.slang).
+  // The Mie/aerosol term was MISSING here (fork — 2026-06-20 fix): this analytical
+  // path had only Rayleigh + ozone while the LUT (sky) includes Mie, so at a low
+  // sun the omitted grey aerosol extinction left the beam under-extinguished and
+  // cloud direct light stayed a bright, fully-saturated red right before sunset
+  // (the "neon orange clouds" window) even though the LUT-lit sky looked correct.
+  // Mie extinction is grey and grows with air mass — it dims the horizon beam
+  // (physically: aerosol is why you can look at a hazy setting sun) and realigns
+  // the cloud/moon sun color with the LUT-lit sky.
+  float rayleighOpticalDepthToSun = H * airMass;
+  float mieOpticalDepthToSun      = args.mieScaleHeight * airMass;
   float ozonePathLength = ozoneDensity(args.ozoneLayerAltitude, args) * airMass;
-  vec3 transmittance = exp(-args.rayleighScattering * opticalDepthToSun
+  vec3 transmittance = exp(-args.rayleighScattering * rayleighOpticalDepthToSun
+                            - args.mieScattering * mieOpticalDepthToSun
                             - args.ozoneAbsorption * ozonePathLength * 0.15f);
 
   // Twilight fade — sky/light should be effectively black by ~-15° below
@@ -1359,10 +1379,18 @@ vec3 computeGroundReflectionAnalytical(float altitude, float sunZenithCosAngle, 
   float ratio = args.planetRadius / d;
   float omega = 2.0f * kPi * (1.0f - sqrt(max(0.0f, 1.0f - ratio * ratio)));
 
-  // Combine: Incoming Sun * Albedo * Phase * SolidAngle * PathTransmittance
+  // Combine: Albedo * Phase * SolidAngle * PathTransmittance
   float cosTheta = max(sunZenithCosAngle, 0.0f); // Sun must be above horizon for ground bounce
-  
-  return args.sunIlluminance * T_sun_to_ground * (GROUND_ALBEDO / kPi) * omega * PHASE_ISOTROPIC * T_ground_to_sample * cosTheta;
+
+  // NOTE (fork — 2026-06-19): sunIlluminance is deliberately NOT applied here.
+  // This returns a dimensionless multiscatter transfer factor; the single
+  // sunIlluminance is applied by the caller (evalAtmosphereRadiance:
+  // contribAnalytical = sunIlluminance * scattering * msAnalytical), matching
+  // the physical LUT twin computeGroundReflection(). Baking sunIlluminance in
+  // here AND at the caller double-counted it (sunIlluminance² ≈ 225× at the
+  // default 15), flooding the sky with an over-strong multiscatter term that
+  // washed out the horizon gradient, over-saturated the blue, and killed warmth.
+  return T_sun_to_ground * (GROUND_ALBEDO / kPi) * omega * PHASE_ISOTROPIC * T_ground_to_sample * cosTheta;
 }
 
 // 2. Accurate Analytical Air Multiscattering (Replaces static curve fit)
@@ -1385,9 +1413,12 @@ vec3 computeAirMultiscatteringAnalytical(float altitude, float sunZenithCosAngle
   
   // D. Calibration Scalar
   // Derived to match the Monte Carlo reference magnitude
-  const float MS_STRENGTH = 0.5f; 
-  
-  return args.sunIlluminance * totalScattering * densityFade * sunFactor * MS_STRENGTH;
+  const float MS_STRENGTH = 0.5f;
+
+  // NOTE (fork — 2026-06-19): sunIlluminance is deliberately NOT applied here —
+  // the caller applies the single sunIlluminance once (see the matching note in
+  // computeGroundReflectionAnalytical and the LUT twin computeAnalyticalMultiscattering).
+  return totalScattering * densityFade * sunFactor * MS_STRENGTH;
 }
 
 // Combined Analytical Multiscattering (Use this to replace LUT sampling)
@@ -2795,6 +2826,7 @@ NubisCubedLighting evalNubisCubedSample(
     float columnSpan,
     vec3 viewDir, vec3 sunDir,
     vec3 sunRadiance, vec3 skyRadianceWarm, vec3 skyRadianceCool,
+    vec3 skyRadianceZenith,
     AtmosphereArgs args, bool isZUp) {
 
   // === Input samples ===
@@ -2863,7 +2895,34 @@ NubisCubedLighting evalNubisCubedSample(
   float M = dim_profile * exp(-sigma_ms * D_sun) * verticalLight;
   float HG1 = hgPhaseNubis(cosTheta, args.cloudPhaseG1);
   float HG2 = hgPhaseNubis(cosTheta, args.cloudPhaseG2);
-  float L_direct = T_primary * HG1 + M * HG2;
+
+  // Energy-conserving dual-lobe blend (fork — 2026-06-19, cloud energy
+  // conservation). The legacy direct term was the raw sum
+  //   L = T_primary*HG1 + M*HG2
+  // and HG1, HG2 each integrate to 1 over the sphere, so the in-scatter source
+  // integrated a phase of up to (1 + M) ~ 2 — the cloud scattered up to ~2x the
+  // energy one scattering event can redistribute. Worst exactly at the sunlit
+  // edge, where T_primary -> 1 AND M is nonzero, so the silver lining fired both
+  // lobes at full amplitude and out-brightened the physical sky LUT it
+  // composites against. That is the long-standing "clouds brighter than the sky
+  // / not energy conserving" read — and the reason the ambient sliders (which
+  // touch only the SEPARATE ambient term) never moved it.
+  //
+  // Reformulate as a CONVEX blend of the single-scatter forward lobe A (silver
+  // lining) and the multi-scatter body fill B: (1-w)*A + w*B has a phase that
+  // integrates to exactly 1. T_primary and M stay <= 1, so they only ever
+  // REMOVE energy from a now-bounded budget. cloudMsLobeWeight = w sets the
+  // forward/body balance; cloudEnergyConserve = s lerps from the legacy additive
+  // sum (s=0, byte-identical old look for an in-game A/B) to the conserving
+  // blend (s=1). The moon path already sums its octaves with bounded geometric
+  // energy decay (cloud_march_common.slangh) — this brings the sun path onto the
+  // same footing.
+  float A = T_primary * HG1;
+  float B = M * HG2;
+  float msLobeS = saturate(args.cloudEnergyConserve);
+  float msLobeW = saturate(args.cloudMsLobeWeight);
+  float L_direct = A * (1.0f - msLobeS * msLobeW)
+                 + B * (1.0f - msLobeS * (1.0f - msLobeW));
 
   // === Ambient scattering (paper p. 142) ===
   // Per-sample warm/cool ambient blend (fork — 2026-05-21). Warm color is
@@ -2889,11 +2948,27 @@ NubisCubedLighting evalNubisCubedSample(
   // occlusion. (The legacy global-slab path that multiplied in exp(-D_ambient)
   // was removed 2026-06-19.)
   float ambient_shape = pow(1.0f - dim_profile, 0.5f);
-  float L_ambient = ambient_shape * verticalLight;
+
+  // Top-down ambient: skylight that filtered DOWN through the overlying cloud,
+  // colored by the warm/cool sun-direction blend and attenuated by
+  // verticalLight (the bottom-darkening light field). This is the legacy term.
+  vec3 topAmbient = ambient_shape * verticalLight * skyRadiance;
+
+  // Sky-dome fill (fork — 2026-06-19, clouds-reflect-sky coupling). The
+  // underside is ALSO lit by the open sky around and below the cloud, which the
+  // water OVERHEAD does not block — so this term deliberately bypasses
+  // verticalLight (it would otherwise crush exactly the fill that keeps real
+  // midday undersides from going gloomy-dark under a bright sky). It reads the
+  // zenith sky color, so a bright daytime dome lifts the undersides AND tints
+  // them with the actual sky; at sunset the zenith sample is dim, so this
+  // naturally fades and the warm top-down term carries the look. The sample is
+  // already cloud-occluded + day-gated upstream (sampleSkyAmbientForVolume ×
+  // dayFactor). cloudSkyAmbientFill scales it; 0 = legacy (no dome fill).
+  vec3 domeFill = ambient_shape * args.cloudSkyAmbientFill * skyRadianceZenith;
 
   NubisCubedLighting result;
-  result.direct  = L_direct  * sunRadiance;
-  result.ambient = L_ambient * skyRadiance;
+  result.direct  = L_direct * sunRadiance;
+  result.ambient = topAmbient + domeFill;
   return result;
 }
 

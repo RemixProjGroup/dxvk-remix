@@ -1236,9 +1236,9 @@ namespace dxvk {
     RTX_OPTION("rtx.atmosphere", float, ozoneLayerAltitude, 25.0f, "Altitude of ozone layer peak in kilometers.");
     RTX_OPTION("rtx.atmosphere", float, ozoneLayerWidth, 15.0f, "Width of the ozone layer in kilometers.");
     RTX_OPTION("rtx.atmosphere", Vector3, sunIlluminance, Vector3(15.0f, 15.0f, 15.0f), "Base Sun illuminance color/intensity.");
-    RTX_OPTION("rtx.atmosphere", float, multiScatterPhysicalStrength, 0.0f, "Blend between artistic (0) and physical (1) multiscattering. 0 = analytical inline fit that preserves preset color directly. 1 = LUT-based hemisphere integration (Hillaire-physical) that wavelength-amplifies each preset's Rayleigh bias. Intermediate values blend. Per-preset overrides recommended.");
+    RTX_OPTION("rtx.atmosphere", float, multiScatterPhysicalStrength, 1.0f, "Blend between the analytical multiscatter fit (0) and the physical Hillaire multiscattering LUT (1). Default 1.0 = physical: the LUT is the correct directional, transmittance-aware hemisphere integration and gives a believable zenith->horizon gradient with warm horizon tones. 0 = the legacy analytical inline fit, which is a flat isotropic blue-biased fill that flattens the gradient and desaturates the warm horizon (kept only for A/B). Intermediate values blend.");
     RTX_OPTION("rtx.atmosphere", float, multiScatterStrength, 1.0f, "Artistic global scale on the atmosphere's multiscattering 'fill' term. The physical two-term model adds a broadband (pale-blue) multiscatter term that desaturates warm sunset color. Lower this (e.g. 0.3-0.6) to let warm single-scatter dominate for a punchier sunset; 1.0 = physical. Feeds the sky-view LUT, so clouds inherit it.");
-    RTX_OPTION("rtx.atmosphere", float, sunsetSaturation, 1.0f, "Artistic saturation boost applied to sky radiance, ramped in as the sun approaches the horizon (midday sky is untouched). >1 amplifies the warm horizon hues the physical model renders accurately but undersaturated; 1.0 = no change. Feeds the sky-view LUT, so clouds inherit the warmer ambient.");
+    RTX_OPTION("rtx.atmosphere", float, sunsetSaturation, 1.0f, "Artistic saturation adjustment applied to sky radiance, ramped in as the sun approaches the horizon (midday sky is untouched). 1.0 = no change (default — the physical multiscatter path now produces correct horizon color at the source, so the former 0.5 desaturation band-aid is retired); <1 desaturates the near-horizon sky toward neutral; >1 amplifies the warm horizon hues. Feeds the sky-view LUT, so clouds inherit it.");
 
     // ----- Night-sky shading (fork) -----
     // Stars, Milky Way, shooting stars, airglow. Active when skyMode == Numos.
@@ -1713,6 +1713,25 @@ namespace dxvk {
                "with the sun overhead and fades out toward the horizon, where "
                "the low sun rakes under the deck and lights the bases (sunset "
                "glow). 0 = off (uniformly lit undersides).");
+    RTX_OPTION("rtx.atmosphere", float, cloudSkyAmbientFill, 0.5f,
+               "How strongly cloud undersides pick up the open sky around them "
+               "[0..1]. Adds a sky-dome fill - the overhead sky color, "
+               "bypassing the bottom-darkening since that skylight reaches the "
+               "base from below/around rather than through the cloud. Lifts "
+               "gloomy undersides under a bright daytime sky and tints them with "
+               "the actual sky color; naturally fades at sunset (the overhead "
+               "sky is dim then). Higher = brighter, more sky-colored bases; "
+               "0 = off (legacy, undersides ignore the open sky). Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, cloudSkyBleedStrength, 0.15f,
+               "How strongly the clouds tint the surrounding sky [0..1+]. The "
+               "sky picks up cloud-colored inscatter sampled from the (smooth) "
+               "cloud field, so an orange sunset deck warms the blue gaps "
+               "between clouds and a grey overcast greys the sky around it, "
+               "instead of clouds and sky reading as two separate layers. "
+               "Strongest next to clouds, fading to nothing in open sky far "
+               "from any. Higher = more cloud color in the sky; 0 = off "
+               "(legacy, sky ignores clouds). Needs the secondary cloud LUT "
+               "(on by default). Applies live.");
 
     // Worley carve (Schneider15 — slide 17 of RDR2 SIGGRAPH 2019).
     // These knobs control how chunky / cell-shaped the prebaked cloud noise is.
@@ -1762,6 +1781,22 @@ namespace dxvk {
                "Primary HG asymmetry; strong forward-scatter, drives silver lining at backlit edges.");
     RTX_OPTION("rtx.atmosphere", float, cloudPhaseG2, 0.3f,
                "Secondary HG asymmetry; mild forward-scatter, drives broader in-scatter envelope.");
+    // Energy conservation of the direct dual-lobe (fork — 2026-06-19). The legacy
+    // direct term summed two full-amplitude phase lobes (T_primary*HG1 + M*HG2),
+    // whose combined phase integrated to up to ~2 over the sphere — the cloud
+    // scattered up to ~2x the energy a single event can redistribute, brightest
+    // exactly at the sunlit edge, which is why lit clouds out-brightened the
+    // physical sky LUT regardless of the ambient sliders. cloudEnergyConserve
+    // lerps that additive sum toward a convex (1-w)*HG1 + w*HG2 blend whose phase
+    // integrates to exactly 1; cloudMsLobeWeight is w.
+    RTX_OPTION("rtx.atmosphere", float, cloudEnergyConserve, 1.0f,
+               "[0,1] Energy conservation of the cloud direct lighting. 0 = legacy additive "
+               "dual-lobe (phase integral up to 2, brighter-than-sky look). 1 = convex blend "
+               "(phase integral 1, energy-conserving). Set 0 to A/B against the old look.");
+    RTX_OPTION("rtx.atmosphere", float, cloudMsLobeWeight, 0.5f,
+               "[0,1] Convex weight between the forward single-scatter lobe (silver lining, "
+               "weight 1-w) and the broader multi-scatter body fill (weight w) when "
+               "cloudEnergyConserve > 0. Higher = flatter/softer body, dimmer silver lining.");
     RTX_OPTION("rtx.atmosphere", float, cloudMsSunDotMax, 0.9f,
                "Nubis Cubed sigma_ms remap upper bound on sun_dot. Lower = wider 'shallow extinction' zone.");
     RTX_OPTION("rtx.atmosphere", float, cloudMsSigmaShallow, 0.25f,

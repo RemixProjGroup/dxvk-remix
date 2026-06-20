@@ -944,6 +944,35 @@ vec3 evalSkyRadiance(
     cloudLayer = vec4(0.0f, 0.0f, 0.0f, 0.0f);
   }
 
+  // Sky <- clouds bleed (fork — 2026-06-19, sky-reflects-clouds coupling).
+  // The visible sky and the cloud layer are otherwise composited independently,
+  // so a colored deck (orange sunset cumulus, grey overcast) never tints the
+  // clear sky around it — leaving vivid blue gaps between warm clouds. Here the
+  // sky picks up a fraction of the LOCAL cloud radiance as colored inscatter.
+  // Source is the secondary cloud dome LUT: it is low-res (256x128) and so
+  // inherently smooth, giving a neighborhood-averaged cloud color per view
+  // direction — bright/colored next to a cloud, ~0 in open sky far from any —
+  // exactly the spatial falloff a bleed wants, with no extra blur pass. The
+  // bleed is added to `radiance` BEFORE the cloud composite below, so the
+  // composite's own (1 - cloudAlpha) factor keeps it in the visible-sky
+  // fraction and out of opaque cloud cores. Gated on the secondary LUT being
+  // baked (it is, by default); 0 strength = no coupling (legacy).
+  if (args.cloudSkyBleedStrength > 0.0f && args.cloudSecondaryLutEnable != 0u) {
+    vec2 bleedUv = cloudDomeDirToUv(viewDirYUp);
+    // Sample a COARSE mip of the secondary cloud dome LUT (fork — 2026-06-19):
+    // a wide neighborhood blur in one tap. Sampling mip 0 here showed the LUT's
+    // coarse 256x128 texels as faceted cloud edges, and gave ~0 in true gaps
+    // (no spread). The blurred mip both removes the facets and spreads cloud
+    // color smoothly into the open sky next to clouds. Mip 4 = 16x8 (~16x blur).
+    // Requires the LUT's mip chain (RtxAtmosphere::dispatchCloudSecondaryLut)
+    // and a sampler with mipmapLodMax > 0 (the shared sky-view sampler sets it).
+    const float kBleedMip = 4.0f;
+    vec4 bleedCloud = AtmosphereCloudSecondaryLut.SampleLevel(AtmosphereSkyViewSampler, bleedUv, kBleedMip);
+    // bleedCloud.rgb is premultiplied (now wide-blurred) cloud radiance; the blur
+    // makes it non-zero in gaps near clouds, so the sky picks up their color.
+    radiance += args.cloudSkyBleedStrength * bleedCloud.rgb;
+  }
+
   // Temporal cloud smoothing (fork). Per-frame FAST-noise jitter on the cloud
   // ray-march (commits 148e3fa5 / d327f3d8) creates brightness variance that
   // DLSS sees as noise and averages out, producing visible flatness. We blend
