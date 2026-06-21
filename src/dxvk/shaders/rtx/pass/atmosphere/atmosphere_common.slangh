@@ -884,62 +884,6 @@ vec3 sampleSkyViewLutForRay(vec3 dirYUp,
   return skyViewLut.SampleLevel(lutSampler, uv, 0).rgb;
 }
 
-// Structure for direct sun lighting sample (NEE)
-struct AtmosphereSunSample {
-  vec3 direction;       // Direction TO the sun (normalized), in world space
-  vec3 radiance;        // Sun radiance reaching the surface (with transmittance)
-  float solidAnglePdf;  // Solid angle PDF (effectively 1.0 for directional light)
-  bool valid;           // True if sun is above horizon
-  float coneAngle;      // Half-angle of the sun cone for soft shadows (radians)
-  int numSamples;       // Number of shadow samples to take for soft shadows
-};
-
-// Get the sun cone angle and sample count based on Mie anisotropy
-// High anisotropy = sharp sun = small cone, few samples
-// Low anisotropy = diffuse sun = large cone, many samples
-void getSunSoftShadowParams(float mieAnisotropy, out float coneAngle, out int numSamples) {
-  // Work across the full [0.0, 1.0] range
-  float normalizedG = saturate(mieAnisotropy);
-  
-  // Map anisotropy [0, 1] to cone angle [0.6, 0.008] radians (~34° to ~0.46°)
-  // Avoid exactly hitting the early-exit threshold at g=1.0
-  // g = 1.0  -> 0.008 rad (~0.46°) = very sharp sun, hard shadows
-  // g = 0.8  -> 0.03 rad (~1.7°) = clear sun, slightly soft
-  // g = 0.5  -> 0.15 rad (~8.5°) = diffuse sun, soft shadows
-  // g = 0.0  -> 0.6 rad (~34°) = extremely diffuse sun, very soft shadows
-  coneAngle = mix(0.6f, 0.008f, normalizedG * normalizedG);  // Quadratic falloff for smoother transition
-  
-  // Map to sample count: more samples for softer shadows
-  // g = 1.0  -> 1 sample (hard shadows)
-  // g = 0.8  -> 2 samples (slightly soft)
-  // g = 0.5  -> 4 samples (medium soft)
-  // g = 0.0  -> 12 samples (very soft, diffuse)
-  numSamples = int(mix(12.0f, 1.0f, normalizedG * normalizedG));
-  numSamples = max(1, numSamples);
-}
-
-// Generate a direction jittered within a cone around the main direction
-// Uses a simple but effective disk sampling approach
-vec3 getJitteredSunDirection(vec3 sunDir, float coneAngle, float u1, float u2) {
-  if (coneAngle < 0.005f) {
-    return sunDir;  // No jitter for very small cones
-  }
-  
-  // Create orthonormal basis around sun direction
-  vec3 up = abs(sunDir.y) < 0.999f ? vec3(0.0f, 1.0f, 0.0f) : vec3(1.0f, 0.0f, 0.0f);
-  vec3 tangent = normalize(cross(up, sunDir));
-  vec3 bitangent = cross(sunDir, tangent);
-  
-  // Sample a point on a disk and project to cone
-  float r = sqrt(u1) * tan(coneAngle);  // Radius on disk
-  float phi = u2 * 2.0f * kPi;          // Angle around disk
-  
-  // Offset direction
-  vec3 offset = tangent * (r * cos(phi)) + bitangent * (r * sin(phi));
-  
-  return normalize(sunDir + offset);
-}
-
 // Structure for volumetric sun light sample
 struct AtmosphereVolumeSunSample {
   vec3 direction;       // Direction TO the sun (normalized), in world space

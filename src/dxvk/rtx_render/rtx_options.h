@@ -1489,19 +1489,11 @@ namespace dxvk {
                "How strongly overcast clouds dim ground and atmosphere lighting [0..1]. "
                "1.0 = full physical voxel-grid shadow contribution from cloudVoxelShadowsEnable; "
                "0 = shadows fully muted (voxel grid still runs but its output is mixed away).");
-    RTX_OPTION("rtx.atmosphere", float, cloudAnisotropy, 0.6f, "Henyey-Greenstein g for cloud forward-scatter (silver lining).");
-
     // Cloud volumetric / appearance enhancements
     RTX_OPTION("rtx.atmosphere", uint32_t, cloudViewSamples, 32,
                "Number of ray-march steps through the cloud slab. Higher = better quality, more cost. Range 1..32.");
     RTX_OPTION("rtx.atmosphere", float, cloudThickness, 3.05f,
                "Vertical depth of the cloud slab in km.");
-    RTX_OPTION("rtx.atmosphere", Vector3, cloudShadowTint, Vector3(0.55f, 0.65f, 0.85f),
-               "Sky-blue bounce color applied on the shadow side of clouds.");
-    RTX_OPTION("rtx.atmosphere", float, cloudShadowTintStrength, 1.0f,
-               "How strongly the shadow tint contributes [0..1].");
-    RTX_OPTION("rtx.atmosphere", float, cloudSunsetWarmth, 0.95f,
-               "Strength of low-sun warm tint on sunward side. 0 = disabled.");
     RTX_OPTION("rtx.atmosphere", float, cloudCurvature, 0.38f,
                "Sky-dome curvature for the cloud layer: 0 = real-planet radius "
                "(nearly flat ceiling), 1 = tight dome (clouds visibly curve down "
@@ -1546,11 +1538,6 @@ namespace dxvk {
     // with a sum of N octaves (each with reduced energy, extinction and phase
     // asymmetry) plus an isotropic deep-scatter floor — collectively the
     // "milky-bright bottom" look real cumulus has when viewed from below.
-    RTX_OPTION("rtx.atmosphere", float, cloudMultiScatterStrength, 1.0f,
-               "Master multiplier on the Wrenninge multi-scatter sun-light response. "
-               "1.0 = physical baseline (Hillaire/Frostbite coefficients); raise to "
-               "brighten cumulus tops + bottoms together, lower for muted look. "
-               "Operates on the sun path only; moon path is unaffected.");
     RTX_OPTION("rtx.atmosphere", uint32_t, cloudMultiScatterOctaves, 3,
                "Number of Wrenninge multi-scatter octaves summed per cloud sample. "
                "3 is the standard cost/quality tradeoff. 1 disables multi-scatter "

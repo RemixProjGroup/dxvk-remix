@@ -235,16 +235,17 @@ struct AtmosphereArgs {
   float cloudShadowStrength;// How strongly clouds dim ground/atmosphere lighting [0..1]
 
   vec2 cloudWindOffset;     // Accumulated wind-driven UV offset (km)
-  float cloudAnisotropy;    // HG g for cloud sun forward-scatter (silver lining)
+  float pad_cloudAnisotropy;// was cloudAnisotropy (removed 2026-06-21 — no shader consumer; lighting
+                            // uses cloudPhaseG1/G2). Reclaimable pad; CB layout unchanged.
   float cloudCurvature;     // 0 = Earth-scale dome, 1 = tight dome
 
   // ----- Cloud volumetric / appearance enhancements (fork) -----
-  vec3 cloudShadowTint;        // RGB sky-bounce tint on shadow side
-  float cloudShadowTintStrength;
+  vec3 pad_cloudShadowTint;        // was cloudShadowTint (removed 2026-06-21 — no shader consumer)
+  float pad_cloudShadowTintStrength; // was cloudShadowTintStrength (removed 2026-06-21). Reclaimable pads.
 
   float cloudThickness;        // Cloud-slab vertical depth, km
   float cloudLayer2TypeSpread; // [0,1] cloud-type variation for layer 2 (independent of layer 1)
-  float cloudSunsetWarmth;     // Strength of low-sun warm tint
+  float pad_cloudSunsetWarmth; // was cloudSunsetWarmth (removed 2026-06-21 — no shader consumer)
   uint cloudViewSamples;       // Ray-march steps through cloud slab
 
   // ----- Spatial variation fields (Nubis-style weather) -----
@@ -258,7 +259,7 @@ struct AtmosphereArgs {
   float cloudAnvilBias;            // [0,1] cumulus top inflation strength (Nubis anvil pow trick).
   float cloudMsScale;              // Multi-scatter sigma_ms master multiplier (1.0 = paper baseline)
 
-  float cloudMultiScatterStrength; // Wrenninge multi-scatter master multiplier (1.0 = physical baseline).
+  float pad_cloudMultiScatterStrength; // was cloudMultiScatterStrength (removed 2026-06-21 — no shader consumer; cloudMsScale is the live knob). Reclaimable pad.
   uint  cloudMultiScatterOctaves;  // Number of Wrenninge octaves to sum (clamped 1..4 in shader).
   float cloudLayer2NoiseSeed;      // Seed offset added to layer 2's 2D coverage/type smoothNoise2D
                                    // calls so layer 2 generates a fully decorrelated noise pattern

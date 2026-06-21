@@ -662,16 +662,12 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudBoilPhase        = m_cloudBoilPhase;
 
     args.cloudShadowStrength = RtxOptions::cloudShadowStrength();
-    args.cloudAnisotropy = RtxOptions::cloudAnisotropy();
   }
 
   // Cloud volumetric / appearance enhancements
   {
-    args.cloudShadowTint = RtxOptions::cloudShadowTint();
-    args.cloudShadowTintStrength = RtxOptions::cloudShadowTintStrength();
     args.cloudThickness = RtxOptions::cloudThickness();
     args.cloudLayer2TypeSpread = RtxOptions::cloudLayer2TypeSpread();
-    args.cloudSunsetWarmth = RtxOptions::cloudSunsetWarmth();
     args.cloudViewSamples = RtxOptions::cloudViewSamples();
     args.cloudCurvature = RtxOptions::cloudCurvature();
     args.cloudTypeMean = RtxOptions::cloudTypeMean();
@@ -682,7 +678,6 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudCoverageNoiseScale = RtxOptions::cloudCoverageNoiseScale();
     args.cloudAnvilBias = RtxOptions::cloudAnvilBias();
     args.cloudMsScale = RtxOptions::cloudMsScale();
-    args.cloudMultiScatterStrength = RtxOptions::cloudMultiScatterStrength();
     args.cloudMultiScatterOctaves = RtxOptions::cloudMultiScatterOctaves();
     args.cloudLayer2NoiseSeed = RtxOptions::cloudLayer2NoiseSeed();
     args.cloudNoiseTileKm = RtxOptions::cloudNoiseTileKm();
