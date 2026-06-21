@@ -1469,11 +1469,6 @@ namespace fork_hooks {
           RemixGui::SetTooltipToLastWidgetOnHover(
               "How much of the sky has layer-2 clouds. Defaults sparser than "
               "layer 1 so cirrus reads as patches, not overcast.");
-          RemixGui::DragFloat("Layer 2 Coverage Spread", &RtxOptions::cloudLayer2CoverageSpreadObject(),
-                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-          RemixGui::SetTooltipToLastWidgetOnHover(
-              "Spatial variation around the Layer 2 Coverage mean. Independent "
-              "of Layer 1's Coverage Spread.");
           RemixGui::DragFloat("Layer 2 Cloud Type", &RtxOptions::cloudLayer2TypeMeanObject(),
                               0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
@@ -1487,9 +1482,26 @@ namespace fork_hooks {
           RemixGui::DragFloat("Layer 2 Density", &RtxOptions::cloudLayer2DensityScaleObject(),
                               0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
-              "Per-step density multiplier for layer 2 only. Cirrus is "
-              "optically thin \xe2\x80\x94 default 0.30 keeps it from competing with the "
-              "main cumulus deck.");
+              "Per-step density multiplier for layer 2 only. Lower values keep "
+              "the echo deck from competing with the main cumulus deck.");
+          RemixGui::DragInt("Layer 2 Step Floor", &RtxOptions::cloudLayer2StepFloorObject(),
+                            1.0f, 2, 64, "%d", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Minimum march steps through the echo deck (hit on near-zenith "
+              "sightlines). The deck is marched more cheaply than layer 1 "
+              "(which floors at 32); raise for a smoother deck at higher cost.");
+          RemixGui::DragInt("Layer 2 Max Steps", &RtxOptions::cloudLayer2StepMaxObject(),
+                            1.0f, 2, 128, "%d", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Hard cap on echo-deck samples per ray \xe2\x80\x94 the deck's performance "
+              "governor. Between the floor and this cap the count follows Cloud "
+              "Sample Spacing (cloudViewStepKm).");
+          RemixGui::ColorEdit3("Layer 2 Color", &RtxOptions::cloudLayer2ColorObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Base color (albedo) of the echo deck, independent of the main "
+              "cloud Color. Defaults to the same near-white; tint it to "
+              "differentiate the upper deck. All other look knobs stay shared "
+              "with layer 1.");
           ImGui::EndDisabled();
           ImGui::TreePop();
         }

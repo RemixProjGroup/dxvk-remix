@@ -2821,18 +2821,27 @@ struct NubisCubedLighting {
 // of the per-column light field — see the verticalLight comment below.
 // Pass 1.0 to reproduce legacy behavior exactly (legacy mode also ignores
 // it entirely).
+//
+// `dSunOverride` (fork — 2026-06-21, layer-2 echo-deck rework): the sun-
+// direction optical depth to use for the direct/shadow terms. A NEGATIVE
+// value means "sample the D_sun voxel grid" — the production path, byte-
+// identical to before. A value >= 0 is used verbatim and the grid tap is
+// skipped: the echo-deck march (marchEchoDeck) passes a cheap analytic proxy
+// because the D_sun grid is baked over the LAYER-1 slab only, so a deck at a
+// different altitude would read meaningless residual from it.
 NubisCubedLighting evalNubisCubedSample(
     vec3 samplePos, float heightFraction, float density,
     float columnSpan,
     vec3 viewDir, vec3 sunDir,
     vec3 sunRadiance, vec3 skyRadianceWarm, vec3 skyRadianceCool,
     vec3 skyRadianceZenith,
-    AtmosphereArgs args, bool isZUp) {
+    AtmosphereArgs args, bool isZUp, float dSunOverride) {
 
   // === Input samples ===
   float dim_profile = sampleDimProfile(samplePos, heightFraction, args);
   float cloud_sdf   = sampleCloudSdf(samplePos, heightFraction, density, args);
-  float D_sun       = sampleDSun(samplePos, args, isZUp);
+  float D_sun       = (dSunOverride >= 0.0f) ? dSunOverride
+                                             : sampleDSun(samplePos, args, isZUp);
   float cosTheta    = dot(viewDir, sunDir);
 
   // === Direct scattering (paper p. 29 + p. 137) ===

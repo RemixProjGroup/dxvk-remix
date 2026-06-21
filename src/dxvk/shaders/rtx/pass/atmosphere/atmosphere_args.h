@@ -226,7 +226,9 @@ struct AtmosphereArgs {
   float cloudDensity;       // Overall opacity/density multiplier
 
   float cloudAltitude;      // Altitude of cloud layer (km)
-  float cloudLayer2CoverageSpread; // [0,1] coverage variation for layer 2 (independent of layer 1)
+  float pad_cloudLayer2CoverageSpread; // was cloudLayer2CoverageSpread (removed 2026-06-21 — deck
+                                       // coverage spread forced to 0). Kept as a pad to preserve
+                                       // CB layout; reuse this slot before growing the struct.
   float cloudEnabled;       // 1.0 if clouds should be rendered, 0.0 otherwise
   float cloudShadowStrength;// How strongly clouds dim ground/atmosphere lighting [0..1]
 
@@ -496,4 +498,30 @@ struct AtmosphereArgs {
   // former pad_artistic1/2 slots; CB layout unchanged.
   float cloudEnergyConserve;  // [0,1] 0 = legacy additive look (A/B), 1 = energy-conserving convex blend
   float cloudMsLobeWeight;    // [0,1] convex weight: forward single-scatter lobe (1-w) vs multi-scatter body fill (w)
+
+  // ----- Layer-2 echo-deck step budget (fork — 2026-06-21) -----
+  // The echo deck is marched far more cheaply than layer 1; these are its own
+  // floor/cap on the adaptive (cloudViewStepKm-driven) step count, decoupled
+  // from layer 1's cloudViewSamples / cloudViewSamplesMax. Consumed by
+  // marchEchoDeck in cloud_march_common.slangh.
+  //
+  // IMPORTANT (CB alignment): no free pad slots remained, so this grows the
+  // constant buffer. It MUST grow by a whole 16-byte (vec4) block or
+  // sizeof(AtmosphereArgs) stops being 16-byte aligned and the updateBuffer of
+  // the whole struct corrupts the cbuffer (the two real fields below then read
+  // garbage, and marchEchoDeck's step count blows up into a GPU hang — solid
+  // black whenever layer 2 is enabled). Hence the two explicit pad words: 2
+  // real + 2 pad = one vec4 row. Future additions should consume these pads
+  // first (reuse-the-pad-slot discipline) before growing the struct again.
+  uint cloudLayer2StepFloor;     // Min march steps through the echo deck (near-zenith floor)
+  uint cloudLayer2StepMax;       // Hard cap on echo-deck steps per ray (perf governor)
+  uint pad_cloudLayer2Step0;     // reserve — keeps the block vec4-aligned
+  uint pad_cloudLayer2Step1;     // reserve — keeps the block vec4-aligned
+
+  // Layer-2 echo-deck color (fork — 2026-06-21). Independent albedo for the
+  // deck (the one look knob split out from layer 1). vec3 + 1 pad word = one
+  // vec4 row, so the CB stays 16-byte aligned (see the step block above —
+  // appending a bare vec3 would straddle the row boundary and corrupt the CB).
+  vec3  cloudLayer2Color;        // Deck base color; defaults to cloudColor's near-white
+  float pad_cloudLayer2Color0;   // reserve — completes the vec4 row
 };

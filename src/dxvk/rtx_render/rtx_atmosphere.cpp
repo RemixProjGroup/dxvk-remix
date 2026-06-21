@@ -642,7 +642,6 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudColor = RtxOptions::cloudColor();
     args.cloudDensity = RtxOptions::cloudDensity();
     args.cloudAltitude = RtxOptions::cloudAltitude();
-    args.cloudLayer2CoverageSpread = RtxOptions::cloudLayer2CoverageSpread();
     args.cloudEnabled = RtxOptions::cloudEnabled() ? 1.0f : 0.0f;
 
     // Accumulated wind offset. Wind scrolling is driven by timeSeconds so the
@@ -820,6 +819,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudLayer2TypeMean      = RtxOptions::cloudLayer2TypeMean();
     args.cloudLayer2CoverageMean  = RtxOptions::cloudLayer2CoverageMean();
     args.cloudLayer2DensityScale  = RtxOptions::cloudLayer2DensityScale();
+    args.cloudLayer2StepFloor     = RtxOptions::cloudLayer2StepFloor();
+    args.cloudLayer2StepMax       = RtxOptions::cloudLayer2StepMax();
+    args.cloudLayer2Color         = RtxOptions::cloudLayer2Color();
     args.cloudVerticalStretch     = RtxOptions::cloudVerticalStretch();
 
     // Worley carve params — consumed only by rtx_cloud_noise_baker. Changing

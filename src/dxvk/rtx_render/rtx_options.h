@@ -2078,27 +2078,27 @@ namespace dxvk {
     // the lower slab first and composites layer 2 onto residual transmittance.
     // Default off so today's look is preserved bit-for-bit.
     RTX_OPTION("rtx.atmosphere", bool, cloudLayer2Enable, true,
-               "When true, cloud_render.comp.slang marches a second cloud "
-               "slab on top of the primary one. Layer 2 has its own altitude / "
-               "thickness / type / coverage / density-scale knobs (the "
-               "cloudLayer2* options below). Voxel-grid terrain shadows + "
-               "ground-shadow NEE remain layer-1-only — cirrus is optically "
-               "thin enough that the per-frame compute cost of shadowing it "
-               "isn't worth the visual delta.");
+               "When true, cloud_render.comp.slang marches a second 'echo' "
+               "cloud deck above the primary slab — the same cloud-slab density "
+               "model at a higher, gapped altitude, marched cheaply (low step "
+               "budget, analytic sun shadow, no moon path). Layer 2 has its own "
+               "altitude / thickness / type / coverage / density-scale / "
+               "noise-seed knobs (the cloudLayer2* options below); the seed "
+               "decorrelates the deck's coverage/type field from layer 1 so it "
+               "reads as a related-but-different cloudscape. Voxel-grid terrain "
+               "shadows + ground-shadow NEE remain layer-1-only.");
     RTX_OPTION("rtx.atmosphere", float, cloudLayer2Altitude, 5.5f,
-               "Altitude (km) of the layer-2 slab base. Default 7.5 km targets "
-               "the cirrus altitude band.");
+               "Altitude (km) of the layer-2 deck base. The gap between the "
+               "layer-1 top (cloudAltitude + cloudThickness) and this value is "
+               "the clear-sky band separating the two decks.");
     RTX_OPTION("rtx.atmosphere", float, cloudLayer2Thickness, 2.0f,
-               "Vertical depth (km) of the layer-2 slab. Default 0.5 km keeps "
-               "the cirrus deck thin.");
+               "Vertical depth (km) of the layer-2 deck.");
     RTX_OPTION("rtx.atmosphere", float, cloudLayer2TypeMean, 0.6f,
                "[0,1] mean cloud type for layer 2. Low values (~0.05) sample "
                "the LUT's stratus-shaped column — appropriate for cirrus.");
     RTX_OPTION("rtx.atmosphere", float, cloudLayer2CoverageMean, 0.85f,
                "[0,1] mean coverage for layer 2. Defaults sparser than layer 1 "
                "so cirrus reads as wispy patches rather than overcast.");
-    RTX_OPTION("rtx.atmosphere", float, cloudLayer2CoverageSpread, 0.0f,
-               "[0,1] coverage variation for layer 2. Independent of layer 1's spread.");
     RTX_OPTION("rtx.atmosphere", float, cloudLayer2TypeSpread, 1.0f,
                "[0,1] cloud-type variation for layer 2. Independent of layer 1's spread.");
     RTX_OPTION("rtx.atmosphere", float, cloudLayer2NoiseSeed, 1000.0f,
@@ -2108,9 +2108,26 @@ namespace dxvk {
                "value produces decorrelation; the magnitude itself does not matter beyond ~10. "
                "Default 1000.");
     RTX_OPTION("rtx.atmosphere", float, cloudLayer2DensityScale, 0.65f,
-               "Per-step density multiplier applied to layer 2 only. Cirrus is "
-               "optically thin; default 0.30 keeps it from competing visually "
-               "with the cumulus deck below.");
+               "Per-step density multiplier applied to layer 2 only. Lower "
+               "values keep the echo deck from competing visually with the "
+               "cumulus deck below.");
+    RTX_OPTION("rtx.atmosphere", uint32_t, cloudLayer2StepFloor, 8,
+               "Minimum ray-march steps through the layer-2 echo deck [2..64]. "
+               "The deck is marched more cheaply than layer 1 (which floors at "
+               "cloudViewSamples = 32); this is the deck's own floor, hit on "
+               "short (near-zenith) sightlines. Raise for a smoother deck at "
+               "higher cost. Applies live.");
+    RTX_OPTION("rtx.atmosphere", uint32_t, cloudLayer2StepMax, 16,
+               "Hard cap on layer-2 echo-deck samples per ray [2..128] — the "
+               "deck's performance governor, analogous to cloudViewSamplesMax "
+               "for layer 1. Between the floor and this cap the step count "
+               "follows the cloudViewStepKm step-length target. Applies live.");
+    RTX_OPTION("rtx.atmosphere", Vector3, cloudLayer2Color, Vector3(0.89f, 0.92f, 1.0f),
+               "Base color (albedo) of the layer-2 echo deck, independent of the "
+               "main cloudColor. Defaults to the same near-white so the deck "
+               "matches layer 1 until changed; tint it to differentiate the upper "
+               "deck (e.g. cooler high cirrus). The deck shares all other look "
+               "knobs with layer 1 (phase, multi-scatter, detail, etc.).");
 
     // TODO (REMIX-656): Remove this once we can transition content to new hash
     RTX_OPTION("rtx", bool, logLegacyHashReplacementMatches, false, "");

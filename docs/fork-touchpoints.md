@@ -2202,3 +2202,37 @@ Final two corrections that fixed the right-before-sunset "neon orange clouds" (f
   *`buildCloudShadeContext`: `dayFactor` smoothstep upper bound 0.02 → 0.20 for a progressive sunset-approach dim of all sun-derived cloud lighting.*
 
 ---
+
+## Workstream — Layer-2 "echo deck" rework (fork — 2026-06-21)
+
+Replaced the old layer-2 path (a fully-independent second `marchCloudSlab` pass that inherited layer 1's ~32-step floor and tapped the layer-1-only `D_sun` grid for a decorrelated cloudscape, so every deck sample read stale residual) with a lean **echo deck**: the *same* per-column cloud-slab density model at a higher, gapped altitude, marched cheaply. Perf comes from a low, **user-adjustable** step budget (the dominant lever — deck cost is ~linear in step count) and an analytic sun-shadow proxy in place of the stale `D_sun` grid tap. Variety ("varied echo") comes from the deck's own coverage/type means + `cloudLayer2NoiseSeed`, which decorrelates its control field from layer 1 while sharing the same field machinery. The column-placement model is deliberately KEPT — it provides the per-sample early-out that refunds the placement tap, contrary to the earlier (now-corrected) analysis. The deck DOES take moonlight (same Beer-Lambert shadow + Wrenninge phase as layer 1, deck-aware self-shadow tap) so the two decks read consistently at night. 3 `cloudLayer2*` options were added (2 step-budget + 1 color) and 1 removed (`cloudLayer2CoverageSpread`); the rest are unchanged. Validated in-game 2026-06-21 (works after the CB-alignment fix below); same-day follow-ups: density/thickness/type decoupled from the main layer, the deck's coverage "tiling" fixed (coverage spread forced uniform + option removed), and an independent deck color.
+
+**Same-day follow-ups (2026-06-21):**
+- **Density/thickness/type decoupling.** The deck ran on a copy of the main `args`, so main-layer sliders (most visibly `cloudDensity`) bled into the deck. `marchCloudLayers` now overrides on `args2`: `cloudDensity` → fixed `kEchoDeckExtinction = 1.8` (= cloudDensity's default, so the deck decouples from the live slider with no look change at default), `cloudThickness` → `cloudLayer2Thickness`, `cloudTypeMean` → `cloudLayer2TypeMean` (the shared lighting — `sampleCloudSdf`, `sampleDimProfile`, underside down-integral — reads these directly rather than via the deck slab params). `marchEchoDeck` also rebuilds `ctx.moonBaseSigma` from the decoupled density. Coverage was already deck-specific. Audit conclusion: all OTHER look knobs (phase, multi-scatter, detail, bottom-darkening, edge, anvil, etc.) stay shared by "same slab" design — only color was split out (below).
+- **Coverage "tiling" fix.** The single-octave Worley coverage field, amplified by the spread slider, read as a fine tiled/stippled texture at the deck's distance (~3 km cells subtend a tiny angle). A de-tile attempt (domain-warp + extra octave) made it worse (small/smudgy), so it was reverted; instead `marchCloudLayers` forces the deck's `cloudCoverageSpread` to 0 — coverage collapses to a uniform `cloudLayer2CoverageMean` sheet, no field, no tiling. `cloudLayer2CoverageSpread` was removed as an option (its arg slot kept as `pad_cloudLayer2CoverageSpread` to preserve CB layout). Type spread is still available.
+- **Independent deck color.** New `cloudLayer2Color` (Vector3, defaults to cloudColor's near-white). `marchCloudLayers` overrides `args2.cloudColor`. The one look knob split from layer 1, per user request.
+- **GPU-hang backstop.** `marchEchoDeck` hard-caps the step count at `kEchoStepHardCap = 256` so a future CB misread can't escalate to a device hang.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`evalNubisCubedSample` gains a trailing `float dSunOverride` param: `< 0` samples the `D_sun` voxel grid (production path, byte-identical to before); `>= 0` is used verbatim and the grid tap is skipped. Only the echo-deck march passes `>= 0`.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned change.
+  *New `marchEchoDeck` (lean second-deck march: `cloudLayer2StepFloor`/`cloudLayer2StepMax` step budget — default 8/16 — honoring `cloudViewStepKm`; analytic `dSunProxy = (1 - shapeHf) × thickness × densityScale`; otherwise identical density model + control fields + per-sample moon block + Beer-Lambert/aerial as `marchCloudSlab`). The moon shadow uses a new slab-parametric `sampleCloudSunOpticalDepth_localSlab` so the deck self-shadows against ITS altitude band (the args-default helper keys on layer 1's slab → zero density at the deck = unshadowed). `marchCloudLayers`' layer-2 branch calls `marchEchoDeck` instead of a second `marchCloudSlab` (the old moon-coefficient zeroing is gone — the deck wants moonlight). `marchCloudSlab`'s `evalNubisCubedSample` call passes `dSunOverride = -1.0` (grid path). Both consumers (view RT + secondary dome LUT) inherit via `marchCloudLayers`.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Adds a 16-byte (vec4) tail block: `cloudLayer2StepFloor`, `cloudLayer2StepMax`, + `pad_cloudLayer2Step0/1`. No free pad slots remained, so the CB grows — but it MUST grow by a whole vec4 or `sizeof(AtmosphereArgs)` stops being 16-byte aligned and the whole-struct `updateBuffer` corrupts the cbuffer (the new tail fields read garbage → marchEchoDeck's step count blows up → GPU hang → solid black when layer 2 is on). A first draft appended bare scalars (8 bytes) and hit exactly that; the two pad words fix it. Future additions should consume the pads first.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Added `cloudLayer2StepFloor` (uint32, 8) and `cloudLayer2StepMax` (uint32, 16). Rewrote `cloudLayer2Enable` / `cloudLayer2Altitude` / `cloudLayer2Thickness` / `cloudLayer2DensityScale` help strings to describe the echo deck + inter-deck gap; corrected three stale default-value mentions (7.5 km / 0.5 km / 0.30 vs the actual 5.5 / 2.0 / 0.65). No option removed or renamed.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *Packs `args.cloudLayer2StepFloor` / `cloudLayer2StepMax` from the new RtxOptions alongside the existing `cloudLayer2*` packing.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *Adds "Layer 2 Step Floor" / "Layer 2 Max Steps" `DragInt` widgets to the Layer 2 imgui node; refreshed the Layer 2 Density tooltip off the old cirrus framing.*
+
+- **`RtxOptions.md`** — PENDING: 3 new options (`cloudLayer2StepFloor`, `cloudLayer2StepMax`, `cloudLayer2Color`) not yet added; regenerate in-app (`DXVK_DOCUMENTATION_WRITE_RTX_OPTIONS_MD=1`).
+
+  (The `atmosphere_args.h` / `rtx_options.h` / `rtx_atmosphere.cpp` / `rtx_fork_atmosphere.cpp` bullets above also cover the follow-up `cloudLayer2Color` field/option/packing/picker and the `cloudControlField2DDetiled` helper; the args color field is a second vec4-aligned tail block — `vec3 cloudLayer2Color` + `pad_cloudLayer2Color0`.)
+
+---
