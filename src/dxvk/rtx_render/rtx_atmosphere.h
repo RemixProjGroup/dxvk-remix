@@ -100,8 +100,7 @@ public:
    * 256x256x32 R16F camera-centered tile-wrapped voxel grid storing summed
    * optical depth along the sun direction. Baked every 8 frames at offset 0
    * by cloud_sun_density_grid.comp.slang. Consumed at shade time via
-   * sampleDSun() by the future Nubis Cubed cloud-lighting rewrite (C4-C6 of
-   * the 2026-05-12 workstream). No consumer in this commit.
+   * sampleDSun() by the Nubis Cubed cloud-lighting path.
    */
   const Resources::Resource& getCloudDSun() const { return m_cloudDSun; }
 
@@ -112,7 +111,6 @@ public:
    * optical depth toward zenith. Baked every 8 frames at offset 4 by
    * cloud_ambient_density_grid.comp.slang. Consumed at shade time via
    * sampleDAmbient() for the Nubis Cubed page-142 ambient attenuation term.
-   * No consumer in this commit.
    */
   const Resources::Resource& getCloudDAmbient() const { return m_cloudDAmbient; }
 
@@ -147,8 +145,8 @@ public:
    * full Nubis cloud march per direction: rgb = premultiplied cloud radiance,
    * a = view transmittance. Baked once per frame by
    * cloud_secondary_lut.comp.slang; consumed by evalSkyRadiance's non-primary
-   * branch (indirect / PSR / reflection sky-miss) in place of the per-ray
-   * analytical evalClouds march.
+   * branch (indirect / PSR / reflection sky-miss) to supply clouds without a
+   * per-ray cloud march.
    */
   const Resources::Resource& getCloudSecondaryLut() const { return m_cloudSecondaryLut; }
 

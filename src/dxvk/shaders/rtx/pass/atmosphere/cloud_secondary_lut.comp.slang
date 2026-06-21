@@ -28,21 +28,18 @@
 // a = view transmittance — the same convention as the screen-space
 // AtmosphereCloudRender RT.
 //
-// Why: every indirect / PSR / reflection ray that reaches sky-miss runs
-// the full analytical evalClouds march in atmosphere_sky.slangh — a
-// hidden per-ray cost that profiling estimated rivals the visible cloud
-// pass. Secondary rays only need "what does the cloud layer look like in
-// that direction"; cloud parallax across a scene-scale ray origin offset
-// (~100 m) versus cloud distance (km) is far below a texel. One 32k-texel
-// bake per frame replaces millions of per-ray marches.
+// Why: indirect / PSR / reflection rays that reach sky-miss would otherwise
+// each run a full per-ray cloud march — a hidden per-ray cost that profiling
+// estimated rivals the visible cloud pass. Secondary rays only need "what does
+// the cloud layer look like in that direction"; cloud parallax across a
+// scene-scale ray origin offset (~100 m) versus cloud distance (km) is far
+// below a texel. One 32k-texel bake per frame replaces millions of per-ray
+// marches.
 //
 // The bake runs the Nubis Cubed march (marchCloudLayers — the same path
-// the visible cloud RT uses) rather than replicating analytical
-// evalClouds. Deliberate look change: reflections and indirect bounces now
-// see the SAME clouds the primary rays see, instead of the legacy
-// Wrenninge-octave approximation that never matched the Nubis primaries.
-// rtx.atmosphere.cloudSecondaryLutEnable = 0 restores the legacy per-ray
-// analytical march for A/B.
+// the visible cloud RT uses), so reflections and indirect bounces see the
+// SAME clouds the primary rays see. rtx.atmosphere.cloudSecondaryLutEnable = 0
+// disables this branch, making secondary sky-miss rays cloudless.
 //
 // Jitter is per-texel and frame-constant (fastJitter at frame index 0) so
 // the LUT is temporally stable — secondary-ray consumers have no temporal
@@ -129,8 +126,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
 
   // Dome direction for this texel. v = 0 is the horizon row; the mapping
   // never goes below horizon (below-horizon sample directions are clamped
-  // to the horizon row by the consumer, matching evalClouds' behavior of
-  // contributing nothing meaningful below the horizon).
+  // to the horizon row by the consumer, since clouds contribute nothing
+  // meaningful below the horizon).
   vec2 uv = (vec2(pixelCoord) + 0.5f) / vec2(lutDim);
   vec3 viewDirYUp = cloudDomeUvToDir(uv);
 

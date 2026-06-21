@@ -32,9 +32,8 @@
 // with the page-137 two-HG-lobe direct term (sigma_ms remap on sun_dot + sdf
 // depth) and the page-142 ambient pow(1 - dim_profile, 0.5) * exp(-D_ambient).
 //
-// Composited into sky-miss in C5 (gated by default-off RTX_OPTION). C4
-// only ships the RT and a debug view (enum 876) for standalone A/B against
-// the existing analytical look.
+// Composited into primary sky-miss when cloudRenderRTEnable is on (gated by
+// RTX_OPTION). A debug view (enum 876) shows the raw RT for inspection.
 //
 // Coordinate frame: ray-vs-slab intersection runs in camera-at-origin Y-up
 // space (the established cloud-math convention — see `intersectCloudLayer`'s
@@ -65,9 +64,9 @@
 // Likewise enable the LUT-backed cloudHeightProfile() in atmosphere_common.slangh
 // for this TU. The AtmosphereCloudHeightLut + AtmosphereCloudHeightLutSampler
 // globals the helper reaches for are declared at slots 10 / 11 below.
-// Voxel grid bakers, the cloud-noise baker, the height LUT baker itself, and
-// the analytical evalClouds path do NOT define this — they get the procedural
-// cloudTypeProfile fallback via atmosphere_common.slangh's #else branch.
+// Voxel grid bakers, the cloud-noise baker, and the height LUT baker itself
+// do NOT define this — they get the procedural cloudTypeProfile fallback via
+// atmosphere_common.slangh's #else branch.
 #define ATMOSPHERE_CLOUD_HEIGHT_LUT_AVAILABLE
 
 // Bring in shader_types (for vec3/uint/etc.) and AtmosphereArgs ahead of the
@@ -202,8 +201,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
   }
 
   // ===== Per-pixel FAST-noise jitter on the fractional step offset =====
-  // Mirrors the view-march jitter pattern from evalClouds. Channel x is the
-  // view-march; we don't take more than one tap so channel y is unused.
+  // Channel x is the view-march; we don't take more than one tap so channel
+  // y is unused.
   // Slab intersection + stepLen now live inside marchCloudSlab so both layer
   // marches can reuse them with their own slab params.
   float jitter = fastJitter(pixelCoord, args.cloudRenderFrameIdx).x;

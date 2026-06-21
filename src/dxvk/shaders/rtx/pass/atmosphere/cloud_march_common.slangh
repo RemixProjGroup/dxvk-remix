@@ -50,17 +50,16 @@
 // the established binding-then-include layout both consumers use.
 
 // =============================================================================
-// Moon-shadow optical-depth tap (port of atmosphere_sky.slangh:617).
+// Moon-shadow optical-depth tap.
 //
-// The legacy `sampleCloudSunOpticalDepth` lives in atmosphere_sky.slangh which
-// the compute passes do NOT include. Replicate the 2-tap deterministic march
-// here so the cloud-march moon path can call it without pulling in the sky
-// header. Math is byte-identical to the legacy helper (same kTaps=2, same
-// kStepKm=0.8, same `density × stepLen` accumulation form, same near-horizon
-// gate). The legacy `pixelCoord` / `frameIdx` jitter params were removed from
-// the signature because they go unused (the comment block at the legacy
-// definition explains why — Jensen's-inequality bias on the convex exp(-x)
-// shadow estimator).
+// A self-contained 2-tap deterministic march so the cloud-march moon path can
+// compute the sun/moon-direction optical depth without pulling in any sky
+// header. (This was ported from a `sampleCloudSunOpticalDepth` helper that
+// formerly lived in atmosphere_sky.slangh, since removed.) kTaps=2, kStepKm=0.8,
+// `density × stepLen` accumulation, with a near-horizon gate. The original
+// `pixelCoord` / `frameIdx` jitter params were dropped from the signature
+// because they go unused — a deterministic estimate avoids Jensen's-inequality
+// bias on the convex exp(-x) shadow estimator.
 // =============================================================================
 float sampleCloudSunOpticalDepth_local(vec3 cloudHitPos, vec3 sunDir,
                                         float typeLocal, float coverageLocal,
@@ -139,7 +138,7 @@ CloudShadeContext buildCloudShadeContext(AtmosphereArgs args) {
   // ===== Per-ray lighting source radiances =====
   // sunRadiance: args.sunIlluminance is raw user-tuned color (near-white in
   // FNV defaults) -- atmospheric extinction along the sun ray is NOT applied
-  // CPU-side. We mirror the legacy evalClouds path's `airTrans` step here so
+  // CPU-side. We apply that `airTrans` extinction along the sun ray here so
   // the direct term picks up the warm-orange Rayleigh shift at low sun
   // elevation. Without this, result.direct stays white while result.ambient
   // (from the sky-view LUT) reads orange, producing a per-pixel hue mismatch
@@ -219,30 +218,25 @@ CloudShadeContext buildCloudShadeContext(AtmosphereArgs args) {
                                                     AtmosphereSkyViewSampler) * dayFactor;
 
   // ===== Per-pixel moon-lighting precompute =====
-  // Direct port of evalClouds (atmosphere_sky.slangh:756-884). The Nubis Cubed
-  // sun equations don't model moonlight, so without this block the cloud RT
-  // renders black at night when cloudRenderRTEnable=true. Three contributions
-  // mirror the legacy:
+  // The Nubis Cubed sun equations don't model moonlight, so without this block
+  // the cloud RT renders black at night. Three contributions:
   //   - nightLight (ambient, per-ray): per-moon airglow fill + nightSkyColor.
-  //     Added uncolored at composite time (it's atmospheric airglow, not cloud-
-  //     scatter; matches the legacy `+ nightLight` outside cloudColor's parens).
+  //     Added uncolored at composite time (atmospheric airglow, not cloud-
+  //     scatter, so it sits outside cloudColor's parens).
   //   - moonDiffuseCoeff[mi] / moonPhaseAmt[mi] (directional, per-ray): per-moon
   //     Lambert and HG-phase-gain response gated by phaseGlow / nightFactor /
   //     cloudMoonBrightness, scaled by computeMoonSharedFactor — which ALREADY
   //     folds in atmospheric extinction `getAtmosphericTransmittanceForDir(
-  //     m.direction, args)` for the moon ray, mirroring the C6.4 airTrans
-  //     treatment we just landed for the sun. Split so the phase term can be
-  //     Wrenninge-smoothed across HG-anisotropy octaves in the per-sample loop.
+  //     m.direction, args)` for the moon ray, mirroring the airTrans treatment
+  //     used for the sun. Split so the phase term can be Wrenninge-smoothed
+  //     across HG-anisotropy octaves in the per-sample loop.
   //   - combinedMoonDir / combinedMoonDiffuseCoeff / combinedMoonPhaseAmt
   //     (Lever-4 approximation): one brightness-weighted shadow march along the
   //     combined direction replaces N independent per-moon marches.
   //
   // Smooth twilight transition: nightFactor = smoothstep(0.02, -0.05, sun.y)
-  // ramps from 0 (sun above horizon) to 1 (sun ~3° below horizon). Same gate
-  // the legacy uses, so the day -> night cross-fade on the Nubis-Cubed RT
-  // matches the analytical-evalClouds curve byte-for-byte. No popping at the
-  // moment the cloudRenderRTEnable gate flips the consumer from analytical to
-  // RT either, because both paths use this identical smoothstep.
+  // ramps from 0 (sun above horizon) to 1 (sun ~3° below horizon), giving a
+  // pop-free day -> night cross-fade on the cloud RT.
   vec3 nightLight = vec3(0.0f);
   vec3 moonDiffuseCoeff[MAX_MOONS];
   vec3 moonPhaseAmt[MAX_MOONS];
@@ -279,8 +273,7 @@ CloudShadeContext buildCloudShadeContext(AtmosphereArgs args) {
           // Silver-lining response decomposed: diffuse (Lambert) amount and
           // phase (HG-gain) amount are precomputed here; the HG phase function
           // itself is evaluated per-sample in the march loop below so it can
-          // be Wrenninge-smoothed across multiple anisotropy octaves. See the
-          // matching design note in atmosphere_sky.slangh's evalClouds.
+          // be Wrenninge-smoothed across multiple anisotropy octaves.
           const float kMoonDiffuseGain = args.moonCloudDiffuseGain;
           const float kMoonPhaseGain   = args.moonCloudPhaseGain;
           float moonLambert = saturate(moonDir.y * 0.8f + 0.2f);
@@ -300,7 +293,7 @@ CloudShadeContext buildCloudShadeContext(AtmosphereArgs args) {
       // Night-sky airglow baseline (uncolored, mirrors legacy `* 0.5f`).
       nightLight += args.nightSkyColor * args.nightSkyBrightness * nightFactor * 0.5f;
 
-      // Starlight ambient coupling (fork — mirrors evalClouds in atmosphere_sky.slangh).
+      // Starlight ambient coupling (fork).
       // Adds a faint per-ray ambient lift to cloud body lighting derived from
       // the sky's star contribution so cumulus under starry skies doesn't read
       // as pitch-black against HDR ~8 stars overhead.
@@ -566,8 +559,7 @@ void marchCloudSlab(vec3   viewDirYUp,
     }
 
     // Composite: cloudColor multiplies all surface-scatter terms; nightLight
-    // is added uncolored. Identical structure to the legacy single-layer march
-    // and the analytical evalClouds in atmosphere_sky.slangh.
+    // is added uncolored, identical to the legacy single-layer march.
     //
     // Thin-sample ambient fade (fork — 2026-06-13). The coverage gate leaves a
     // soft sub-threshold skirt around every silhouette; those thin samples are

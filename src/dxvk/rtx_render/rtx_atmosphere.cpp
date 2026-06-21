@@ -105,9 +105,8 @@ namespace dxvk {
 
     // Fork (Nubis Cubed 2023, 2026-05-12): round-robin bake of the cloud
     // voxel grids. 256x256x32 R16F precomputed optical depth along the sun
-    // direction (D_sun) and zenith (D_ambient). No consumer in this commit;
-    // the Nubis Cubed cloud-lighting rewrite (C4-C6) reads these via
-    // sampleDSun / sampleDAmbient.
+    // direction (D_sun) and zenith (D_ambient). The Nubis Cubed cloud-lighting
+    // path reads these at shade time via sampleDSun / sampleDAmbient.
     class CloudSunDensityGridShader : public ManagedShader {
       SHADER_SOURCE(CloudSunDensityGridShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_sun_density_grid)
 
@@ -174,8 +173,8 @@ namespace dxvk {
     // Fork (2026-06-10, perf): per-frame bake of the secondary-ray cloud LUT.
     // 256x128 RGBA16F dome holding the full Nubis cloud march per direction
     // (rgb = premultiplied radiance, a = view transmittance). Consumed by
-    // evalSkyRadiance's non-primary branch in place of the per-ray analytical
-    // evalClouds march. Bindings 0-11 kept in lockstep with
+    // evalSkyRadiance's non-primary branch in place of a per-ray cloud
+    // march. Bindings 0-11 kept in lockstep with
     // cloud_render.comp.slang (slot 6 is this pass's own RW output).
     class CloudSecondaryLutShader : public ManagedShader {
       SHADER_SOURCE(CloudSecondaryLutShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_secondary_lut)
@@ -353,9 +352,6 @@ namespace {
     args.cloudRenderRightYUp         = vec3(0.0f, 0.0f, 0.0f);
     args.cloudRenderUpYUp            = vec3(0.0f, 0.0f, 0.0f);
     args.cameraWorldPosYUpKm         = vec3(0.0f, 0.0f, 0.0f);
-    args.cloudVoxelGridSunDirty      = 0u;
-    args.cloudVoxelGridAmbientDirty  = 0u;
-    args.cloudVoxelGridFrameOffset   = 0.0f;
   }
 
   // Quantize one direction-vector component to the granularity step.
@@ -696,14 +692,8 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // lighting from the density field. Vertical: track cloudThickness so the
     // grid spans the slab vertically. cloudThickness is already in km per
     // atmosphere_args.h:149.
-    // The Dirty flags are informational fields with no consumer in this
-    // commit; left zero here to avoid spurious LUT-recompute triggers via
-    // the memcmp in needsLutRecompute().
     args.cloudVoxelGridExtentKm    = RtxOptions::cloudNoiseTileKm();
     args.cloudVoxelGridVerticalKm  = args.cloudThickness;
-    args.cloudVoxelGridFrameOffset = 0.0f;
-    args.cloudVoxelGridSunDirty    = 0u;
-    args.cloudVoxelGridAmbientDirty = 0u;
     // Bottom darkening + additive edge detail (fork — 2026-06-10). Live in the
     // former pad_cloudVoxel0..2 slots so the CB layout is unchanged.
     args.cloudBottomDarkening       = RtxOptions::cloudBottomDarkening();
@@ -758,9 +748,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   }
 
   // Nubis Cubed sky-miss composite gate (fork — 2026-05-12, C5).
-  // Drives the primary-ray-only branch in evalSkyRadiance that swaps
-  // analytical evalClouds for the prerendered AtmosphereCloudRender RT.
-  // Default false until visual confirmation; flipped to true in C7.
+  // Drives the primary-ray-only branch in evalSkyRadiance that composites the
+  // prerendered AtmosphereCloudRender RT (when off, primary sky-miss is
+  // cloudless). Default false until visual confirmation; flipped to true in C7.
   {
     args.cloudRenderRTEnable = RtxOptions::cloudRenderRTEnable() ? 1u : 0u;
     // Secondary-ray cloud LUT gate (fork — 2026-06-10, perf). Lives in the
@@ -974,7 +964,7 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
   // Fork (Nubis Cubed 2023, 2026-05-12): cloud D_sun voxel grid (3D R16F,
   // 256x256x32). Camera-centered tile-wrapped precomputation of summed
   // optical depth along the sun direction. Round-robin baked every 8 frames
-  // at offset 0. No consumer in this commit.
+  // at offset 0. Consumed at shade time via sampleDSun.
   VkExtent3D cloudVoxelGridExtent = {
     kCloudVoxelGridX, kCloudVoxelGridY, kCloudVoxelGridZ
   };
@@ -1332,9 +1322,9 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
 
   // NOTE (perf-bisect rationale): this dispatch runs whenever the RT is
   // valid, INDEPENDENT of cloudRenderRTEnable — turning that option off
-  // switches the consumer to analytical clouds but leaves this pass
-  // running, so frame-time A/B via cloudRenderRTEnable never isolates the
-  // pass cost. The debug toggle is the only lever that actually skips it.
+  // makes primary sky-miss cloudless but leaves this pass running, so
+  // frame-time A/B via cloudRenderRTEnable never isolates the pass cost.
+  // The debug toggle is the only lever that actually skips it.
   if (RtxOptions::debugDispatchCloudRender() && m_cloudRenderRT.isValid()) {
     ctx->emitMemoryBarrier(0,
       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,

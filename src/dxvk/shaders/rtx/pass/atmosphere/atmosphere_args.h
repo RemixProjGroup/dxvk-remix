@@ -288,13 +288,16 @@ struct AtmosphereArgs {
   // sun direction (D_sun) and zenith (D_ambient), camera-centered with
   // horizontal tile-wrap. Baked round-robin every 8 frames by
   // cloud_sun_density_grid.comp.slang / cloud_ambient_density_grid.comp.slang.
-  // No consumer in this commit; the Nubis Cubed cloud-lighting rewrite (C4-C6)
-  // samples them at shade time via sampleDSun / sampleDAmbient.
+  // Consumed at shade time by the Nubis Cubed cloud-lighting path via
+  // sampleDSun / sampleDAmbient.
   float cloudVoxelGridExtentKm;     // Horizontal extent of camera-centered grid (default 12.0 km)
   float cloudVoxelGridVerticalKm;   // Vertical extent — populated CPU-side from cloudThickness
-  float cloudVoxelGridFrameOffset;  // For round-robin cadence; CPU-side scalar (informational)
-  uint  cloudVoxelGridSunDirty;     // 1 when D_sun was (re)baked this frame
-  uint  cloudVoxelGridAmbientDirty; // 1 when D_ambient was (re)baked this frame
+  // The three below were informational round-robin/dirty scalars with no shader
+  // consumer; demoted to reserve pads 2026-06-21 (kept to preserve CB layout —
+  // reuse these slots before growing the struct).
+  float pad_cloudVoxelGridFrameOffset;
+  uint  pad_cloudVoxelGridSunDirty;
+  uint  pad_cloudVoxelGridAmbientDirty;
   // The three fields below reuse the former pad_cloudVoxel0..2 slots so the
   // constant-buffer layout is unchanged.
   float cloudBottomDarkening;       // [0,1] strength of the sun-gated underside darkening (multi-scatter + ambient)
@@ -339,16 +342,16 @@ struct AtmosphereArgs {
 
   // ----- Nubis Cubed sky-miss composite gate (fork — 2026-05-12, C5) -----
   // When 1, the primary-ray branch in evalSkyRadiance reads the prerendered
-  // AtmosphereCloudRender RT instead of calling analytical evalClouds. PSR,
-  // indirect, and reflection rays continue to use evalClouds regardless of
-  // this gate — the cloud RT is at primary-ray pixel coords, sampling it for
-  // a different ray direction at the same pixel would return the wrong cloud.
+  // AtmosphereCloudRender RT to composite clouds; when 0, primary-ray sky-miss
+  // is cloudless. PSR, indirect, and reflection rays use the secondary dome LUT
+  // (see cloudSecondaryLutEnable) regardless of this gate — the cloud RT is at
+  // primary-ray pixel coords, sampling it for a different ray direction at the
+  // same pixel would return the wrong cloud.
   uint  cloudRenderRTEnable;       // 0 or 1
   // Secondary-ray cloud LUT gate (fork — 2026-06-10, perf). When 1, the
   // non-primary branch in evalSkyRadiance samples the per-frame
-  // AtmosphereCloudSecondaryLut dome instead of running the analytical
-  // evalClouds march per ray. 0 = legacy per-ray march (A/B switch).
-  // Reuses the former pad_c5_0 slot, so the CB layout is unchanged.
+  // AtmosphereCloudSecondaryLut dome; when 0, secondary sky-miss rays are
+  // cloudless. Reuses the former pad_c5_0 slot, so the CB layout is unchanged.
   uint  cloudSecondaryLutEnable;   // 0 or 1
   // Downscale (DLSS-input) render extent, i.e. the coordinate space of the
   // pixelCoord evalSkyRadiance receives (fork — 2026-06-11, half-res cloud
@@ -398,18 +401,17 @@ struct AtmosphereArgs {
   // baked once at startup by cloud_height_lut_baker.comp.slang. Lets the cloud
   // type continuum (stratus ... cumulonimbus) carry richer altitude-shape
   // variation than the 3-keypoint trapezoid, and lets layer-2 cirrus pick a
-  // genuinely different vertical profile than layer-1 cumulus. Only
-  // cloud_render.comp.slang binds the LUT today; voxel grid bakers and the
-  // analytical evalClouds path fall back to the procedural curve (cheap, and
-  // the LUT bake targets visual parity at type values 0/0.5/1 so the deltas
-  // stay inside cumulus shape noise).
+  // genuinely different vertical profile than layer-1 cumulus. cloud_render
+  // and the secondary-LUT bake bind the LUT; the voxel grid bakers fall back
+  // to the procedural curve (cheap, and the LUT bake targets visual parity at
+  // type values 0/0.5/1 so the deltas stay inside cumulus shape noise).
   uint  cloudHeightLutEnable;      // 0 = use procedural cloudTypeProfile, 1 = sample LUT
 
   // ----- Two-layer cloud map (slide 1 lift — RDR2 SIGGRAPH 2019) -----
   // Adds an independent second cloud slab at its own altitude band, sampled
-  // by cloud_render.comp.slang only (voxel grid bakers + analytical
-  // evalClouds + ground-shadow march all stay layer-1 only for v1 — cirrus
-  // is too thin to need precomputed terrain shadows, and the simpler
+  // by cloud_render.comp.slang only (voxel grid bakers + ground-shadow march
+  // all stay layer-1 only for v1 — cirrus is too thin to need precomputed
+  // terrain shadows, and the simpler
   // scoping caps the change surface). When enabled, cloud_render marches
   // the lower slab first (front-to-back) and composes layer 2 on top of
   // the residual transmittance.

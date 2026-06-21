@@ -1212,7 +1212,6 @@ namespace dxvk {
                "Sky rendering mode. SkyboxRasterization uses traditional skybox rasterization, Numos uses Hillaire atmospheric scattering.");
 
     // Atmosphere parameters
-    RTX_OPTION("rtx.atmosphere", bool, sunDisc, true, "Include the sun itself in the output.");
     RTX_OPTION("rtx.atmosphere", float, sunSize, 0.545f, "Size of sun disc in degrees.");
     RTX_OPTION("rtx.atmosphere", float, sunShadowSoftnessDeg, 0.0f,
                "Decoupled sun shadow softness, as the distant light's angular half-angle in degrees. "
@@ -1859,18 +1858,18 @@ namespace dxvk {
                "bit-exact). Applies on the next frame; live-tunable.");
 
     // Secondary-ray cloud LUT (fork — 2026-06-10, perf). Every indirect /
-    // PSR / reflection ray that reaches sky-miss previously ran the full
-    // analytical evalClouds march — a hidden per-ray cost rivaling the
-    // visible cloud pass. With this on, those rays sample a 256x128 dome
-    // LUT baked once per frame with the same Nubis Cubed march the visible
-    // clouds use (cloud_secondary_lut.comp.slang).
+    // PSR / reflection ray that reaches sky-miss would otherwise run a full
+    // per-ray cloud march — a hidden per-ray cost rivaling the visible cloud
+    // pass. With this on, those rays sample a 256x128 dome LUT baked once per
+    // frame with the same Nubis Cubed march the visible clouds use
+    // (cloud_secondary_lut.comp.slang). With it off, secondary sky-miss rays
+    // are cloudless.
     RTX_OPTION("rtx.atmosphere", bool, cloudSecondaryLutEnable, true,
-               "Replace the per-ray analytical cloud march on secondary rays "
-               "(indirect bounces, PSR, reflections) with a small per-frame "
-               "baked dome LUT. Large performance win on cloudy skies; also "
-               "makes reflected/indirect clouds match the primary Nubis look "
-               "instead of the legacy analytical approximation. Disable to "
-               "restore the legacy per-ray march for comparison.");
+               "Supply clouds to secondary rays (indirect bounces, PSR, "
+               "reflections) from a small per-frame baked dome LUT instead of a "
+               "per-ray cloud march. Large performance win on cloudy skies, and "
+               "reflected/indirect clouds match the primary Nubis look. Disable "
+               "to make secondary sky-miss rays cloudless.");
 
     // NEE shadow-ray budget clamps (fork — 2026-06-11, perf). With physical
     // atmosphere on, sun NEE traces an anisotropy-driven 1-12 visibility
@@ -1989,17 +1988,19 @@ namespace dxvk {
 
     // Nubis Cubed sky-miss composite gate (fork — 2026-05-12, C5).
     // When true, the primary-ray sky-miss path samples the AtmosphereCloudRender
-    // RT (written by cloud_render.comp.slang each frame) instead of calling
-    // analytical evalClouds. Indirect, PSR, and reflection rays continue to use
-    // analytical evalClouds — the cloud RT is at primary-ray pixel coordinates,
-    // so sampling it for a non-primary ray direction would return the wrong
-    // cloud. Default false; flip after in-game visual confirmation.
+    // RT (written by cloud_render.comp.slang each frame); when false, primary
+    // sky-miss is cloudless. Indirect, PSR, and reflection rays instead use the
+    // secondary dome LUT (cloudSecondaryLutEnable) — the cloud RT is at
+    // primary-ray pixel coordinates, so sampling it for a non-primary ray
+    // direction would return the wrong cloud. Default false; flip after in-game
+    // visual confirmation.
     RTX_OPTION("rtx.atmosphere", bool, cloudRenderRTEnable, true,
-               "Composite the Nubis Cubed cloud render RT at primary sky-miss "
-               "instead of calling analytical evalClouds. Indirect/PSR/reflection "
-               "rays continue to use analytical clouds. Default on as of C7 "
-               "(2026-05-13) -- in-game validation confirmed Nubis Cubed lighting "
-               "produces the expected perceptual wins across day/sunset/night.");
+               "Composite the Nubis Cubed cloud render RT at primary sky-miss. "
+               "When off, primary sky-miss is cloudless. Indirect/PSR/reflection "
+               "rays get clouds from the secondary dome LUT instead. Default on "
+               "as of C7 (2026-05-13) -- in-game validation confirmed Nubis Cubed "
+               "lighting produces the expected perceptual wins across "
+               "day/sunset/night.");
 
     // Voxel-grid cloud-on-terrain shadows at NEE entry points (fork — 2026-05-12, C6).
     // When true, sampleAtmosphereSunLight / sampleAtmosphereSunLightVolume apply
@@ -2068,9 +2069,8 @@ namespace dxvk {
                "height LUT to determine the per-altitude shape modulator "
                "instead of the procedural cloudTypeProfile trapezoid. The LUT "
                "is baked once at startup and keyed by (typeSlice, heightFrac). "
-               "Voxel grid bakers + analytical evalClouds still use the "
-               "procedural curve, so this flag only affects the screen-space "
-               "cloud render pass.");
+               "The voxel grid bakers still use the procedural curve, so this "
+               "flag affects only the cloud render and secondary-LUT passes.");
 
     // Two-layer cloud map (slide 1 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
     // Adds an independent second cloud slab at a higher altitude (cirrus deck

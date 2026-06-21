@@ -37,50 +37,6 @@
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
 
 // ============================================================================
-// Sun disk
-// ============================================================================
-
-// Evaluate sun disk contribution (for sky miss shaders)
-vec3 evalSunDisk(vec3 viewDir, AtmosphereArgs args, bool isZUp = false) {
-  // Transform view direction to Y-up space
-  vec3 viewDirYUp = isZUp ? vec3(viewDir.x, viewDir.z, viewDir.y) : viewDir;
-  viewDirYUp = normalize(viewDirYUp);
-
-  // Check if sun is above horizon - sun disk should NOT be visible when sun is below horizon
-  // The sun direction Y component represents elevation (positive = above horizon)
-  float sunElevation = args.sunDirection.y;
-
-  // Sun disk MUST be fully gone by 0° elevation (horizon line)
-  // Start fading at +2° so it disappears smoothly, fully invisible at 0° and below
-  const float kSunsetStart = 0.035f;   // ~2 degrees above horizon - start fading
-  const float kSunsetEnd = 0.0f;       // 0 degrees = horizon - fully invisible
-  float sunsetFade = smoothstep(kSunsetEnd, kSunsetStart, sunElevation);
-
-  // Early exit if sun is at/below horizon
-  if (sunElevation <= 0.0f || sunsetFade <= 0.001f) {
-    return vec3(0.0f);  // Sun has set
-  }
-
-  float cosAngle = dot(viewDirYUp, args.sunDirection);
-  float sunCosRadius = cos(args.sunAngularRadius);
-
-  if (cosAngle >= sunCosRadius) {
-    // Looking at the sun disk - apply limb darkening
-    float normalizedAngle = acos(cosAngle) / args.sunAngularRadius;
-    float limbDarkening = 1.0f - 0.6f * normalizedAngle * normalizedAngle;
-    limbDarkening = max(limbDarkening, 0.0f);
-
-    // Get transmittance from camera to sun through atmosphere
-    vec3 transmittance = getTransmittanceToSun(vec3(0.0f), args, false);
-
-    // Sun disk is extremely bright relative to sky
-    // Apply sunset fade so sun dims and disappears as it sets
-    return args.sunIlluminance * transmittance * limbDarkening * sunsetFade * 100.0f;
-  }
-  return vec3(0.0f);
-}
-
-// ============================================================================
 // Night sky — stars, galactic band, shooting stars, airglow
 // ============================================================================
 // Composited inside the Numos sky path; users on the default

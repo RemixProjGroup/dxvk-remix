@@ -2231,8 +2231,23 @@ Replaced the old layer-2 path (a fully-independent second `marchCloudSlab` pass 
 - **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
   *Adds "Layer 2 Step Floor" / "Layer 2 Max Steps" `DragInt` widgets to the Layer 2 imgui node; refreshed the Layer 2 Density tooltip off the old cirrus framing.*
 
-- **`RtxOptions.md`** — PENDING: 3 new options (`cloudLayer2StepFloor`, `cloudLayer2StepMax`, `cloudLayer2Color`) not yet added; regenerate in-app (`DXVK_DOCUMENTATION_WRITE_RTX_OPTIONS_MD=1`).
+- **`RtxOptions.md`** — regenerated; reflects the 3 new options (`cloudLayer2StepFloor`, `cloudLayer2StepMax`, `cloudLayer2Color`) and the removed `cloudLayer2CoverageSpread`.
 
-  (The `atmosphere_args.h` / `rtx_options.h` / `rtx_atmosphere.cpp` / `rtx_fork_atmosphere.cpp` bullets above also cover the follow-up `cloudLayer2Color` field/option/packing/picker and the `cloudControlField2DDetiled` helper; the args color field is a second vec4-aligned tail block — `vec3 cloudLayer2Color` + `pad_cloudLayer2Color0`.)
+  (The `atmosphere_args.h` / `rtx_options.h` / `rtx_atmosphere.cpp` / `rtx_fork_atmosphere.cpp` bullets above also cover the follow-up `cloudLayer2Color` field/option/packing/picker; the args color field is a second vec4-aligned tail block — `vec3 cloudLayer2Color` + `pad_cloudLayer2Color0`. The de-tile attempt was reverted: the deck's coverage tiling is instead handled by forcing `cloudCoverageSpread` to 0 and removing the `cloudLayer2CoverageSpread` option, see below.)
+
+---
+
+## Workstream — Dead-code removal + stale-doc cleanup (fork — 2026-06-21)
+
+Audit-driven cleanup of the sky/cloud system; no behavior change. Removed two unused shader helpers — `evalSunDisk` (`atmosphere_sky.slangh`) and `uvToSkyViewLutParams` (`atmosphere_common.slangh`); removed the orphaned `rtx.atmosphere.sunDisc` option (never consumed — the sun disc renders via the sun-as-distant-light / NEE path) along with its `RemixSkyAPI.md` row and a `RemixApiChangelog.md` "Removed" entry. Demoted the three dead `cloudVoxelGrid*` dirty/offset args fields to `pad_*` reserves (CPU zero-writes dropped) — kept as pads so the CB layout is unchanged. Corrected ~30 stale comments + 3 user-facing RTX_OPTION descriptions that referenced the long-removed analytical `evalClouds` path / "no consumer in this commit" voxel grids as if current; each description was re-verified against its consumer before rewording. `RtxOptions.md` regenerated.
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Removed the `sunDisc` RTX_OPTION; reworded `cloudRenderRTEnable` / `cloudSecondaryLutEnable` / `cloudHeightLutEnable` descriptions to drop the removed-evalClouds references (off = cloudless; secondary rays get clouds from the dome LUT). The "original 17 atmosphere options" historical list earlier in this file still names `sunDisc` — left as history.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`, `atmosphere_common.slangh`** — fork-owned change.
+  *Deleted `evalSunDisk` / `uvToSkyViewLutParams`; comment fixes for removed-evalClouds references.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`cloudVoxelGridFrameOffset` / `…SunDirty` / `…AmbientDirty` → `pad_*`; comment fixes.*
+- **Comment-only doc-rot fixes** in `cloud_render.comp.slang`, `cloud_secondary_lut.comp.slang`, `cloud_march_common.slangh`, `common_bindings.slangh`, `common_binding_indices.h`, `debug_view.comp.slang`, `rtx_atmosphere.cpp/.h`, `rtx_debug_view.cpp`. No functional change.
+- **`RtxOptions.md` / `docs/RemixSkyAPI.md` / `docs/RemixApiChangelog.md`** — regenerated / `sunDisc` row removed / `[0.4.3] Removed` entry added.
 
 ---

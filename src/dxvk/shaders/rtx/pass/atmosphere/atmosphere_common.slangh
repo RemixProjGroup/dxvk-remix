@@ -219,29 +219,6 @@ vec3 sampleMultiscatteringLut(Texture2D multiscatteringLut, SamplerState lutSamp
   return multiscatteringLut.SampleLevel(lutSampler, vec2(u, v), 0).rgb;
 }
 
-// Convert UV coordinates to sky view LUT parameters
-// Returns view direction in atmosphere space
-vec3 uvToSkyViewLutParams(vec2 uv, vec3 viewDir, vec3 sunDir, vec3 cameraPos, AtmosphereArgs args) {
-  // Sky view LUT stores a hemisphere view from camera position
-  // uv.x maps to azimuth angle around the sun direction
-  // uv.y maps to elevation angle from horizon to zenith
-  
-  float azimuth = uv.x * 2.0f * kPi;
-  float elevation = uv.y * kPi - kPi * 0.5f;
-  
-  // Build coordinate system with sun direction
-  vec3 up = normalize(cameraPos);
-  vec3 sunRight = normalize(cross(up, sunDir));
-  vec3 sunUp = cross(sunDir, sunRight);
-  
-  // Rotate view direction
-  float cosElevation = cos(elevation);
-  vec3 dir = sunDir * sin(elevation) + 
-             cosElevation * (sunRight * cos(azimuth) + sunUp * sin(azimuth));
-  
-  return normalize(dir);
-}
-
 // ============================================================================
 // Per-moon physical irradiance scaffold (fork) — shared across all moon-
 // lighting consumers (disk, cloud, atmospheric coupling, surface NEE, halo).
@@ -486,18 +463,17 @@ vec3 evalAtmosphereRadiance(
 }
 
 // ============================================================================
-// Procedural Cloud Layer
+// Procedural Cloud Layer — shared geometry & profile helpers
 // ============================================================================
-// Analytical cloud rendering via ray/plane intersection with a cloud dome at
-// fixed altitude. Density is computed from FBM noise scaled by coverage.
-// Shading uses a simple single-scatter approximation: sun transmittance through
-// the slab plus Henyey-Greenstein forward scatter for silver lining, mixed with
-// ambient sky/night light.
+// Shared building blocks for the cloud system: slab/dome ray intersection,
+// height-fraction and cloud-type profile lookups, and the per-frame ground
+// shadow term. Density is driven by FBM noise scaled by coverage.
 //
 // The cloud layer is treated as a flat layer above the spherical planet. For a
 // given view direction we compute the intersection with a sphere at the cloud
-// altitude, sample the noise at that point, and then composite (alpha, color).
-// Returns cloud radiance premultiplied by coverage in .rgb and coverage in .a.
+// altitude and sample the noise at that point. These helpers are consumed by
+// the cloud_render compute pass and the secondary dome LUT bake (the per-ray
+// analytical sky-pass render that once also used them was removed 2026-06-19).
 
 // Effective planet radius for the cloud sphere. cloudCurvature=0 reproduces
 // the real planet radius (very subtle dome at Earth scale). Higher values
@@ -618,10 +594,10 @@ float cloudTypeProfileIntegralFromTop(float hf, float type) {
 // Translation units that bind the cloud height LUT define
 // ATMOSPHERE_CLOUD_HEIGHT_LUT_AVAILABLE and declare globals named
 // AtmosphereCloudHeightLut + AtmosphereCloudHeightLutSampler at their own
-// binding slots. cloud_render.comp.slang is the only such TU today; voxel
-// grid bakers, the cloud-noise baker, the height LUT baker itself, and the
-// analytical evalClouds path in atmosphere_sky.slangh all fall back to the
-// procedural curve via the #else branch below.
+// binding slots. cloud_render.comp.slang and cloud_secondary_lut.comp.slang
+// are such TUs; the voxel grid bakers, the cloud-noise baker, and the height
+// LUT baker itself all fall back to the procedural curve via the #else branch
+// below.
 //
 // The LUT is keyed (typeSlice, heightFrac) -> (R = density envelope, G =
 // coverage threshold scale). The R-only `cloudHeightProfile` overload returns

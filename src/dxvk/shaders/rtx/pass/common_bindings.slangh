@@ -198,8 +198,8 @@ SamplerState AtmosphereSkyViewSampler;
 // rgb = premultiplied cloud radiance, a = view transmittance, keyed
 // (azimuth, elevation = (pi/2)*v^2) via cloudDomeDirToUv. Baked per frame by
 // cloud_secondary_lut.comp.slang with the same Nubis march the visible cloud
-// RT uses. Consumed by evalSkyRadiance's non-primary branch in place of the
-// per-ray analytical evalClouds march; sampled with AtmosphereSkyViewSampler
+// RT uses. Consumed by evalSkyRadiance's non-primary (indirect / PSR /
+// reflection) branch; sampled with AtmosphereSkyViewSampler
 // (REPEAT-U wraps the azimuth seam, CLAMP-V pins the horizon/zenith rows).
 layout(binding = BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)
 Texture2D<float4> AtmosphereCloudSecondaryLut;
@@ -209,7 +209,7 @@ Texture2D<float4> AtmosphereCloudSecondaryLut;
 // cloud_placement_map_baker.comp.slang (re-baked live when its inputs
 // change): R = cluster field, G = top-height jitter, B = base lift. Drives
 // the per-column cloud model inside the density samplers; consumed here by
-// the analytical evalClouds fallback + its shadow taps. Sampled with the
+// those samplers and their shadow-march taps. Sampled with the
 // linear/REPEAT cloud noise sampler (BINDING_ATMOSPHERE_CLOUD_NOISE_SAMPLER).
 layout(binding = BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP)
 Texture2D<float4> AtmosphereCloudPlacementMap;

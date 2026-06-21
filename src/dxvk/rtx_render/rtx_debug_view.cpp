@@ -174,8 +174,8 @@ namespace dxvk {
                                 "pixel cloud radiance from the page-137 two-HG-lobe direct term +\n"
                                 "page-142 ambient pow(1 - dim_profile, 0.5) * exp(-D_ambient).\n"
                                 "Visual gate: toggle this debug view off and on with Sky Mode = Physical\n"
-                                "Atmosphere active to A/B against the existing analytical evalClouds\n"
-                                "rendering. Expected improvements: top-bright / bottom-dark cumulus\n"
+                                "Atmosphere active to inspect the raw cloud render before compositing.\n"
+                                "Expected look: top-bright / bottom-dark cumulus\n"
                                 "gradient, less-flat shadow side, stronger silver lining at backlit\n"
                                 "edges. Tune via the Atmosphere -> Clouds -> Nubis Cubed Lighting\n"
                                 "ImGui block (six magic-constant sliders)."},

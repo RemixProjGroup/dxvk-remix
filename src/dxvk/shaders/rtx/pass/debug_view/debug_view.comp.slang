@@ -493,10 +493,10 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
       // lighting equations (top-bright / bottom-dark cumulus gradient,
       // silver lining at backlit edges, less-flat shadow side).
       //
-      // Compare against the live sky (debug view off) to A/B this against
-      // the existing analytical evalClouds rendering. The cloud-render RT
-      // value is the same scene as the live sky's cloud layer minus the
-      // sky-miss composite (which still uses analytical clouds in C4).
+      // Compare against the live sky (debug view off) to inspect the raw
+      // cloud-render output before compositing. The cloud-render RT value is
+      // the same scene as the live sky's cloud layer minus the sky-miss
+      // composite.
       vec4 cloudSample = DebugViewCloudRenderRT.Load(int3(threadId, 0));
       value = vec4(cloudSample.rgb, 1.0f);
     }
