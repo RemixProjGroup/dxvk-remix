@@ -152,7 +152,6 @@ namespace fork_hooks {
 
       // ---- Sun (always present in Numos; radiance 0 below horizon) ----
       {
-        const float g = std::min(std::max(args.mieAnisotropy, 0.0f), 1.0f);
         const Vector3 sunDirYUp(args.sunDirection.x, args.sunDirection.y, args.sunDirection.z);
         Vector3 radiance(0.0f, 0.0f, 0.0f);
         if (sunDirYUp.y > 0.0f) {
@@ -163,18 +162,14 @@ namespace fork_hooks {
           const Vector3 sample = fhMul(sunIll, T) * (mieModulation * sunVisibility * args.sunRayBrightness * 0.5f);
           radiance = sample * (radScale / kFhPi);
         }
-        // Shadow softness: the physical sun disc (~0.27deg half-angle) gives very
-        // sharp shadows. The old bespoke NEE used a much wider mieAnisotropy-driven
-        // cone (getSunSoftShadowParams: mix(0.6, 0.008, g^2), ~2.5deg at g=0.97)
-        // for soft shadows. Mirror that as the distant light's half-angle so the
-        // tuned look transfers; the cone never goes below the physical sun radius.
-        // Half-angle does not affect brightness (contribution ~= pi * m_radiance).
-        const float softCone = 0.6f + (0.008f - 0.6f) * (g * g);                // mix(0.6, 0.008, g^2)
-        const float sunHalfAngle = std::max(softCone, args.sunAngularRadius);
+        // Half-angle = the physical sun disc radius (sunSize/2). Real sun shadows
+        // are crisp near contact and soften with distance — RTXDI/DLSS-RR denoise
+        // the hard edge fine, so no artistic cone widening is needed. Half-angle
+        // does not affect brightness (contribution ~= pi * m_radiance).
         const Vector3 toSun = toWorld(sunDirYUp);
         const Vector3 propDir = (sunDirYUp.y > 0.0f) ? Vector3(-toSun.x, -toSun.y, -toSun.z)
                                                      : Vector3(0.0f, -1.0f, 0.0f);
-        ensureLight(g_atmoLights.sun, propDir, sunHalfAngle, radiance);
+        ensureLight(g_atmoLights.sun, propDir, args.sunAngularRadius, radiance);
       }
 
       // ---- Moons (lazily created; mirror sampleAtmosphereMoonLight radiance) ----
@@ -207,9 +202,8 @@ namespace fork_hooks {
         }
         const Vector3 toMoon = toWorld(dirN);
         const Vector3 propDir = lit ? Vector3(-toMoon.x, -toMoon.y, -toMoon.z) : Vector3(0.0f, -1.0f, 0.0f);
-        // Match the old moon soft-shadow cone: clamp(angularRadius * 0.5, 0.005, 0.6).
-        const float moonHalfAngle = std::min(std::max(m.angularRadius * 0.5f, 0.005f), 0.6f);
-        ensureLight(g_atmoLights.moons[i], propDir, moonHalfAngle, radiance);
+        // Half-angle = the moon's physical angular radius (same as the sun).
+        ensureLight(g_atmoLights.moons[i], propDir, m.angularRadius, radiance);
       }
     }
   }  // anonymous namespace
