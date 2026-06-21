@@ -610,15 +610,13 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // former padMoonNee0/1 slots so the CB layout is unchanged.
   args.sunShadowMaxSamples             = static_cast<uint32_t>(std::max(RtxOptions::sunShadowMaxSamples(), 0));
   args.moonShadowMaxSamples            = static_cast<uint32_t>(std::max(RtxOptions::moonShadowMaxSamples(), 0));
-  // Perf-bisect shader gates (fork — 2026-06-11, diagnostic). Packed into
-  // the former padMoonNee2 slot: bit 0 = skip atmosphere NEE, bit 1 = flat
-  // sky miss. Both options default true (= bits clear = production path).
-  args.debugSkyBisectFlags             = (RtxOptions::debugEnableAtmosphereNee()  ? 0u : 1u)
-                                       | (RtxOptions::debugEnableSkyMissShading() ? 0u : 2u)
-  // bit 2 (fork — experiment 2026-06-21): when the sun/moon are injected as real
-  // distant lights, gate OFF the bespoke evalAtmosphereSunNEE/MoonNEE so the sun
-  // is not double-counted (the real light carries it through the standard NEE).
-                                       | (RtxOptions::useDirectionalLights()      ? 4u : 0u);
+  // Perf-bisect shader gate (fork — 2026-06-11, diagnostic). Packed into the
+  // former padMoonNee2 slot. Only bit 1 (= flat sky miss) remains; bit 0
+  // (atmosphere NEE) and bit 2 (bespoke-NEE skip for directional lights) were
+  // retired 2026-06-21 with the removal of the bespoke sun/moon NEE. Option
+  // defaults true (= bit clear = production path). Bit 1 is read at
+  // atmosphere_sky.slangh.
+  args.debugSkyBisectFlags             = (RtxOptions::debugEnableSkyMissShading() ? 0u : 2u);
 
   // ----- Moon cloud-look + halo shape constants (fork, Phase 3 Task 2) -----
   // moonSilverLiningIntensity / moonHaloGlowStrength are master multipliers

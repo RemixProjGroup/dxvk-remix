@@ -2299,3 +2299,24 @@ Pure dev-menu/label rename to stop the word collision with the new Atmosphere �
 - **`docs/CloudSystem.md`, `docs/integrators/weather-presets.md`** — updated the dev-menu sub-tree name references (keys unchanged).
 
 ---
+
+## Workstream — Remove the bespoke atmosphere sun/moon NEE (fork — 2026-06-21)
+
+Graduates the "sun/moon as real distant lights" work from an experiment-with-fallback to the **sole** sun/moon path in Numos, deleting the now-redundant bespoke atmosphere NEE that was previously only runtime-gated off. Supersedes the earlier `evalAtmosphere*NEE*` touchpoint entries above. Runtime-neutral at default settings (the bespoke path was already gated off whenever `useDirectionalLights` was on, the default). Cloud-on-terrain shadows are unaffected — they fold per-pixel onto the real sun distant light in the integrators (gated on `atmosphereCloudShadowed` + `cloudVoxelShadowsEnable`); the volumetric fold via `sampleAtmosphereSunLightVolume` is unchanged.
+
+- **`src/dxvk/shaders/rtx/algorithm/integrator_direct.slangh`** — fork-owned change.
+  *Deleted `evalAtmosphereSunNEE` + `evalAtmosphereMoonNEE` and their gated call block; the direct path now lights the atmosphere sun/moon purely via the standard NEE on the injected distant lights.*
+- **`src/dxvk/shaders/rtx/algorithm/integrator_indirect.slangh`** — fork-owned change.
+  *Deleted `evalAtmosphereSunNEESecondary` + `evalAtmosphereMoonNEESecondary` and their gated secondary call block.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *Deleted the now-orphaned surface samplers `sampleAtmosphereSunLight` / `sampleAtmosphereMoonLight` and their private `pickMoon` helper (only the bespoke NEE called them). The volumetric samplers (`sampleAtmosphereSunLightVolume`, …) are retained — still used by the RTXDI volume integrator.*
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Removed the `useDirectionalLights` RTX_OPTION (injection is now unconditional in Numos) and the dead `debugEnableAtmosphereNee` diagnostic; reworded `directionalLightRadianceScale` (no longer references the toggle).*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`debugSkyBisectFlags` now packs only bit 1 (`debugEnableSkyMissShading`); bit 0 (atmosphere NEE) and bit 2 (directional-lights skip) retired with the bespoke NEE.*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *`fhSyncAtmosphereDistantLights` now gates on `skyMode == Numos` only (dropped the `useDirectionalLights` condition); comments de-experimentalised.*
+- **`docs/CloudSystem.md`** — updated the cloud-on-terrain shadow section to the real-distant-light fold; corrected `cloudShadowStrength` default (0 → **0.5**).
+- **`RtxOptions.md`** — REGEN PENDING (drops `useDirectionalLights` + `debugEnableAtmosphereNee`).
+
+---

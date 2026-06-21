@@ -84,21 +84,25 @@ plus one consumer wire-in inside the volumetric pass.
 
 The cloud field participates in three places outside its own RT:
 
-- **Cloud-on-terrain shadows folded onto the sun (re-architected 2026-06-19).**
+- **Cloud-on-terrain shadows folded onto the sun (sun-only).**
   A cloud shadow is just attenuation of the SUN along the sun direction, so it
-  is applied where that is physically true: onto the sun's own radiance inside
-  the sun next-event-estimation, *before* the sun is summed with other lights
-  and *before* denoising. When `cloudVoxelShadowsEnable` is true (default), the
-  surface and volume sun-NEE helpers
-  ([`sampleAtmosphereSunLight` / `sampleAtmosphereSunLightVolume`](../src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh))
-  project the receiver position up to the slab base along the sun direction,
-  sample `D_sun` at the entry voxel, apply Beer-Lambert
-  `transmittance = exp(-OD * cloudDensity * cloudShadowMarchStrength)`, and fold
-  it onto the sun radiance as
-  `result.radiance *= pow(transmittance, cloudShadowFactorStrength)`. This
-  replaces the older `evalCloudGroundShadow` 2D coverage proxy for the NEE path
-  -- terrain shows cumulus-shaped drifting shadow patches matching the cloud
-  silhouettes overhead, and only the sun is darkened.
+  is applied where that is physically true: onto the sun's own radiance, *before*
+  the sun is summed with other lights and *before* denoising. The sun is a real
+  Remix distant light (see "directional lights" below), so the surface fold lives
+  in the standard sun NEE: when `cloudVoxelShadowsEnable` is true (default) and
+  the sampled light is the flagged atmosphere sun (`atmosphereCloudShadowed`), the
+  direct integrator
+  ([`integrator_direct.slangh`](../src/dxvk/shaders/rtx/algorithm/integrator_direct.slangh))
+  samples the cloud transmittance toward the sun via
+  `sampleCloudGroundShadow_OptionB` and folds it onto the light's NEE radiance as
+  `radiance *= pow(cloudT, cloudShadowFactorStrength)`. The volumetric path folds
+  the same factor onto the per-froxel sun radiance in
+  `sampleAtmosphereSunLightVolume`. Terrain shows cumulus-shaped drifting shadow
+  patches matching the cloud silhouettes overhead, and only the sun is darkened --
+  indoors it is automatically a no-op (the sun's direct contribution is already
+  ~0 from the roof-occluded shadow ray), and lamps / point lights are never
+  touched. (Before 2026-06-21 the fold lived in a bespoke `sampleAtmosphereSunLight`
+  sun NEE; that path was removed when the sun became a real distant light.)
 
   **Why this is correct, and what it deleted.** Because the factor rides the
   sun's contribution alone (multiplied alongside the geometric sun-shadow ray):
@@ -106,10 +110,9 @@ The cloud field participates in three places outside its own RT:
   viewmodels, particles) -- the sun's direct contribution is already ~0 indoors
   from the roof-occluded NEE shadow ray, so multiplying by the cloud factor
   changes nothing, with no per-pixel geometry test. Lamps/point lights are never
-  touched. The secondary sun NEE (`evalAtmosphereSunNEESecondary`) shares
-  `sampleAtmosphereSunLight`, so bounce light off cloud-shadowed ground is
-  correct for free, with no double-count (the legitimate sky-bounce reduction
-  lives in `evalSkyRadiance`). This single change deleted the entire
+  touched. The same fold is applied to the sun distant light in the indirect
+  integrator, so bounce light off cloud-shadowed ground is correct for free, with
+  no double-count (the legitimate sky-bounce reduction lives in `evalSkyRadiance`). This single change deleted the entire
   geometry-blindness compensation stack: the sealed-interior zenith up-ray gate,
   the viewmodel/decal camera-origin correction (and its `Surface::isDecalCategory`
   flag across three C++ files), the camera-side triangle-normal flip, and the
@@ -180,9 +183,9 @@ The cloud field participates in three places outside its own RT:
    - `cloudAltitude` / `cloudThickness` -- vertical placement.
    - `cloudShadowMarchStrength` -- pre-denoise darkness of cloud-on-terrain
      shadows (multiplier inside the `exp(-OD * density * march)` term).
-   - `cloudShadowStrength` -- master enable for the same; defaults to 0,
-     so out of the box cloud shadows on terrain are *off* even though
-     the voxel grid is baked. Raise to 1.0 for the physical baseline.
+   - `cloudShadowStrength` -- master fade for the same; defaults to 0.5,
+     so out of the box cloud shadows on terrain are at half strength. 0
+     disables them; 1.0 is the full physical baseline.
    - `cloudShadowFactorStrength` -- artistic contrast curve on the cloud
      shadow, applied as `pow(cloudTransmittance, strength)` where the shadow is
      folded onto the SUN's radiance in the NEE (it lived in composite before the
@@ -303,26 +306,28 @@ future-work item.
   particularly large mirror-like puddles at sunset, where the
   reflected sky's cloud lighting model does not match the direct
   sky's.
-- **Cloud-on-terrain shadow strength defaults to 0.**
+- **Cloud-on-terrain shadow strength defaults to 0.5.**
   `cloudShadowStrength` is the master fade between "full sun on the
   ground" and "voxel-baked cloud shadow on the ground." It ships at
-  0 so the default appearance is unchanged from the analytical baseline.
-  Raise it to 1.0 to see the cumulus-shaped drift patches; tune the
-  visible contrast separately with `cloudShadowFactorStrength`.
+  0.5 (half strength); set 0 to disable, 1.0 for the full physical
+  baseline. Tune the visible contrast separately with
+  `cloudShadowFactorStrength`.
 - **Sky-ambient ships off.** `cloudSkyAmbientStrength = 0` by default
   so the volumetric pass is bit-identical to the no-fork baseline.
   This is intentional rollback safety; in-game review flips it on.
 
 ## Future work
 
-- **Sun-only direct cloud factor (DONE 2026-06-19).** The cloud shadow now
-  folds onto the sun's radiance pre-denoise inside `sampleAtmosphereSunLight` /
-  `sampleAtmosphereSunLightVolume` (option (b) from the prior plan), so it
-  darkens only the sun and is automatically correct indoors for every surface
-  type. The whole geometry-blindness compensation stack (sealed-interior zenith
-  gate, viewmodel/decal origin correction + `isDecalCategory` flag, normal flip,
+- **Sun-only direct cloud factor (DONE).** The cloud shadow folds onto the sun's
+  radiance pre-denoise — on the surface via the real sun distant light in the
+  direct/indirect integrators (gated on `atmosphereCloudShadowed`), and in fog via
+  `sampleAtmosphereSunLightVolume` — so it darkens only the sun and is
+  automatically correct indoors for every surface type. The whole
+  geometry-blindness compensation stack (sealed-interior zenith gate,
+  viewmodel/decal origin correction + `isDecalCategory` flag, normal flip,
   dusk/dawn horizon gate) and the screen-space `PrimaryCloudShadowFactor` system
-  were deleted. The one residual is the accepted tradeoff of option (b): the
+  were deleted, as was the bespoke `sampleAtmosphereSunLight` sun NEE (2026-06-21,
+  when the sun became a real distant light). The one residual is the accepted tradeoff of option (b): the
   per-cumulus pattern now passes through NRD / DLSS-RR and the denoiser can
   soften the crisp shadow edges. If that softening reads as too mushy in review,
   the follow-on is option (a) -- a dedicated denoised sun-direct buffer with its

@@ -35,19 +35,17 @@ namespace dxvk {
 namespace fork_hooks {
 
   // ===========================================================================
-  // Sun + moon as real Remix distant lights (fork — experiment 2026-06-21)
+  // Sun + moon as real Remix distant lights (fork — 2026-06-21)
   //
-  // When rtx.atmosphere.useDirectionalLights is on, physical-atmosphere mode
-  // injects the sun (and each enabled moon) as externally-tracked
-  // RtDistantLight sources driven by the atmosphere model. They then flow
-  // through the standard NEE/RTXDI path, so SSS / decals / viewmodels are
-  // handled by the unified pipeline (the bespoke evalAtmosphereSunNEE/MoonNEE
-  // is gated off via debugSkyBisectFlags bit 2). The radiance is the CPU port
-  // of sampleAtmosphereSunLight / sampleAtmosphereMoonLight divided by pi: a
+  // In physical-atmosphere mode the sun (and each enabled moon) is injected as
+  // an externally-tracked RtDistantLight driven by the atmosphere model — the
+  // sole sun/moon path in Numos. They flow through the standard NEE/RTXDI path,
+  // so SSS / decals / viewmodels are handled by the unified pipeline. The
+  // radiance is the CPU port of the atmosphere sun/moon sample divided by pi: a
   // distant light contributes radiance/sin^2(halfAngle) * coneSolidAngle ~=
-  // pi*radiance of effective irradiance, vs the bespoke NEE which used the
-  // sample radiance directly. KNOWN v1 limitation: no cloud-on-terrain shadow
-  // (a uniform distant light can't carry the per-pixel cloud transmittance).
+  // pi*radiance of effective irradiance. Cloud-on-terrain shadows are folded
+  // per-pixel onto the real sun in the NEE (integrator_direct.slangh). The
+  // older bespoke evalAtmosphereSunNEE/MoonNEE path was removed 2026-06-21.
   // ===========================================================================
   namespace {
     constexpr float kFhPi = 3.14159265358979323846f;
@@ -116,8 +114,9 @@ namespace fork_hooks {
     }
 
     void fhSyncAtmosphereDistantLights(RtxContext& ctx, const AtmosphereArgs& args) {
-      // Feature / mode gate. Drop any previously-injected lights when off.
-      if (!RtxOptions::useDirectionalLights() || RtxOptions::skyMode() != SkyMode::Numos) {
+      // Mode gate. Sun/moon distant lights are the sole atmosphere sun path in
+      // Numos; drop any previously-injected lights when not in Numos.
+      if (RtxOptions::skyMode() != SkyMode::Numos) {
         fhDropAtmosphereLights();
         return;
       }
@@ -356,8 +355,8 @@ namespace fork_hooks {
     }
 
     // Inject / update (or drop) the sun + moon distant lights. Called
-    // unconditionally — the helper internally gates on useDirectionalLights +
-    // skyMode and drops its lights when either is off. Uses the atmosphere args
+    // unconditionally — the helper internally gates on skyMode and drops its
+    // lights when not in Numos. Uses the atmosphere args
     // just written above; when not in Numos those are stale but unread (the
     // helper early-outs before touching them). One-frame latency vs the light
     // manager's prepareSceneData linearization is acceptable (the sun moves
