@@ -165,14 +165,17 @@ namespace fork_hooks {
           const Vector3 sample = fhMul(sunIll, T) * (mieModulation * sunVisibility * args.sunRayBrightness * 0.5f);
           radiance = sample * (radScale / kFhPi);
         }
-        // Half-angle = the physical sun disc radius (sunSize/2). Real sun shadows
-        // are crisp near contact and soften with distance — RTXDI/DLSS-RR denoise
-        // the hard edge fine, so no artistic cone widening is needed. Half-angle
-        // does not affect brightness (contribution ~= pi * m_radiance).
+        // Half-angle: physical sun disc radius (sunSize/2) by default, or the
+        // decoupled sunShadowSoftnessDeg override (>0) so shadows can be softened
+        // without enlarging the visible sun disc. Half-angle does not affect
+        // brightness (contribution ~= pi * m_radiance).
+        const float softnessDeg = RtxOptions::sunShadowSoftnessDeg();
+        const float sunHalfAngle = (softnessDeg > 0.0f) ? (softnessDeg * (kFhPi / 180.0f))
+                                                        : args.sunAngularRadius;
         const Vector3 toSun = toWorld(sunDirYUp);
         const Vector3 propDir = (sunDirYUp.y > 0.0f) ? Vector3(-toSun.x, -toSun.y, -toSun.z)
                                                      : Vector3(0.0f, -1.0f, 0.0f);
-        ensureLight(g_atmoLights.sun, propDir, args.sunAngularRadius, radiance, /*cloudShadowed=*/true);
+        ensureLight(g_atmoLights.sun, propDir, sunHalfAngle, radiance, /*cloudShadowed=*/true);
       }
 
       // ---- Moons (lazily created; mirror sampleAtmosphereMoonLight radiance) ----
@@ -725,7 +728,17 @@ namespace fork_hooks {
 
       if (ImGui::TreeNode("Sun")) {
         RemixGui::DragFloat("Sun Size", &RtxOptions::sunSizeObject(), 0.01f, 0.0f, 10.0f, "%.3f\xc2\xb0", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover("Size of sun disc in degrees");
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Sun angular diameter in degrees (Earth's sun is ~0.545\xc2\xb0). Sets the "
+            "visible sun disc, and (unless Shadow Softness below overrides it) the "
+            "sun light's half-angle = Sun Size / 2, which drives shadow softness.");
+
+        RemixGui::DragFloat("Shadow Softness", &RtxOptions::sunShadowSoftnessDegObject(), 0.01f, 0.0f, 10.0f, "%.3f\xc2\xb0", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Decoupled sun shadow softness (the distant light's angular half-angle, "
+            "degrees). 0 = physical: track Sun Size / 2. When > 0 it overrides the "
+            "half-angle WITHOUT changing the visible sun disc \xe2\x80\x94 larger = softer "
+            "penumbra, for soft shadows under a small, crisp sun.");
 
         RemixGui::DragFloat("Sun Intensity", &RtxOptions::sunIntensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Strength of Sun");

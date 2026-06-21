@@ -1214,6 +1214,11 @@ namespace dxvk {
     // Atmosphere parameters
     RTX_OPTION("rtx.atmosphere", bool, sunDisc, true, "Include the sun itself in the output.");
     RTX_OPTION("rtx.atmosphere", float, sunSize, 0.545f, "Size of sun disc in degrees.");
+    RTX_OPTION("rtx.atmosphere", float, sunShadowSoftnessDeg, 0.0f,
+               "Decoupled sun shadow softness, as the distant light's angular half-angle in degrees. "
+               "0 = physical (use sunSize / 2, so shadow softness tracks the visible disc). When > 0 it "
+               "overrides the sun light's half-angle WITHOUT changing the visible sun disc — larger = "
+               "softer penumbra, for artistic soft shadows under a small sun.");
     RTX_OPTION("rtx.atmosphere", float, sunIntensity, 1.0f, "Strength of Sun.");
     RTX_OPTION("rtx.atmosphere", float, sunElevation, 15.0f,
                "Sun elevation in degrees. Game-drivable per-frame; persists when saved unless overridden by a runtime push.");
