@@ -1455,14 +1455,13 @@ namespace dxvk {
                "internal kMoonAirglowScale constant in the shader, so this knob is O(1)). The "
                "cloud volume gets a uniform sky-bounce from each enabled moon scaled by this. "
                "Default 1.0 = calibrated level.");
-    RTX_OPTION("rtx.atmosphere", float, moonSilverLiningIntensity, 1.0f,
+    RTX_OPTION("rtx.atmosphere", float, moonSilverLiningIntensity, 2.0f,
                "Master multiplier on the combined cloud-moon silver-lining contribution "
-               "(Lambert diffuse + HG phase). Default 1.0 = current calibrated look. "
-               "Composes with moonCloudDiffuseGain/PhaseGain for ratio tuning.");
-    RTX_OPTION("rtx.atmosphere", float, moonHaloGlowStrength, 1.0f,
+               "(Lambert diffuse + HG phase). Composes with moonCloudDiffuseGain/PhaseGain "
+               "for ratio tuning.");
+    RTX_OPTION("rtx.atmosphere", float, moonHaloGlowStrength, 2.0f,
                "Master multiplier on the combined moon halo + ambient airglow contribution. "
-               "Default 1.0 = current calibrated look. Composes with moonHaloMagnitude / "
-               "moonAmbientAirglow for ratio tuning.");
+               "Composes with moonHaloMagnitude / moonAmbientAirglow for ratio tuning.");
 
     // Cloud parameters (procedural FBM cloud layer)
     RTX_OPTION("rtx.atmosphere", bool, cloudEnabled, true, "Enable procedural cloud rendering.");
