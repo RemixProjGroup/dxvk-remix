@@ -179,21 +179,17 @@ struct AtmosphereArgs {
   float cloudMoonBrightness;             // Per-path stylistic multiplier on cloud-moon directional + ambient airglow (Phase 3)
 
   float haloMoonBrightness;               // Per-path stylistic multiplier on disk halo Gaussian glow (Phase 3)
-  // NEE shadow-ray budget clamps (fork — 2026-06-11, perf). Sun NEE traces
-  // an anisotropy-driven 1-12 visibility rays per primary pixel (half that
-  // per indirect vertex); moon NEE traces a constant 4. In the denoised
-  // pipeline one jittered ray per frame converges, so these clamp the loop
-  // counts: 0 = legacy uncapped behavior, N = at most N rays on the primary
-  // path (secondary keeps its half-rate derivation from the clamped value).
-  // Live in the former padMoonNee0/1 slots so the CB layout is unchanged.
-  uint  sunShadowMaxSamples;              // 0 = legacy anisotropy-driven count
-  uint  moonShadowMaxSamples;             // 0 = legacy constant 4
-  // Perf-bisect shader toggles (fork — 2026-06-11, diagnostic). Rides the
-  // former padMoonNee2 slot as two packed gates:
-  //   bit 0: skip atmosphere sun+moon NEE entirely (primary + secondary)
-  //   bit 1: flat sky miss — evalSkyRadiance returns a constant grey
-  //          immediately, isolating the full per-ray miss-path cost
-  // Both 0 in production; ImGui "Perf Bisect (Diagnostic)" tree drives them.
+  // Reclaimable pads — were sunShadowMaxSamples / moonShadowMaxSamples (the
+  // bespoke sun/moon NEE soft-shadow ray caps), removed 2026-06-21 with that NEE
+  // path. Kept in the former padMoonNee0/1 slots so the CB layout is unchanged.
+  uint  pad_sunShadowMaxSamples;
+  uint  pad_moonShadowMaxSamples;
+  // Perf-bisect shader toggle (fork — 2026-06-11, diagnostic). Rides the former
+  // padMoonNee2 slot; only bit 1 remains in use:
+  //   bit 1: flat sky miss — evalSkyRadiance returns a constant grey immediately,
+  //          isolating the full per-ray miss-path cost
+  // (bit 0, "skip atmosphere NEE", was retired 2026-06-21 with the bespoke NEE.)
+  // Bit clear in production; ImGui "Perf Bisect (Diagnostic)" tree drives it.
   uint  debugSkyBisectFlags;
 
   // ----- Moon cloud-look + halo shape constants (fork, Phase 3 Task 2) -----

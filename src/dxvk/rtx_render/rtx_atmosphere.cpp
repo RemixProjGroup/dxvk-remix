@@ -606,10 +606,6 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.surfaceMoonBrightness           = RtxOptions::surfaceMoonBrightness();
   args.cloudMoonBrightness             = RtxOptions::cloudMoonBrightness();
   args.haloMoonBrightness              = RtxOptions::haloMoonBrightness();
-  // NEE shadow-ray budget clamps (fork — 2026-06-11, perf). Live in the
-  // former padMoonNee0/1 slots so the CB layout is unchanged.
-  args.sunShadowMaxSamples             = static_cast<uint32_t>(std::max(RtxOptions::sunShadowMaxSamples(), 0));
-  args.moonShadowMaxSamples            = static_cast<uint32_t>(std::max(RtxOptions::moonShadowMaxSamples(), 0));
   // Perf-bisect shader gate (fork — 2026-06-11, diagnostic). Packed into the
   // former padMoonNee2 slot. Only bit 1 (= flat sky miss) remains; bit 0
   // (atmosphere NEE) and bit 2 (bespoke-NEE skip for directional lights) were

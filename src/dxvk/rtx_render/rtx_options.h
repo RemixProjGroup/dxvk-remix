@@ -1869,27 +1869,6 @@ namespace dxvk {
                "reflected/indirect clouds match the primary Nubis look. Disable "
                "to make secondary sky-miss rays cloudless.");
 
-    // NEE shadow-ray budget clamps (fork — 2026-06-11, perf). With physical
-    // atmosphere on, sun NEE traces an anisotropy-driven 1-12 visibility
-    // rays per primary pixel per frame (plus half that per indirect bounce
-    // vertex), and moon NEE traces a constant 4 at night — bisect-measured
-    // as the dominant share of the skyMode frame-time delta. The denoised
-    // pipeline (NRD / DLSS-RR) temporally converges one blue-noise-jittered
-    // ray per frame to the same soft penumbra, so the multi-ray loop is
-    // oversampling. 0 = legacy uncapped count.
-    RTX_OPTION("rtx.atmosphere", int, sunShadowMaxSamples, 1,
-               "Cap on sun soft-shadow visibility rays per primary pixel "
-               "(secondary bounces use half the capped value, min 1). "
-               "Default 1 (in-game validated 2026-06-11: large perf win, no "
-               "penumbra smudging — the denoiser temporally converges a "
-               "single jittered ray to the same softness). 0 = legacy "
-               "anisotropy-driven count (1-12).");
-    RTX_OPTION("rtx.atmosphere", int, moonShadowMaxSamples, 1,
-               "Cap on moon soft-shadow visibility rays per primary pixel "
-               "at night (secondary bounces use half the capped value, "
-               "min 1). Default 1 (in-game validated 2026-06-11). "
-               "0 = legacy constant 4.");
-
     // Cloud voxel-grid re-bake granularity (fork — 2026-06-11, perf). The
     // D_sun / D_ambient grids re-baked every frame; the perf-bisect freeze
     // showed a large win with only slowly-accumulating staleness (the bake

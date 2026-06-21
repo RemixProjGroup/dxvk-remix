@@ -1165,9 +1165,8 @@ namespace fork_hooks {
               "Feeds the sky-view LUT, so clouds inherit the warmer ambient.");
 
           // Sky perf workstream knobs (fork — 2026-06-11) are conf-only by
-          // design: skyLutCacheKeySplitEnable, sunShadowMaxSamples,
-          // moonShadowMaxSamples, skyViewRebakeGranularityDeg and the
-          // debug* bisect toggles all default to their validated production
+          // design: skyLutCacheKeySplitEnable, skyViewRebakeGranularityDeg and
+          // the debug* bisect toggles all default to their validated production
           // values and stay out of the UI (user decision after the in-game
           // validation pass — "this is in a good enough spot now").
 
