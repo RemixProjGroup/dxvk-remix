@@ -137,7 +137,12 @@ namespace fork_hooks {
         if (!dl) {
           return;
         }
-        const RtLight rtl(*dl);
+        RtLight rtl(*dl);
+        // Mark dynamic so updateLightStaticSleep applies *light = newLight every
+        // frame. Without this the light is treated as static and put to sleep
+        // after getNumFramesToPutLightsToSleep() frames — which froze the sun's
+        // direction (it stopped tracking sunRotation/sunElevation).
+        rtl.isDynamic = true;
         if (slot == nullptr) {
           slot = lm.createExternallyTrackedLight(rtl);
         } else {
