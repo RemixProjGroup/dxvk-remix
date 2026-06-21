@@ -1015,26 +1015,34 @@ namespace dxvk { namespace fork_weather {
       ImGui::TreePop();
     }
 
-    // ---- Cloud Drift sub-tree ----
+    // ---- Weather Variation sub-tree ----
+    // (Renamed from "Cloud Drift" 2026-06-21 to stop the word collision with the
+    // Atmosphere → Clouds → "Cloud Motion" tree — this one is the slow,
+    // preset-driven wander of weather PARAMETERS (coverage + wind), not the
+    // per-frame field motion. The underlying __weather.drift_* API keys and the
+    // internal m_drift* members are unchanged.)
     ImGui::Separator();
-    if (ImGui::TreeNode("Cloud Drift")) {
+    if (ImGui::TreeNode("Weather Variation")) {
+      ImGui::TextDisabled("Slow preset-scale wander of coverage + wind. "
+                          "Field motion lives in Atmosphere \xe2\x86\x92 Clouds \xe2\x86\x92 Cloud Motion.");
       // Read raw values from GameStateStore so the sliders show the current
       // plugin-or-dev-menu-written intent, not the smoothed internal state.
       // (The smoothed values are read-only and shown below.)
       float driftSpeed     = readFloatFromGameStateStore("__weather.drift_speed",     1.0f);
       float driftIntensity = readFloatFromGameStateStore("__weather.drift_intensity", 1.0f);
 
-      bool changedSpeed     = ImGui::SliderFloat("Drift speed multiplier",     &driftSpeed,     0.0f, 4.0f, "%.2f");
+      bool changedSpeed     = ImGui::SliderFloat("Variation speed",     &driftSpeed,     0.0f, 4.0f, "%.2f");
       RemixGui::SetTooltipToLastWidgetOnHover(
-        "Scales how fast the drift evolves. 0 = drift frozen. "
+        "Scales how fast the weather variation evolves. 0 = frozen. "
         "Recommended values per preset: clear 0.6, overcast 0.7, "
-        "thunderstorm 2.0. Smoothed with tau = 1.0s.");
+        "thunderstorm 2.0. Smoothed with tau = 1.0s. "
+        "(API key: __weather.drift_speed.)");
 
-      bool changedIntensity = ImGui::SliderFloat("Drift intensity multiplier", &driftIntensity, 0.0f, 3.0f, "%.2f");
+      bool changedIntensity = ImGui::SliderFloat("Variation intensity", &driftIntensity, 0.0f, 3.0f, "%.2f");
       RemixGui::SetTooltipToLastWidgetOnHover(
-        "Scales how big the drift swings are around the preset midpoint. "
-        "0 = drift fully off. Recommended values per preset: clear 0.5, "
-        "overcast 0.7, thunderstorm 1.6.");
+        "Scales how big the variation swings are around the preset midpoint. "
+        "0 = fully off. Recommended values per preset: clear 0.5, "
+        "overcast 0.7, thunderstorm 1.6. (API key: __weather.drift_intensity.)");
 
       if (changedSpeed) {
         char buf[32];
@@ -1047,16 +1055,16 @@ namespace dxvk { namespace fork_weather {
         fork_game_state::GameStateStore::get().set("__weather.drift_intensity", buf);
       }
 
-      ImGui::Text("Drift phase:        %.2f s",  m_driftPhaseSeconds);
+      ImGui::Text("Variation phase:     %.2f s",  m_driftPhaseSeconds);
       ImGui::Text("Speed (smoothed):    %.3f",   m_driftSpeedSmoothed);
       ImGui::Text("Intensity (smoothed):%.3f",   m_driftIntensitySmoothed);
 
-      if (ImGui::Button("Reset drift to defaults")) {
+      if (ImGui::Button("Reset to defaults")) {
         fork_game_state::GameStateStore::get().set("__weather.drift_speed",     "1.0");
         fork_game_state::GameStateStore::get().set("__weather.drift_intensity", "1.0");
       }
       ImGui::SameLine();
-      if (ImGui::Button("Disable drift")) {
+      if (ImGui::Button("Disable variation")) {
         fork_game_state::GameStateStore::get().set("__weather.drift_intensity", "0.0");
       }
 

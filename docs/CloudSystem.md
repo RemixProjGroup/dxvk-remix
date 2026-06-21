@@ -238,7 +238,8 @@ The three sources:
    (see below) as the source of cloud shape change.
 
 3. **Weather-parameter drift** (`__weather.drift_speed` /
-   `__weather.drift_intensity`; dev-menu **Weather -> Cloud Drift**, in
+   `__weather.drift_intensity`; dev-menu **Weather -> Weather Variation**
+   -- renamed from "Cloud Drift" to avoid colliding with Cloud Motion; in
    `rtx_fork_weather.cpp`). Slowly modulates a few *global* weather
    scalars over time so the sky's overall character changes. As of
    2026-06-21 it is **de-pulsed and trimmed**: the old fast layer had a

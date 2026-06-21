@@ -333,7 +333,8 @@ visible step.
 ### Recommended values per preset
 
 These values are starter recommendations. Tune per game using the dev menu's
-"Cloud Drift" sub-tree, then bake the values into your `setWeather` handler.
+"Weather Variation" sub-tree (formerly "Cloud Drift"), then bake the values
+into your `setWeather` handler.
 
 | Preset | drift_speed | drift_intensity | Character |
 |---|---|---|---|

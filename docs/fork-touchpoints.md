@@ -2287,3 +2287,15 @@ Folds the three cloud-motion sources (wind advection, field-evolution morph/boil
 - **`RtxOptions.md`** — REGEN PENDING: reflects the `cloudLayer2StepMax` default change.
 
 ---
+
+## Workstream — Rename weather "Cloud Drift" → "Weather Variation" (fork — 2026-06-21, UI clarity)
+
+Pure dev-menu/label rename to stop the word collision with the new Atmosphere → Clouds → "Cloud Motion" tree. The weather-parameter wander (slow, preset-driven modulation of coverage + wind) is a different layer from the per-frame field motion; calling both "drift"/"motion" in adjacent panels was confusing. The `__weather.drift_*` GameStateStore API keys and the internal `m_drift*` members are UNCHANGED — only user-facing strings moved.
+
+- **`src/dxvk/rtx_render/rtx_fork_weather.cpp`** — fork-owned change.
+  *Subtree "Cloud Drift" → "Weather Variation"; slider/button labels "Drift …" → "Variation …"; tooltips note the unchanged `__weather.drift_*` keys; added a one-line pointer to Cloud Motion.*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *Cloud Motion tree's cross-reference text updated to point at "Weather → Weather Variation".*
+- **`docs/CloudSystem.md`, `docs/integrators/weather-presets.md`** — updated the dev-menu sub-tree name references (keys unchanged).
+
+---

@@ -1447,9 +1447,9 @@ namespace fork_hooks {
         // way the cloud field moves/changes: bulk wind advection, in-place field
         // morphing, and edge boil. All three are integrated by a single per-frame
         // accumulator (RtxAtmosphere::advanceCloudMotion), so the slow weather
-        // "Cloud Drift" (Weather panel) that varies wind speed/direction composes
-        // smoothly here rather than snapping the field. Rates are independent (no
-        // cross-coupling). Any speed at 0 freezes that part.
+        // "Weather Variation" (Weather panel) that varies wind speed/direction
+        // composes smoothly here rather than snapping the field. Rates are
+        // independent (no cross-coupling). Any speed at 0 freezes that part.
         if (ImGui::TreeNode("Cloud Motion")) {
           RemixGui::DragFloat("Wind Speed", &RtxOptions::cloudWindSpeedObject(),
                               0.005f, 0.0f, 1.0f, "%.3f km/s", sliderFlags);
@@ -1480,8 +1480,8 @@ namespace fork_hooks {
               "How fast cloud edge billows churn (km/s), independent of the base "
               "shape. Only active when edge detail strength > 0. 0 = edges frozen.");
 
-          ImGui::TextDisabled("Slow weather-scale wind/coverage drift: Weather "
-                              "\xe2\x86\x92 Cloud Drift");
+          ImGui::TextDisabled("Slow weather-scale wind/coverage wander: Weather "
+                              "\xe2\x86\x92 Weather Variation");
           ImGui::TreePop();
         }
 
