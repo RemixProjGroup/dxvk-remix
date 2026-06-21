@@ -672,7 +672,12 @@ void integrateDirectPath(
     
     // Evaluate direct sun lighting from physical atmosphere
     // (debugSkyBisectFlags bit 0: perf-bisect skip — fork, diagnostic)
-    if (cb.skyMode == 1 && (cb.atmosphereArgs.debugSkyBisectFlags & 1u) == 0u) // Physical atmosphere mode
+    // (debugSkyBisectFlags bit 2: sun/moon are injected as real distant lights
+    //  and sampled via the standard NEE/RTXDI path — skip the bespoke atmosphere
+    //  sun+moon NEE here to avoid double-counting. fork — experiment 2026-06-21.)
+    if (cb.skyMode == 1
+        && (cb.atmosphereArgs.debugSkyBisectFlags & 1u) == 0u
+        && (cb.atmosphereArgs.debugSkyBisectFlags & 4u) == 0u) // Physical atmosphere mode, bespoke sun/moon NEE
     {
       evalAtmosphereSunNEE(
         throughput, pixelCoordinate,

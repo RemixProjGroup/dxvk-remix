@@ -610,7 +610,11 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // the former padMoonNee2 slot: bit 0 = skip atmosphere NEE, bit 1 = flat
   // sky miss. Both options default true (= bits clear = production path).
   args.debugSkyBisectFlags             = (RtxOptions::debugEnableAtmosphereNee()  ? 0u : 1u)
-                                       | (RtxOptions::debugEnableSkyMissShading() ? 0u : 2u);
+                                       | (RtxOptions::debugEnableSkyMissShading() ? 0u : 2u)
+  // bit 2 (fork — experiment 2026-06-21): when the sun/moon are injected as real
+  // distant lights, gate OFF the bespoke evalAtmosphereSunNEE/MoonNEE so the sun
+  // is not double-counted (the real light carries it through the standard NEE).
+                                       | (RtxOptions::useDirectionalLights()      ? 4u : 0u);
 
   // ----- Moon cloud-look + halo shape constants (fork, Phase 3 Task 2) -----
   // moonSilverLiningIntensity / moonHaloGlowStrength are master multipliers

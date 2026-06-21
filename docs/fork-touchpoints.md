@@ -886,7 +886,7 @@ initializer list and can't be lifted into a separate TU.
   *Primary-bounce moon NEE -- mirror of evalAtmosphereSunNEE for the moon. Calls `sampleAtmosphereMoonLight` with a u_pick blue-noise sample so one of the enabled, above-horizon moons is importance-picked per ray (weight = brightness × phaseGlow × elevation). Soft-shadow cone jitter via `getJitteredSunDirection` (direction-agnostic). Accumulated contribution divided by `moonSample.solidAnglePdf` (discrete pick PDF) so multi-moon importance sampling stays unbiased over many frames. Added by 2026-05-07 moon sun-parity workstream. 2026-06-20: same thin-opaque subsurface fix as the sun path (`visibilityModeEnableSubsurfaceMaterials` + thin-opaque-gated `NdotL <= 0` early-outs) so moonlit translucency matches.*
 
 - **Block** at `integrateDirectPath` (atmosphere sun NEE call site) — ~14 LOC, planned target `fork_hooks::directPathAtmosphereSunCall` in `rtx_fork_atmosphere.slangh`.
-  *Calls `evalAtmosphereSunNEE` in the direct-path integrator when `cb.skyMode == 1`.*
+  *Calls `evalAtmosphereSunNEE` in the direct-path integrator when `cb.skyMode == 1`. 2026-06-21 (experiment branch): the gate also requires `debugSkyBisectFlags` bit 2 clear — when the sun/moon are injected as real distant lights (`rtx.atmosphere.useDirectionalLights`), bit 2 is set and this bespoke sun+moon NEE block is skipped to avoid double-counting.*
 
 - **Block** at `integrateDirectPath` (atmosphere moon NEE call site) — ~12 LOC, planned target `fork_hooks::directPathAtmosphereMoonCall` in `rtx_fork_atmosphere.slangh`.
   *Calls `evalAtmosphereMoonNEE` immediately after `evalAtmosphereSunNEE` in the direct-path integrator when `cb.skyMode == 1`. Sun and moon NEE are independent samples -- both can be valid at twilight, both invalid during pure daytime / pure-night-with-no-moons; each early-outs cheaply when invalid. Added by 2026-05-07 moon sun-parity workstream.*
@@ -1278,6 +1278,9 @@ the fork-owned ImGui surface.
 
 - **Inline tweak** at `fork_hooks::showAtmosphereUI` (weather UI call site) — ~1 LOC.
   *Calls `fork_hooks::showWeatherUI()` between the Moons and Clouds collapsing-header tree blocks so the Weather Presets panel appears in the correct visual position in the Atmosphere dev menu.*
+
+- **Block** (anonymous namespace) + call from `fork_hooks::updateAtmosphereConstants` (directional sun/moon lights — experiment, branch `experiment/atmosphere-directional-sun`, 2026-06-21) — ~180 LOC.
+  *When `rtx.atmosphere.useDirectionalLights` is on and skyMode==Numos, injects the sun + each enabled moon as externally-tracked `RtDistantLight`s (via `LightManager::createExternallyTrackedLight` / `updateExternallyTrackedLight`) so they go through the standard NEE/RTXDI path and SSS/decals/viewmodels are handled by the unified pipeline. Radiance is the CPU port of `sampleAtmosphereSunLight`/`sampleAtmosphereMoonLight` ÷ π (distant-light irradiance convention); transmittance is the CPU port of the closed-form `getAtmosphericTransmittanceForDir` so sunset reddening is preserved. The bespoke `evalAtmosphereSunNEE`/`MoonNEE` are gated off via `debugSkyBisectFlags` bit 2. KNOWN v1 limitation: no cloud-on-terrain shadow.*
 
 ---
 

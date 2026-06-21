@@ -1389,6 +1389,24 @@ namespace dxvk {
                "0 = no blue-dome around the moon (sky stays pure black); 1 = default physical-baseline; "
                ">1 = exaggerated for stylized scenes.");
 
+    // ----- Sun/moon as real distant lights (fork — experiment, 2026-06-21) -----
+    // When enabled, physical-atmosphere mode injects the sun (and each enabled,
+    // above-horizon moon) as real Remix RtDistantLight sources driven by the
+    // atmosphere model, so they flow through the standard RTXDI/NEE path. This
+    // makes subsurface scattering, decals, viewmodels, etc. automatically
+    // correct (the bespoke evalAtmosphereSunNEE/MoonNEE shader path is gated
+    // off via debugSkyBisectFlags bit 2). KNOWN v1 LIMITATION: cloud-on-terrain
+    // shadows are dropped — a uniform distant light cannot carry the per-pixel
+    // cloud transmittance the sun-radiance fold uses.
+    RTX_OPTION("rtx.atmosphere", bool, useDirectionalLights, true,
+               "EXPERIMENT: drive the sun + moons as real Remix distant lights through the standard "
+               "NEE/RTXDI path instead of the bespoke atmosphere sun/moon NEE. Fixes SSS/decal/viewmodel "
+               "lighting in physical-atmosphere mode; drops cloud-on-terrain shadows in this first version.");
+    RTX_OPTION("rtx.atmosphere", float, directionalLightRadianceScale, 1.0f,
+               "Global tuning multiplier on the injected sun/moon distant-light radiance (only used when "
+               "useDirectionalLights is true). 1.0 targets parity with the old atmosphere NEE magnitude; "
+               "adjust if the real-light sun/moon reads globally too bright or too dim.");
+
     // ----- Per-path moon stylistic multipliers (fork, Phase 3) -----
     // These are tonemapper-correction stylistic axes layered on top of the unified
     // physical irradiance scaffold from Phase 2. Defaults are empirically tuned by

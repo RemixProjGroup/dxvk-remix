@@ -16,6 +16,9 @@
 #include "rtx_fork_hooks.h"
 #include "rtx_context.h"
 #include "rtx_atmosphere.h"
+#include "rtx_scene_manager.h"       // getLightManager (directional sun/moon injection)
+#include "rtx_light_manager.h"       // createExternallyTrackedLight / updateExternallyTrackedLight
+#include "rtx_lights.h"              // RtDistantLight, RtLight
 #include "rtx_options.h"
 #include "rtx/pass/raytrace_args.h"
 #include "rtx/pass/common_binding_indices.h"
@@ -29,6 +32,172 @@
 
 namespace dxvk {
 namespace fork_hooks {
+
+  // ===========================================================================
+  // Sun + moon as real Remix distant lights (fork — experiment 2026-06-21)
+  //
+  // When rtx.atmosphere.useDirectionalLights is on, physical-atmosphere mode
+  // injects the sun (and each enabled moon) as externally-tracked
+  // RtDistantLight sources driven by the atmosphere model. They then flow
+  // through the standard NEE/RTXDI path, so SSS / decals / viewmodels are
+  // handled by the unified pipeline (the bespoke evalAtmosphereSunNEE/MoonNEE
+  // is gated off via debugSkyBisectFlags bit 2). The radiance is the CPU port
+  // of sampleAtmosphereSunLight / sampleAtmosphereMoonLight divided by pi: a
+  // distant light contributes radiance/sin^2(halfAngle) * coneSolidAngle ~=
+  // pi*radiance of effective irradiance, vs the bespoke NEE which used the
+  // sample radiance directly. KNOWN v1 limitation: no cloud-on-terrain shadow
+  // (a uniform distant light can't carry the per-pixel cloud transmittance).
+  // ===========================================================================
+  namespace {
+    constexpr float kFhPi = 3.14159265358979323846f;
+
+    inline float fhSmoothstep(float e0, float e1, float x) {
+      const float denom = e1 - e0;
+      float t = (denom != 0.0f) ? (x - e0) / denom : 0.0f;
+      t = std::min(std::max(t, 0.0f), 1.0f);
+      return t * t * (3.0f - 2.0f * t);
+    }
+
+    inline Vector3 fhMul(const Vector3& a, const Vector3& b) {
+      return Vector3(a.x * b.x, a.y * b.y, a.z * b.z);
+    }
+
+    // Port of getAtmosphericTransmittanceForDir (atmosphere_common.slangh): the
+    // closed-form Kasten-Young air-mass extinction the sun/moon/cloud paths use.
+    // dirYUp must be normalized, Y-up. ozoneDensity at the ozone layer altitude
+    // is exactly 1.0, so the ozone path length collapses to airMass.
+    Vector3 fhAtmTransmittanceYUp(const AtmosphereArgs& a, const Vector3& dirYUp) {
+      const float H = a.rayleighScaleHeight;
+      const float zc = dirYUp.y;  // zenith cosine
+      float airMass;
+      if (zc > 0.01f) {
+        const float zenithRad = std::acos(std::min(std::max(zc, -1.0f), 1.0f));
+        const float zenithDeg = zenithRad * (180.0f / kFhPi);
+        airMass = 1.0f / (zc + 0.15f * std::pow(93.885f - zenithDeg, -1.253f));
+      } else {
+        airMass = 40.0f * std::exp(-zc * 10.0f);
+      }
+      airMass = std::min(airMass, 200.0f);
+      const float rayleighOD = H * airMass;
+      const float mieOD = a.mieScaleHeight * airMass;
+      const float ozonePath = airMass;  // ozoneDensity(layerAltitude) == 1
+      Vector3 t(
+        std::exp(-(a.rayleighScattering.x * rayleighOD + a.mieScattering.x * mieOD + a.ozoneAbsorption.x * ozonePath * 0.15f)),
+        std::exp(-(a.rayleighScattering.y * rayleighOD + a.mieScattering.y * mieOD + a.ozoneAbsorption.y * ozonePath * 0.15f)),
+        std::exp(-(a.rayleighScattering.z * rayleighOD + a.mieScattering.z * mieOD + a.ozoneAbsorption.z * ozonePath * 0.15f)));
+      if (zc < 0.0f) {
+        const float f = std::exp(-(-zc) * 15.0f);  // twilight fade
+        t = Vector3(t.x * f, t.y * f, t.z * f);
+      }
+      return t;
+    }
+
+    // Persistent externally-tracked light handles. Kept alive across frames;
+    // radiance goes to 0 when a body is below the horizon / disabled (inert,
+    // no create/destroy churn). Moons are created lazily on first use.
+    struct AtmosphereDistantLightState {
+      RtLight* sun = nullptr;
+      RtLight* moons[MAX_MOONS] = {};
+    };
+    AtmosphereDistantLightState g_atmoLights;
+
+    void fhDropAtmosphereLights() {
+      if (g_atmoLights.sun) {
+        g_atmoLights.sun->markForGarbageCollection();
+        g_atmoLights.sun = nullptr;
+      }
+      for (uint32_t i = 0; i < MAX_MOONS; ++i) {
+        if (g_atmoLights.moons[i]) {
+          g_atmoLights.moons[i]->markForGarbageCollection();
+          g_atmoLights.moons[i] = nullptr;
+        }
+      }
+    }
+
+    void fhSyncAtmosphereDistantLights(RtxContext& ctx, const AtmosphereArgs& args) {
+      // Feature / mode gate. Drop any previously-injected lights when off.
+      if (!RtxOptions::useDirectionalLights() || RtxOptions::skyMode() != SkyMode::Numos) {
+        fhDropAtmosphereLights();
+        return;
+      }
+
+      LightManager& lm = ctx.getSceneManager().getLightManager();
+      const bool isZUp = RtxOptions::zUp();
+      const float radScale = RtxOptions::directionalLightRadianceScale();
+      constexpr float kMinHalfAngle = 0.0005f;  // avoid sin(halfAngle)==0 in distantLightSampleArea
+
+      auto toWorld = [isZUp](const Vector3& yup) -> Vector3 {
+        return isZUp ? Vector3(yup.x, yup.z, yup.y) : yup;  // Y-up -> Z-up swap
+      };
+
+      // m_direction is the propagation direction (toward the ground) = -toBody.
+      auto ensureLight = [&](RtLight*& slot, const Vector3& propDir, float halfAngle, const Vector3& radiance) {
+        const Vector3 clamped(std::max(radiance.x, 0.0f), std::max(radiance.y, 0.0f), std::max(radiance.z, 0.0f));
+        auto dl = RtDistantLight::tryCreate(propDir, std::max(halfAngle, kMinHalfAngle), clamped);
+        if (!dl) {
+          return;
+        }
+        const RtLight rtl(*dl);
+        if (slot == nullptr) {
+          slot = lm.createExternallyTrackedLight(rtl);
+        } else {
+          lm.updateExternallyTrackedLight(slot, rtl);
+        }
+      };
+
+      // ---- Sun (always present in Numos; radiance 0 below horizon) ----
+      {
+        const Vector3 sunDirYUp(args.sunDirection.x, args.sunDirection.y, args.sunDirection.z);
+        Vector3 radiance(0.0f, 0.0f, 0.0f);
+        if (sunDirYUp.y > 0.0f) {
+          const float g = args.mieAnisotropy;
+          const float mieModulation = 0.3f + 1.7f * g;                          // mix(0.3, 2.0, g)
+          const float sunVisibility = 0.05f + 0.95f * fhSmoothstep(0.0f, 0.8f, g);
+          const Vector3 T = fhAtmTransmittanceYUp(args, sunDirYUp);
+          const Vector3 sunIll(args.sunIlluminance.x, args.sunIlluminance.y, args.sunIlluminance.z);
+          const Vector3 sample = fhMul(sunIll, T) * (mieModulation * sunVisibility * args.sunRayBrightness * 0.5f);
+          radiance = sample * (radScale / kFhPi);
+        }
+        const Vector3 toSun = toWorld(sunDirYUp);
+        const Vector3 propDir = (sunDirYUp.y > 0.0f) ? Vector3(-toSun.x, -toSun.y, -toSun.z)
+                                                     : Vector3(0.0f, -1.0f, 0.0f);
+        ensureLight(g_atmoLights.sun, propDir, args.sunAngularRadius, radiance);
+      }
+
+      // ---- Moons (lazily created; mirror sampleAtmosphereMoonLight radiance) ----
+      const float moonNee = args.moonNeeStrength;
+      const float surfMoon = args.surfaceMoonBrightness;
+      const float nightFactor = fhSmoothstep(0.02f, -0.05f, args.sunDirection.y);
+      for (uint32_t i = 0; i < MAX_MOONS; ++i) {
+        const MoonParams& m = args.moons[i];
+        const Vector3 dirRaw(m.direction.x, m.direction.y, m.direction.z);
+        const float len = std::sqrt(dirRaw.x * dirRaw.x + dirRaw.y * dirRaw.y + dirRaw.z * dirRaw.z);
+        const bool lit = (m.enabled >= 0.5f) && (moonNee > 0.0f) && (nightFactor > 0.001f) && (len > 1e-4f);
+
+        // Skip moons that have never been lit (avoid creating unused light slots).
+        if (!lit && g_atmoLights.moons[i] == nullptr) {
+          continue;
+        }
+
+        const Vector3 dirN = (len > 1e-4f) ? Vector3(dirRaw.x / len, dirRaw.y / len, dirRaw.z / len)
+                                           : Vector3(0.0f, 1.0f, 0.0f);
+        Vector3 radiance(0.0f, 0.0f, 0.0f);
+        if (lit) {
+          const Vector3 T = fhAtmTransmittanceYUp(args, dirN);  // ~0 below horizon (twilight fade)
+          const Vector3 sunIll(args.sunIlluminance.x, args.sunIlluminance.y, args.sunIlluminance.z);
+          const Vector3 color(m.color.x, m.color.y, m.color.z);
+          const Vector3 sharedFactor = fhMul(fhMul(sunIll, color), T) * (m.brightness / kFhPi);
+          const float phaseGlow = 0.5f - 0.5f * std::cos(m.phase * 2.0f * kFhPi);
+          const float moonSolidAngleSr = 2.0f * kFhPi * (1.0f - std::cos(m.angularRadius));
+          const Vector3 sample = sharedFactor * (phaseGlow * moonSolidAngleSr * moonNee * surfMoon * nightFactor);
+          radiance = sample * (radScale / kFhPi);
+        }
+        const Vector3 toMoon = toWorld(dirN);
+        const Vector3 propDir = lit ? Vector3(-toMoon.x, -toMoon.y, -toMoon.z) : Vector3(0.0f, -1.0f, 0.0f);
+        ensureLight(g_atmoLights.moons[i], propDir, m.angularRadius, radiance);
+      }
+    }
+  }  // anonymous namespace
 
   // ---------------------------------------------------------------------------
   // initAtmosphere
@@ -162,6 +331,15 @@ namespace fork_hooks {
       ctx.m_atmosphere->computeLuts(&ctx);
       constants.atmosphereArgs = ctx.m_atmosphere->getAtmosphereArgs();
     }
+
+    // Inject / update (or drop) the sun + moon distant lights. Called
+    // unconditionally — the helper internally gates on useDirectionalLights +
+    // skyMode and drops its lights when either is off. Uses the atmosphere args
+    // just written above; when not in Numos those are stale but unread (the
+    // helper early-outs before touching them). One-frame latency vs the light
+    // manager's prepareSceneData linearization is acceptable (the sun moves
+    // slowly); steady state the light is always present.
+    fhSyncAtmosphereDistantLights(ctx, constants.atmosphereArgs);
   }
 
   // ---------------------------------------------------------------------------
