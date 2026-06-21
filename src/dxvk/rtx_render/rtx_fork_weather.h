@@ -1,7 +1,7 @@
 #pragma once
 
 // rtx_fork_weather.h — fork-owned weather preset declarations.
-// Defines 324 RTX_OPTIONs (12 presets x 27 fields) under the
+// Defines 276 RTX_OPTIONs (12 presets x 23 fields) under the
 // rtx.weather.preset.<presetName> namespace.
 //
 // Field bucket breakdown: 17 cloud + 3 atmosphere + 3 sky/moon mood + 4 volumetric.
@@ -26,7 +26,7 @@
 // Expands to: X(type, name, defaultValue), one entry per field.
 // ---------------------------------------------------------------------------
 #define WEATHER_PRESET_FIELD_LIST(X)                                                               \
-  /* Cloud (17) */                                                                                 \
+  /* Cloud (13) */                                                                                 \
   X(float,   cloudDensity,                              1.0f)                                      \
   X(float,   cloudCoverageMean,                         0.5f)                                      \
   X(float,   cloudCoverageSpread,                       0.2f)                                      \
@@ -39,11 +39,7 @@
   X(float,   cloudWindSpeed,                            0.02f)                                     \
   X(float,   cloudWindDirection,                        45.0f)                                     \
   X(float,   cloudShadowStrength,                       1.0f)                                      \
-  X(float,   cloudAnisotropy,                           0.6f)                                      \
   X(float,   cloudThickness,                            3.05f)                                     \
-  X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))              \
-  X(float,   cloudShadowTintStrength,                   1.0f)                                      \
-  X(float,   cloudSunsetWarmth,                         0.95f)                                     \
   /* Atmosphere (3) */                                                                             \
   X(float,   airDensity,                                1.0f)                                      \
   X(float,   aerosolDensity,                            1.0f)                                      \
@@ -92,7 +88,7 @@
 #define WEATHER_PRESET_BIND_smoggy(type, name, def)        WEATHER_PRESET_RTX_OPTION_FOR(smoggy,        type, name, def);
 
 // ---------------------------------------------------------------------------
-// Per-preset value X-macros — one per archetype, 27 fields each, in the same
+// Per-preset value X-macros — one per archetype, 23 fields each, in the same
 // order as WEATHER_PRESET_FIELD_LIST. Fields not explicitly tuned use the
 // neutral default from WEATHER_PRESET_FIELD_LIST.
 // Field order: cloudDensity, cloudCoverageMean, cloudCoverageSpread,
@@ -120,11 +116,7 @@
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.0f)                                          \
-  X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            2.0f)                                          \
-  X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
-  X(float,   cloudShadowTintStrength,                   1.0f)                                          \
-  X(float,   cloudSunsetWarmth,                         0.95f)                                         \
   X(float,   airDensity,                                0.95f)                                         \
   X(float,   aerosolDensity,                            0.7f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(20.0f, 20.0f, 20.0f))                  \
@@ -150,11 +142,7 @@
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.05f)                                         \
-  X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            2.5f)                                          \
-  X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
-  X(float,   cloudShadowTintStrength,                   1.0f)                                          \
-  X(float,   cloudSunsetWarmth,                         0.95f)                                         \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            1.0f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(19.0f, 19.0f, 19.0f))                  \
@@ -180,11 +168,7 @@
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.10f)                                         \
-  X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            3.05f)                                         \
-  X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
-  X(float,   cloudShadowTintStrength,                   1.0f)                                          \
-  X(float,   cloudSunsetWarmth,                         0.95f)                                         \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            1.1f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(15.0f, 15.0f, 15.0f))                  \
@@ -210,11 +194,7 @@
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.10f)                                         \
-  X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            2.5f)                                          \
-  X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
-  X(float,   cloudShadowTintStrength,                   1.0f)                                          \
-  X(float,   cloudSunsetWarmth,                         1.10f)                                         \
   X(float,   airDensity,                                1.1f)                                          \
   X(float,   aerosolDensity,                            1.5f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(17.0f, 16.0f, 14.0f))                  \
@@ -240,11 +220,7 @@
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.05f)                                         \
-  X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            2.0f)                                          \
-  X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
-  X(float,   cloudShadowTintStrength,                   1.0f)                                          \
-  X(float,   cloudSunsetWarmth,                         0.50f)                                         \
   X(float,   airDensity,                                1.2f)                                          \
   X(float,   aerosolDensity,                            2.0f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(10.0f, 10.0f, 10.0f))                  \
@@ -270,11 +246,7 @@
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.20f)                                         \
-  X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            3.0f)                                          \
-  X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
-  X(float,   cloudShadowTintStrength,                   1.0f)                                          \
-  X(float,   cloudSunsetWarmth,                         0.50f)                                         \
   X(float,   airDensity,                                1.1f)                                          \
   X(float,   aerosolDensity,                            1.5f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(11.0f, 12.0f, 14.0f))                  \
@@ -300,11 +272,7 @@
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.40f)                                         \
-  X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            4.0f)                                          \
-  X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
-  X(float,   cloudShadowTintStrength,                   1.0f)                                          \
-  X(float,   cloudSunsetWarmth,                         0.20f)                                         \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            1.4f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(7.0f, 8.0f, 10.0f))                    \
@@ -332,11 +300,7 @@
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.44f)                                         \
-  X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            4.13f)                                         \
-  X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
-  X(float,   cloudShadowTintStrength,                   1.0f)                                          \
-  X(float,   cloudSunsetWarmth,                         0.21f)                                         \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            1.3f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(4.0f, 4.0f, 6.0f))                     \
@@ -362,11 +326,7 @@
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.20f)                                         \
-  X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            3.0f)                                          \
-  X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
-  X(float,   cloudShadowTintStrength,                   1.0f)                                          \
-  X(float,   cloudSunsetWarmth,                         0.30f)                                         \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            1.3f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(12.0f, 13.0f, 14.0f))                  \
@@ -392,11 +352,7 @@
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.50f)                                         \
-  X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            4.5f)                                          \
-  X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
-  X(float,   cloudShadowTintStrength,                   1.0f)                                          \
-  X(float,   cloudSunsetWarmth,                         0.10f)                                         \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            1.6f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(6.0f, 7.0f, 8.0f))                     \
@@ -422,11 +378,7 @@
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.20f)                                         \
-  X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            2.5f)                                          \
-  X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
-  X(float,   cloudShadowTintStrength,                   1.0f)                                          \
-  X(float,   cloudSunsetWarmth,                         1.30f)                                         \
   X(float,   airDensity,                                1.0f)                                          \
   X(float,   aerosolDensity,                            2.5f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(10.0f, 8.0f, 5.0f))                    \
@@ -452,11 +404,7 @@
   X(float,   cloudWindSpeed,                            0.02f)                                         \
   X(float,   cloudWindDirection,                        45.0f)                                         \
   X(float,   cloudShadowStrength,                       0.15f)                                         \
-  X(float,   cloudAnisotropy,                           0.6f)                                          \
   X(float,   cloudThickness,                            2.5f)                                          \
-  X(Vector3, cloudShadowTint,                           Vector3(0.55f, 0.65f, 0.85f))                  \
-  X(float,   cloudShadowTintStrength,                   1.0f)                                          \
-  X(float,   cloudSunsetWarmth,                         0.80f)                                         \
   X(float,   airDensity,                                1.1f)                                          \
   X(float,   aerosolDensity,                            1.8f)                                          \
   X(Vector3, sunIlluminance,                            Vector3(12.0f, 10.0f, 8.0f))                   \
@@ -478,7 +426,7 @@
 
 // ---------------------------------------------------------------------------
 // Umbrella macro. Invoke inside RtxOptions struct body to declare all 348
-// RTX_OPTIONs (12 presets x 27 fields).
+// RTX_OPTIONs (12 presets x 23 fields).
 // ---------------------------------------------------------------------------
 #define DECLARE_ALL_WEATHER_PRESETS()   \
   DECLARE_WEATHER_PRESET(clear)         \

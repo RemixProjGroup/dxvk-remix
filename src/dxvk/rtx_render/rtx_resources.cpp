@@ -1070,7 +1070,9 @@ namespace dxvk {
     m_raytracingOutput.m_primaryRtxdiIlluminance[0] = AliasedResource(ctx, m_downscaledExtent, VK_FORMAT_R16_SFLOAT, "Primary RTXDI Illuminance [0]");
     m_raytracingOutput.m_primaryRtxdiIlluminance[1] = AliasedResource(ctx, m_downscaledExtent, VK_FORMAT_R16_SFLOAT, "Primary RTXDI Illuminance[1]");
 
-    m_raytracingOutput.m_primaryCloudShadowFactor = createImageResource(ctx, "primary cloud shadow factor", m_downscaledExtent, VK_FORMAT_R16_SFLOAT);
+    // m_primaryCloudShadowFactor removed 2026-06-19 (fork) — the screen-space
+    // cloud-shadow texture is gone now that the cloud shadow folds onto the sun
+    // radiance in the NEE.
 
     m_raytracingOutput.m_primarySurfaceFlags = createImageResource(ctx, "primary surface flags", m_downscaledExtent, VK_FORMAT_R8_UINT);
     m_raytracingOutput.m_primaryDisocclusionThresholdMix = createImageResource(ctx, "primary disocclusion threshold mix", m_downscaledExtent, VK_FORMAT_R16_SFLOAT);

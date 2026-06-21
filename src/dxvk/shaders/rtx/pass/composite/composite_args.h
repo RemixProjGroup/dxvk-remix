@@ -114,10 +114,18 @@ struct CompositeArgs {
   uint timeSinceStartMS;
 
   float alphaBlendSurfacePackMult; // for packing/unpacking hitT into Float16 in AlphaBlendSurface
-  // pow exponent applied to PrimaryCloudShadowFactor in composite. 1.0 keeps
-  // the wire-in factor as-is; >1 darkens cumulus shadows, <1 fades them.
-  // Mirrored from RtxOptions::cloudShadowFactorStrength().
-  float cloudShadowFactorStrength;
+  // Reserved (formerly cloudShadowFactorStrength, fork). Composite used to apply
+  // pow(PrimaryCloudShadowFactor, k) to the post-denoise primary direct radiance.
+  // That whole screen-space cloud-shadow path was removed 2026-06-19 when the
+  // cloud shadow moved onto the sun term in the NEE; the contrast knob lives in
+  // atmosphere_args.h::cloudShadowFactorStrength now. Slot kept as a pad so the
+  // composite CB layout is ABI-stable; rename rather than delete to avoid drift.
+  float pad1;
+  // Reserved (formerly cloudShadowIndirectStrength, fork issue #37). The
+  // indirect cloud-shadow multiply it drove was removed 2026-06-18: it
+  // double-counted the cloud occlusion already carried by evalSkyRadiance on
+  // escaped indirect rays and was the geometry-blind root cause of indoor cloud
+  // darkening. Slot kept as a pad so the CB layout is unchanged.
   float pad2;
   float pad3;
 };

@@ -118,6 +118,8 @@ struct RtSurface {
     uint16_t flags0 = 0;
     flags0 |= normalFormat == VK_FORMAT_R32_UINT ? 1 : 0;
     flags0 |= isVertexColorBakedLighting ? (1 << 1) : 0;
+    // flags0 bit 2 freed 2026-06-19 (was isDecalCategory for the removed
+    // cloud-shadow zenith gate). Spare again.
     // NOTE: Spare flags bits here
 
     writeGPUHelper(data, offset, flags0);
@@ -334,6 +336,8 @@ struct RtSurface {
   bool isClipPlaneEnabled = false;
   bool isTextureFactorBlend = false;
   bool isVertexColorBakedLighting = true;
+  // isDecalCategory (fork — 2026-06-18) removed 2026-06-19 with the cloud-shadow
+  // zenith gate that consumed it.
   bool isMotionBlurMaskOut = false;
   bool skipSurfaceInteractionSpritesheetAdjustment = false;
   bool ignoreTransparencyLayer = false;

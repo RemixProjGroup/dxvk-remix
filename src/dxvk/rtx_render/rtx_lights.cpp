@@ -852,7 +852,7 @@ void RtDistantLight::applyTransform(const Matrix4& lightToWorld) {
   updateCachedHash();
 }
 
-void RtDistantLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
+void RtDistantLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel, bool atmosphereCloudShadowed) const {
   [[maybe_unused]] const std::size_t oldOffset = offset;
 
   assert(m_direction < Vector3(FLOAT16_MAX));
@@ -887,6 +887,7 @@ void RtDistantLight::writeGPUData(unsigned char* data, std::size_t& offset, bool
   // Todo: Ideally match this with GPU light type constants
   uint32_t flags = lightTypeDistant << 29;
   if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  if (atmosphereCloudShadowed) flags |= 1 << 2; // atmosphere cloud-shadow flag at bit 2 (fork)
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
@@ -985,6 +986,7 @@ void RtLight::copyFrom(const RtLight& light) {
   isStaticCount = light.isStaticCount;
   isDynamic = light.isDynamic;
   ignoreViewModel = light.ignoreViewModel;
+  atmosphereCloudShadowed = light.atmosphereCloudShadowed;
   m_type = light.m_type;
   
   // Copy only the active union member based on the light type
@@ -1123,7 +1125,7 @@ void RtLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
     m_cylinderLight.writeGPUData(data, offset, this->ignoreViewModel);
     break;
   case RtLightType::Distant:
-    m_distantLight.writeGPUData(data, offset, this->ignoreViewModel);
+    m_distantLight.writeGPUData(data, offset, this->ignoreViewModel, this->atmosphereCloudShadowed);
     break;
   }
 }

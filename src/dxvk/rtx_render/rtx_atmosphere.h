@@ -22,6 +22,7 @@
 #pragma once
 
 #include "rtx_resources.h"
+#include "rtx_mipmap.h"
 #include "rtx_common_object.h"
 #include "rtx_fast_noise.h"
 #include "rtx/pass/atmosphere/atmosphere_args.h"
@@ -99,8 +100,7 @@ public:
    * 256x256x32 R16F camera-centered tile-wrapped voxel grid storing summed
    * optical depth along the sun direction. Baked every 8 frames at offset 0
    * by cloud_sun_density_grid.comp.slang. Consumed at shade time via
-   * sampleDSun() by the future Nubis Cubed cloud-lighting rewrite (C4-C6 of
-   * the 2026-05-12 workstream). No consumer in this commit.
+   * sampleDSun() by the Nubis Cubed cloud-lighting path.
    */
   const Resources::Resource& getCloudDSun() const { return m_cloudDSun; }
 
@@ -111,7 +111,6 @@ public:
    * optical depth toward zenith. Baked every 8 frames at offset 4 by
    * cloud_ambient_density_grid.comp.slang. Consumed at shade time via
    * sampleDAmbient() for the Nubis Cubed page-142 ambient attenuation term.
-   * No consumer in this commit.
    */
   const Resources::Resource& getCloudDAmbient() const { return m_cloudDAmbient; }
 
@@ -138,6 +137,32 @@ public:
    * shader rebuilds).
    */
   const Resources::Resource& getCloudHeightLut() const { return m_cloudHeightLut; }
+
+  /**
+   * \brief Get the secondary-ray cloud LUT (fork — 2026-06-10, perf).
+   *
+   * 256x128 RGBA16F dome keyed (azimuth, elevation = (pi/2)*v^2) holding the
+   * full Nubis cloud march per direction: rgb = premultiplied cloud radiance,
+   * a = view transmittance. Baked once per frame by
+   * cloud_secondary_lut.comp.slang; consumed by evalSkyRadiance's non-primary
+   * branch (indirect / PSR / reflection sky-miss) to supply clouds without a
+   * per-ray cloud march.
+   */
+  const Resources::Resource& getCloudSecondaryLut() const { return m_cloudSecondaryLut; }
+
+  /**
+   * \brief Get the cloud placement map (fork — 2026-06-11, column-shaping
+   * rework).
+   *
+   * 512x512 RGBA8 tiled at cloudNoiseTileKm: R = cluster field (where clouds
+   * are, at cloud scale), G = per-cloud top-height jitter, B = base lift.
+   * Baked by cloud_placement_map_baker.comp.slang at init and re-baked live
+   * when cloudCellSizeKm / cloudNoiseTileKm change. Drives the per-column
+   * cloud model inside the density samplers (each cloud gets its own
+   * base/top and a per-cloud height axis for all vertical shaping +
+   * lighting).
+   */
+  const Resources::Resource& getCloudPlacementMap() const { return m_cloudPlacementMap; }
 
   /**
    * \brief Ensure the cloud render RT exists at the requested downscale extent.
@@ -234,6 +259,20 @@ public:
    */
   AtmosphereArgs getAtmosphereArgs() const;
 
+  /**
+   * \brief Advance the unified cloud-motion accumulators by one frame
+   *        (fork — 2026-06-21, cloud-motion unification).
+   *
+   * Integrates wind advection + field-evolution morph + edge boil as
+   * `offset += velocity * dt` from the live (drift-modulated) RtxOptions, into
+   * persistent members read by the const getAtmosphereArgs(). MUST be called
+   * exactly once per frame (from updateAtmosphereConstants, alongside the other
+   * per-frame setters); getAtmosphereArgs is called many times per frame and so
+   * cannot integrate. Replaces the former stateless `speed * timeSeconds`, which
+   * mis-scaled/rotated the whole field whenever the weather drift varied wind.
+   */
+  void advanceCloudMotion(float dt);
+
 private:
   void createLutResources(Rc<DxvkContext> ctx);
   void dispatchTransmittanceLut(Rc<DxvkContext> ctx);
@@ -242,7 +281,12 @@ private:
   void dispatchCloudNoise3DBake(Rc<DxvkContext> ctx);  // Stage C: baked at init + on bake-input change
   bool needsCloudNoiseRebake() const;                  // true when a bake input (tile / worley*) changed
   void cacheCloudNoiseBakeInputs();                    // snapshot the current bake inputs after a bake
-  void dispatchCloudHeightLutBake(Rc<DxvkContext> ctx);  // Fork: one-shot at init (slide 3 lift)
+  void dispatchCloudHeightLutBake(Rc<DxvkContext> ctx);  // Fork: baked once at init (slide 3 lift)
+  // Cloud placement map bake (fork — 2026-06-11, column-shaping rework).
+  // At init + on bake-input change (cloudCellSizeKm / cloudNoiseTileKm).
+  void dispatchCloudPlacementMapBake(Rc<DxvkContext> ctx);
+  bool needsCloudPlacementRebake() const;
+  void cacheCloudPlacementBakeInputs();
   void dispatchCloudSkyTransmittanceLut(Rc<DxvkContext> ctx);  // Fork: per-frame
   // Cloud voxel grid bakes (Nubis Cubed 2023, fork — 2026-05-12). Round-robin
   // every 8 frames. Driven from computeLuts based on the device frame ID.
@@ -252,6 +296,10 @@ private:
   // Runs each frame from computeLuts after the voxel grid bakes; produces
   // m_cloudRenderRT (screen-space premultiplied cloud rgb + transmittance a).
   void dispatchCloudRender(Rc<DxvkContext> ctx);
+  // Secondary-ray cloud LUT bake (fork — 2026-06-10, perf). Runs each frame
+  // from computeLuts after the voxel grid bakes (it reads D_sun / D_ambient
+  // like the visible march). Gated on cloudSecondaryLutEnable.
+  void dispatchCloudSecondaryLut(Rc<DxvkContext> ctx);
 
   // LUT dimensions
   static constexpr uint32_t kTransmittanceLutWidth = 512;   // Increased from 256 for better precision
@@ -288,6 +336,21 @@ private:
   static constexpr uint32_t kCloudHeightLutWidth  = 64;
   static constexpr uint32_t kCloudHeightLutHeight = 128;
 
+  // Secondary-ray cloud LUT (fork — 2026-06-10, perf). 256 azimuth x 128
+  // elevation RGBA16F = 256 KB VRAM. Elevation rows concentrate near the
+  // horizon (elevation = (pi/2)*v^2 — see cloudDomeUvToDir). Sized for
+  // secondary-ray fidelity: indirect bounces and reflections are roughness-
+  // filtered downstream, so ~1.4 degree azimuth texels are below the
+  // perceptual floor there.
+  static constexpr uint32_t kCloudSecondaryLutWidth  = 256;
+  static constexpr uint32_t kCloudSecondaryLutHeight = 128;
+
+  // Cloud placement map (fork — 2026-06-11, column-shaping rework). 512x512
+  // RGBA8 = 1 MB VRAM, tiled at cloudNoiseTileKm (~23 m/texel at the 12 km
+  // default — ample for ~2 km cloud clusters). Keep in lockstep with
+  // kPlacementMapSize in cloud_placement_map_baker.comp.slang.
+  static constexpr uint32_t kCloudPlacementMapSize = 512;
+
   // Scale heights for exponential density profiles (in km)
   static constexpr float kRayleighScaleHeight = 8.0f;
   static constexpr float kMieScaleHeight = 1.2f;
@@ -307,10 +370,23 @@ private:
   // realloc inside ensureCloudRenderRT.
   Resources::Resource m_cloudRenderRT;
   VkExtent2D          m_cloudRenderExtent = { 0u, 0u };
+  // Full downscale (DLSS-input) extent the cloud RT is composited into —
+  // the RT itself may be allocated smaller (cloudRenderResolutionScale,
+  // fork — 2026-06-11). Published to shaders via
+  // args.cloudRenderFullDimX/Y for the bilinear upsample at sky-miss.
+  VkExtent2D          m_cloudRenderFullExtent = { 0u, 0u };
 
   // Cloud height LUT (slide 3 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
   // 64x128 R8, baked once at startup.
   Resources::Resource m_cloudHeightLut;
+
+  // Secondary-ray cloud LUT (fork — 2026-06-10, perf). 256x128 RGBA16F,
+  // baked every frame by dispatchCloudSecondaryLut.
+  RtxMipmap::Resource m_cloudSecondaryLut;
+
+  // Cloud placement map (fork — 2026-06-11, column-shaping rework). 512x512
+  // RGBA8, baked at init + on input change by dispatchCloudPlacementMapBake.
+  Resources::Resource m_cloudPlacementMap;
 
   // Per-frame camera basis for cloud_render.comp.slang. Pushed via
   // setCloudRenderCameraBasis() from updateAtmosphereConstants before
@@ -329,6 +405,15 @@ private:
   // flips cloudVoxelShadowsEnable, by which point the setter will have run
   // at least one frame.
   Vector3  m_cameraWorldPosYUpKm   { 0.0f, 0.0f, 0.0f };
+
+  // Unified cloud-motion accumulators (fork — 2026-06-21). Integrated once per
+  // frame by advanceCloudMotion() (offset += velocity * dt) and read by the const
+  // getAtmosphereArgs() into cloudWindOffset / cloudEvolutionOffset* / cloudBoilPhase.
+  // Persistent integration (vs the old stateless speed*timeSeconds) is what lets
+  // the slow weather drift vary wind speed/direction without snapping the field.
+  Vector2  m_cloudAdvectOffset     { 0.0f, 0.0f };  // wind translation (km)
+  Vector3  m_cloudEvolutionOffset  { 0.0f, 0.0f, 0.0f };  // morph scroll (km)
+  float    m_cloudBoilPhase        { 0.0f };  // edge-boil scroll phase (km)
 
   // Cloud history ping-pong (fork). Screen-space RGBA16F (premultiplied
   // radiance, alpha) used by the temporal-smoothing path inside
@@ -357,6 +442,18 @@ private:
   Rc<DxvkBuffer> m_constantsBuffer;
 
   AtmosphereArgs m_cachedArgs;
+  // Split LUT cache keys (fork — 2026-06-11, perf). Each sky LUT bake gets a
+  // cache key normalized down to the fields it actually reads, so a per-frame
+  // starRotation push no longer re-bakes anything and a moving sun re-bakes
+  // only the sky-view LUT. Used when skyLutCacheKeySplitEnable is on;
+  // m_cachedArgs above remains the legacy monolithic key for the off path.
+  AtmosphereArgs m_cachedSkyViewKey = {};
+  AtmosphereArgs m_cachedTransmittanceMsKey = {};
+  // Voxel-grid re-bake key (fork — 2026-06-11, perf). Wind / camera motion
+  // quantized by cloudVoxelGridRebakeGranularityKm; see
+  // normalizeForVoxelGridKey. Zero-init forces a first-frame bake; the
+  // cloud-noise re-bake path also zeroes it to force same-frame refresh.
+  AtmosphereArgs m_cachedVoxelGridKey = {};
   // Cloud noise 3D re-bake gate (fork). The 256^3 noise volume bakes its
   // periodic structure from cloudNoiseTileKm + the cloudWorley* inputs, while
   // the runtime sampler divides world position by the *live* cloudNoiseTileKm.
@@ -369,6 +466,12 @@ private:
   float    m_cachedWorleyFrequency     = 0.0f;
   uint32_t m_cachedWorleyOctaves       = 0u;
   float    m_cachedWorleyCarveStrength = 0.0f;
+  float    m_cachedBaseFreqScale       = 0.0f;
+  // Cloud placement map re-bake gate (fork — 2026-06-11, column-shaping
+  // rework). Same pattern as the noise gate above: snapshot the last-baked
+  // inputs, re-bake only on actual change.
+  float    m_cachedPlacementCellSizeKm = 0.0f;
+  float    m_cachedPlacementTileKm     = 0.0f;
   bool m_initialized = false;
   bool m_lutsNeedRecompute = true;
 };

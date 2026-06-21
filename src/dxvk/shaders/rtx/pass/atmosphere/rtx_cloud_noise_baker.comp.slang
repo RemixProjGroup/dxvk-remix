@@ -84,8 +84,13 @@ void main(uint3 threadId : SV_DispatchThreadID) {
   // should produce integer periods at both pre-scales (12 km × 0.5 = 6,
   // 12 km × 2.0 = 24); floor() snaps to nearest integer for non-default
   // tile values, with min 2 to avoid a degenerate single-cell period.
-  const float baseFreq   = 0.5f;
-  const float detailFreq = 2.0f;
+  // Base-frequency scale (fork — 2026-06-11, de-tile rework stage B).
+  // Multiplies the base AND detail FBM frequencies together (preserving
+  // their 4x ratio) to control cloud feature size. 1.0 = legacy bake
+  // (bit-identical). Re-bakes live via the needsCloudNoiseRebake gate.
+  float freqScale = clamp(args.cloudNoiseBaseFreqScale, 0.25f, 4.0f);
+  float baseFreq   = 0.5f * freqScale;
+  float detailFreq = 2.0f * freqScale;
   // Worley frequency + octave count + carve strength surface as RTX_OPTIONs
   // (cloudWorleyFrequency / cloudWorleyOctaves / cloudWorleyCarveStrength)
   // so the bake can be tuned from ImGui. Changing any of them (or

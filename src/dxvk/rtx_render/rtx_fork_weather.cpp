@@ -79,7 +79,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // use lerp.
   WeatherSnapshot lerpSnapshot(const WeatherSnapshot& a, const WeatherSnapshot& b, float t) {
     WeatherSnapshot out;
-    // Cloud (17)
+    // Cloud (13)
     out.cloudDensity            = lerp(a.cloudDensity,            b.cloudDensity,            t);
     out.cloudCoverageMean       = lerp(a.cloudCoverageMean,       b.cloudCoverageMean,       t);
     out.cloudCoverageSpread     = lerp(a.cloudCoverageSpread,     b.cloudCoverageSpread,     t);
@@ -92,11 +92,7 @@ namespace dxvk { namespace fork_weather { namespace {
     out.cloudWindSpeed          = lerp(a.cloudWindSpeed,          b.cloudWindSpeed,          t);
     out.cloudWindDirection      = lerpAngleDeg(a.cloudWindDirection, b.cloudWindDirection,   t);
     out.cloudShadowStrength     = lerp(a.cloudShadowStrength,     b.cloudShadowStrength,     t);
-    out.cloudAnisotropy         = lerp(a.cloudAnisotropy,         b.cloudAnisotropy,         t);
     out.cloudThickness          = lerp(a.cloudThickness,          b.cloudThickness,          t);
-    out.cloudShadowTint         = lerpV3(a.cloudShadowTint,       b.cloudShadowTint,         t);
-    out.cloudShadowTintStrength = lerp(a.cloudShadowTintStrength, b.cloudShadowTintStrength, t);
-    out.cloudSunsetWarmth       = lerp(a.cloudSunsetWarmth,       b.cloudSunsetWarmth,       t);
     // Atmosphere (3)
     out.airDensity              = lerp(a.airDensity,              b.airDensity,              t);
     out.aerosolDensity          = lerp(a.aerosolDensity,          b.aerosolDensity,          t);
@@ -120,11 +116,18 @@ namespace dxvk { namespace fork_weather { namespace {
   // periods (1.0, 1.527, 0.701) chosen so the sum doesn't repeat for many
   // hours of phase advance.
   //
-  // The two-layer model (fast 30s + slow 300s) is summed in
-  // driftOffsetForField with weights 0.4 / 0.6.
+  // De-pulsed (fork — 2026-06-21): the old two-layer model had a fast layer with
+  // base period 30 s, whose dominant inner sine (weight 0.5) was exactly 30 s.
+  // That produced a clearly perceptible whole-sky "breathing" beat every ~30 s —
+  // all drift fields share one phase clock, so coverage/density/type all crested
+  // in lockstep. The fast layer is GONE; only the slow (multi-minute) layer
+  // remains, so this subsystem now reads as genuine slow weather change rather
+  // than a rhythm. Local cloud SHAPE change (formation/dissolution, edge boil) is
+  // now owned by the field-evolution system in the cloud taps
+  // (cloudEvolutionSpeed / cloudBoilSpeed), which evolves the field spatially
+  // instead of pulsing a global scalar.
   // ---------------------------------------------------------------------------
 
-  constexpr float kDriftFastPeriodSec = 30.0f;
   constexpr float kDriftSlowPeriodSec = 300.0f;
 
   float driftNoise1D(float phaseSeconds, float periodSeconds, float fieldSeed) {
@@ -135,23 +138,34 @@ namespace dxvk { namespace fork_weather { namespace {
          + 0.20f * std::sin(kTwoPi * (p / 0.701f) + fieldSeed * 2.331f);
   }
 
-  // Per-field two-layer drift offset, normalized to ~[-relativeAmp, +relativeAmp].
+  // Per-field slow drift offset, normalized to ~[-relativeAmp, +relativeAmp].
+  // Slow-layer only (the fast 30 s layer was removed — see note above). The slow
+  // layer's shortest inner period is ~210 s (3.5 min), so there is no short-cycle
+  // tell. fieldIndex still seeds the phase so the few remaining fields stay
+  // decorrelated from each other.
   float driftOffsetForField(int fieldIndex, float phaseSeconds, float relativeAmp) {
     constexpr float kFieldSeedStep = 0.6180f;  // golden-ratio-ish for low correlation
-    const float seedFast = static_cast<float>(fieldIndex) * kFieldSeedStep;
     const float seedSlow = static_cast<float>(fieldIndex) * kFieldSeedStep + 100.0f;
-    const float nFast = driftNoise1D(phaseSeconds, kDriftFastPeriodSec, seedFast);
     const float nSlow = driftNoise1D(phaseSeconds, kDriftSlowPeriodSec, seedSlow);
-    const float nTotal = 0.4f * nFast + 0.6f * nSlow;
-    return nTotal * relativeAmp;
+    return nSlow * relativeAmp;
   }
 
   // ---------------------------------------------------------------------------
-  // Drift field table — 9 of 27 WeatherSnapshot fields drift.
+  // Drift field table — weather-SCALE fields only (fork — 2026-06-21).
+  //
+  // Trimmed from 9 to 3. The shape-ish fields (cloudDensity, cloudThickness,
+  // cloudTypeMean/Spread, cloudCoverageSpread, cloudAnvilBias) were removed:
+  // drifting them as a GLOBAL scalar is exactly the artificial "whole-sky
+  // breathing" the field-evolution rework replaced — those shape changes are now
+  // produced locally and incoherently by cloudEvolutionSpeed / cloudBoilSpeed in
+  // the cloud taps. What remains is the genuinely weather-scale stuff the field
+  // evolution does NOT reproduce: how cloudy the sky is overall (cloudCoverageMean)
+  // and how the wind gusts/shifts (cloudWindSpeed / cloudWindDirection).
   //
   // Color, optical, sky/moon, atmosphere, volumetric, and noise-scale fields
-  // are intentionally excluded (drift would look sickly, break calibration,
-  // or re-tile the cloud field — see spec section "Drift fields").
+  // remain excluded (drift would look sickly, break calibration, or re-tile the
+  // cloud field — see spec section "Drift fields"). fieldIndex values are kept at
+  // their original numbers so each field's noise seed is unchanged.
   //
   // amplitudeMode:
   //   Proportional — final delta is delta_table * intensity * field_value
@@ -185,18 +199,13 @@ namespace dxvk { namespace fork_weather { namespace {
   static const DriftFieldEntry kDriftTable[] = {
     // name                    idx  mode                       relAmp   min     max
     { "cloudCoverageMean",      0,   DriftMode::Proportional,   0.15f,   0.0f,   1.0f,    DRIFT_FIELD_ACCESSORS(cloudCoverageMean)   },
-    { "cloudCoverageSpread",    1,   DriftMode::Proportional,   0.25f,   0.0f,   1.0f,    DRIFT_FIELD_ACCESSORS(cloudCoverageSpread) },
-    { "cloudTypeMean",          2,   DriftMode::Proportional,   0.10f,   0.0f,   1.0f,    DRIFT_FIELD_ACCESSORS(cloudTypeMean)       },
-    { "cloudTypeSpread",        3,   DriftMode::Proportional,   0.20f,   0.0f,   1.0f,    DRIFT_FIELD_ACCESSORS(cloudTypeSpread)     },
-    { "cloudDensity",           4,   DriftMode::Proportional,   0.10f,   0.0f,   kInf,    DRIFT_FIELD_ACCESSORS(cloudDensity)        },
-    { "cloudThickness",         5,   DriftMode::Proportional,   0.08f,   0.0f,   kInf,    DRIFT_FIELD_ACCESSORS(cloudThickness)      },
     { "cloudWindSpeed",         6,   DriftMode::Proportional,   0.30f,   0.0f,   kInf,    DRIFT_FIELD_ACCESSORS(cloudWindSpeed)      },
     { "cloudWindDirection",     7,   DriftMode::AbsoluteDeg,   10.0f,   -kInf,  kInf,    DRIFT_FIELD_ACCESSORS(cloudWindDirection)  },
-    { "cloudAnvilBias",         8,   DriftMode::Proportional,   0.15f,   0.0f,   kInf,    DRIFT_FIELD_ACCESSORS(cloudAnvilBias)      },
   };
 
   static constexpr int kDriftFieldCount = static_cast<int>(sizeof(kDriftTable) / sizeof(kDriftTable[0]));
-  static_assert(kDriftFieldCount == 9, "Drift table must have exactly 9 entries (per spec)");
+  static_assert(kDriftFieldCount == 3, "Drift table must have exactly 3 weather-scale entries "
+                "(de-pulsed 2026-06-21: shape fields moved to field evolution)");
 
   // ---------------------------------------------------------------------------
   // applyDriftToSnapshot — mutate interp in place by adding per-field drift
@@ -288,7 +297,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // readPresetValues — dispatch by name to the appropriate per-preset getters.
   //
   // Returns false when the preset name is unknown (caller treats blender as
-  // dormant). Each branch reads all 27 fields from RtxOptions::<preset>_<field>.
+  // dormant). Each branch reads all 23 fields from RtxOptions::<preset>_<field>.
   //
   // FIELD ORDER matches WEATHER_PRESET_FIELD_LIST exactly (same 4 sites:
   // lerpSnapshot, readPresetValues' 12 branches, snapshotRenderer,
@@ -300,7 +309,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // ---------------------------------------------------------------------------
   bool readPresetValues(const std::string& name, WeatherSnapshot& out) {
     if (name == "clear") {
-      // Cloud (17)
+      // Cloud (13)
       out.cloudDensity               = RtxOptions::clear_cloudDensity();
       out.cloudCoverageMean          = RtxOptions::clear_cloudCoverageMean();
       out.cloudCoverageSpread        = RtxOptions::clear_cloudCoverageSpread();
@@ -313,11 +322,7 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudWindSpeed             = RtxOptions::clear_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::clear_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::clear_cloudShadowStrength();
-      out.cloudAnisotropy            = RtxOptions::clear_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::clear_cloudThickness();
-      out.cloudShadowTint            = RtxOptions::clear_cloudShadowTint();
-      out.cloudShadowTintStrength    = RtxOptions::clear_cloudShadowTintStrength();
-      out.cloudSunsetWarmth          = RtxOptions::clear_cloudSunsetWarmth();
       // Atmosphere (3)
       out.airDensity                 = RtxOptions::clear_airDensity();
       out.aerosolDensity             = RtxOptions::clear_aerosolDensity();
@@ -344,11 +349,7 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudWindSpeed             = RtxOptions::partlyCloudy_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::partlyCloudy_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::partlyCloudy_cloudShadowStrength();
-      out.cloudAnisotropy            = RtxOptions::partlyCloudy_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::partlyCloudy_cloudThickness();
-      out.cloudShadowTint            = RtxOptions::partlyCloudy_cloudShadowTint();
-      out.cloudShadowTintStrength    = RtxOptions::partlyCloudy_cloudShadowTintStrength();
-      out.cloudSunsetWarmth          = RtxOptions::partlyCloudy_cloudSunsetWarmth();
       out.airDensity                 = RtxOptions::partlyCloudy_airDensity();
       out.aerosolDensity             = RtxOptions::partlyCloudy_aerosolDensity();
       out.sunIlluminance             = RtxOptions::partlyCloudy_sunIlluminance();
@@ -372,11 +373,7 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudWindSpeed             = RtxOptions::overcast_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::overcast_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::overcast_cloudShadowStrength();
-      out.cloudAnisotropy            = RtxOptions::overcast_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::overcast_cloudThickness();
-      out.cloudShadowTint            = RtxOptions::overcast_cloudShadowTint();
-      out.cloudShadowTintStrength    = RtxOptions::overcast_cloudShadowTintStrength();
-      out.cloudSunsetWarmth          = RtxOptions::overcast_cloudSunsetWarmth();
       out.airDensity                 = RtxOptions::overcast_airDensity();
       out.aerosolDensity             = RtxOptions::overcast_aerosolDensity();
       out.sunIlluminance             = RtxOptions::overcast_sunIlluminance();
@@ -400,11 +397,7 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudWindSpeed             = RtxOptions::hazy_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::hazy_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::hazy_cloudShadowStrength();
-      out.cloudAnisotropy            = RtxOptions::hazy_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::hazy_cloudThickness();
-      out.cloudShadowTint            = RtxOptions::hazy_cloudShadowTint();
-      out.cloudShadowTintStrength    = RtxOptions::hazy_cloudShadowTintStrength();
-      out.cloudSunsetWarmth          = RtxOptions::hazy_cloudSunsetWarmth();
       out.airDensity                 = RtxOptions::hazy_airDensity();
       out.aerosolDensity             = RtxOptions::hazy_aerosolDensity();
       out.sunIlluminance             = RtxOptions::hazy_sunIlluminance();
@@ -428,11 +421,7 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudWindSpeed             = RtxOptions::foggy_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::foggy_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::foggy_cloudShadowStrength();
-      out.cloudAnisotropy            = RtxOptions::foggy_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::foggy_cloudThickness();
-      out.cloudShadowTint            = RtxOptions::foggy_cloudShadowTint();
-      out.cloudShadowTintStrength    = RtxOptions::foggy_cloudShadowTintStrength();
-      out.cloudSunsetWarmth          = RtxOptions::foggy_cloudSunsetWarmth();
       out.airDensity                 = RtxOptions::foggy_airDensity();
       out.aerosolDensity             = RtxOptions::foggy_aerosolDensity();
       out.sunIlluminance             = RtxOptions::foggy_sunIlluminance();
@@ -456,11 +445,7 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudWindSpeed             = RtxOptions::drizzle_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::drizzle_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::drizzle_cloudShadowStrength();
-      out.cloudAnisotropy            = RtxOptions::drizzle_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::drizzle_cloudThickness();
-      out.cloudShadowTint            = RtxOptions::drizzle_cloudShadowTint();
-      out.cloudShadowTintStrength    = RtxOptions::drizzle_cloudShadowTintStrength();
-      out.cloudSunsetWarmth          = RtxOptions::drizzle_cloudSunsetWarmth();
       out.airDensity                 = RtxOptions::drizzle_airDensity();
       out.aerosolDensity             = RtxOptions::drizzle_aerosolDensity();
       out.sunIlluminance             = RtxOptions::drizzle_sunIlluminance();
@@ -484,11 +469,7 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudWindSpeed             = RtxOptions::rainstorm_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::rainstorm_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::rainstorm_cloudShadowStrength();
-      out.cloudAnisotropy            = RtxOptions::rainstorm_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::rainstorm_cloudThickness();
-      out.cloudShadowTint            = RtxOptions::rainstorm_cloudShadowTint();
-      out.cloudShadowTintStrength    = RtxOptions::rainstorm_cloudShadowTintStrength();
-      out.cloudSunsetWarmth          = RtxOptions::rainstorm_cloudSunsetWarmth();
       out.airDensity                 = RtxOptions::rainstorm_airDensity();
       out.aerosolDensity             = RtxOptions::rainstorm_aerosolDensity();
       out.sunIlluminance             = RtxOptions::rainstorm_sunIlluminance();
@@ -512,11 +493,7 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudWindSpeed             = RtxOptions::thunderstorm_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::thunderstorm_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::thunderstorm_cloudShadowStrength();
-      out.cloudAnisotropy            = RtxOptions::thunderstorm_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::thunderstorm_cloudThickness();
-      out.cloudShadowTint            = RtxOptions::thunderstorm_cloudShadowTint();
-      out.cloudShadowTintStrength    = RtxOptions::thunderstorm_cloudShadowTintStrength();
-      out.cloudSunsetWarmth          = RtxOptions::thunderstorm_cloudSunsetWarmth();
       out.airDensity                 = RtxOptions::thunderstorm_airDensity();
       out.aerosolDensity             = RtxOptions::thunderstorm_aerosolDensity();
       out.sunIlluminance             = RtxOptions::thunderstorm_sunIlluminance();
@@ -540,11 +517,7 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudWindSpeed             = RtxOptions::snow_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::snow_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::snow_cloudShadowStrength();
-      out.cloudAnisotropy            = RtxOptions::snow_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::snow_cloudThickness();
-      out.cloudShadowTint            = RtxOptions::snow_cloudShadowTint();
-      out.cloudShadowTintStrength    = RtxOptions::snow_cloudShadowTintStrength();
-      out.cloudSunsetWarmth          = RtxOptions::snow_cloudSunsetWarmth();
       out.airDensity                 = RtxOptions::snow_airDensity();
       out.aerosolDensity             = RtxOptions::snow_aerosolDensity();
       out.sunIlluminance             = RtxOptions::snow_sunIlluminance();
@@ -568,11 +541,7 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudWindSpeed             = RtxOptions::blizzard_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::blizzard_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::blizzard_cloudShadowStrength();
-      out.cloudAnisotropy            = RtxOptions::blizzard_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::blizzard_cloudThickness();
-      out.cloudShadowTint            = RtxOptions::blizzard_cloudShadowTint();
-      out.cloudShadowTintStrength    = RtxOptions::blizzard_cloudShadowTintStrength();
-      out.cloudSunsetWarmth          = RtxOptions::blizzard_cloudSunsetWarmth();
       out.airDensity                 = RtxOptions::blizzard_airDensity();
       out.aerosolDensity             = RtxOptions::blizzard_aerosolDensity();
       out.sunIlluminance             = RtxOptions::blizzard_sunIlluminance();
@@ -596,11 +565,7 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudWindSpeed             = RtxOptions::sandstorm_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::sandstorm_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::sandstorm_cloudShadowStrength();
-      out.cloudAnisotropy            = RtxOptions::sandstorm_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::sandstorm_cloudThickness();
-      out.cloudShadowTint            = RtxOptions::sandstorm_cloudShadowTint();
-      out.cloudShadowTintStrength    = RtxOptions::sandstorm_cloudShadowTintStrength();
-      out.cloudSunsetWarmth          = RtxOptions::sandstorm_cloudSunsetWarmth();
       out.airDensity                 = RtxOptions::sandstorm_airDensity();
       out.aerosolDensity             = RtxOptions::sandstorm_aerosolDensity();
       out.sunIlluminance             = RtxOptions::sandstorm_sunIlluminance();
@@ -624,11 +589,7 @@ namespace dxvk { namespace fork_weather { namespace {
       out.cloudWindSpeed             = RtxOptions::smoggy_cloudWindSpeed();
       out.cloudWindDirection         = RtxOptions::smoggy_cloudWindDirection();
       out.cloudShadowStrength        = RtxOptions::smoggy_cloudShadowStrength();
-      out.cloudAnisotropy            = RtxOptions::smoggy_cloudAnisotropy();
       out.cloudThickness             = RtxOptions::smoggy_cloudThickness();
-      out.cloudShadowTint            = RtxOptions::smoggy_cloudShadowTint();
-      out.cloudShadowTintStrength    = RtxOptions::smoggy_cloudShadowTintStrength();
-      out.cloudSunsetWarmth          = RtxOptions::smoggy_cloudSunsetWarmth();
       out.airDensity                 = RtxOptions::smoggy_airDensity();
       out.aerosolDensity             = RtxOptions::smoggy_aerosolDensity();
       out.sunIlluminance             = RtxOptions::smoggy_sunIlluminance();
@@ -657,7 +618,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // ---------------------------------------------------------------------------
   WeatherSnapshot snapshotRenderer() {
     WeatherSnapshot s;
-    // Cloud (17)
+    // Cloud (13)
     s.cloudDensity               = RtxOptions::cloudDensity();
     s.cloudCoverageMean          = RtxOptions::cloudCoverageMean();
     s.cloudCoverageSpread        = RtxOptions::cloudCoverageSpread();
@@ -670,11 +631,7 @@ namespace dxvk { namespace fork_weather { namespace {
     s.cloudWindSpeed             = RtxOptions::cloudWindSpeed();
     s.cloudWindDirection         = RtxOptions::cloudWindDirection();
     s.cloudShadowStrength        = RtxOptions::cloudShadowStrength();
-    s.cloudAnisotropy            = RtxOptions::cloudAnisotropy();
     s.cloudThickness             = RtxOptions::cloudThickness();
-    s.cloudShadowTint            = RtxOptions::cloudShadowTint();
-    s.cloudShadowTintStrength    = RtxOptions::cloudShadowTintStrength();
-    s.cloudSunsetWarmth          = RtxOptions::cloudSunsetWarmth();
     // Atmosphere (3)
     s.airDensity                 = RtxOptions::airDensity();
     s.aerosolDensity             = RtxOptions::aerosolDensity();
@@ -698,7 +655,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // FIELD ORDER matches WEATHER_PRESET_FIELD_LIST exactly (same 4 sites).
   // ---------------------------------------------------------------------------
   void writeBlendedToDerivedLayer(const WeatherSnapshot& interp) {
-    // Cloud (17)
+    // Cloud (13)
     RtxOptions::cloudDensityObject().setImmediately(interp.cloudDensity);
     RtxOptions::cloudCoverageMeanObject().setImmediately(interp.cloudCoverageMean);
     RtxOptions::cloudCoverageSpreadObject().setImmediately(interp.cloudCoverageSpread);
@@ -711,11 +668,7 @@ namespace dxvk { namespace fork_weather { namespace {
     RtxOptions::cloudWindSpeedObject().setImmediately(interp.cloudWindSpeed);
     RtxOptions::cloudWindDirectionObject().setImmediately(interp.cloudWindDirection);
     RtxOptions::cloudShadowStrengthObject().setImmediately(interp.cloudShadowStrength);
-    RtxOptions::cloudAnisotropyObject().setImmediately(interp.cloudAnisotropy);
     RtxOptions::cloudThicknessObject().setImmediately(interp.cloudThickness);
-    RtxOptions::cloudShadowTintObject().setImmediately(interp.cloudShadowTint);
-    RtxOptions::cloudShadowTintStrengthObject().setImmediately(interp.cloudShadowTintStrength);
-    RtxOptions::cloudSunsetWarmthObject().setImmediately(interp.cloudSunsetWarmth);
     // Atmosphere (3)
     RtxOptions::airDensityObject().setImmediately(interp.airDensity);
     RtxOptions::aerosolDensityObject().setImmediately(interp.aerosolDensity);
@@ -964,11 +917,7 @@ namespace dxvk { namespace fork_weather {
       RemixGui::DragFloat("Wind Speed",                 &RtxOptions::P##_cloudWindSpeedObject(),             0.005f, 0.0f,   1.0f,    "%.3f", sliderFlags); \
       RemixGui::DragFloat("Wind Direction",             &RtxOptions::P##_cloudWindDirectionObject(),         1.0f,   0.0f,   360.0f,  "%.1f\xc2\xb0", sliderFlags); \
       ImGui::Separator(); ImGui::TextDisabled("Lighting");                                                                                                 \
-      RemixGui::DragFloat("Anisotropy",                 &RtxOptions::P##_cloudAnisotropyObject(),            0.01f, -1.0f,   1.0f,    "%.2f", sliderFlags); \
       RemixGui::DragFloat("Ground Shadow",              &RtxOptions::P##_cloudShadowStrengthObject(),        0.01f,  0.0f,   1.0f,    "%.2f", sliderFlags); \
-      RemixGui::DragFloat3("Shadow Tint",               &RtxOptions::P##_cloudShadowTintObject(),            0.01f,  0.0f,   1.0f,    "%.2f", sliderFlags); \
-      RemixGui::DragFloat("Shadow Tint Strength",       &RtxOptions::P##_cloudShadowTintStrengthObject(),    0.05f,  0.0f,   2.0f,    "%.2f", sliderFlags); \
-      RemixGui::DragFloat("Sunset Warmth",              &RtxOptions::P##_cloudSunsetWarmthObject(),          0.05f,  0.0f,   2.0f,    "%.2f", sliderFlags); \
       ImGui::Separator(); ImGui::TextDisabled("Atmosphere");                                                                                               \
       RemixGui::DragFloat("Air Density",                &RtxOptions::P##_airDensityObject(),                 0.05f,  0.0f,   5.0f,    "%.2f", sliderFlags); \
       RemixGui::DragFloat("Aerosol Density",            &RtxOptions::P##_aerosolDensityObject(),             0.05f,  0.0f,   5.0f,    "%.2f", sliderFlags); \
@@ -1002,26 +951,34 @@ namespace dxvk { namespace fork_weather {
       ImGui::TreePop();
     }
 
-    // ---- Cloud Drift sub-tree ----
+    // ---- Weather Variation sub-tree ----
+    // (Renamed from "Cloud Drift" 2026-06-21 to stop the word collision with the
+    // Atmosphere → Clouds → "Cloud Motion" tree — this one is the slow,
+    // preset-driven wander of weather PARAMETERS (coverage + wind), not the
+    // per-frame field motion. The underlying __weather.drift_* API keys and the
+    // internal m_drift* members are unchanged.)
     ImGui::Separator();
-    if (ImGui::TreeNode("Cloud Drift")) {
+    if (ImGui::TreeNode("Weather Variation")) {
+      ImGui::TextDisabled("Slow preset-scale wander of coverage + wind. "
+                          "Field motion lives in Atmosphere \xe2\x86\x92 Clouds \xe2\x86\x92 Cloud Motion.");
       // Read raw values from GameStateStore so the sliders show the current
       // plugin-or-dev-menu-written intent, not the smoothed internal state.
       // (The smoothed values are read-only and shown below.)
       float driftSpeed     = readFloatFromGameStateStore("__weather.drift_speed",     1.0f);
       float driftIntensity = readFloatFromGameStateStore("__weather.drift_intensity", 1.0f);
 
-      bool changedSpeed     = ImGui::SliderFloat("Drift speed multiplier",     &driftSpeed,     0.0f, 4.0f, "%.2f");
+      bool changedSpeed     = ImGui::SliderFloat("Variation speed",     &driftSpeed,     0.0f, 4.0f, "%.2f");
       RemixGui::SetTooltipToLastWidgetOnHover(
-        "Scales how fast the drift evolves. 0 = drift frozen. "
+        "Scales how fast the weather variation evolves. 0 = frozen. "
         "Recommended values per preset: clear 0.6, overcast 0.7, "
-        "thunderstorm 2.0. Smoothed with tau = 1.0s.");
+        "thunderstorm 2.0. Smoothed with tau = 1.0s. "
+        "(API key: __weather.drift_speed.)");
 
-      bool changedIntensity = ImGui::SliderFloat("Drift intensity multiplier", &driftIntensity, 0.0f, 3.0f, "%.2f");
+      bool changedIntensity = ImGui::SliderFloat("Variation intensity", &driftIntensity, 0.0f, 3.0f, "%.2f");
       RemixGui::SetTooltipToLastWidgetOnHover(
-        "Scales how big the drift swings are around the preset midpoint. "
-        "0 = drift fully off. Recommended values per preset: clear 0.5, "
-        "overcast 0.7, thunderstorm 1.6.");
+        "Scales how big the variation swings are around the preset midpoint. "
+        "0 = fully off. Recommended values per preset: clear 0.5, "
+        "overcast 0.7, thunderstorm 1.6. (API key: __weather.drift_intensity.)");
 
       if (changedSpeed) {
         char buf[32];
@@ -1034,16 +991,16 @@ namespace dxvk { namespace fork_weather {
         fork_game_state::GameStateStore::get().set("__weather.drift_intensity", buf);
       }
 
-      ImGui::Text("Drift phase:        %.2f s",  m_driftPhaseSeconds);
+      ImGui::Text("Variation phase:     %.2f s",  m_driftPhaseSeconds);
       ImGui::Text("Speed (smoothed):    %.3f",   m_driftSpeedSmoothed);
       ImGui::Text("Intensity (smoothed):%.3f",   m_driftIntensitySmoothed);
 
-      if (ImGui::Button("Reset drift to defaults")) {
+      if (ImGui::Button("Reset to defaults")) {
         fork_game_state::GameStateStore::get().set("__weather.drift_speed",     "1.0");
         fork_game_state::GameStateStore::get().set("__weather.drift_intensity", "1.0");
       }
       ImGui::SameLine();
-      if (ImGui::Button("Disable drift")) {
+      if (ImGui::Button("Disable variation")) {
         fork_game_state::GameStateStore::get().set("__weather.drift_intensity", "0.0");
       }
 

@@ -30,3 +30,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 ### Removed
+- `rtx.atmosphere.sunDisc` (GameStateStore/config key) — removed. The option had no consumer (the sun disc is rendered via the sun-as-distant-light / NEE path); setting it had no effect.

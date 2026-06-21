@@ -70,8 +70,9 @@ namespace fork_hooks {
   // assumption fails in the plugin-API case: when the plugin HUD pulls focus,
   // raw-input delivery to overlayWndProc also stops (the same root cause
   // that broke keyboard), and mouse events disappear. This function now
-  // forwards both — keyboard unconditionally, mouse only when raw input
-  // has gone silent (see the in-case comment for the gate rationale).
+  // forwards both keyboard and mouse, each gated on raw-input (Path B)
+  // recency: Path A only fires when Path B has gone silent, so the two
+  // delivery paths never double-feed ImGui (see the in-case comments).
   //
   // Coordinate translation: mouse WM_MOUSEMOVE and WM_{L,R,M,X}BUTTON*
   // messages carry CLIENT-AREA coordinates in lParam. When the overlay is a
@@ -90,13 +91,37 @@ namespace fork_hooks {
     HWND targetHwnd = overlayHwnd ? overlayHwnd : gameHwnd;
 
     switch (msg) {
-    // Keyboard: lParam has no coordinates, pass through as-is.
+    // Keyboard: gated on Path B liveness, same as mouse below.
+    //
+    // Path B is NOT mouse-only — the fork's ImGui Win32 backend handles
+    // WM_INPUT for RIM_TYPEKEYBOARD too (imgui_impl_win32.cpp), feeding both
+    // key events AND text (ToUnicodeEx -> AddInputCharacterUTF16) straight to
+    // ImGui. overlayWndProc's WM_INPUT case falls through to that backend for
+    // any non-mouse raw packet, so keyboard reaches ImGui via Path B exactly
+    // as mouse does. RIDEV_NOLEGACY on the keyboard device only suppresses the
+    // overlay's *legacy* WM_KEY* messages; it does nothing about the raw path.
+    //
+    // So Path A (this block, the game wnd proc fallback) and Path B both
+    // deliver every keypress and character — producing doubled keys / doubled
+    // text ("dual keyboard input"), the keyboard analogue of the dual-cursor
+    // bug fixed in bf6e6851. The bf6e6851 note that "keyboard is Path A only"
+    // was wrong: it accounted for the legacy path but not the raw one.
+    //
+    // The gate is identical to the mouse gate: only forward via Path A when
+    // raw input has been silent for longer than kRawInputRecencyMs (~100ms).
+    // Normal case: Path B fires concurrently, recency is fresh, Path A skips.
+    // Plugin-HUD-pulls-focus case: Path B goes silent, recency lapses, Path A
+    // picks up — preserving the legacy keyboard fallback (commit ba358314).
     case WM_KEYDOWN:
     case WM_KEYUP:
     case WM_SYSKEYDOWN:
     case WM_SYSKEYUP:
     case WM_CHAR:
     case WM_SYSCHAR:
+      if (overlay.isRawInputRecent()) {
+        break;
+      }
+      // lParam has no coordinates, pass through as-is.
       ImGui_ImplWin32_WndProcHandler(targetHwnd, msg, wParam, lParam);
       break;
 

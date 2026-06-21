@@ -300,8 +300,20 @@ write `__weather.target = ""` to put the blender back to dormant.
 
 Once a weather transition completes, the renderer holds the target preset's
 parameter values steady -- but real atmospheres are never frozen. The cloud
-drift system continuously modulates 9 of the 29 weather parameters with
-low-frequency noise so the sky feels alive even between transitions.
+drift system continuously modulates a few weather parameters with
+low-frequency noise so the sky's overall character keeps changing between
+transitions.
+
+> **Changed 2026-06-21 (de-pulse + trim).** This system used to modulate 9
+> parameters with a two-layer noise whose fast layer had a 30-second base
+> period -- that produced a clearly visible whole-sky "breathing" pulse
+> every ~30 s. The fast layer is removed (slow multi-minute layer only) and
+> the set is cut to the **3 genuinely weather-scale parameters**:
+> `cloudCoverageMean`, `cloudWindSpeed`, `cloudWindDirection`. Per-preset
+> *shape* change (density, thickness, type, anvil billowing) is now produced
+> locally by the renderer's **field-evolution** system
+> (`rtx.atmosphere.cloudEvolutionSpeed` / `cloudBoilSpeed`), not by this
+> global-scalar drift. The two trigger keys below are unchanged.
 
 The renderer ships the drift mechanism (which parameters drift, with what
 relative amplitude -- fixed per the design); the plugin owns the drift
@@ -321,7 +333,8 @@ visible step.
 ### Recommended values per preset
 
 These values are starter recommendations. Tune per game using the dev menu's
-"Cloud Drift" sub-tree, then bake the values into your `setWeather` handler.
+"Weather Variation" sub-tree (formerly "Cloud Drift"), then bake the values
+into your `setWeather` handler.
 
 | Preset | drift_speed | drift_intensity | Character |
 |---|---|---|---|
@@ -398,9 +411,12 @@ short-circuits.
 
 ### What drifts
 
-The renderer modulates 9 cloud-shape and dynamics parameters: coverage
-mean/spread, cloud-type mean/spread, density, thickness, wind speed/direction,
-and anvil bias. Color, optical, sky/moon, atmosphere, and volumetric fog
-parameters are intentionally NOT drifted (drift on color looks sickly; drift
-on physically-calibrated parameters breaks lighting; drift on noise-scale
-parameters re-tiles the entire cloud field).
+The renderer modulates 3 weather-scale parameters: `cloudCoverageMean`,
+`cloudWindSpeed`, and `cloudWindDirection` (how cloudy the sky is overall and
+how the wind gusts/shifts). The former shape parameters -- coverage spread,
+cloud-type mean/spread, density, thickness, anvil bias -- are no longer drifted
+here; their change is now produced locally by the field-evolution system (see
+the 2026-06-21 note above). Color, optical, sky/moon, atmosphere, and
+volumetric fog parameters remain intentionally NOT drifted (drift on color
+looks sickly; drift on physically-calibrated parameters breaks lighting; drift
+on noise-scale parameters re-tiles the entire cloud field).

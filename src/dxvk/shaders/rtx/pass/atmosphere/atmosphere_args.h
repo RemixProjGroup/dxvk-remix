@@ -131,7 +131,9 @@ struct AtmosphereArgs {
   float starPsfSharpness;               // PSF exponent for evalStarField (default 20.0; was hardcoded 800)
   float starCloudExtinctionPower;       // Power exponent on cloud view-T when extincting stars (default 2.5)
   float starAmbientCouplingStrength;    // Star/airglow coupling into cloud nightLight (default 0.01)
-  float padStarCloud0;
+  float cloudViewSamplesMax;            // Cap on the adaptive cloud-march step count (fork —
+                                        // 2026-06-12, adaptive march sampling). Reuses the former
+                                        // padStarCloud0 slot; CB layout unchanged.
 
   // ----- Milky Way controls (fork) -----
   // The galactic band is two independent visual layers: (1) increased star
@@ -177,9 +179,18 @@ struct AtmosphereArgs {
   float cloudMoonBrightness;             // Per-path stylistic multiplier on cloud-moon directional + ambient airglow (Phase 3)
 
   float haloMoonBrightness;               // Per-path stylistic multiplier on disk halo Gaussian glow (Phase 3)
-  float padMoonNee0;                      // 16-byte alignment
-  float padMoonNee1;
-  float padMoonNee2;
+  // Reclaimable pads — were sunShadowMaxSamples / moonShadowMaxSamples (the
+  // bespoke sun/moon NEE soft-shadow ray caps), removed 2026-06-21 with that NEE
+  // path. Kept in the former padMoonNee0/1 slots so the CB layout is unchanged.
+  uint  pad_sunShadowMaxSamples;
+  uint  pad_moonShadowMaxSamples;
+  // Perf-bisect shader toggle (fork — 2026-06-11, diagnostic). Rides the former
+  // padMoonNee2 slot; only bit 1 remains in use:
+  //   bit 1: flat sky miss — evalSkyRadiance returns a constant grey immediately,
+  //          isolating the full per-ray miss-path cost
+  // (bit 0, "skip atmosphere NEE", was retired 2026-06-21 with the bespoke NEE.)
+  // Bit clear in production; ImGui "Perf Bisect (Diagnostic)" tree drives it.
+  uint  debugSkyBisectFlags;
 
   // ----- Moon cloud-look + halo shape constants (fork, Phase 3 Task 2) -----
   // Tunable shape parameters for cloud-moon silver-lining contrast and halo glow.
@@ -191,30 +202,46 @@ struct AtmosphereArgs {
   float moonHaloMagnitude;                // Disk halo Gaussian strength (was kHaloMagnitude in atmosphere_sky.slangh)
 
   float moonAmbientAirglow;               // Ambient airglow per-moon strength (was 0.0015 literal in nightLight)
-  float padCloudLook0;                    // 16-byte alignment
-  float padCloudLook1;
-  float padCloudLook2;
+  float cloudHexTilingEnable;             // Hex de-tiling of the cloud noise volume (fork — 2026-06-11,
+                                          // stage A): 1 = stochastic triangle-lattice randomization of the
+                                          // tiled volume (periodicity destroyed at the source), 0 = legacy
+                                          // single periodic tap. Reuses the former padCloudLook0 slot;
+                                          // CB layout unchanged.
+  float cloudNoiseBaseFreqScale;          // Bake base/detail FBM frequency multiplier (fork —
+                                          // 2026-06-11, stage B). 1.0 = legacy bake. Re-bakes
+                                          // the noise volume live on change. Reuses the former
+                                          // padCloudLook1 slot; CB layout unchanged.
+  float cloudSkyBleedStrength;            // [0,1+] strength of cloud-color inscatter bled into the
+                                          // visible sky (sky reflects clouds; sampled from the smooth
+                                          // secondary dome LUT). 0 = off. Reuses the former
+                                          // cloudColumnShapingEnable slot (was padCloudLook2); CB
+                                          // layout unchanged.
 
   // ----- Cloud parameters (fork: procedural FBM cloud layer at fixed altitude) -----
   vec3 cloudColor;          // Cloud base color (typically white)
   float cloudDensity;       // Overall opacity/density multiplier
 
   float cloudAltitude;      // Altitude of cloud layer (km)
-  float cloudLayer2CoverageSpread; // [0,1] coverage variation for layer 2 (independent of layer 1)
+  float cloudBoilPhase;     // Accumulated edge-boil scroll phase (km) — drives the detail tap's
+                            // offset along a fixed internal direction so cloud edges churn
+                            // independently of the base shape (fork — 2026-06-21, field-evolution
+                            // rework). 0 = frozen. Reuses the former pad_cloudLayer2CoverageSpread
+                            // slot; CB layout unchanged.
   float cloudEnabled;       // 1.0 if clouds should be rendered, 0.0 otherwise
   float cloudShadowStrength;// How strongly clouds dim ground/atmosphere lighting [0..1]
 
   vec2 cloudWindOffset;     // Accumulated wind-driven UV offset (km)
-  float cloudAnisotropy;    // HG g for cloud sun forward-scatter (silver lining)
+  float pad_cloudAnisotropy;// was cloudAnisotropy (removed 2026-06-21 — no shader consumer; lighting
+                            // uses cloudPhaseG1/G2). Reclaimable pad; CB layout unchanged.
   float cloudCurvature;     // 0 = Earth-scale dome, 1 = tight dome
 
   // ----- Cloud volumetric / appearance enhancements (fork) -----
-  vec3 cloudShadowTint;        // RGB sky-bounce tint on shadow side
-  float cloudShadowTintStrength;
+  vec3 pad_cloudShadowTint;        // was cloudShadowTint (removed 2026-06-21 — no shader consumer)
+  float pad_cloudShadowTintStrength; // was cloudShadowTintStrength (removed 2026-06-21). Reclaimable pads.
 
   float cloudThickness;        // Cloud-slab vertical depth, km
   float cloudLayer2TypeSpread; // [0,1] cloud-type variation for layer 2 (independent of layer 1)
-  float cloudSunsetWarmth;     // Strength of low-sun warm tint
+  float pad_cloudSunsetWarmth; // was cloudSunsetWarmth (removed 2026-06-21 — no shader consumer)
   uint cloudViewSamples;       // Ray-march steps through cloud slab
 
   // ----- Spatial variation fields (Nubis-style weather) -----
@@ -228,7 +255,7 @@ struct AtmosphereArgs {
   float cloudAnvilBias;            // [0,1] cumulus top inflation strength (Nubis anvil pow trick).
   float cloudMsScale;              // Multi-scatter sigma_ms master multiplier (1.0 = paper baseline)
 
-  float cloudMultiScatterStrength; // Wrenninge multi-scatter master multiplier (1.0 = physical baseline).
+  float pad_cloudMultiScatterStrength; // was cloudMultiScatterStrength (removed 2026-06-21 — no shader consumer; cloudMsScale is the live knob). Reclaimable pad.
   uint  cloudMultiScatterOctaves;  // Number of Wrenninge octaves to sum (clamped 1..4 in shader).
   float cloudLayer2NoiseSeed;      // Seed offset added to layer 2's 2D coverage/type smoothNoise2D
                                    // calls so layer 2 generates a fully decorrelated noise pattern
@@ -250,25 +277,41 @@ struct AtmosphereArgs {
   // (skyAmbientStrength = 0 means the feature is off by default).
   float cloudSkyAmbientStrength;                 // Overall multiplier on the sky-ambient term [0..3]. 0 = feature off.
   float cloudSkyAmbientCloudOcclusionStrength;   // Strength of cloud occlusion of sky ambient [0..1]. 1 = physical.
-  float cloudNoiseWarpStrength;  // Anti-tiling domain-warp amplitude as a fraction of
-                                 // cloudNoiseTileKm (0 = off). Reuses the former padCloudC2
-                                 // slot, so the constant-buffer layout is unchanged.
+  float cloudCellSizeKm;         // Average cloud-cluster footprint size (km) for the placement
+                                 // map bake (fork — 2026-06-11, column-shaping rework). Re-bakes
+                                 // the placement map live on change. Reuses the former padCloudC2
+                                 // slot (ex-cloudNoiseWarpStrength); CB layout unchanged.
 
   // ----- Cloud voxel grid (Nubis Cubed 2023, fork — 2026-05-12) -----
   // 256x256x32 R16F precomputed grids storing summed optical depth along the
   // sun direction (D_sun) and zenith (D_ambient), camera-centered with
   // horizontal tile-wrap. Baked round-robin every 8 frames by
   // cloud_sun_density_grid.comp.slang / cloud_ambient_density_grid.comp.slang.
-  // No consumer in this commit; the Nubis Cubed cloud-lighting rewrite (C4-C6)
-  // samples them at shade time via sampleDSun / sampleDAmbient.
+  // Consumed at shade time by the Nubis Cubed cloud-lighting path via
+  // sampleDSun / sampleDAmbient.
   float cloudVoxelGridExtentKm;     // Horizontal extent of camera-centered grid (default 12.0 km)
   float cloudVoxelGridVerticalKm;   // Vertical extent — populated CPU-side from cloudThickness
-  float cloudVoxelGridFrameOffset;  // For round-robin cadence; CPU-side scalar (informational)
-  uint  cloudVoxelGridSunDirty;     // 1 when D_sun was (re)baked this frame
-  uint  cloudVoxelGridAmbientDirty; // 1 when D_ambient was (re)baked this frame
-  float pad_cloudVoxel0;
-  float pad_cloudVoxel1;
-  float pad_cloudVoxel2;
+  // The three below were informational round-robin/dirty scalars with no shader
+  // consumer; demoted to reserve pads 2026-06-21, then reused the same day as the
+  // base field-evolution scroll offset (fork — field-evolution rework). This is a
+  // slow 3D offset added to the base 3D noise sample position only (NOT to
+  // heightFraction / hex placement / column model), so the cloud field morphs in
+  // place — clouds form and dissolve — while altitude and placement stay put. The
+  // Y component scrolls through the volume's decorrelated, tile-wrapping vertical
+  // axis (the dominant morph term); X/Z add lateral decorrelation. 0 = frozen.
+  // Three separate scalars reuse the three contiguous voxel-grid pad slots, so the
+  // CB layout is byte-identical.
+  float cloudEvolutionOffsetX;
+  float cloudEvolutionOffsetY;
+  float cloudEvolutionOffsetZ;
+  // The three fields below reuse the former pad_cloudVoxel0..2 slots so the
+  // constant-buffer layout is unchanged.
+  float cloudBottomDarkening;       // [0,1] strength of the sun-gated underside darkening (multi-scatter + ambient)
+  float cloudSkyAmbientFill;        // [0,1] strength of the sky-dome underside fill (clouds reflect the
+                                    // open sky from below/around, bypassing bottom-darkening; bright by
+                                    // day, fades at sunset). Reuses the former cloudBottomDarkeningHeight
+                                    // slot (was pad_cloudVoxel1); CB layout unchanged.
+  float cloudDetailStrength;        // [0,1] additive edge detail strength (0 = off)
 
   // ----- Nubis Cubed 2023 lighting params (fork — 2026-05-12, C4) -----
   // Consumed by cloud_render.comp.slang via evalNubisCubedSample.
@@ -280,7 +323,9 @@ struct AtmosphereArgs {
   float cloudMsSigmaDeep;          // sigma_ms deep inside cloud (saturated)
   float cloudMsSdfDepth;           // SDF depth in meters at which sigma_ms saturates to deep
   uint  cloudRenderFrameIdx;       // Frame counter for fastJitter() in cloud_render.comp.slang
-  float pad_nubisCubed0;           // 16-byte alignment
+  float cloudDetailScale;          // Edge-detail noise frequency, as a multiple of the base
+                                   // cloudNoiseTileKm frequency. Reuses the former pad_nubisCubed0
+                                   // slot, so the constant-buffer layout is unchanged.
 
   // ----- Cloud render camera basis (fork — 2026-05-12, C4) -----
   // Pre-computed Y-up basis vectors (camera at origin). Per-pixel view direction
@@ -289,25 +334,41 @@ struct AtmosphereArgs {
   // The `Right` and `Up` vectors are pre-multiplied by tan(halfFovX/Y) so the
   // shader doesn't need fov/aspect knowledge. All in Y-up world (cloud math
   // convention — camera at origin).
+  // The three scalars riding the camera-basis vec3 padding below belong to
+  // the column-shaping rework (fork — 2026-06-11); they reuse the former
+  // pad_cr0..2 slots so the CB layout is unchanged.
   vec3  cloudRenderForwardYUp;
-  float pad_cr0;
+  float cloudColumnTopVariation;   // [0,1] per-cloud tower-height jitter amount (0 = uniform tops)
 
   vec3  cloudRenderRightYUp;       // Pre-scaled by tan(halfFovX) * aspectRatio
-  float pad_cr1;
+  float cloudColumnTopShape;       // Exponent mapping column presence -> top height (lower = taller edges)
 
   vec3  cloudRenderUpYUp;          // Pre-scaled by tan(halfFovY)
-  float pad_cr2;
+  float cloudColumnBaseVariation;  // [0,~0.4] max local cloud-base lift as a fraction of the slab
 
   // ----- Nubis Cubed sky-miss composite gate (fork — 2026-05-12, C5) -----
   // When 1, the primary-ray branch in evalSkyRadiance reads the prerendered
-  // AtmosphereCloudRender RT instead of calling analytical evalClouds. PSR,
-  // indirect, and reflection rays continue to use evalClouds regardless of
-  // this gate — the cloud RT is at primary-ray pixel coords, sampling it for
-  // a different ray direction at the same pixel would return the wrong cloud.
+  // AtmosphereCloudRender RT to composite clouds; when 0, primary-ray sky-miss
+  // is cloudless. PSR, indirect, and reflection rays use the secondary dome LUT
+  // (see cloudSecondaryLutEnable) regardless of this gate — the cloud RT is at
+  // primary-ray pixel coords, sampling it for a different ray direction at the
+  // same pixel would return the wrong cloud.
   uint  cloudRenderRTEnable;       // 0 or 1
-  uint  pad_c5_0;                  // 16-byte alignment
-  uint  pad_c5_1;
-  uint  pad_c5_2;
+  // Secondary-ray cloud LUT gate (fork — 2026-06-10, perf). When 1, the
+  // non-primary branch in evalSkyRadiance samples the per-frame
+  // AtmosphereCloudSecondaryLut dome; when 0, secondary sky-miss rays are
+  // cloudless. Reuses the former pad_c5_0 slot, so the CB layout is unchanged.
+  uint  cloudSecondaryLutEnable;   // 0 or 1
+  // Downscale (DLSS-input) render extent, i.e. the coordinate space of the
+  // pixelCoord evalSkyRadiance receives (fork — 2026-06-11, half-res cloud
+  // RT). The cloud RT may be allocated SMALLER than this
+  // (cloudRenderResolutionScale); the primary-ray composite divides
+  // pixelCoord by these dims to get normalized screen uv and bilinearly
+  // samples the RT — exact texel-center fetch when the RT is full-size.
+  // 0 means "not yet known" (first frames) and selects the legacy Load
+  // path. Reuse the former pad_c5_1/2 slots; CB layout unchanged.
+  uint  cloudRenderFullDimX;
+  uint  cloudRenderFullDimY;
 
   // ----- Voxel-grid cloud-on-terrain shadows at NEE (fork — 2026-05-12, C6) -----
   // Plumbing for sampleCloudGroundShadow_OptionB, called from the surface and
@@ -328,10 +389,17 @@ struct AtmosphereArgs {
   uint  cloudVoxelShadowsEnable;   // 0 or 1
   float cloudShadowMarchStrength;  // Beer-Lambert exponent multiplier
   float worldUnitsPerKm;           // game units per km
-  float pad_c6_0;                  // 16-byte alignment
+  float cloudColumnFeather;        // Coverage-remap feather band width for column presence
+                                   // (fork — 2026-06-11, column-shaping rework). Reuses the
+                                   // former pad_c6_0 slot; CB layout unchanged.
 
   vec3  cameraWorldPosYUpKm;       // Camera position in Y-up km, world-absolute
-  float pad_c6_1;                  // 16-byte alignment
+  float cloudUndersideLightSigma;  // Extinction sigma (per km·density of overlying water) for
+                                   // the analytic per-column downwelling light field that lights
+                                   // cloud undersides in column mode (fork — 2026-06-12,
+                                   // column-shaping rev 3; replaced rev 2's flat span scaling).
+                                   // 0 = legacy constant bottom-darkening gradient. Reuses the
+                                   // former pad_c6_1 slot; CB layout unchanged.
 
   // ----- Cloud Height LUT (slide 3 lift — RDR2 SIGGRAPH 2019) -----
   // Replaces the procedural cloudTypeProfile() trapezoid in
@@ -339,18 +407,17 @@ struct AtmosphereArgs {
   // baked once at startup by cloud_height_lut_baker.comp.slang. Lets the cloud
   // type continuum (stratus ... cumulonimbus) carry richer altitude-shape
   // variation than the 3-keypoint trapezoid, and lets layer-2 cirrus pick a
-  // genuinely different vertical profile than layer-1 cumulus. Only
-  // cloud_render.comp.slang binds the LUT today; voxel grid bakers and the
-  // analytical evalClouds path fall back to the procedural curve (cheap, and
-  // the LUT bake targets visual parity at type values 0/0.5/1 so the deltas
-  // stay inside cumulus shape noise).
+  // genuinely different vertical profile than layer-1 cumulus. cloud_render
+  // and the secondary-LUT bake bind the LUT; the voxel grid bakers fall back
+  // to the procedural curve (cheap, and the LUT bake targets visual parity at
+  // type values 0/0.5/1 so the deltas stay inside cumulus shape noise).
   uint  cloudHeightLutEnable;      // 0 = use procedural cloudTypeProfile, 1 = sample LUT
 
   // ----- Two-layer cloud map (slide 1 lift — RDR2 SIGGRAPH 2019) -----
   // Adds an independent second cloud slab at its own altitude band, sampled
-  // by cloud_render.comp.slang only (voxel grid bakers + analytical
-  // evalClouds + ground-shadow march all stay layer-1 only for v1 — cirrus
-  // is too thin to need precomputed terrain shadows, and the simpler
+  // by cloud_render.comp.slang only (voxel grid bakers + ground-shadow march
+  // all stay layer-1 only for v1 — cirrus is too thin to need precomputed
+  // terrain shadows, and the simpler
   // scoping caps the change surface). When enabled, cloud_render marches
   // the lower slab first (front-to-back) and composes layer 2 on top of
   // the residual transmittance.
@@ -361,7 +428,8 @@ struct AtmosphereArgs {
   float cloudLayer2TypeMean;       // [0,1] mean cloud type for layer 2 (defaults to a cirrus-shaped 0.0)
   float cloudLayer2CoverageMean;   // [0,1] mean coverage for layer 2 (defaults sparse)
   float cloudLayer2DensityScale;   // Per-step density multiplier for layer 2 (cirrus is optically thin)
-  float pad_cloudLayer2_0;         // 16-byte alignment
+  float cloudVerticalStretch;      // >= 1: vertical elongation of noise features (towering cumulus).
+                                   // Reuses the former pad_cloudLayer2_0 slot; CB layout unchanged.
 
   // ----- Worley carve params (Schneider15 lift, fork — 2026-05-15) -----
   // Consumed by rtx_cloud_noise_baker.comp.slang at the one-shot bake. Each
@@ -382,5 +450,86 @@ struct AtmosphereArgs {
   float cloudSunsetAmbientStrength;   // Master multiplier on cool blend (0 = feature off, 1 = baseline)
   float cloudSunsetAmbientReachInvKm; // D_sun reach in 1/km — higher = clouds turn cool faster with shadow depth
   float cloudSunsetAmbientRampHighSun;// sin(sun elevation) at which the effect smooth-fades to zero
-  float pad_cloudSunsetAmbient0;      // 16-byte alignment
+  float cloudViewStepKm;              // Target cloud-march step LENGTH in km (fork — 2026-06-12,
+                                      // adaptive march sampling). The per-ray step count becomes
+                                      // span / step, floored at cloudViewSamples and capped at
+                                      // cloudViewSamplesMax, so horizon-grazing rays (slab spans
+                                      // of 50+ km) stop undersampling 2 km cloud features with
+                                      // 1.6 km steps — the aliasing read as soft horizontal
+                                      // banding. 0 = legacy fixed count. Reuses the former
+                                      // pad_cloudSunsetAmbient0 slot; CB layout unchanged.
+
+  // ----- Cloud-edge / halo tuning (fork — 2026-06-13). Exposed live in ImGui. -----
+  float cloudEdgeSoftness;            // VIEW coverage-gate smoothstep band width [~0.02..0.4].
+                                      // Sets silhouette softness: wider => broader faint
+                                      // sub-threshold skirt around each cloud (the soft halo).
+                                      // VIEW path only; the shadow/optical-depth gate stays 0.25.
+  float cloudEdgeAmbientFade;         // Density at which a thin sample's (horizon-tinted) ambient
+                                      // reaches full strength [0..~0.5]. Below it the ambient fades
+                                      // toward 0 so the soft skirt doesn't read as grey-brown haze.
+                                      // 0 = off (ambient at full strength on all samples).
+  // Independent scale on the physical sun's contribution to volumetric fog
+  // in-scattering (fork — issue #35). Applied in volume_integrator.slangh where
+  // the sun term is added to the froxel SH, so it scales ONLY the sun and not
+  // the whole cache the way rtx.volumetrics.fogSunVisibilityGain does. Reuses
+  // the former pad_cloudEdge0 slot; CB layout unchanged. Default 1.0 = baseline.
+  float atmosphereSunVolumetricRadianceScale;
+
+  // ----- Artistic sunset color controls (fork — 2026-06-14) -----
+  // Counteract the desaturation introduced when sunset reddening moved onto the
+  // physical Hillaire two-term LUT model (commit 3e37062b): the multiscatter
+  // fill reads pale-blue and washes the warm single-scatter. Both apply inside
+  // evalAtmosphereRadiance, so the sky-view LUT carries them and clouds inherit
+  // the warmer ambient for free. Defaults (1.0) reproduce the physical look.
+  float multiScatterStrength; // Global scale on the multiscatter fill term. <1 = less
+                              // pale-blue wash so warm single-scatter dominates. 1 = physical.
+                              // Reuses the former pad_cloudEdge1 slot; CB layout unchanged.
+
+  float sunsetSaturation;     // Saturation boost on sky radiance, ramped in near the horizon
+                              // (midday untouched). >1 = punchier warm sunset. 1 = no change.
+  // Artistic contrast curve on the cloud-on-terrain shadow (fork — 2026-06-19).
+  // Applied as pow(cloudTransmittance, cloudShadowFactorStrength) where the
+  // factor is folded onto the SUN's radiance in sampleAtmosphereSunLight /
+  // sampleAtmosphereSunLightVolume. This is the same perception-side knob that
+  // previously lived in composite_args.h (it used to scale the screen-space
+  // PrimaryCloudShadowFactor texture); it moved here when the cloud shadow was
+  // re-architected onto the sun term and the screen-space texture was deleted.
+  // 1.0 = raw physical transmittance, >1 deepens cumulus shadows, <1 fades.
+  // Mirrors RtxOptions::cloudShadowFactorStrength(). Reuses the former
+  // pad_artistic0 slot; CB layout unchanged.
+  float cloudShadowFactorStrength;
+  // ----- Cloud direct-lighting energy conservation (fork — 2026-06-19) -----
+  // Reformulates the direct dual-lobe from the legacy additive sum
+  // (T_primary*HG1 + M*HG2, phase integral up to ~2) into an energy-conserving
+  // convex blend (phase integral 1) — the fix for lit clouds out-brightening
+  // the physical sky LUT. Consumed by evalNubisCubedSample. Both reuse the
+  // former pad_artistic1/2 slots; CB layout unchanged.
+  float cloudEnergyConserve;  // [0,1] 0 = legacy additive look (A/B), 1 = energy-conserving convex blend
+  float cloudMsLobeWeight;    // [0,1] convex weight: forward single-scatter lobe (1-w) vs multi-scatter body fill (w)
+
+  // ----- Layer-2 echo-deck step budget (fork — 2026-06-21) -----
+  // The echo deck is marched far more cheaply than layer 1; these are its own
+  // floor/cap on the adaptive (cloudViewStepKm-driven) step count, decoupled
+  // from layer 1's cloudViewSamples / cloudViewSamplesMax. Consumed by
+  // marchEchoDeck in cloud_march_common.slangh.
+  //
+  // IMPORTANT (CB alignment): no free pad slots remained, so this grows the
+  // constant buffer. It MUST grow by a whole 16-byte (vec4) block or
+  // sizeof(AtmosphereArgs) stops being 16-byte aligned and the updateBuffer of
+  // the whole struct corrupts the cbuffer (the two real fields below then read
+  // garbage, and marchEchoDeck's step count blows up into a GPU hang — solid
+  // black whenever layer 2 is enabled). Hence the two explicit pad words: 2
+  // real + 2 pad = one vec4 row. Future additions should consume these pads
+  // first (reuse-the-pad-slot discipline) before growing the struct again.
+  uint cloudLayer2StepFloor;     // Min march steps through the echo deck (near-zenith floor)
+  uint cloudLayer2StepMax;       // Hard cap on echo-deck steps per ray (perf governor)
+  uint pad_cloudLayer2Step0;     // reserve — keeps the block vec4-aligned
+  uint pad_cloudLayer2Step1;     // reserve — keeps the block vec4-aligned
+
+  // Layer-2 echo-deck color (fork — 2026-06-21). Independent albedo for the
+  // deck (the one look knob split out from layer 1). vec3 + 1 pad word = one
+  // vec4 row, so the CB stays 16-byte aligned (see the step block above —
+  // appending a bare vec3 would straddle the row boundary and corrupt the CB).
+  vec3  cloudLayer2Color;        // Deck base color; defaults to cloudColor's near-white
+  float pad_cloudLayer2Color0;   // reserve — completes the vec4 row
 };

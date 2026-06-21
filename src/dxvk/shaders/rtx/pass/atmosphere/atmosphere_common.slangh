@@ -35,7 +35,7 @@
 //     Horizon Zero Dawn." SIGGRAPH 2015 Advances in Real-Time Rendering.
 //     https://www.guerrilla-games.com/read/the-real-time-volumetric-cloudscapes-of-horizon-zero-dawn
 //     Used for: Nubis cloud density-via-noise raymarching approach and the
-//     single-scatter sun-ray lighting pattern that underlies evalClouds().
+//     single-scatter sun-ray lighting pattern that underlies the cloud march.
 //   - Schneider, A. "Nubis Cubed: Methods (and Madness) to Model and Render
 //     Immersive Real-Time Voxel-Based Clouds." SIGGRAPH 2023 Advances in
 //     Real-Time Rendering.
@@ -219,29 +219,6 @@ vec3 sampleMultiscatteringLut(Texture2D multiscatteringLut, SamplerState lutSamp
   return multiscatteringLut.SampleLevel(lutSampler, vec2(u, v), 0).rgb;
 }
 
-// Convert UV coordinates to sky view LUT parameters
-// Returns view direction in atmosphere space
-vec3 uvToSkyViewLutParams(vec2 uv, vec3 viewDir, vec3 sunDir, vec3 cameraPos, AtmosphereArgs args) {
-  // Sky view LUT stores a hemisphere view from camera position
-  // uv.x maps to azimuth angle around the sun direction
-  // uv.y maps to elevation angle from horizon to zenith
-  
-  float azimuth = uv.x * 2.0f * kPi;
-  float elevation = uv.y * kPi - kPi * 0.5f;
-  
-  // Build coordinate system with sun direction
-  vec3 up = normalize(cameraPos);
-  vec3 sunRight = normalize(cross(up, sunDir));
-  vec3 sunUp = cross(sunDir, sunRight);
-  
-  // Rotate view direction
-  float cosElevation = cos(elevation);
-  vec3 dir = sunDir * sin(elevation) + 
-             cosElevation * (sunRight * cos(azimuth) + sunUp * sin(azimuth));
-  
-  return normalize(dir);
-}
-
 // ============================================================================
 // Per-moon physical irradiance scaffold (fork) — shared across all moon-
 // lighting consumers (disk, cloud, atmospheric coupling, surface NEE, halo).
@@ -405,10 +382,18 @@ vec3 evalAtmosphereRadiance(
 
     vec3 singleScatter = args.sunIlluminance * sunTransmittance *
                          (scatteringR * phaseR + scatteringM * phaseM);
+    // Both multiscatter factors are dimensionless transfers (NO sunIlluminance
+    // baked in — fixed 2026-06-19); the single sunIlluminance is applied here
+    // exactly once, identically for both paths. Do NOT add sunIlluminance back
+    // into getAnalyticalMultiscattering / computeMultiscattering.
     vec3 contribAnalytical = args.sunIlluminance * msAnalytical * scattering;
     vec3 contribLut        = args.sunIlluminance * scattering * msLut;
     vec3 multiScatterContrib = lerp(contribAnalytical, contribLut,
                                      args.multiScatterPhysicalStrength);
+    // Artistic multiscatter fill scale (fork — 2026-06-14). The physical fill
+    // reads pale-blue and desaturates the warm single-scatter at sunset; <1 lets
+    // single-scatter dominate for a punchier sunset. 1.0 = physical.
+    multiScatterContrib *= args.multiScatterStrength;
     vec3 scatteredLight = singleScatter + multiScatterContrib;
 
     // Moon contribution to single scattering. Combined-moon direction +
@@ -457,23 +442,38 @@ vec3 evalAtmosphereRadiance(
   if (any(isnan(L)) || any(isinf(L))) {
     L = vec3(0.0f);
   }
-  
+
+  // Artistic sunset saturation boost (fork — 2026-06-14). Ramped in as the sun
+  // nears the horizon (full at/below horizon, off above ~24deg = sin 0.4) so the
+  // midday sky is untouched. Amplifies the warm horizon hues the physical
+  // two-term model renders accurately but undersaturated. sunsetSaturation 1.0 =
+  // no change. Applied here in the sky-view integral so the baked LUT carries it
+  // and clouds inherit the warmer ambient.
+  {
+    const float kSunsetSatRampHighSun = 0.4f; // sin(elevation) where the boost fades out
+    float sunsetT = 1.0f - smoothstep(0.0f, kSunsetSatRampHighSun, sunDir.y);
+    float satGain = lerp(1.0f, args.sunsetSaturation, sunsetT);
+    if (abs(satGain - 1.0f) > 1e-4f) {
+      float luma = dot(L, vec3(0.2126f, 0.7152f, 0.0722f));
+      L = max(vec3(0.0f), lerp(vec3(luma), L, satGain));
+    }
+  }
+
   return L;
 }
 
 // ============================================================================
-// Procedural Cloud Layer
+// Procedural Cloud Layer — shared geometry & profile helpers
 // ============================================================================
-// Analytical cloud rendering via ray/plane intersection with a cloud dome at
-// fixed altitude. Density is computed from FBM noise scaled by coverage.
-// Shading uses a simple single-scatter approximation: sun transmittance through
-// the slab plus Henyey-Greenstein forward scatter for silver lining, mixed with
-// ambient sky/night light.
+// Shared building blocks for the cloud system: slab/dome ray intersection,
+// height-fraction and cloud-type profile lookups, and the per-frame ground
+// shadow term. Density is driven by FBM noise scaled by coverage.
 //
 // The cloud layer is treated as a flat layer above the spherical planet. For a
 // given view direction we compute the intersection with a sphere at the cloud
-// altitude, sample the noise at that point, and then composite (alpha, color).
-// Returns cloud radiance premultiplied by coverage in .rgb and coverage in .a.
+// altitude and sample the noise at that point. These helpers are consumed by
+// the cloud_render compute pass and the secondary dome LUT bake (the per-ray
+// analytical sky-pass render that once also used them was removed 2026-06-19).
 
 // Effective planet radius for the cloud sphere. cloudCurvature=0 reproduces
 // the real planet radius (very subtle dome at Earth scale). Higher values
@@ -506,6 +506,39 @@ float computeCloudHeightFraction(vec3 samplePos, AtmosphereArgs args) {
   return computeCloudHeightFraction(samplePos, args, args.cloudAltitude, args.cloudThickness);
 }
 
+// =============================================================================
+// Cloud dome-LUT direction mapping (fork — 2026-06-10).
+//
+// The secondary-ray cloud LUT is keyed (azimuth, elevation) over the upper
+// hemisphere with elevation resolution concentrated near the horizon:
+// elevation = (pi/2) * v^2. Horizon-grazing rays carry the most cloud
+// detail per texel (the slab spans ~90 km edge-on at the horizon vs ~4 km
+// at zenith), so v^2 spends ~70% of the rows below 30 degrees elevation.
+//
+// Writer (cloud_secondary_lut.comp.slang) and sampler (evalSkyRadiance in
+// atmosphere_sky.slangh) must agree exactly — both call these two helpers.
+// Lives here (not cloud_march_common.slangh) because the sample side does
+// not include the march library.
+// =============================================================================
+vec3 cloudDomeUvToDir(vec2 uv) {
+  float azimuth   = uv.x * 2.0f * kPi;
+  float elevation = (0.5f * kPi) * uv.y * uv.y;
+  float cosEl = cos(elevation);
+  return vec3(sin(azimuth) * cosEl, sin(elevation), cos(azimuth) * cosEl);
+}
+
+vec2 cloudDomeDirToUv(vec3 dirYUp) {
+  float elevation = asin(clamp(dirYUp.y, 0.0f, 1.0f));
+  float v = sqrt(elevation / (0.5f * kPi));
+  // Same azimuth convention as cloudDomeUvToDir: az 0 = +Z, increasing
+  // toward +X. atan2 gives u in [-0.5, 0.5); wrap to [0, 1) here with frac so
+  // sampling correctness no longer depends on the sampler's address mode
+  // (robustness — fork 2026-06-19; the shared sky-view sampler is REPEAT-U, but
+  // the mip-gen for the bleed uses a CLAMP sampler, so don't rely on wrap).
+  float u = frac(atan2(dirYUp.x, dirYUp.z) / (2.0f * kPi));
+  return vec2(u, v);
+}
+
 // Nubis sliding-keypoint vertical density profile. Type slides the rise/peak/fall
 // keypoints from stratus values (narrow band low in slab) to cumulus values (full
 // vertical extent). Stratocumulus emerges naturally at type=0.5.
@@ -526,16 +559,45 @@ float cloudTypeProfile(float hf, float type) {
   return saturate(rise * fall);
 }
 
+// Closed-form ∫_hf^1 cloudTypeProfile(u, type) du — the procedural fallback
+// for the height LUT's B channel (cumulative envelope integral, "water above
+// this height" in column-height units). Used by the per-column downwelling
+// light field (column-shaping rev 3) in TUs that don't bind the LUT. The
+// trapezoid integrates piecewise: half-triangle rise, plateau, half-triangle
+// fall.
+float cloudTypeProfileIntegralFromTop(float hf, float type) {
+  float riseEnd   = mix(0.10f, 0.20f, type);
+  float fallStart = mix(0.20f, 0.75f, type);
+  float fallEnd   = mix(0.30f, 0.95f, type);
+  riseEnd   = max(riseEnd, 1e-4f);
+  float fallW = max(fallEnd - fallStart, 1e-4f);
+
+  float integ = 0.0f;
+  // Fall piece: profile = (fallEnd - u) / fallW on [fallStart, fallEnd].
+  {
+    float a = clamp(hf, fallStart, fallEnd);
+    float d = fallEnd - a;
+    integ += d * d / (2.0f * fallW);
+  }
+  // Plateau piece: profile = 1 on [riseEnd, fallStart].
+  integ += max(fallStart - max(hf, riseEnd), 0.0f);
+  // Rise piece: profile = u / riseEnd on [0, riseEnd].
+  if (hf < riseEnd) {
+    integ += (riseEnd * riseEnd - hf * hf) / (2.0f * riseEnd);
+  }
+  return integ;
+}
+
 // Height-profile lookup that selects between a baked LUT (slide 3 lift —
 // RDR2 SIGGRAPH 2019) and the procedural cloudTypeProfile fallback.
 //
 // Translation units that bind the cloud height LUT define
 // ATMOSPHERE_CLOUD_HEIGHT_LUT_AVAILABLE and declare globals named
 // AtmosphereCloudHeightLut + AtmosphereCloudHeightLutSampler at their own
-// binding slots. cloud_render.comp.slang is the only such TU today; voxel
-// grid bakers, the cloud-noise baker, the height LUT baker itself, and the
-// analytical evalClouds path in atmosphere_sky.slangh all fall back to the
-// procedural curve via the #else branch below.
+// binding slots. cloud_render.comp.slang and cloud_secondary_lut.comp.slang
+// are such TUs; the voxel grid bakers, the cloud-noise baker, and the height
+// LUT baker itself all fall back to the procedural curve via the #else branch
+// below.
 //
 // The LUT is keyed (typeSlice, heightFrac) -> (R = density envelope, G =
 // coverage threshold scale). The R-only `cloudHeightProfile` overload returns
@@ -553,9 +615,25 @@ vec2 cloudHeightProfileFull(float hf, float type, AtmosphereArgs args) {
       ? sampleCloudHeightLUT(hf, type)
       : vec2(cloudTypeProfile(hf, type), 1.0f);
 }
+// Cumulative envelope integral from hf to the cloud top (LUT B channel —
+// column-shaping rev 3). "Water above this per-cloud height" in
+// column-height units; feeds the analytic downwelling light field in
+// evalNubisCubedSample. Falls back to the closed-form trapezoid integral
+// when the LUT is disabled (matches the procedural R-channel fallback's
+// curve family, same accepted family mismatch as the R channel itself).
+float cloudHeightProfileDownIntegral(float hf, float type, AtmosphereArgs args) {
+  if (args.cloudHeightLutEnable != 0u) {
+    vec2 uv = vec2(saturate(type), saturate(hf));
+    return AtmosphereCloudHeightLut.SampleLevel(AtmosphereCloudHeightLutSampler, uv, 0).b;
+  }
+  return cloudTypeProfileIntegralFromTop(hf, type);
+}
 #else
 vec2 cloudHeightProfileFull(float hf, float type, AtmosphereArgs args) {
   return vec2(cloudTypeProfile(hf, type), 1.0f);
+}
+float cloudHeightProfileDownIntegral(float hf, float type, AtmosphereArgs args) {
+  return cloudTypeProfileIntegralFromTop(hf, type);
 }
 #endif
 
@@ -658,8 +736,10 @@ vec3 getAtmosphericTransmittanceForDir(vec3 dirYUp, AtmosphereArgs args) {
   float zenithCosAngle = dirYUp.y;
 
   // Kasten-Young air mass above horizon, exponential continuation below.
-  // Mirrors lines 308-328 of evalAtmosphereRadiance verbatim — single
-  // source of truth for sun-direction transmittance physics.
+  // This analytical Kasten-Young model is the sun-direction transmittance used
+  // by the CLOUD + MOON paths; the sky body uses the per-sample transmittance
+  // LUT (its old inline analytical twin was removed when the sky moved to the
+  // LUT in 3e37062b, so this is now the sole copy).
   float airMass;
   if (zenithCosAngle > 0.01f) {
     float zenithRad = acos(clamp(zenithCosAngle, -1.0f, 1.0f));
@@ -672,10 +752,22 @@ vec3 getAtmosphericTransmittanceForDir(vec3 dirYUp, AtmosphereArgs args) {
   }
   airMass = min(airMass, 200.0f);
 
-  // Optical depth for ground-level samples: H * density(0) * airMass = H * airMass.
-  float opticalDepthToSun = H * airMass;
+  // Slant optical depth per species = scaleHeight * density(0) * airMass
+  // (density(0) = 1 at ground), composing extinction as Rayleigh + Mie + ozone —
+  // identical to the per-sample transmittance LUT bake (transmittance_lut.comp.slang).
+  // The Mie/aerosol term was MISSING here (fork — 2026-06-20 fix): this analytical
+  // path had only Rayleigh + ozone while the LUT (sky) includes Mie, so at a low
+  // sun the omitted grey aerosol extinction left the beam under-extinguished and
+  // cloud direct light stayed a bright, fully-saturated red right before sunset
+  // (the "neon orange clouds" window) even though the LUT-lit sky looked correct.
+  // Mie extinction is grey and grows with air mass — it dims the horizon beam
+  // (physically: aerosol is why you can look at a hazy setting sun) and realigns
+  // the cloud/moon sun color with the LUT-lit sky.
+  float rayleighOpticalDepthToSun = H * airMass;
+  float mieOpticalDepthToSun      = args.mieScaleHeight * airMass;
   float ozonePathLength = ozoneDensity(args.ozoneLayerAltitude, args) * airMass;
-  vec3 transmittance = exp(-args.rayleighScattering * opticalDepthToSun
+  vec3 transmittance = exp(-args.rayleighScattering * rayleighOpticalDepthToSun
+                            - args.mieScattering * mieOpticalDepthToSun
                             - args.ozoneAbsorption * ozonePathLength * 0.15f);
 
   // Twilight fade — sky/light should be effectively black by ~-15° below
@@ -792,335 +884,6 @@ vec3 sampleSkyViewLutForRay(vec3 dirYUp,
   return skyViewLut.SampleLevel(lutSampler, uv, 0).rgb;
 }
 
-// Structure for direct sun lighting sample (NEE)
-struct AtmosphereSunSample {
-  vec3 direction;       // Direction TO the sun (normalized), in world space
-  vec3 radiance;        // Sun radiance reaching the surface (with transmittance)
-  float solidAnglePdf;  // Solid angle PDF (effectively 1.0 for directional light)
-  bool valid;           // True if sun is above horizon
-  float coneAngle;      // Half-angle of the sun cone for soft shadows (radians)
-  int numSamples;       // Number of shadow samples to take for soft shadows
-  // Per-pixel cumulus shadow (fork — 2026-05-18, simplified 2026-05-19).
-  // Raw newShadow ∈ [0, 1] from sampleCloudGroundShadow_OptionB at this
-  // pixel. sampleAtmosphereSunLight intentionally does NOT multiply this
-  // into result.radiance — the cumulus pattern rides the separate
-  // PrimaryCloudShadowFactor texture so NRD/DLSS-RR cannot smear it away.
-  // 1.0 = no per-cumulus modulation (clear voxel grid or wire-in disabled).
-  float cloudShadowFactor;
-};
-
-// Get the sun cone angle and sample count based on Mie anisotropy
-// High anisotropy = sharp sun = small cone, few samples
-// Low anisotropy = diffuse sun = large cone, many samples
-void getSunSoftShadowParams(float mieAnisotropy, out float coneAngle, out int numSamples) {
-  // Work across the full [0.0, 1.0] range
-  float normalizedG = saturate(mieAnisotropy);
-  
-  // Map anisotropy [0, 1] to cone angle [0.6, 0.008] radians (~34° to ~0.46°)
-  // Avoid exactly hitting the early-exit threshold at g=1.0
-  // g = 1.0  -> 0.008 rad (~0.46°) = very sharp sun, hard shadows
-  // g = 0.8  -> 0.03 rad (~1.7°) = clear sun, slightly soft
-  // g = 0.5  -> 0.15 rad (~8.5°) = diffuse sun, soft shadows
-  // g = 0.0  -> 0.6 rad (~34°) = extremely diffuse sun, very soft shadows
-  coneAngle = mix(0.6f, 0.008f, normalizedG * normalizedG);  // Quadratic falloff for smoother transition
-  
-  // Map to sample count: more samples for softer shadows
-  // g = 1.0  -> 1 sample (hard shadows)
-  // g = 0.8  -> 2 samples (slightly soft)
-  // g = 0.5  -> 4 samples (medium soft)
-  // g = 0.0  -> 12 samples (very soft, diffuse)
-  numSamples = int(mix(12.0f, 1.0f, normalizedG * normalizedG));
-  numSamples = max(1, numSamples);
-}
-
-// Generate a direction jittered within a cone around the main direction
-// Uses a simple but effective disk sampling approach
-vec3 getJitteredSunDirection(vec3 sunDir, float coneAngle, float u1, float u2) {
-  if (coneAngle < 0.005f) {
-    return sunDir;  // No jitter for very small cones
-  }
-  
-  // Create orthonormal basis around sun direction
-  vec3 up = abs(sunDir.y) < 0.999f ? vec3(0.0f, 1.0f, 0.0f) : vec3(1.0f, 0.0f, 0.0f);
-  vec3 tangent = normalize(cross(up, sunDir));
-  vec3 bitangent = cross(sunDir, tangent);
-  
-  // Sample a point on a disk and project to cone
-  float r = sqrt(u1) * tan(coneAngle);  // Radius on disk
-  float phi = u2 * 2.0f * kPi;          // Angle around disk
-  
-  // Offset direction
-  vec3 offset = tangent * (r * cos(phi)) + bitangent * (r * sin(phi));
-  
-  return normalize(sunDir + offset);
-}
-
-// Sample direct sun lighting for NEE at a surface point
-AtmosphereSunSample sampleAtmosphereSunLight(vec3 surfacePos, vec3 surfaceNormal, AtmosphereArgs args, bool isZUp = false) {
-  AtmosphereSunSample result;
-  // Default the cumulus-shadow factor to 1.0 (no per-pixel modulation). Only
-  // the voxel-grid wire-in below overwrites it. Caller is responsible for
-  // writing the factor into PrimaryCloudShadowFactor for the post-denoise
-  // composite to consume.
-  result.cloudShadowFactor = 1.0f;
-
-  // Get sun direction in world space
-  // args.sunDirection is in Y-up space, convert if needed
-  if (isZUp) {
-    // Convert from Y-up to Z-up: (x, y, z) -> (x, z, y)
-    // Y-up: X=right, Y=up, Z=forward
-    // Z-up: X=right, Y=forward, Z=up
-    // So: X stays, Y->Z, Z->Y
-    result.direction = normalize(vec3(args.sunDirection.x, args.sunDirection.z, args.sunDirection.y));
-  } else {
-    result.direction = normalize(args.sunDirection);
-  }
-  
-  // Check if sun is above the surface horizon
-  float NdotL = dot(surfaceNormal, result.direction);
-  if (NdotL <= 0.0f) {
-    result.valid = false;
-    result.radiance = vec3(0.0f);
-    result.solidAnglePdf = 1.0f;
-    return result;
-  }
-  
-  // Compute transmittance from surface to sun. When the voxel-grid cloud
-  // shadow is enabled, skip the analytical cloud shadow inside the helper
-  // and carry the per-pixel newShadow separately via cloudShadowFactor
-  // (written into PrimaryCloudShadowFactor below). This avoids the prior
-  // ratio-correction pattern where composite had to UN-DO an analytical
-  // bake — saturate(factor) clamped the > 1 un-do values at clear pixels
-  // and erased the per-cumulus contrast.
-  vec3 transmittance = getTransmittanceToSun(surfacePos, args, isZUp,
-      /*skipCloudShadow=*/(args.cloudVoxelShadowsEnable != 0u));
-  
-  // Apply Mie anisotropy to simulate atmospheric scattering effects
-  // High anisotropy = sharp, concentrated sun (forward scattering dominant)
-  // Low anisotropy = diffuse sun (scattered in all directions, faint but still present)
-  
-  // Sun visibility fade: smoothly fade direct lighting as sun becomes more diffuse
-  // g >= 0.80: Sun is sharp and bright (full intensity)
-  // g = 0.00-0.80: Sun becomes progressively more diffuse and dim
-  // g = 0.00: Sun is extremely diffuse but still contributing some light
-  const float kSunFullyVisible = 0.80f;
-  
-  // Smooth visibility fade using smoothstep, but never fully off
-  // Maps [0.0, 0.8] to [0.05, 1.0] - even at g=0, sun contributes 5% light (very diffuse)
-  float sunVisibility = mix(0.05f, 1.0f, smoothstep(0.0f, kSunFullyVisible, args.mieAnisotropy));
-  
-  // Brightness modulation: sharper sun = brighter direct light
-  // Map anisotropy [0.0, 1.0] to brightness multiplier [0.3, 2.0]
-  // g = 1.0  -> 2.0x (very sharp, bright sun)
-  // g = 0.8  -> 1.5x (clear sun, full visibility)
-  // g = 0.5  -> 0.8x (diffuse sun)
-  // g = 0.0  -> 0.3x (very diffuse, faint sun)
-  float mieModulation = mix(0.3f, 2.0f, args.mieAnisotropy);
-  
-  // Sun radiance = illuminance * transmittance * Mie modulation * visibility fade * user brightness
-  // The 0.5x factor provides a baseline reduction, then user can adjust with sunRayBrightness
-  result.radiance = args.sunIlluminance * transmittance * mieModulation * sunVisibility * args.sunRayBrightness * 0.5f;
-  result.solidAnglePdf = 1.0f;  // Directional light has delta PDF, but we use 1.0 for math
-  result.valid = any(transmittance > vec3(0.0f));
-
-#ifdef ATMOSPHERE_AVAILABLE
-  // Voxel-grid cloud-on-terrain shadow wire-in (fork — 2026-05-12, C6;
-  // post-denoise split-out 2026-05-18; ratio→newShadow simplification 2026-05-19).
-  //
-  // Per-pixel newShadow from sampleCloudGroundShadow_OptionB lands directly
-  // in result.cloudShadowFactor. The integrator routes it into
-  // PrimaryCloudShadowFactor, and the composite pass multiplies it onto
-  // post-denoise primary direct radiance with the user-tunable
-  // pow(factor, cloudShadowFactorStrength) curve.
-  //
-  // Why a separate texture (not multiplied into result.radiance here): the
-  // per-cumulus signal is high-frequency edges on terrain. If multiplied
-  // into pre-denoise radiance, NRD / DLSS-RR smear the shadow boundaries
-  // away — the denoiser has no motion vectors or geometry edges to anchor
-  // bilateral filtering on a cumulus shadow. Routing newShadow around the
-  // denoiser preserves the per-pixel detail.
-  //
-  // Why no ratio-correction math anymore: getTransmittanceToSun was called
-  // above with skipCloudShadow=true, so result.radiance has NO analytical
-  // cloud darkening baked in. cloudShadowFactor is plain newShadow ∈ [0, 1];
-  // composite's saturate() is harmless and pow() does what the strength
-  // knob promises. The prior ratio newShadow / safeOldShadow existed to
-  // un-do the analytical bake at clear pixels — composite's saturate() then
-  // clamped the > 1 ratios at clear pixels back to 1.0, erasing the per-
-  // cumulus contrast (diagnosed by enum 878 + the user's "binary white-black
-  // moves with clouds" observation on 2026-05-19).
-  //
-  // Sentinel-position protection: the multiscatter analytical path
-  // (computeGroundReflectionAnalytical with vec3(0,0,0)) calls
-  // getTransmittanceToSun with skipCloudShadow LEFT AT DEFAULT (false), so
-  // it continues to see the analytical dimmer and never feeds the sentinel
-  // into the voxel-grid lookup. That invariant is what the prior ratio-
-  // correction was protecting; the conditional skip preserves it without
-  // the saturate-clamp side effect.
-  if (args.cloudVoxelShadowsEnable != 0u) {
-    result.cloudShadowFactor = sampleCloudGroundShadow_OptionB(
-        surfacePos, result.direction, args, isZUp);
-  }
-#endif
-
-  // Get soft shadow parameters based on Mie anisotropy
-  getSunSoftShadowParams(args.mieAnisotropy, result.coneAngle, result.numSamples);
-
-  return result;
-}
-
-// ============================================================================
-// Moon NEE — surface direct lighting from the moon (fork)
-// ============================================================================
-// Mirrors the sun-NEE structure above. One moon picked per ray via importance
-// sampling (weight = brightness * phaseGlow * max(direction.y, 0)); ReSTIR +
-// DLSS handle temporal averaging across frames. Shares getJitteredSunDirection
-// for soft-shadow cone jitter -- that helper is direction-agnostic despite the
-// name.
-
-// Structure for direct moon lighting sample (NEE) -- fork.
-struct AtmosphereMoonSample {
-  vec3 direction;       // Direction TO the picked moon (normalized), in world space
-  vec3 radiance;        // Moon radiance reaching the surface (with transmittance)
-  float solidAnglePdf;  // Discrete pick PDF over enabled moons; integrator divides into accumulation
-  bool valid;           // True if a moon was successfully picked and is above horizon
-  float coneAngle;      // Half-angle of the moon cone for soft shadows (radians)
-  int numSamples;       // Number of shadow samples to take for soft shadows
-  uint pickedMoonIdx;   // Diagnostic; MAX_MOONS if invalid
-};
-
-// Importance-pick a single enabled, above-horizon moon by a discrete CDF over
-// per-moon weight = m.brightness * phaseGlow * max(direction.y, 0). `u` is a
-// uniform [0,1) random; `outPickPdf` receives the discrete pick probability
-// (1.0 if only one moon contributes, fractional otherwise). Returns MAX_MOONS
-// if no moon qualifies (daytime, all moons disabled, all below horizon, or
-// all at new-moon phase).
-uint pickMoon(AtmosphereArgs args, float u, out float outPickPdf) {
-  outPickPdf = 0.0f;
-  float weights[MAX_MOONS];
-  float total = 0.0f;
-  [unroll] for (uint mi = 0u; mi < MAX_MOONS; ++mi) {
-    weights[mi] = 0.0f;
-    MoonParams m = args.moons[mi];
-    if (m.enabled < 0.5f) continue;
-    vec3 moonDir = normalize(m.direction);
-    if (moonDir.y <= 0.01f) continue;
-    float phaseGlow = 0.5f - 0.5f * cos(m.phase * 2.0f * kPi);
-    if (phaseGlow <= 0.001f) continue;
-    float w = m.brightness * phaseGlow * moonDir.y;
-    weights[mi] = w;
-    total += w;
-  }
-  if (total <= 0.0f) {
-    return MAX_MOONS;
-  }
-  float threshold = u * total;
-  float accum = 0.0f;
-  [unroll] for (uint mi2 = 0u; mi2 < MAX_MOONS; ++mi2) {
-    if (weights[mi2] <= 0.0f) continue;
-    accum += weights[mi2];
-    if (accum >= threshold) {
-      outPickPdf = weights[mi2] / total;
-      return mi2;
-    }
-  }
-  // Fallback for floating-point edge: return the last positive-weight moon.
-  [unroll] for (uint mi3 = 0u; mi3 < MAX_MOONS; ++mi3) {
-    uint idx = MAX_MOONS - 1u - mi3;
-    if (weights[idx] > 0.0f) {
-      outPickPdf = weights[idx] / total;
-      return idx;
-    }
-  }
-  return MAX_MOONS;
-}
-
-// Sample direct moon lighting for NEE at a surface point -- fork.
-// Mirrors sampleAtmosphereSunLight. One moon picked per call via the
-// importance helper above; integrator divides accumulated contribution by
-// solidAnglePdf to debias the pick.
-AtmosphereMoonSample sampleAtmosphereMoonLight(vec3 surfacePos, vec3 surfaceNormal,
-                                               AtmosphereArgs args, float u_pick,
-                                               bool isZUp = false) {
-  AtmosphereMoonSample result;
-  result.direction      = vec3(0.0f, 1.0f, 0.0f);
-  result.radiance       = vec3(0.0f);
-  result.solidAnglePdf  = 1.0f;
-  result.valid          = false;
-  result.coneAngle      = 0.05f;
-  result.numSamples     = 1;
-  result.pickedMoonIdx  = MAX_MOONS;
-
-  if (args.moonNeeStrength <= 0.0f) {
-    return result;
-  }
-
-  // Night-factor gate -- moon NEE only contributes once the sun has dropped
-  // past the twilight band. Same gate shape as cloud and atmospheric coupling.
-  float sunElev = args.sunDirection.y;
-  float nightFactor = smoothstep(0.02f, -0.05f, sunElev);
-  if (nightFactor < 0.001f) {
-    return result;
-  }
-
-  float pickPdf;
-  uint mIdx = pickMoon(args, u_pick, pickPdf);
-  if (mIdx >= MAX_MOONS) {
-    return result;
-  }
-
-  MoonParams m = args.moons[mIdx];
-  vec3 moonDirYUp = normalize(m.direction);
-
-  // Direction in caller's coordinate space (Y-up or Z-up).
-  result.direction = isZUp ? vec3(moonDirYUp.x, moonDirYUp.z, moonDirYUp.y) : moonDirYUp;
-
-  // Surface-facing check.
-  float NdotL = dot(surfaceNormal, result.direction);
-  if (NdotL <= 0.0f) {
-    return result;
-  }
-
-  vec3 transmittance = getAtmosphericTransmittanceForDir(moonDirYUp, args);
-  if (all(transmittance <= vec3(1e-6f))) {
-    return result;
-  }
-
-  float phaseGlow = 0.5f - 0.5f * cos(m.phase * 2.0f * kPi);
-
-  // Phase 2 (2026-05-08): physical irradiance via computeMoonSharedFactor.
-  // Replaces the prior kSurfaceMoonIllumScale = 1e-5 magic-number scaling.
-  //
-  // Magnitude analysis for FNV defaults (sunIlluminance ~20, m.color 0.12,
-  // m.brightness 1.0, full moon, zenith):
-  //   sharedFactor      = 20 × 0.12 × 0.97 × 1.0 / π ≈ 0.74 per channel
-  //   moonSolidAngleSr  = 2π × (1 - cos(0.0305 rad)) ≈ 2.93e-3 sr
-  //   result.radiance   = 0.74 × 1.0 × 2.93e-3 × 1.0 × 1.0 ≈ 2.17e-3 per channel
-  //
-  // Sun-to-moon ratio: 2.17e-3 / 20 ≈ 1.09e-4 — within 5% of the physical
-  // reference for a stylized 3.5° angular-diameter moon (Earth's 0.5° moon
-  // would yield ~2.5e-6, but the game's larger angular size scales solid
-  // angle ~46×). Tunable via args.moonNeeStrength at runtime if too bright
-  // under the FNV tonemapper.
-  vec3 sharedFactor = computeMoonSharedFactor(m, args, m.color);
-  float moonSolidAngleSr = 2.0f * kPi * (1.0f - cos(m.angularRadius));
-  // Phase 3 (2026-05-08): args.surfaceMoonBrightness is the per-path stylistic
-  // multiplier on surface NEE (default 8.0 = tonemapper-corrected baseline).
-  result.radiance = sharedFactor * phaseGlow * moonSolidAngleSr
-                  * args.moonNeeStrength * args.surfaceMoonBrightness * nightFactor;
-
-  result.solidAnglePdf = pickPdf;
-  result.valid         = any(result.radiance > vec3(0.0f));
-  result.pickedMoonIdx = mIdx;
-
-  // Soft-shadow cone: moons typically have ~3.5deg angular diameter (~6x sun),
-  // so the cone is bigger than the sun's. Cap to 0.6 rad (~34deg) for stability.
-  result.coneAngle  = clamp(m.angularRadius * 0.5f, 0.005f, 0.6f);
-  result.numSamples = 4;  // Constant; moon shadows are softer than sun's.
-
-  return result;
-}
-
 // Structure for volumetric sun light sample
 struct AtmosphereVolumeSunSample {
   vec3 direction;       // Direction TO the sun (normalized), in world space
@@ -1187,26 +950,36 @@ AtmosphereVolumeSunSample sampleAtmosphereSunLightVolume(vec3 volumePos, vec3 vi
   // as the sun approaches/crosses the geodetic horizon, killing the
   // bright fog/decals when sun is visually below terrain. This is a
   // per-froxel visibility approximation, not an artistic gain.
-  const float sunUpAxis = (isZUp ? args.sunDirection.z : args.sunDirection.y);
-  const float sunElevationGate = smoothstep(0.0f, 0.3f, sunUpAxis);
+  // sunDirection is authored in Y-up space (matching the twilight check above
+  // and line 1145), so the elevation component is always .y regardless of the
+  // world being Z-up. The prior `isZUp ? .z : .y` read the wrong axis in Z-up
+  // scenes, killing the sun's volumetric contribution (issue #35). Always use .y.
+  const float sunUpAxis = args.sunDirection.y;
+  // Ramp the gate across the lowest ~5deg of elevation (sin(5deg) ~= 0.087) so
+  // the contribution fades smoothly through the horizon. The prior 0.3 cutoff
+  // (~17deg) culled volumetric sun far too aggressively near sunrise/sunset.
+  const float sunElevationGate = smoothstep(0.0f, 0.087f, sunUpAxis);
   result.radiance = args.sunIlluminance * transmittance * phase * mieModulation * sunVisibility * args.sunRayBrightness * sunElevationGate;
   result.valid = any(transmittance > vec3(0.0f));
 
 #ifdef ATMOSPHERE_AVAILABLE
-  // Voxel-grid cloud-on-terrain shadow wire-in for volumetric NEE
-  // (fork — 2026-05-12, C6; ratio→newShadow simplification 2026-05-19).
+  // Voxel-grid cloud-on-terrain shadow on the volumetric sun term
+  // (fork — 2026-05-12, C6; sun-only re-architecture 2026-06-19).
   //
-  // getTransmittanceToSun above was called with skipCloudShadow=true, so
-  // result.radiance has NO analytical cloud darkening baked in. Multiply
-  // the per-cumulus newShadow directly onto the radiance — the volumetric
-  // path has no post-denoise factor texture because the volumetric denoiser
-  // tolerates the high-frequency signal better than NRD does on flat
-  // surfaces (different bilateral domain). Same surface-path simplification
-  // applies: dropping the ratio + cliff-guard + strength-floor math.
+  // Same principle as the surface path in sampleAtmosphereSunLight: the cloud
+  // shadow is attenuation of the SUN, so it is folded directly onto the sun's
+  // volumetric radiance. getTransmittanceToSun above was called with
+  // skipCloudShadow=true so there is no analytical double-count. The volumetric
+  // path always applied newShadow into radiance directly — that was already
+  // architecturally correct; this just adds the same cloudShadowFactorStrength
+  // contrast curve so the artistic knob behaves identically on god-rays and on
+  // surfaces. The volumetric denoiser tolerates the high-frequency signal on its
+  // own bilateral domain, so there is no separate factor texture (there never
+  // was for this path).
   if (args.cloudVoxelShadowsEnable != 0u) {
-    const float newShadow = sampleCloudGroundShadow_OptionB(
+    const float cloudTransmittance = sampleCloudGroundShadow_OptionB(
         volumePos, result.direction, args, isZUp);
-    result.radiance *= newShadow;
+    result.radiance *= pow(cloudTransmittance, args.cloudShadowFactorStrength);
   }
 #endif
 
@@ -1250,10 +1023,18 @@ vec3 computeGroundReflectionAnalytical(float altitude, float sunZenithCosAngle, 
   float ratio = args.planetRadius / d;
   float omega = 2.0f * kPi * (1.0f - sqrt(max(0.0f, 1.0f - ratio * ratio)));
 
-  // Combine: Incoming Sun * Albedo * Phase * SolidAngle * PathTransmittance
+  // Combine: Albedo * Phase * SolidAngle * PathTransmittance
   float cosTheta = max(sunZenithCosAngle, 0.0f); // Sun must be above horizon for ground bounce
-  
-  return args.sunIlluminance * T_sun_to_ground * (GROUND_ALBEDO / kPi) * omega * PHASE_ISOTROPIC * T_ground_to_sample * cosTheta;
+
+  // NOTE (fork — 2026-06-19): sunIlluminance is deliberately NOT applied here.
+  // This returns a dimensionless multiscatter transfer factor; the single
+  // sunIlluminance is applied by the caller (evalAtmosphereRadiance:
+  // contribAnalytical = sunIlluminance * scattering * msAnalytical), matching
+  // the physical LUT twin computeGroundReflection(). Baking sunIlluminance in
+  // here AND at the caller double-counted it (sunIlluminance² ≈ 225× at the
+  // default 15), flooding the sky with an over-strong multiscatter term that
+  // washed out the horizon gradient, over-saturated the blue, and killed warmth.
+  return T_sun_to_ground * (GROUND_ALBEDO / kPi) * omega * PHASE_ISOTROPIC * T_ground_to_sample * cosTheta;
 }
 
 // 2. Accurate Analytical Air Multiscattering (Replaces static curve fit)
@@ -1276,9 +1057,12 @@ vec3 computeAirMultiscatteringAnalytical(float altitude, float sunZenithCosAngle
   
   // D. Calibration Scalar
   // Derived to match the Monte Carlo reference magnitude
-  const float MS_STRENGTH = 0.5f; 
-  
-  return args.sunIlluminance * totalScattering * densityFade * sunFactor * MS_STRENGTH;
+  const float MS_STRENGTH = 0.5f;
+
+  // NOTE (fork — 2026-06-19): sunIlluminance is deliberately NOT applied here —
+  // the caller applies the single sunIlluminance once (see the matching note in
+  // computeGroundReflectionAnalytical and the LUT twin computeAnalyticalMultiscattering).
+  return totalScattering * densityFade * sunFactor * MS_STRENGTH;
 }
 
 // Combined Analytical Multiscattering (Use this to replace LUT sampling)
@@ -1704,39 +1488,226 @@ float sampleTricubicBSpline(Texture3D<float> tex, SamplerState s,
   return mix(txy1, txy0, g0.z);
 }
 
-// Anti-tiling domain warp (fork). The prebaked cloud noise is periodic at
-// cloudNoiseTileKm, so at small tiles the periodic repeat telescopes into
-// visible horizontal layers toward the horizon — the residual that remains
-// after the runtime re-bake fix. Displace the HORIZONTAL sample position by a
-// low-frequency, NON-tiling offset whose wavelength spans several tiles, so
-// two world positions one tile apart no longer sample identical texels and the
-// repeat dissolves into organic variation. Amplitude is a fraction of the tile
-// (args.cloudNoiseWarpStrength) so it scales with the knob; 0 disables. Y is
-// left unwarped so the altitude / height-profile mapping stays intact. Applied
-// identically in the full runtime sampler and the cheap voxel-bake sampler so
-// the density and its baked self-shadows agree.
-void applyCloudNoiseAntiTileWarp(inout vec3 perturbed, AtmosphereArgs args) {
-  if (args.cloudNoiseWarpStrength <= 0.0f) {
-    return;
+// ===========================================================================
+// Stochastic hex-tiling of the cloud noise volume (fork — 2026-06-11,
+// de-tile rework stage A).
+//
+// Root-cause fix for the periodic repeat of the prebaked volume: the
+// horizontal plane is partitioned into an equilateral-triangle lattice
+// (~1.6 tiles per edge) and each lattice vertex carries a random
+// texture-space XZ offset.
+// A sample blends the volume taps of its triangle's three vertices with
+// barycentric weights using Heitz & Neyret 2018's variance-preserving
+// operator:
+//
+//   G = mean + sum(w_i * (x_i - mean)) / sqrt(sum(w_i^2))
+//
+// which keeps the blended field's mean and variance equal to the source
+// field's (a plain weighted average would crush variance in blend zones and
+// soften the coverage gate there). Because every cell samples the SAME
+// volume at a random translation, the spectrum/histogram of the field is
+// essentially unchanged — the look is preserved — but the tiling period is
+// destroyed: two world positions one tile apart land in different cells
+// with decorrelated offsets.
+//
+// Weights are sharpened (pow 4, renormalized) so triangle interiors collapse
+// to a single dominant vertex — the samplers take a 1-tap fast path there
+// (w1 > 0.95, ~70% of area) and only blend 3 taps near triangle edges.
+//
+// Lattice scale is a GOLDEN-RATIO multiple of the tile period: an integer
+// multiple would re-introduce banding (the lattice itself would repeat in
+// phase with the texture), and phi is the "most irrational" choice, so
+// lattice-vs-tile resonance is minimized at every tile value.
+//
+// This replaced the former anti-tile domain warp (a horizontal sample
+// displacement that hid the repeat), which was removed once de-tiling was
+// validated in-game. See the cloud-detile-rework plan notes.
+// ===========================================================================
+struct CloudHexTile {
+  float w1, w2, w3;        // sharpened, normalized blend weights (w1 largest)
+  vec2  off1, off2, off3;  // per-vertex random texture-space XZ offsets
+};
+
+CloudHexTile computeCloudHexTile(vec2 hzKm, AtmosphereArgs args) {
+  const float kHexLatticeTiles = 1.618034f;  // golden ratio — see header
+  float latticeKm = max(args.cloudNoiseTileKm * kHexLatticeTiles, 1e-3f);
+  vec2 uv = hzKm / latticeKm;
+
+  // Skew the plane so integer cells form an equilateral-triangle lattice
+  // (Heitz 2018's gridToSkewedGrid, written out without a matrix).
+  vec2 skewed = vec2(uv.x - 0.57735027f * uv.y, uv.y * 1.15470054f);
+  vec2 baseId = floor(skewed);
+  vec2 fr = fract(skewed);
+
+  vec3 w;
+  vec2 v1, v2, v3;
+  float lower = 1.0f - fr.x - fr.y;
+  if (lower > 0.0f) {
+    w  = vec3(lower, fr.y, fr.x);
+    v1 = baseId;
+    v2 = baseId + vec2(0.0f, 1.0f);
+    v3 = baseId + vec2(1.0f, 0.0f);
+  } else {
+    w  = vec3(-lower, 1.0f - fr.y, 1.0f - fr.x);
+    v1 = baseId + vec2(1.0f, 1.0f);
+    v2 = baseId + vec2(1.0f, 0.0f);
+    v3 = baseId + vec2(0.0f, 1.0f);
   }
-  // Two-octave fractal warp. A single smooth wave only decorrelates repeats at
-  // one spacing — adjacent horizon repeats get shoved by nearly the same amount,
-  // leaving a faint residual no matter the amplitude. Two octaves at NON-integer
-  // tile multiples break the periodicity across scales: the long octave
-  // (~5.3 tiles) scrambles large structure; the short octave (~2.1 tiles, near a
-  // half-period-per-tile offset) lands adjacent repeats out of phase. Non-integer
-  // multiples matter — a wavelength that's an integer multiple of the tile would
-  // itself repeat at the tile period and re-introduce banding.
-  const float kWarp1Tiles = 5.3f;  // large-scale break
-  const float kWarp2Tiles = 2.1f;  // adjacent-repeat break
-  vec2  hz   = vec2(perturbed.x, perturbed.z);
-  float inv1 = 1.0f / max(args.cloudNoiseTileKm * kWarp1Tiles, 1e-3f);
-  float inv2 = 1.0f / max(args.cloudNoiseTileKm * kWarp2Tiles, 1e-3f);
-  float wx = perlinNoise3D(vec3(hz * inv1, 0.0f))  + 0.5f * perlinNoise3D(vec3(hz * inv2, 23.7f));
-  float wz = perlinNoise3D(vec3(hz * inv1, 11.3f)) + 0.5f * perlinNoise3D(vec3(hz * inv2, 31.1f));
-  float ampKm = args.cloudNoiseWarpStrength * args.cloudNoiseTileKm;
-  perturbed.x += wx * ampKm;
-  perturbed.z += wz * ampKm;
+
+  // Sharpen: pow-4 + renormalize. Narrows blend zones to ~edge bands so the
+  // 1-tap fast path covers most of the plane, and reduces the ghosting that
+  // wide 3-way blends of a non-Gaussian field would show.
+  w = w * w;
+  w = w * w;
+  w /= (w.x + w.y + w.z);
+
+  // Sort so w1 is the dominant vertex (the fast-path / footprint anchor).
+  // Two compare-swaps suffice to get the max into slot 1; the relative
+  // order of slots 2/3 is irrelevant to the symmetric blend.
+  if (w.y > w.x) { float t = w.x; w.x = w.y; w.y = t; vec2 tv = v1; v1 = v2; v2 = tv; }
+  if (w.z > w.x) { float t = w.x; w.x = w.z; w.z = t; vec2 tv = v1; v1 = v3; v3 = tv; }
+
+  CloudHexTile hex;
+  hex.w1 = w.x; hex.w2 = w.y; hex.w3 = w.z;
+  // Per-vertex random translation of the tiling, in texture-space units.
+  // Lattice ids are integers, so hash31's int-truncation never collides
+  // neighboring vertices. Two decorrelated seeds give the two channels.
+  hex.off1 = vec2(hash31(vec3(v1, 7.31f)), hash31(vec3(v1, 19.77f)));
+  hex.off2 = vec2(hash31(vec3(v2, 7.31f)), hash31(vec3(v2, 19.77f)));
+  hex.off3 = vec2(hash31(vec3(v3, 7.31f)), hash31(vec3(v3, 19.77f)));
+  return hex;
+}
+
+// Mean of the Worley-carved bake — shared anchor for the hex blend and the
+// vertical-coherence re-expansion (which already used 0.4; keep in lockstep
+// with any re-bake that shifts the field statistics).
+static const float kCloudNoiseFieldMean = 0.4f;
+
+// Variance-preserving 3-tap blend of the noise volume at the hex offsets.
+// Trilinear taps — only the blend zones (~30% of area) come through here,
+// and the 3-way blend masks the trilinear-vs-tricubic softness difference.
+float sampleCloudNoiseHexBlend(CloudHexTile hex, vec3 texcoord,
+                               Texture3D<float> cloudNoise3D,
+                               SamplerState cloudSampler) {
+  float x1 = cloudNoise3D.SampleLevel(cloudSampler,
+      vec3(frac(texcoord.x + hex.off1.x), texcoord.y, frac(texcoord.z + hex.off1.y)), 0).r;
+  float x2 = cloudNoise3D.SampleLevel(cloudSampler,
+      vec3(frac(texcoord.x + hex.off2.x), texcoord.y, frac(texcoord.z + hex.off2.y)), 0).r;
+  float x3 = cloudNoise3D.SampleLevel(cloudSampler,
+      vec3(frac(texcoord.x + hex.off3.x), texcoord.y, frac(texcoord.z + hex.off3.y)), 0).r;
+  float norm = sqrt(hex.w1 * hex.w1 + hex.w2 * hex.w2 + hex.w3 * hex.w3);
+  return kCloudNoiseFieldMean
+       + (hex.w1 * (x1 - kCloudNoiseFieldMean)
+        + hex.w2 * (x2 - kCloudNoiseFieldMean)
+        + hex.w3 * (x3 - kCloudNoiseFieldMean)) / max(norm, 1e-4f);
+}
+
+// ===========================================================================
+// Per-column cloud model (fork — 2026-06-11, column-shaping rework).
+//
+// Root-cause fix for the "stacked separated layers" read: previously EVERY
+// vertical shaping signal — density envelope, coverage-threshold scale,
+// anvil pow, dim profile, bottom darkening — was keyed on the GLOBAL slab
+// height fraction, so every cloud in the sky shared one vertical recipe
+// pinned to absolute altitude (flat global base/top planes, identical
+// lighting bands), while the thresholded isotropic 3D noise placed mass
+// independently per altitude (vertically disconnected puffs in a column).
+// The eye integrates both as flat horizontal layers.
+//
+// The column model gives each cloud its own identity:
+//   * The 2D placement map (cloud_placement_map_baker.comp.slang) supplies a
+//     cluster field F (where clouds are, at cloud scale), a top-height
+//     jitter J, and a base lift B — tiled at cloudNoiseTileKm and de-tiled
+//     by the SAME hex lattice as the 3D noise so cluster and texture travel
+//     together.
+//   * Per column: presence = coverage remap of F (0 = no cloud here,
+//     1 = solid core); local base/top derived from B, presence and J. Cloud
+//     edges feather to nothing because their tops sink to their bases.
+//   * The sample's height fraction is re-normalized to the COLUMN
+//     ([base, top] -> [0,1]); the height profile, anvil pow, coverage
+//     threshold and the Nubis lighting proxies all key on this per-cloud
+//     height, so each cloud carries a complete rise/bulk/domed-top shape at
+//     its own altitude. The 3D noise keeps its texture/erosion role but no
+//     longer decides placement — vertical coherence holds by construction.
+// ===========================================================================
+
+// Design mean of the placement map's R-channel cluster field — anchor for
+// the variance-preserving hex blend. Monte-Carlo of the baker's field
+// construction (worley-core + fbm at the shipped offsets/gains) lands at
+// ~0.60 after saturation; an anchor that mismatches the true mean shifts
+// presence in blend zones by (anchor - mean)(1 - 1/norm), which would read
+// as cloud-density seams along the hex lattice. Keep in lockstep with the
+// field construction in cloud_placement_map_baker.comp.slang.
+static const float kCloudPlacementFieldMean = 0.6f;
+
+// Placement-map tap at the hex-de-tiled texture coordinate. texXZ is the
+// tile-space UV (frac(perturbed.xz / cloudNoiseTileKm)); the hex offsets are
+// the same texture-space offsets the 3D noise taps use, so both fields
+// decorrelate across lattice cells in lockstep. The R channel (cluster
+// field, gets thresholded by the coverage remap downstream) blends
+// variance-preservingly; G/B are smooth modulators where a plain weighted
+// average is fine (weights are normalized).
+vec4 sampleCloudPlacement(vec2 texXZ, CloudHexTile hex, bool hexOn,
+                          Texture2D<float4> placementMap,
+                          SamplerState placementSampler) {
+  if (!hexOn) {
+    return placementMap.SampleLevel(placementSampler, texXZ, 0);
+  }
+  if (hex.w1 > 0.95f) {
+    return placementMap.SampleLevel(placementSampler,
+        vec2(frac(texXZ.x + hex.off1.x), frac(texXZ.y + hex.off1.y)), 0);
+  }
+  vec4 p1 = placementMap.SampleLevel(placementSampler,
+      vec2(frac(texXZ.x + hex.off1.x), frac(texXZ.y + hex.off1.y)), 0);
+  vec4 p2 = placementMap.SampleLevel(placementSampler,
+      vec2(frac(texXZ.x + hex.off2.x), frac(texXZ.y + hex.off2.y)), 0);
+  vec4 p3 = placementMap.SampleLevel(placementSampler,
+      vec2(frac(texXZ.x + hex.off3.x), frac(texXZ.y + hex.off3.y)), 0);
+  float norm = sqrt(hex.w1 * hex.w1 + hex.w2 * hex.w2 + hex.w3 * hex.w3);
+  float F = kCloudPlacementFieldMean
+          + (hex.w1 * (p1.r - kCloudPlacementFieldMean)
+           + hex.w2 * (p2.r - kCloudPlacementFieldMean)
+           + hex.w3 * (p3.r - kCloudPlacementFieldMean)) / max(norm, 1e-4f);
+  vec2 gb = hex.w1 * vec2(p1.g, p1.b)
+          + hex.w2 * vec2(p2.g, p2.b)
+          + hex.w3 * vec2(p3.g, p3.b);
+  return vec4(saturate(F), gb.x, gb.y, 1.0f);
+}
+
+// Column parameters derived from a placement sample + the weather-scale
+// coverage. baseFrac/topFrac are fractions of the slab; presence is the
+// per-column cloud amount that replaces the weather coverage in the noise
+// threshold (so the gate carves each cloud's own feather band instead of
+// uniformly carving a 300 km weather region).
+struct CloudColumn {
+  float presence;  // [0,1] — 0: no cloud in this column, 1: solid core
+  float baseFrac;  // column cloud-base as a slab height fraction
+  float topFrac;   // column cloud-top as a slab height fraction
+};
+
+CloudColumn computeCloudColumn(vec4 placement, float coverageLocal,
+                               AtmosphereArgs args) {
+  CloudColumn col;
+  // Coverage remap (Schneider-style): the cluster field F crosses the
+  // (1 - coverage) waterline and feathers to full presence over the band.
+  // coverage 1 -> almost every column has presence; coverage 0.3 -> only
+  // cluster cores survive.
+  float band = max(args.cloudColumnFeather, 0.02f);
+  col.presence = saturate((placement.r - (1.0f - coverageLocal)) / band);
+
+  // Local base lift: small undulation of the cloud base.
+  col.baseFrac = saturate(placement.b * args.cloudColumnBaseVariation);
+
+  // Local top: grows with presence (edges feather to nothing) shaped by the
+  // top exponent, jittered per cluster so equal-presence clouds still get
+  // different tower heights.
+  float topJitter = mix(1.0f - saturate(args.cloudColumnTopVariation), 1.0f,
+                        saturate(placement.g));
+  col.topFrac = col.baseFrac
+              + (1.0f - col.baseFrac)
+              * pow(col.presence, max(args.cloudColumnTopShape, 0.05f))
+              * topJitter;
+  return col;
 }
 
 // Stage C replacement for sampleCloudDensity AND sampleCloudDensityShadow.
@@ -1775,7 +1746,26 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
                                  float densityScale,
                                  AtmosphereArgs args,
                                  Texture3D<float> cloudNoise3D,
-                                 SamplerState cloudSampler) {
+                                 SamplerState cloudSampler,
+                                 Texture2D<float4> placementMap,
+                                 out float shapeHeightFraction,
+                                 out float columnSpan) {
+  // shapeHeightFraction (fork — 2026-06-11, column-shaping rework): the
+  // height fraction all vertical SHAPING and LIGHTING should key on,
+  // re-normalized to this column's own [base, top] so every cloud carries a
+  // complete rise/bulk/top profile at its own altitude. Callers feed it to
+  // evalNubisCubedSample so the dim profile / bottom darkening track each
+  // cloud rather than painting global altitude bands across the sky.
+  //
+  // columnSpan (rev 2 — 2026-06-12): this column's vertical extent as a
+  // fraction of the slab (topFrac - baseFrac). Feeds the per-column
+  // underside-brightness modulation in evalNubisCubedSample — thick columns
+  // darken their base fully, thin columns stay bright (transmitted-light cue),
+  // which gives the deck underside km-scale cellular relief instead of one
+  // flat-lit sheet. Both are always overwritten by the column block below.
+  shapeHeightFraction = heightFraction;
+  columnSpan = 1.0f;
+
   // 1. Wind perturbation (translation only — texture is tilable).
   //    The legacy analytic sampler applied a height-dependent shear on top of
   //    the wind offset; that term was intentionally dropped when this textured
@@ -1785,10 +1775,6 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   //    than in this helper's contract.
   vec3 windOffset = vec3(args.cloudWindOffset.x, 0.0f, args.cloudWindOffset.y);
   vec3 perturbed  = worldPosKm + windOffset;
-
-  // 1b. Anti-tiling domain warp (fork) — dissolve the periodic repeat at small
-  //     tiles before the texcoord wrap below reads it as horizontal layers.
-  applyCloudNoiseAntiTileWarp(perturbed, args);
 
   // 2. World-pos -> texcoord. ISOTROPIC mapping: all three axes use the same
   //    cloudNoiseTileKm period. The previous slabAlt-relative Y mapping
@@ -1809,41 +1795,235 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
       frac(perturbed.y / args.cloudNoiseTileKm),
       frac(perturbed.z / args.cloudNoiseTileKm));
 
-  // 3. Tricubic 3D sample. Texture-size literal must match the baker's
+  // Field-evolution scroll (fork — 2026-06-21). The base 3D noise is sampled at
+  // an additional slowly-evolving offset so the cloud field MORPHS in place
+  // (formations form / dissolve) instead of translating rigidly with wind. The
+  // dominant Y component scrolls through the volume's decorrelated, tile-wrapping
+  // vertical axis → genuine churn, not a slide. This offset feeds ONLY the base
+  // 3D tap and its footprint slice below — the placement map, hex lattice, column
+  // model, and height fraction all stay on the real `perturbed`/`texcoord`, so
+  // cloud clusters keep their sky location and altitude while their shape evolves.
+  // Offset 0 (cloudEvolutionSpeed 0) makes noiseTexcoord == texcoord (legacy).
+  vec3 noiseSamplePos = perturbed + vec3(args.cloudEvolutionOffsetX,
+                                         args.cloudEvolutionOffsetY,
+                                         args.cloudEvolutionOffsetZ);
+  vec3 noiseTexcoord = vec3(
+      frac(noiseSamplePos.x / args.cloudNoiseTileKm),
+      frac(noiseSamplePos.y / args.cloudNoiseTileKm),
+      frac(noiseSamplePos.z / args.cloudNoiseTileKm));
+
+  // 2b. Per-column cloud model (fork — 2026-06-11, column-shaping rework).
+  //     The hex tile is computed BEFORE the 3D taps (hoisted from step 3)
+  //     because the placement tap shares its lattice offsets. When the
+  //     column says "no cloud at this height in this column", we return
+  //     before paying for any 3D volume taps — at partial coverage most
+  //     march steps exit here, which more than refunds the placement tap.
+  CloudHexTile hex = (CloudHexTile)0;
+  bool hexOn = args.cloudHexTilingEnable > 0.5f;
+  if (hexOn) {
+    hex = computeCloudHexTile(vec2(perturbed.x, perturbed.z), args);
+  }
+
+  float gateCoverage = coverageLocal;
+  {
+    vec4 placement = sampleCloudPlacement(vec2(texcoord.x, texcoord.z), hex, hexOn,
+                                          placementMap, cloudSampler);
+    CloudColumn col = computeCloudColumn(placement, coverageLocal, args);
+    if (col.presence <= 0.001f) {
+      return 0.0f;
+    }
+    if (heightFraction <= col.baseFrac || heightFraction >= col.topFrac) {
+      return 0.0f;
+    }
+    shapeHeightFraction = saturate((heightFraction - col.baseFrac)
+                                   / max(col.topFrac - col.baseFrac, 1e-3f));
+    columnSpan = saturate(col.topFrac - col.baseFrac);
+    gateCoverage = col.presence;
+  }
+
+  // 3. Base 3D sample. Texture-size literal must match the baker's
   //    dispatch resolution (RtxAtmosphere::kCloudNoise3DSize = 256). If the
   //    bake resolution ever changes, update both sites in lockstep.
-  float texturedNoise = sampleTricubicBSpline(
-      cloudNoise3D, cloudSampler,
-      texcoord, vec3(256.0f));
+  //
+  //    Hex de-tiling (fork — 2026-06-11, stage A): when enabled, the sample
+  //    position's triangle-lattice cell supplies random texture offsets that
+  //    destroy the volume's tile period (see computeCloudHexTile). Triangle
+  //    interiors (dominant weight > 0.95 after sharpening) take the 1-tap
+  //    tricubic fast path at the dominant offset; edge bands blend 3
+  //    trilinear taps variance-preservingly. Off = exact legacy single
+  //    tricubic tap.
+  float texturedNoise;
+  if (hexOn) {
+    if (hex.w1 > 0.95f) {
+      vec3 hexCoord = vec3(frac(noiseTexcoord.x + hex.off1.x), noiseTexcoord.y,
+                           frac(noiseTexcoord.z + hex.off1.y));
+      texturedNoise = sampleTricubicBSpline(cloudNoise3D, cloudSampler,
+                                            hexCoord, vec3(256.0f));
+    } else {
+      texturedNoise = sampleCloudNoiseHexBlend(hex, noiseTexcoord, cloudNoise3D, cloudSampler);
+    }
+  } else {
+    texturedNoise = sampleTricubicBSpline(cloudNoise3D, cloudSampler,
+                                          noiseTexcoord, vec3(256.0f));
+  }
 
-  // 4. Per-frame 1-octave analytic detail (shape jitter at ~10% weight).
-  //    Frequency tuned for sub-voxel-scale variation that the prebaked
-  //    texture cannot represent.
-  //    NOTE: perlinNoise3D returns gradient noise in [-1, 1]; the plan's
-  //    - 0.5f shift is preserved as-is per plan spec (Task 9 re-tuning will
-  //    address the asymmetry if visually problematic).
-  float detailWeight = 0.10f;  // tune in Task 9 re-tuning loop
-  float detail       = perlinNoise3D(perturbed * 720.0f) - 0.5f;
-  float density      = texturedNoise + detailWeight * detail;
+  // 3b. Vertical coherence (fork — 2026-06-10, rev 2 of cloudVerticalStretch).
+  //     Rev 1 stretched the Y sample domain, which elongates EVERY octave
+  //     equally — the small octaves became vertical bead-chains that gated
+  //     into stacked disconnected puffs (user-reported in-game). Rev 2
+  //     instead blends the 3D sample toward a FIXED-Y slice of the same
+  //     volume: the slice term is constant along a vertical column by
+  //     construction, so its share of the density field is connected
+  //     top-to-bottom at every scale (towers grow from a stable footprint),
+  //     while the remaining 3D share keeps tops and edges irregular. The
+  //     stretch value S maps to blend weight k = 1 - 1/S (S=1 -> k=0 legacy
+  //     isotropic; S=2 -> 0.5; S=3 -> 0.67). The blend is re-expanded so
+  //     averaging two decorrelated fields doesn't shrink variance (which
+  //     would soften the coverage gate); the anchor is the Worley-carved
+  //     bake's approximate MEAN (~0.4, not 0.5) — an off-mean anchor
+  //     silently shifts effective coverage by (anchor - mean)*(1/norm - 1).
+  //     Must match sampleCloudDensityForShadow below so the baked
+  //     self-shadow grids describe the same shapes.
+  float S = max(args.cloudVerticalStretch, 1.0f);
+  if (S > 1.001f) {
+    float k = 1.0f - 1.0f / S;
+    // Fixed slice at 0.85: outside the default slab's wrapped Y range
+    // (~[0.11, 0.53] at altitude 1.3 / thickness 5 / tile 12) so the local
+    // 3D sample and the footprint slice stay decorrelated within the slab.
+    const float kFootprintSliceY = 0.85f;
+    // Hex de-tiling: shift the footprint slice by the DOMINANT vertex's
+    // offset so the footprint tracks the same randomized field the base
+    // sample reads (a full 3-tap footprint blend isn't worth it for this
+    // default-inert stabilizer). Uses noiseTexcoord so the footprint tracks the
+    // same evolving field as the base 3D tap (fork — 2026-06-21, field evolution).
+    vec2 fpXZ = hexOn ? vec2(frac(noiseTexcoord.x + hex.off1.x), frac(noiseTexcoord.z + hex.off1.y))
+                      : vec2(noiseTexcoord.x, noiseTexcoord.z);
+    float footprint = cloudNoise3D.SampleLevel(cloudSampler,
+        vec3(fpXZ.x, kFootprintSliceY, fpXZ.y), 0).r;
+    float blended = mix(texturedNoise, footprint, k);
+    texturedNoise = kCloudNoiseFieldMean
+                  + (blended - kCloudNoiseFieldMean) / sqrt(k * k + (1.0f - k) * (1.0f - k));
+  }
 
-  // 5. Coverage threshold + anvil pow + cloud-type vertical profile.
-  //    The R channel is the density envelope (gentle altitude shape). The G
-  //    channel is the per-altitude coverage threshold scale — that's the
-  //    lever with visible silhouette teeth (slide-3 anvil mechanism: a low G
-  //    at the cumulus top lowers the threshold, so more pixels survive the
-  //    coverage gate and the silhouette widens horizontally).
-  vec2 heightProfile = cloudHeightProfileFull(heightFraction, typeLocal, args);
+  // 4. (fork — 2026-06-10, perf) The per-frame 1-octave analytic detail
+  // (perlinNoise3D at 720 cycles/km, ~10% weight) is REMOVED: its 1.4 m
+  // wavelength against >= 100 m march steps could never resolve into
+  // structure — it integrated out as per-sample grain — while costing a
+  // full 8-corner perlin eval per view-march sample. Visible detail comes
+  // from the edge threshold modulation in step 4b. The term's constant part is kept:
+  // detailWeight * (perlin - 0.5) had mean -0.05 (perlin is zero-mean), and
+  // dropping the bias would silently shift the coverage calibration.
+  float density = texturedNoise - 0.05f;
+
+  // 4a. Coverage threshold + anvil pow + cloud-type vertical profile.
+  //     HOISTED above the edge-detail block (4b) — the additive detail needs
+  //     coverageThreshold to localize itself to the silhouette. All three terms
+  //     depend only on shapeHeightFraction / typeLocal / gateCoverage (NOT on
+  //     density), so evaluating them here is behavior-neutral for the gate.
+  //     The R channel is the density envelope (gentle altitude shape). The G
+  //     channel is the per-altitude coverage threshold scale — that's the
+  //     lever with visible silhouette teeth (slide-3 anvil mechanism: a low G
+  //     at the cumulus top lowers the threshold, so more pixels survive the
+  //     coverage gate and the silhouette widens horizontally).
+  //
+  //     Column mode: everything keys on shapeHeightFraction (per-cloud height)
+  //     and gateCoverage (per-column presence), so the envelope, the anvil
+  //     band and the threshold feathering land at each cloud's OWN base/top
+  //     instead of at two global altitudes — that global keying was the core
+  //     of the stacked-layers read. Legacy mode: shapeHeightFraction ==
+  //     heightFraction and gateCoverage == coverageLocal, bit-identical.
+  vec2 heightProfile = cloudHeightProfileFull(shapeHeightFraction, typeLocal, args);
 
   float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
-                            smoothstep(0.7f, 0.8f, heightFraction));
-  float coverageAnvil = pow(coverageLocal, anvilExponent);
+                            smoothstep(0.7f, 0.8f, shapeHeightFraction));
+  float coverageAnvil = pow(gateCoverage, anvilExponent);
 
   float coverageThreshold = mix(0.80f, 0.0f, coverageAnvil) * heightProfile.g;
-  density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, density);
+
+  // 4b. Edge detail (fork — 2026-06-14, rev 4 — THRESHOLD MODULATION). A second
+  //     tap of the prebaked Worley-carved volume at cloudDetailScale× the base
+  //     frequency wobbles the COVERAGE THRESHOLD (the step-5 gate position)
+  //     instead of being added to the density field. Where detail is high the
+  //     threshold drops, so the threshold-crossing iso-surface bulges OUTWARD
+  //     past the base silhouette (cauliflower billows grow into clear sky at
+  //     60-500 m wavelengths); where it is low the threshold rises, carving
+  //     crevices in. The wobble is zero-mean about the field mean, so it adds no
+  //     uniform outward push.
+  //
+  //     This beats the two failure modes of the old additive+window form
+  //     (rev 3): (a) NO TRAPPED RIND — the threshold can drop below the base
+  //     value, so billows are not confined to a thin band inside the silhouette;
+  //     (b) NO HALF-RES SMEAR HALO — the step-5 gate SELF-LOCALIZES the effect:
+  //     samples far outside (density ≪ threshold) stay hard-0 however the
+  //     threshold wobbles, so there is no faint clear-sky margin for the half-res
+  //     render + bilinear upsample to smear, and samples far inside
+  //     (density ≫ threshold) stay 1 (no interior holes). The modulation only
+  //     bites in the gate's transition band — exactly at the edge — so no
+  //     explicit edge window is needed (rev 3's window, and the rejected tunable
+  //     reach, are both gone). It never touches the noise/density field (unlike
+  //     rev 2's rejected erosion remap); it only moves the gate, the same
+  //     slide-3 anvil mechanism step 4a uses at low frequency. The cheap shadow
+  //     sampler (sampleCloudDensityForShadow) still skips the whole term, and
+  //     cloudDetailStrength = 0 leaves coverageThreshold untouched (bit-identical).
+  if (args.cloudDetailStrength > 0.0f) {
+    // Edge boil (fork — 2026-06-21, field evolution): scroll the detail tap along
+    // a fixed internal direction at cloudBoilSpeed, INDEPENDENT of the base
+    // shape's wind + evolution, so the erosion field slides relative to the
+    // silhouette and cauliflower billows churn/rebuild at the edge. The direction
+    // is decorrelated from both wind (XZ) and the evolution scroll (Y-dominant).
+    // cloudBoilPhase is accumulated km; 0 = frozen edges (legacy).
+    const vec3 kBoilDir = vec3(0.6092f, 0.7109f, 0.3517f);  // ~unit, off-axis
+    vec3 boilPos = perturbed + args.cloudBoilPhase * kBoilDir;
+    vec3 detailCoord = frac(boilPos * (args.cloudDetailScale / args.cloudNoiseTileKm));
+    float detailNoise = cloudNoise3D.SampleLevel(cloudSampler, detailCoord, 0).r;
+    // kEdgeDetailThreshold scales the wobble into threshold units; at the 0.6
+    // default strength the typical excursion is ~±0.1, with growth peaks to
+    // ~0.18 (the [0,1] detail range is wider above the 0.4 mean, giving a gentle
+    // growth lean). Clamp ≥ 0 so the anvil's threshold→0 cloud tops can't go
+    // negative (which would over-fill the gate to solid).
+    const float kEdgeDetailThreshold = 0.5f;
+    coverageThreshold -= args.cloudDetailStrength * kEdgeDetailThreshold
+                       * (detailNoise - kCloudNoiseFieldMean);
+    coverageThreshold = max(coverageThreshold, 0.0f);
+  }
+
+  // 5. Apply the coverage gate (threshold computed in 4a above), then the
+  //    density envelope. The transition-band width sets silhouette softness:
+  //    the wider it is, the broader the faint sub-threshold skirt around each
+  //    cloud (the soft halo). Driven live by cloudEdgeSoftness (default 0.15,
+  //    down from the legacy 0.25; fork — 2026-06-13). VIEW PATH ONLY; the
+  //    shadow/optical-depth overload below keeps 0.25 so the validated
+  //    self-shadow bakes are unchanged (the trimmed edge density is negligible
+  //    for shadowing).
+  density = smoothstep(coverageThreshold,
+                       coverageThreshold + max(args.cloudEdgeSoftness, 1e-3f),
+                       density);
 
   density *= heightProfile.r;
 
   return saturate(density) * densityScale;
+}
+
+// Slab-parametric convenience overload without the shape out params — for
+// callers (shadow taps, optical-depth marches) that don't need the per-cloud
+// height or column span back.
+float sampleCloudDensityTextured(vec3 worldPosKm,
+                                 float heightFraction,
+                                 float typeLocal,
+                                 float coverageLocal,
+                                 float slabAltitudeKm,
+                                 float slabThicknessKm,
+                                 float densityScale,
+                                 AtmosphereArgs args,
+                                 Texture3D<float> cloudNoise3D,
+                                 SamplerState cloudSampler,
+                                 Texture2D<float4> placementMap) {
+  float shapeHfUnused;
+  float columnSpanUnused;
+  return sampleCloudDensityTextured(worldPosKm, heightFraction, typeLocal, coverageLocal,
+                                     slabAltitudeKm, slabThicknessKm, densityScale,
+                                     args, cloudNoise3D, cloudSampler, placementMap,
+                                     shapeHfUnused, columnSpanUnused);
 }
 
 // Args-default overload — preserves the layer-1 behavior every existing
@@ -1854,10 +2034,11 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
                                  float coverageLocal,
                                  AtmosphereArgs args,
                                  Texture3D<float> cloudNoise3D,
-                                 SamplerState cloudSampler) {
+                                 SamplerState cloudSampler,
+                                 Texture2D<float4> placementMap) {
   return sampleCloudDensityTextured(worldPosKm, heightFraction, typeLocal, coverageLocal,
                                      args.cloudAltitude, args.cloudThickness, 1.0f,
-                                     args, cloudNoise3D, cloudSampler);
+                                     args, cloudNoise3D, cloudSampler, placementMap);
 }
 
 // ===========================================================================
@@ -1893,13 +2074,10 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
                                    float densityScale,
                                    AtmosphereArgs args,
                                    Texture3D<float> cloudNoise3D,
-                                   SamplerState cloudSampler) {
+                                   SamplerState cloudSampler,
+                                   Texture2D<float4> placementMap) {
   vec3 windOffset = vec3(args.cloudWindOffset.x, 0.0f, args.cloudWindOffset.y);
   vec3 perturbed  = worldPosKm + windOffset;
-
-  // Anti-tiling domain warp (fork) — identical to the full sampler so the baked
-  // self-shadows track the warped density the runtime shows.
-  applyCloudNoiseAntiTileWarp(perturbed, args);
 
   // Isotropic Y texcoord — see the long comment in sampleCloudDensityTextured
   // above. Same fix applies here: voxel grid bakes need to see the same 3D
@@ -1910,17 +2088,82 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
       frac(perturbed.y / args.cloudNoiseTileKm),
       frac(perturbed.z / args.cloudNoiseTileKm));
 
-  // Single trilinear sample (assumes the bound sampler is linear-filter +
-  // repeat-address per RtxAtmosphere's cloud-noise sampler setup).
-  float density = cloudNoise3D.SampleLevel(cloudSampler, texcoord, 0).r;
+  // Hex tile hoisted ahead of the taps (shared by placement + noise) — must
+  // mirror sampleCloudDensityTextured.
+  CloudHexTile hex = (CloudHexTile)0;
+  bool hexOn = args.cloudHexTilingEnable > 0.5f;
+  if (hexOn) {
+    hex = computeCloudHexTile(vec2(perturbed.x, perturbed.z), args);
+  }
 
-  // Coverage threshold + vertical profile lifted from sampleCloudDensityTextured.
-  // R = envelope multiplier, G = coverage threshold scale (slide 3 lift).
-  vec2 heightProfile = cloudHeightProfileFull(heightFraction, typeLocal, args);
+  // Per-column cloud model — must mirror sampleCloudDensityTextured (same
+  // placement tap, same column derivation, same early-outs) so the baked
+  // D_sun / D_ambient grids shadow the same column shapes the view march
+  // renders. The shape height fraction stays local here: the voxel bakes
+  // integrate density only and never evaluate the lighting proxies.
+  float shapeHeightFraction = heightFraction;
+  float gateCoverage = coverageLocal;
+  {
+    vec4 placement = sampleCloudPlacement(vec2(texcoord.x, texcoord.z), hex, hexOn,
+                                          placementMap, cloudSampler);
+    CloudColumn col = computeCloudColumn(placement, coverageLocal, args);
+    if (col.presence <= 0.001f) {
+      return 0.0f;
+    }
+    if (heightFraction <= col.baseFrac || heightFraction >= col.topFrac) {
+      return 0.0f;
+    }
+    shapeHeightFraction = saturate((heightFraction - col.baseFrac)
+                                   / max(col.topFrac - col.baseFrac, 1e-3f));
+    gateCoverage = col.presence;
+  }
+
+  // Base sample (trilinear — this is the cheap variant; assumes the bound
+  // sampler is linear-filter + repeat-address per RtxAtmosphere's
+  // cloud-noise sampler setup).
+  //
+  // Hex de-tiling (fork — 2026-06-11, stage A) — must mirror
+  // sampleCloudDensityTextured's base tap (same lattice, same offsets,
+  // same blend) so the baked D_sun / D_ambient grids shadow the same
+  // de-tiled field the view march renders. Both paths are trilinear here.
+  float density;
+  if (hexOn) {
+    if (hex.w1 > 0.95f) {
+      density = cloudNoise3D.SampleLevel(cloudSampler,
+          vec3(frac(texcoord.x + hex.off1.x), texcoord.y,
+               frac(texcoord.z + hex.off1.y)), 0).r;
+    } else {
+      density = sampleCloudNoiseHexBlend(hex, texcoord, cloudNoise3D, cloudSampler);
+    }
+  } else {
+    density = cloudNoise3D.SampleLevel(cloudSampler, texcoord, 0).r;
+  }
+
+  // Vertical coherence blend — must mirror sampleCloudDensityTextured's
+  // step 3b (same k mapping, same fixed slice, same mean-anchored
+  // re-expansion) so the baked D_sun / D_ambient grids shadow the same
+  // tower shapes the view march renders.
+  float S = max(args.cloudVerticalStretch, 1.0f);
+  if (S > 1.001f) {
+    float k = 1.0f - 1.0f / S;
+    const float kFootprintSliceY = 0.85f;
+    vec2 fpXZ = hexOn ? vec2(frac(texcoord.x + hex.off1.x), frac(texcoord.z + hex.off1.y))
+                      : vec2(texcoord.x, texcoord.z);
+    float footprint = cloudNoise3D.SampleLevel(cloudSampler,
+        vec3(fpXZ.x, kFootprintSliceY, fpXZ.y), 0).r;
+    float blended = mix(density, footprint, k);
+    density = kCloudNoiseFieldMean
+            + (blended - kCloudNoiseFieldMean) / sqrt(k * k + (1.0f - k) * (1.0f - k));
+  }
+
+  // Coverage threshold + vertical profile lifted from sampleCloudDensityTextured
+  // (column mode: keyed on per-cloud height + per-column presence — see the
+  // step-5 comment there). R = envelope, G = coverage threshold scale.
+  vec2 heightProfile = cloudHeightProfileFull(shapeHeightFraction, typeLocal, args);
 
   float anvilExponent = mix(1.0f, mix(1.0f, 0.5f, args.cloudAnvilBias),
-                            smoothstep(0.7f, 0.8f, heightFraction));
-  float coverageAnvil = pow(coverageLocal, anvilExponent);
+                            smoothstep(0.7f, 0.8f, shapeHeightFraction));
+  float coverageAnvil = pow(gateCoverage, anvilExponent);
   float coverageThreshold = mix(0.80f, 0.0f, coverageAnvil) * heightProfile.g;
   density = smoothstep(coverageThreshold, coverageThreshold + 0.25f, density);
   density *= heightProfile.r;
@@ -1936,10 +2179,11 @@ float sampleCloudDensityForShadow(vec3 worldPosKm,
                                    float coverageLocal,
                                    AtmosphereArgs args,
                                    Texture3D<float> cloudNoise3D,
-                                   SamplerState cloudSampler) {
+                                   SamplerState cloudSampler,
+                                   Texture2D<float4> placementMap) {
   return sampleCloudDensityForShadow(worldPosKm, heightFraction, typeLocal, coverageLocal,
                                       args.cloudAltitude, args.cloudThickness, 1.0f,
-                                      args, cloudNoise3D, cloudSampler);
+                                      args, cloudNoise3D, cloudSampler, placementMap);
 }
 
 // ===========================================================================
@@ -2026,7 +2270,8 @@ vec3 cloudVoxelUVWToWorld(vec3 uvw, AtmosphereArgs args) {
 float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
                                          AtmosphereArgs args,
                                          Texture3D<float> cloudNoise3D,
-                                         SamplerState cloudSampler) {
+                                         SamplerState cloudSampler,
+                                         Texture2D<float4> placementMap) {
   const int kSamples = 8;
   float opticalDepth = 0.0f;
 
@@ -2069,7 +2314,8 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
     float hf = computeCloudHeightFraction(samplePos, args);
     float density = sampleCloudDensityForShadow(samplePos, hf,
                                                  typeLocal, coverageLocal,
-                                                 args, cloudNoise3D, cloudSampler);
+                                                 args, cloudNoise3D, cloudSampler,
+                                                 placementMap);
     opticalDepth += density * stepLen;
   }
 
@@ -2082,7 +2328,8 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
 float sampleCloudAmbientOpticalDepthAtWorld(vec3 worldPosYUpKm,
                                              AtmosphereArgs args,
                                              Texture3D<float> cloudNoise3D,
-                                             SamplerState cloudSampler) {
+                                             SamplerState cloudSampler,
+                                             Texture2D<float4> placementMap) {
   const int kSamples = 6;
   float opticalDepth = 0.0f;
 
@@ -2110,7 +2357,8 @@ float sampleCloudAmbientOpticalDepthAtWorld(vec3 worldPosYUpKm,
     float hf = computeCloudHeightFraction(samplePos, args);
     float density = sampleCloudDensityForShadow(samplePos, hf,
                                                  typeLocal, coverageLocal,
-                                                 args, cloudNoise3D, cloudSampler);
+                                                 args, cloudNoise3D, cloudSampler,
+                                                 placementMap);
     opticalDepth += density * stepLen;
   }
 
@@ -2236,17 +2484,34 @@ struct NubisCubedLighting {
 //
 // `isZUp` is forwarded to sampleDSun / sampleDAmbient — pass false when
 // samplePos is already in Y-up space (the cloud math's standard convention).
+//
+// `columnSpan` (fork — 2026-06-12, column-shaping rev 2/3): the sample's
+// column vertical extent as a slab fraction (from the density sampler's out
+// param; 1.0 in legacy mode). Scales the analytic downwelling optical depth
+// of the per-column light field — see the verticalLight comment below.
+// Pass 1.0 to reproduce legacy behavior exactly (legacy mode also ignores
+// it entirely).
+//
+// `dSunOverride` (fork — 2026-06-21, layer-2 echo-deck rework): the sun-
+// direction optical depth to use for the direct/shadow terms. A NEGATIVE
+// value means "sample the D_sun voxel grid" — the production path, byte-
+// identical to before. A value >= 0 is used verbatim and the grid tap is
+// skipped: the echo-deck march (marchEchoDeck) passes a cheap analytic proxy
+// because the D_sun grid is baked over the LAYER-1 slab only, so a deck at a
+// different altitude would read meaningless residual from it.
 NubisCubedLighting evalNubisCubedSample(
     vec3 samplePos, float heightFraction, float density,
+    float columnSpan,
     vec3 viewDir, vec3 sunDir,
     vec3 sunRadiance, vec3 skyRadianceWarm, vec3 skyRadianceCool,
-    AtmosphereArgs args, bool isZUp) {
+    vec3 skyRadianceZenith,
+    AtmosphereArgs args, bool isZUp, float dSunOverride) {
 
   // === Input samples ===
   float dim_profile = sampleDimProfile(samplePos, heightFraction, args);
   float cloud_sdf   = sampleCloudSdf(samplePos, heightFraction, density, args);
-  float D_sun       = sampleDSun(samplePos, args, isZUp);
-  float D_ambient   = sampleDAmbient(samplePos, args, isZUp);
+  float D_sun       = (dSunOverride >= 0.0f) ? dSunOverride
+                                             : sampleDSun(samplePos, args, isZUp);
   float cosTheta    = dot(viewDir, sunDir);
 
   // === Direct scattering (paper p. 29 + p. 137) ===
@@ -2260,10 +2525,83 @@ NubisCubedLighting evalNubisCubedSample(
   float sunFrac = saturate(cosTheta / max(args.cloudMsSunDotMax, 1e-4f));
   float sigma_ms = lerp(args.cloudMsSigmaShallow, sigma_ms_inner, sunFrac) * args.cloudMsScale;
 
-  float M = dim_profile * exp(-sigma_ms * D_sun);
+  // Underside light field (fork — realistic rework 2026-06-19; supersedes the
+  // column-shaping rev 3 analytic downwelling and the older constant gradient,
+  // both of which are now removed along with the legacy global-slab path).
+  //
+  // The diffuse light reaching a point on the cloud's underside is the sky-dome
+  // light that filtered DOWN through the water above it. Two physical inputs:
+  //
+  //   1) Cloud density (how much water is overhead). The height LUT's B channel
+  //      carries the cumulative envelope integral from this per-cloud height to
+  //      the cloud top, so
+  //          downTau = ∫envelope × columnSpan × cloudThickness × cloudDensity
+  //      is the macroscopic optical depth above the sample, at full resolution
+  //      with no voxel-grid smoothing and no extra taps. A Beer-Lambert term
+  //      with a tunable diffusion-flavored sigma (cloudUndersideLightSigma —
+  //      the downwelling flux is multiply-scattered, so its effective
+  //      extinction is far below the beam sigma) turns it into a light factor
+  //      that varies CONTINUOUSLY with the water overhead: dark under thick
+  //      cores, bright under thin spots, smooth gradients between.
+  //
+  //   2) Sun position. When the sun is high it lights the deck from above and
+  //      the base sits in its own shadow — undersides are at their darkest.
+  //      As the sun drops toward the horizon its light rakes UNDER the deck and
+  //      strikes the bases directly, so the darkening must fade out near the
+  //      horizon and let the warm ambient / silver-lining terms produce the
+  //      classic lit-orange sunset undersides. We fade the darkening STRENGTH
+  //      with sun elevation (sunDir's up-axis component), which is 0 at the
+  //      horizon and 1 overhead.
+  //
+  // cloudBottomDarkening is the overall strength of the effect: at 1.0 (high
+  // sun) the underside takes the full analytic darkening; at 0 it is flat-lit.
+  // T_primary (the directly-shadowed sun beam) is exempt so backlit silver
+  // linings survive. cloudUndersideLightSigma = 0 disables darkening entirely.
+  float downInteg = cloudHeightProfileDownIntegral(heightFraction, args.cloudTypeMean, args);
+  float downTau = downInteg * saturate(columnSpan)
+                * args.cloudThickness * args.cloudDensity;
+  float skyDown = exp(-args.cloudUndersideLightSigma * downTau);
+  // Sun elevation: cos(zenith) ~ up-axis component, clamped to [0,1] (no
+  // darkening contribution from a sub-horizon sun).
+  float sunElev = saturate(isZUp ? sunDir.z : sunDir.y);
+  // Fade darkening out as the sun nears the horizon. Full strength once the sun
+  // is above ~20deg; eased to zero at the horizon so low-sun bases light up.
+  const float kUndersideSunFadeElev = 0.35f;
+  float darkenStrength = saturate(args.cloudBottomDarkening)
+                       * smoothstep(0.0f, kUndersideSunFadeElev, sunElev);
+  float verticalLight = mix(1.0f, skyDown, darkenStrength);
+
+  float M = dim_profile * exp(-sigma_ms * D_sun) * verticalLight;
   float HG1 = hgPhaseNubis(cosTheta, args.cloudPhaseG1);
   float HG2 = hgPhaseNubis(cosTheta, args.cloudPhaseG2);
-  float L_direct = T_primary * HG1 + M * HG2;
+
+  // Energy-conserving dual-lobe blend (fork — 2026-06-19, cloud energy
+  // conservation). The legacy direct term was the raw sum
+  //   L = T_primary*HG1 + M*HG2
+  // and HG1, HG2 each integrate to 1 over the sphere, so the in-scatter source
+  // integrated a phase of up to (1 + M) ~ 2 — the cloud scattered up to ~2x the
+  // energy one scattering event can redistribute. Worst exactly at the sunlit
+  // edge, where T_primary -> 1 AND M is nonzero, so the silver lining fired both
+  // lobes at full amplitude and out-brightened the physical sky LUT it
+  // composites against. That is the long-standing "clouds brighter than the sky
+  // / not energy conserving" read — and the reason the ambient sliders (which
+  // touch only the SEPARATE ambient term) never moved it.
+  //
+  // Reformulate as a CONVEX blend of the single-scatter forward lobe A (silver
+  // lining) and the multi-scatter body fill B: (1-w)*A + w*B has a phase that
+  // integrates to exactly 1. T_primary and M stay <= 1, so they only ever
+  // REMOVE energy from a now-bounded budget. cloudMsLobeWeight = w sets the
+  // forward/body balance; cloudEnergyConserve = s lerps from the legacy additive
+  // sum (s=0, byte-identical old look for an in-game A/B) to the conserving
+  // blend (s=1). The moon path already sums its octaves with bounded geometric
+  // energy decay (cloud_march_common.slangh) — this brings the sun path onto the
+  // same footing.
+  float A = T_primary * HG1;
+  float B = M * HG2;
+  float msLobeS = saturate(args.cloudEnergyConserve);
+  float msLobeW = saturate(args.cloudMsLobeWeight);
+  float L_direct = A * (1.0f - msLobeS * msLobeW)
+                 + B * (1.0f - msLobeS * (1.0f - msLobeW));
 
   // === Ambient scattering (paper p. 142) ===
   // Per-sample warm/cool ambient blend (fork — 2026-05-21). Warm color is
@@ -2279,12 +2617,37 @@ NubisCubedLighting evalNubisCubedSample(
   float coolMix        = saturate(coolReachCurve * sunsetFactor * args.cloudSunsetAmbientStrength);
   vec3  skyRadiance    = lerp(skyRadianceWarm, skyRadianceCool, coolMix);
 
+  // Ambient occlusion estimate: the analytic verticalLight REPLACES the
+  // page-142 exp(-D_ambient) voxel-grid tap. exp(-D_ambient) is the same
+  // "occlusion of downwelling sky light" quantity, but the raw integral
+  // saturates to ~0 a few hundred meters into a deck (its implicit sigma is
+  // 1/km·density, far above the diffusion regime) and its 8-tap voxel-grid
+  // source is km-scale smooth, so under a deck it contributes neither
+  // light nor structure. Multiplying both would double-count the same
+  // occlusion. (The legacy global-slab path that multiplied in exp(-D_ambient)
+  // was removed 2026-06-19.)
   float ambient_shape = pow(1.0f - dim_profile, 0.5f);
-  float L_ambient = ambient_shape * exp(-D_ambient);
+
+  // Top-down ambient: skylight that filtered DOWN through the overlying cloud,
+  // colored by the warm/cool sun-direction blend and attenuated by
+  // verticalLight (the bottom-darkening light field). This is the legacy term.
+  vec3 topAmbient = ambient_shape * verticalLight * skyRadiance;
+
+  // Sky-dome fill (fork — 2026-06-19, clouds-reflect-sky coupling). The
+  // underside is ALSO lit by the open sky around and below the cloud, which the
+  // water OVERHEAD does not block — so this term deliberately bypasses
+  // verticalLight (it would otherwise crush exactly the fill that keeps real
+  // midday undersides from going gloomy-dark under a bright sky). It reads the
+  // zenith sky color, so a bright daytime dome lifts the undersides AND tints
+  // them with the actual sky; at sunset the zenith sample is dim, so this
+  // naturally fades and the warm top-down term carries the look. The sample is
+  // already cloud-occluded + day-gated upstream (sampleSkyAmbientForVolume ×
+  // dayFactor). cloudSkyAmbientFill scales it; 0 = legacy (no dome fill).
+  vec3 domeFill = ambient_shape * args.cloudSkyAmbientFill * skyRadianceZenith;
 
   NubisCubedLighting result;
-  result.direct  = L_direct  * sunRadiance;
-  result.ambient = L_ambient * skyRadiance;
+  result.direct  = L_direct * sunRadiance;
+  result.ambient = topAmbient + domeFill;
   return result;
 }
 
@@ -2423,8 +2786,21 @@ float sampleCloudGroundShadow_OptionB_impl(vec3 worldPos, vec3 sunDir,
   // single-tap evalCloudGroundShadow it replaces.
   const float transmittance = exp(-opticalDepth * args.cloudDensity * args.cloudShadowMarchStrength);
 
-  // Mix with the existing strength knob so the helper degrades to 1.0
-  // (no shadow) when the user has shadow strength at zero.
+  // Horizon gate REMOVED (fork — 2026-06-19, sun-only re-architecture). The
+  // gate existed only because the factor used to be applied to the COMBINED
+  // primary direct buffer (every light) in composite: near sunrise/sunset the
+  // grazing slant path baked into D_sun scales as ~1/sin(elevation), saturates,
+  // and collapsed the transmittance to ~0 in a band just above the horizon —
+  // which crushed all direct lighting (lamps included) at dusk/dawn. Now the
+  // factor is folded onto the SUN's radiance ALONE, so a collapsed factor at
+  // grazing elevation only darkens the sun — which is already deeply attenuated
+  // by atmospheric transmittance at the horizon, so crushing the residual is
+  // physically reasonable (a low sun behind cloud is correctly dark) and never
+  // touches lamps. The hard dir.y<=0.001 guard in intersectCloudSlabBottomFromBelow
+  // still returns full-sun once the sun crosses below the horizon.
+  //
+  // Mix with the strength knob so the helper degrades to 1.0 (no shadow) when
+  // cloudShadowStrength is zero.
   return mix(1.0f, transmittance, args.cloudShadowStrength);
 }
 

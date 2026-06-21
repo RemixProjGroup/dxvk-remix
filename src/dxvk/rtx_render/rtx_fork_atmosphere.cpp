@@ -16,10 +16,14 @@
 #include "rtx_fork_hooks.h"
 #include "rtx_context.h"
 #include "rtx_atmosphere.h"
+#include "rtx_scene_manager.h"       // getLightManager (directional sun/moon injection)
+#include "rtx_light_manager.h"       // createExternallyTrackedLight / updateExternallyTrackedLight
+#include "rtx_lights.h"              // RtDistantLight, RtLight
 #include "rtx_options.h"
 #include "rtx/pass/raytrace_args.h"
 #include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/atmosphere/atmosphere_args.h" // MAX_MOONS (showAtmosphereUI moon loop)
+#include "../util/util_global_time.h" // GlobalTime::get().deltaTime (cloud-motion integrator)
 #include "imgui/imgui.h"              // ImGui::Button, ImGui::Text, etc. (showAtmosphereUI)
 #include "rtx_imgui.h"                // RemixGui::DragFloat, ComboWithKey (showAtmosphereUI)
 #include <cstdio>                     // std::snprintf (renderMoonUI label)
@@ -29,6 +33,186 @@
 
 namespace dxvk {
 namespace fork_hooks {
+
+  // ===========================================================================
+  // Sun + moon as real Remix distant lights (fork — 2026-06-21)
+  //
+  // In physical-atmosphere mode the sun (and each enabled moon) is injected as
+  // an externally-tracked RtDistantLight driven by the atmosphere model — the
+  // sole sun/moon path in Numos. They flow through the standard NEE/RTXDI path,
+  // so SSS / decals / viewmodels are handled by the unified pipeline. The
+  // radiance is the CPU port of the atmosphere sun/moon sample divided by pi: a
+  // distant light contributes radiance/sin^2(halfAngle) * coneSolidAngle ~=
+  // pi*radiance of effective irradiance. Cloud-on-terrain shadows are folded
+  // per-pixel onto the real sun in the NEE (integrator_direct.slangh). The
+  // older bespoke evalAtmosphereSunNEE/MoonNEE path was removed 2026-06-21.
+  // ===========================================================================
+  namespace {
+    constexpr float kFhPi = 3.14159265358979323846f;
+
+    inline float fhSmoothstep(float e0, float e1, float x) {
+      const float denom = e1 - e0;
+      float t = (denom != 0.0f) ? (x - e0) / denom : 0.0f;
+      t = std::min(std::max(t, 0.0f), 1.0f);
+      return t * t * (3.0f - 2.0f * t);
+    }
+
+    inline Vector3 fhMul(const Vector3& a, const Vector3& b) {
+      return Vector3(a.x * b.x, a.y * b.y, a.z * b.z);
+    }
+
+    // Port of getAtmosphericTransmittanceForDir (atmosphere_common.slangh): the
+    // closed-form Kasten-Young air-mass extinction the sun/moon/cloud paths use.
+    // dirYUp must be normalized, Y-up. ozoneDensity at the ozone layer altitude
+    // is exactly 1.0, so the ozone path length collapses to airMass.
+    Vector3 fhAtmTransmittanceYUp(const AtmosphereArgs& a, const Vector3& dirYUp) {
+      const float H = a.rayleighScaleHeight;
+      const float zc = dirYUp.y;  // zenith cosine
+      float airMass;
+      if (zc > 0.01f) {
+        const float zenithRad = std::acos(std::min(std::max(zc, -1.0f), 1.0f));
+        const float zenithDeg = zenithRad * (180.0f / kFhPi);
+        airMass = 1.0f / (zc + 0.15f * std::pow(93.885f - zenithDeg, -1.253f));
+      } else {
+        airMass = 40.0f * std::exp(-zc * 10.0f);
+      }
+      airMass = std::min(airMass, 200.0f);
+      const float rayleighOD = H * airMass;
+      const float mieOD = a.mieScaleHeight * airMass;
+      const float ozonePath = airMass;  // ozoneDensity(layerAltitude) == 1
+      Vector3 t(
+        std::exp(-(a.rayleighScattering.x * rayleighOD + a.mieScattering.x * mieOD + a.ozoneAbsorption.x * ozonePath * 0.15f)),
+        std::exp(-(a.rayleighScattering.y * rayleighOD + a.mieScattering.y * mieOD + a.ozoneAbsorption.y * ozonePath * 0.15f)),
+        std::exp(-(a.rayleighScattering.z * rayleighOD + a.mieScattering.z * mieOD + a.ozoneAbsorption.z * ozonePath * 0.15f)));
+      if (zc < 0.0f) {
+        const float f = std::exp(-(-zc) * 15.0f);  // twilight fade
+        t = Vector3(t.x * f, t.y * f, t.z * f);
+      }
+      return t;
+    }
+
+    // Persistent externally-tracked light handles. Kept alive across frames;
+    // radiance goes to 0 when a body is below the horizon / disabled (inert,
+    // no create/destroy churn). Moons are created lazily on first use.
+    struct AtmosphereDistantLightState {
+      RtLight* sun = nullptr;
+      RtLight* moons[MAX_MOONS] = {};
+    };
+    AtmosphereDistantLightState g_atmoLights;
+
+    void fhDropAtmosphereLights() {
+      if (g_atmoLights.sun) {
+        g_atmoLights.sun->markForGarbageCollection();
+        g_atmoLights.sun = nullptr;
+      }
+      for (uint32_t i = 0; i < MAX_MOONS; ++i) {
+        if (g_atmoLights.moons[i]) {
+          g_atmoLights.moons[i]->markForGarbageCollection();
+          g_atmoLights.moons[i] = nullptr;
+        }
+      }
+    }
+
+    void fhSyncAtmosphereDistantLights(RtxContext& ctx, const AtmosphereArgs& args) {
+      // Mode gate. Sun/moon distant lights are the sole atmosphere sun path in
+      // Numos; drop any previously-injected lights when not in Numos.
+      if (RtxOptions::skyMode() != SkyMode::Numos) {
+        fhDropAtmosphereLights();
+        return;
+      }
+
+      LightManager& lm = ctx.getSceneManager().getLightManager();
+      const bool isZUp = RtxOptions::zUp();
+      const float radScale = RtxOptions::directionalLightRadianceScale();
+      constexpr float kMinHalfAngle = 0.0005f;  // avoid sin(halfAngle)==0 in distantLightSampleArea
+
+      auto toWorld = [isZUp](const Vector3& yup) -> Vector3 {
+        return isZUp ? Vector3(yup.x, yup.z, yup.y) : yup;  // Y-up -> Z-up swap
+      };
+
+      // m_direction is the propagation direction (toward the ground) = -toBody.
+      auto ensureLight = [&](RtLight*& slot, const Vector3& propDir, float halfAngle, const Vector3& radiance, bool cloudShadowed) {
+        const Vector3 clamped(std::max(radiance.x, 0.0f), std::max(radiance.y, 0.0f), std::max(radiance.z, 0.0f));
+        auto dl = RtDistantLight::tryCreate(propDir, std::max(halfAngle, kMinHalfAngle), clamped);
+        if (!dl) {
+          return;
+        }
+        RtLight rtl(*dl);
+        // Mark dynamic so updateLightStaticSleep applies *light = newLight every
+        // frame. Without this the light is treated as static and put to sleep
+        // after getNumFramesToPutLightsToSleep() frames — which froze the sun's
+        // direction (it stopped tracking sunRotation/sunElevation).
+        rtl.isDynamic = true;
+        // When set, the NEE folds the per-pixel cloud-on-terrain transmittance
+        // onto this light's contribution (distant-light GPU flags bit 2).
+        rtl.atmosphereCloudShadowed = cloudShadowed;
+        if (slot == nullptr) {
+          slot = lm.createExternallyTrackedLight(rtl);
+        } else {
+          lm.updateExternallyTrackedLight(slot, rtl);
+        }
+      };
+
+      // ---- Sun (always present in Numos; radiance 0 below horizon) ----
+      {
+        const Vector3 sunDirYUp(args.sunDirection.x, args.sunDirection.y, args.sunDirection.z);
+        Vector3 radiance(0.0f, 0.0f, 0.0f);
+        if (sunDirYUp.y > 0.0f) {
+          const float mieModulation = 0.3f + 1.7f * args.mieAnisotropy;         // mix(0.3, 2.0, g)
+          const float sunVisibility = 0.05f + 0.95f * fhSmoothstep(0.0f, 0.8f, args.mieAnisotropy);
+          const Vector3 T = fhAtmTransmittanceYUp(args, sunDirYUp);
+          const Vector3 sunIll(args.sunIlluminance.x, args.sunIlluminance.y, args.sunIlluminance.z);
+          const Vector3 sample = fhMul(sunIll, T) * (mieModulation * sunVisibility * args.sunRayBrightness * 0.5f);
+          radiance = sample * (radScale / kFhPi);
+        }
+        // Half-angle: physical sun disc radius (sunSize/2) by default, or the
+        // decoupled sunShadowSoftnessDeg override (>0) so shadows can be softened
+        // without enlarging the visible sun disc. Half-angle does not affect
+        // brightness (contribution ~= pi * m_radiance).
+        const float softnessDeg = RtxOptions::sunShadowSoftnessDeg();
+        const float sunHalfAngle = (softnessDeg > 0.0f) ? (softnessDeg * (kFhPi / 180.0f))
+                                                        : args.sunAngularRadius;
+        const Vector3 toSun = toWorld(sunDirYUp);
+        const Vector3 propDir = (sunDirYUp.y > 0.0f) ? Vector3(-toSun.x, -toSun.y, -toSun.z)
+                                                     : Vector3(0.0f, -1.0f, 0.0f);
+        ensureLight(g_atmoLights.sun, propDir, sunHalfAngle, radiance, /*cloudShadowed=*/true);
+      }
+
+      // ---- Moons (lazily created; mirror sampleAtmosphereMoonLight radiance) ----
+      const float moonNee = args.moonNeeStrength;
+      const float surfMoon = args.surfaceMoonBrightness;
+      const float nightFactor = fhSmoothstep(0.02f, -0.05f, args.sunDirection.y);
+      for (uint32_t i = 0; i < MAX_MOONS; ++i) {
+        const MoonParams& m = args.moons[i];
+        const Vector3 dirRaw(m.direction.x, m.direction.y, m.direction.z);
+        const float len = std::sqrt(dirRaw.x * dirRaw.x + dirRaw.y * dirRaw.y + dirRaw.z * dirRaw.z);
+        const bool lit = (m.enabled >= 0.5f) && (moonNee > 0.0f) && (nightFactor > 0.001f) && (len > 1e-4f);
+
+        // Skip moons that have never been lit (avoid creating unused light slots).
+        if (!lit && g_atmoLights.moons[i] == nullptr) {
+          continue;
+        }
+
+        const Vector3 dirN = (len > 1e-4f) ? Vector3(dirRaw.x / len, dirRaw.y / len, dirRaw.z / len)
+                                           : Vector3(0.0f, 1.0f, 0.0f);
+        Vector3 radiance(0.0f, 0.0f, 0.0f);
+        if (lit) {
+          const Vector3 T = fhAtmTransmittanceYUp(args, dirN);  // ~0 below horizon (twilight fade)
+          const Vector3 sunIll(args.sunIlluminance.x, args.sunIlluminance.y, args.sunIlluminance.z);
+          const Vector3 color(m.color.x, m.color.y, m.color.z);
+          const Vector3 sharedFactor = fhMul(fhMul(sunIll, color), T) * (m.brightness / kFhPi);
+          const float phaseGlow = 0.5f - 0.5f * std::cos(m.phase * 2.0f * kFhPi);
+          const float moonSolidAngleSr = 2.0f * kFhPi * (1.0f - std::cos(m.angularRadius));
+          const Vector3 sample = sharedFactor * (phaseGlow * moonSolidAngleSr * moonNee * surfMoon * nightFactor);
+          radiance = sample * (radScale / kFhPi);
+        }
+        const Vector3 toMoon = toWorld(dirN);
+        const Vector3 propDir = lit ? Vector3(-toMoon.x, -toMoon.y, -toMoon.z) : Vector3(0.0f, -1.0f, 0.0f);
+        // Half-angle = the moon's physical angular radius (same as the sun).
+        ensureLight(g_atmoLights.moons[i], propDir, m.angularRadius, radiance, /*cloudShadowed=*/false);
+      }
+    }
+  }  // anonymous namespace
 
   // ---------------------------------------------------------------------------
   // initAtmosphere
@@ -48,8 +232,8 @@ namespace fork_hooks {
   // updateAtmosphereConstants
   //
   // Sets constants.skyMode, detects sky-mode transitions (clearing rasterized
-  // skybox buffers when switching to Physical Atmosphere), and when Physical
-  // Atmosphere is active ensures the atmosphere object exists, calls
+  // skybox buffers when switching to Numos), and when Numos
+  // is active ensures the atmosphere object exists, calls
   // initialize/computeLuts, and writes atmosphereArgs into the constant block.
   //
   // Called from RtxContext::updateRaytraceArgsConstantBuffer immediately after
@@ -62,10 +246,10 @@ namespace fork_hooks {
   void updateAtmosphereConstants(RtxContext& ctx, RaytraceArgs& constants) {
     constants.skyMode = static_cast<uint32_t>(RtxOptions::skyMode());
 
-    // Detect sky mode change and clear sky buffers when switching to Physical Atmosphere
+    // Detect sky mode change and clear sky buffers when switching to Numos
     SkyMode currentSkyMode = RtxOptions::skyMode();
     if (currentSkyMode != ctx.m_lastSkyMode) {
-      if (currentSkyMode == SkyMode::PhysicalAtmosphere) {
+      if (currentSkyMode == SkyMode::Numos) {
         // Clear the rasterized skybox buffers when switching to physical atmosphere
         auto skyProbe = ctx.getResourceManager().getSkyProbe(&ctx, ctx.m_skyColorFormat);
         auto skyMatte = ctx.getResourceManager().getSkyMatte(&ctx, ctx.m_skyRtColorFormat);
@@ -87,11 +271,18 @@ namespace fork_hooks {
     }
 
     // Update atmosphere parameters
-    if (RtxOptions::skyMode() == SkyMode::PhysicalAtmosphere) {
+    if (RtxOptions::skyMode() == SkyMode::Numos) {
       if (!ctx.m_atmosphere) {
         ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
       }
       ctx.m_atmosphere->initialize(&ctx);
+
+      // Unified cloud-motion integrator (fork — 2026-06-21). Advance the wind /
+      // morph / boil accumulators exactly once per frame, before getAtmosphereArgs
+      // (called many times per frame) reads them. dt comes from the same GlobalTime
+      // clock the weather blender uses, so the drift-modulated wind it reads is
+      // consistent with the parameters the blender wrote this frame.
+      ctx.m_atmosphere->advanceCloudMotion(GlobalTime::get().deltaTime());
 
       // Cloud render compute pass setup (Nubis Cubed 2023, fork — 2026-05-12, C4).
       // Push the per-frame camera basis and ensure the screen-space RT is
@@ -162,6 +353,15 @@ namespace fork_hooks {
       ctx.m_atmosphere->computeLuts(&ctx);
       constants.atmosphereArgs = ctx.m_atmosphere->getAtmosphereArgs();
     }
+
+    // Inject / update (or drop) the sun + moon distant lights. Called
+    // unconditionally — the helper internally gates on skyMode and drops its
+    // lights when not in Numos. Uses the atmosphere args
+    // just written above; when not in Numos those are stale but unread (the
+    // helper early-outs before touching them). One-frame latency vs the light
+    // manager's prepareSceneData linearization is acceptable (the sun moves
+    // slowly); steady state the light is always present.
+    fhSyncAtmosphereDistantLights(ctx, constants.atmosphereArgs);
   }
 
   // ---------------------------------------------------------------------------
@@ -193,6 +393,8 @@ namespace fork_hooks {
     auto cloudDSun                = ctx.m_atmosphere->getCloudDSun();      // Fork: Nubis Cubed sun-direction optical depth grid
     auto cloudDAmbient            = ctx.m_atmosphere->getCloudDAmbient();  // Fork: Nubis Cubed zenith optical depth grid
     auto cloudRenderRT            = ctx.m_atmosphere->getCloudRenderRT();  // Fork: Nubis Cubed screen-space cloud render (C4)
+    auto cloudSecondaryLut        = ctx.m_atmosphere->getCloudSecondaryLut();  // Fork: secondary-ray cloud dome LUT (perf, 2026-06-10)
+    auto cloudPlacementMap        = ctx.m_atmosphere->getCloudPlacementMap();  // Fork: per-column cloud placement map (2026-06-11)
 
     // Always bind the LUTs (they're declared in shaders unconditionally)
     if (transmittanceLut.isValid()) {
@@ -221,6 +423,12 @@ namespace fork_hooks {
     }
     if (cloudRenderRT.isValid()) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_RENDER_RT, cloudRenderRT.view, nullptr);
+    }
+    if (cloudSecondaryLut.isValid()) {
+      ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT, cloudSecondaryLut.view, nullptr);
+    }
+    if (cloudPlacementMap.isValid()) {
+      ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP, cloudPlacementMap.view, nullptr);
     }
 
     // Cloud history (fork). Allocate at the current downscaled render extent
@@ -288,6 +496,10 @@ namespace fork_hooks {
       samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
       samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
       samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+      // Allow explicit-LOD sampling of mips: the secondary cloud LUT (shared via
+      // this sampler) is mipmapped and the sky<-clouds bleed samples a coarse
+      // mip. Harmless for the mip-less sky-view LUT / cloud RT (only mip 0 used).
+      samplerInfo.mipmapLodMax = VK_LOD_CLAMP_NONE;
       Rc<DxvkSampler> skyViewSampler = ctx.m_device->createSampler(samplerInfo);
       ctx.bindResourceSampler(BINDING_ATMOSPHERE_SKY_VIEW_SAMPLER, skyViewSampler);
     }
@@ -370,13 +582,13 @@ namespace fork_hooks {
   // injectRtxAtmosphereSkySkip
   //
   // Returns true when the caller (RtxContext::rasterizeSky) should skip
-  // rasterized sky rendering because Physical Atmosphere mode is active.
+  // rasterized sky rendering because Numos mode is active.
   //
   // No private-member access — uses only the public RtxOptions::skyMode() API.
   // No friend declaration needed.
   // ---------------------------------------------------------------------------
   bool injectRtxAtmosphereSkySkip() {
-    return RtxOptions::skyMode() == SkyMode::PhysicalAtmosphere;
+    return RtxOptions::skyMode() == SkyMode::Numos;
   }
 
   // ---------------------------------------------------------------------------
@@ -385,7 +597,7 @@ namespace fork_hooks {
   // Renders the sky mode selector and atmosphere preset/parameter UI inside
   // the "Sky Tuning" collapsing header (showRenderingSettings). When the sky
   // mode is SkyboxRasterization, draws only the Sky Brightness slider (upstream
-  // behaviour). When PhysicalAtmosphere is selected, draws the full Hillaire
+  // behaviour). When Numos is selected, draws the full Hillaire
   // atmosphere preset buttons and parameter tree.
   //
   // The skyModeCombo static is owned here (moved from dxvk_imgui.cpp) so that
@@ -403,7 +615,7 @@ namespace fork_hooks {
       "Sky Mode",
       RemixGui::ComboWithKey<SkyMode>::ComboEntries { {
           {SkyMode::SkyboxRasterization, "Skybox Rasterization"},
-          {SkyMode::PhysicalAtmosphere, "Physical Atmosphere"}
+          {SkyMode::Numos, "Numos"}
       } }
     };
 
@@ -523,7 +735,17 @@ namespace fork_hooks {
 
       if (ImGui::TreeNode("Sun")) {
         RemixGui::DragFloat("Sun Size", &RtxOptions::sunSizeObject(), 0.01f, 0.0f, 10.0f, "%.3f\xc2\xb0", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover("Size of sun disc in degrees");
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Sun angular diameter in degrees (Earth's sun is ~0.545\xc2\xb0). Sets the "
+            "visible sun disc, and (unless Shadow Softness below overrides it) the "
+            "sun light's half-angle = Sun Size / 2, which drives shadow softness.");
+
+        RemixGui::DragFloat("Shadow Softness", &RtxOptions::sunShadowSoftnessDegObject(), 0.01f, 0.0f, 10.0f, "%.3f\xc2\xb0", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Decoupled sun shadow softness (the distant light's angular half-angle, "
+            "degrees). 0 = physical: track Sun Size / 2. When > 0 it overrides the "
+            "half-angle WITHOUT changing the visible sun disc \xe2\x80\x94 larger = softer "
+            "penumbra, for soft shadows under a small, crisp sun.");
 
         RemixGui::DragFloat("Sun Intensity", &RtxOptions::sunIntensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover("Strength of Sun");
@@ -692,9 +914,10 @@ namespace fork_hooks {
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Exponent on cloud view-transmittance when extincting stars. Higher = stars die through clouds faster.");
         RemixGui::DragFloat("Star Ambient Coupling", &RtxOptions::starAmbientCouplingStrengthObject(),
-                            0.001f, 0.0f, 0.1f, "%.4f", sliderFlags);
+                            0.02f, 0.0f, 3.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
-            "Star/airglow coupling into cloud-march nightLight. 0 = disabled.");
+            "Star/airglow coupling into cloud-march nightLight, as a multiple of the calibrated "
+            "night level (1.0 = calibrated, ~2 doubles it). 0 = disabled.");
         ImGui::TreePop();
       }
     }
@@ -761,7 +984,7 @@ namespace fork_hooks {
 
     // Sky mode selection
     skyModeCombo.getKey(&RtxOptions::skyModeObject());
-    RemixGui::SetTooltipToLastWidgetOnHover("Skybox Rasterization: Traditional skybox rendering\nPhysical Atmosphere: Hillaire atmospheric scattering");
+    RemixGui::SetTooltipToLastWidgetOnHover("Skybox Rasterization: Traditional skybox rendering\nNumos: Hillaire atmospheric scattering");
 
     if (RtxOptions::skyMode() == SkyMode::SkyboxRasterization) {
       RemixGui::DragFloat("Sky Brightness", &RtxOptions::skyBrightnessObject(), 0.01f, 0.01f, FLT_MAX, "%.3f", sliderFlags);
@@ -868,7 +1091,7 @@ namespace fork_hooks {
       // Sun (lifted out of former "Atmosphere Parameters" tree)
       renderSunUI();
 
-      // Physical Atmosphere controls (renamed; Sun fields moved to renderSunUI above)
+      // Numos controls (renamed; Sun fields moved to renderSunUI above)
       if (ImGui::TreeNode("Atmosphere")) {
 
         RemixGui::DragFloat("Altitude", &RtxOptions::altitudeObject(), 1.0f, 0.0f, 100000.0f, "%.0f m", sliderFlags);
@@ -926,11 +1149,41 @@ namespace fork_hooks {
               "1 = physical multiscattering (Hillaire-style LUT hemisphere integration; wavelength-amplifies each preset's "
               "Rayleigh bias for realistic saturation but harder to art-direct). Intermediate values blend.");
 
+          // Artistic sunset color controls (fork — 2026-06-14). Recover the
+          // sunset warmth/saturation lost when reddening moved onto the physical
+          // two-term LUT model; both feed the sky-view LUT so clouds inherit them.
+          RemixGui::DragFloat("Multiscatter Strength", &RtxOptions::multiScatterStrengthObject(), 0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Global scale on the multiscattering 'fill' term. The physical model adds a broadband (pale-blue) "
+              "multiscatter term that desaturates warm sunset color. Lower (e.g. 0.3-0.6) to let warm single-scatter "
+              "dominate for a punchier sunset; 1.0 = physical. Feeds the sky-view LUT, so clouds inherit it.");
+
+          RemixGui::DragFloat("Sunset Saturation", &RtxOptions::sunsetSaturationObject(), 0.01f, 0.0f, 3.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Saturation boost on sky radiance, ramped in only as the sun nears the horizon (midday sky untouched). "
+              ">1 amplifies the warm horizon hues the physical model renders accurately but undersaturated; 1.0 = no change. "
+              "Feeds the sky-view LUT, so clouds inherit the warmer ambient.");
+
+          // Sky perf workstream knobs (fork — 2026-06-11) are conf-only by
+          // design: skyLutCacheKeySplitEnable, skyViewRebakeGranularityDeg and
+          // the debug* bisect toggles all default to their validated production
+          // values and stay out of the UI (user decision after the in-game
+          // validation pass — "this is in a good enough spot now").
+
+          // (cloudVoxelGridRebakeGranularityKm is conf-only like the other
+          // workstream knobs above; validated at its 0.1 default.)
+
           ImGui::TreePop();
         }
 
         ImGui::TreePop();
       }
+
+      // The Perf Bisect (Diagnostic) tree (fork — 2026-06-11) was removed
+      // from the UI after the sky perf workstream closed; the six
+      // rtx.atmosphere.debug* skip toggles it drove remain conf-tunable
+      // (all default ON = normal rendering) for future regression hunting.
+      // See docs/fork-touchpoints.md, sky perf workstream entries.
 
       // ----- Night Sky tree (fork, restructured) -----
       if (ImGui::TreeNode("Night Sky")) {
@@ -969,185 +1222,391 @@ namespace fork_hooks {
       if (ImGui::TreeNode("Clouds")) {
         RemixGui::Checkbox("Enable Clouds", &RtxOptions::cloudEnabledObject());
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Coverage & Shape");
-        RemixGui::DragFloat("Coverage", &RtxOptions::cloudCoverageMeanObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How much of the sky has clouds. 0 = clear, 1 = overcast.");
-        RemixGui::DragFloat("Coverage Spread", &RtxOptions::cloudCoverageSpreadObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Spatial variation around the Coverage mean. 0 = uniform across "
-            "the sky, 1 = mixed clear / cloudy patches.");
-        RemixGui::DragFloat("Coverage Patch Size", &RtxOptions::cloudCoverageNoiseScaleObject(),
-                            0.0001f, 0.0001f, 0.01f, "%.4f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Spatial frequency of the coverage variation. SMALLER value = "
-            "LARGER coverage patches (broad weather regions); larger value = "
-            "finer patchwork. Default 0.0033.");
-        RemixGui::DragFloat("Cloud Type", &RtxOptions::cloudTypeMeanObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Cloud shape from stratus to cumulus. 0 = flat stratus, "
-            "0.5 = stratocumulus, 1 = tall cumulus.");
-        RemixGui::DragFloat("Type Spread", &RtxOptions::cloudTypeSpreadObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Spatial variation around the Cloud Type mean. 0 = uniform type "
-            "everywhere, 1 = full stratus-to-cumulus range across the sky.");
-        RemixGui::DragFloat("Type Patch Size", &RtxOptions::cloudTypeNoiseScaleObject(),
-                            0.0001f, 0.0001f, 0.0034f, "%.4f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Spatial frequency of the cloud-type variation. SMALLER value = "
-            "LARGER patches of one cloud type; larger value = finer mix. "
-            "Capped at 0.0034 because faster variation puts visible 2D "
-            "cell structure at sub-cumulus scales. Independent of Coverage "
-            "Patch Size. Default 0.001.");
-        RemixGui::DragFloat("Anvil Spread", &RtxOptions::cloudAnvilBiasObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Cumulus top inflation. 0 = flat tops, 1 = mushroom-cap anvils. "
-            "Most visible on tall cumulus / thunderstorm scenes.");
-        RemixGui::DragFloat("Texture Scale", &RtxOptions::cloudNoiseTileKmObject(),
-                            1.0f, 6.0f, 24.0f, "%.0f km", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "World-space tile size for the 3D cloud noise. Smaller = visible "
-            "repetition; larger = lower-frequency detail. Re-bakes the noise "
-            "volume live on change.");
-        RemixGui::DragFloat("Anti-Tile Warp", &RtxOptions::cloudNoiseWarpStrengthObject(),
-                            0.01f, 0.0f, 1.5f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Anti-tiling domain warp, as a fraction of Texture Scale. Breaks the "
-            "noise's periodic repeat so it stops reading as horizontal layers "
-            "toward the horizon at small tile sizes. 0 = off, 0.75 default. "
-            "Too high smears cloud shapes. Applies live.");
+        // Conditional-disable gates (fork — 2026-06-15, cloud UI rework). Controls
+        // that the shader only consumes in a given mode are greyed (not hidden) so
+        // they stay discoverable but can't be dragged when inert.
+        const bool layer2On  = RtxOptions::cloudLayer2Enable();
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Look");
-        RemixGui::DragFloat("Density", &RtxOptions::cloudDensityObject(),
-                            0.05f, 0.0f, 4.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Cloud opacity. Higher = thicker / darker clouds.");
-        RemixGui::DragFloat("Altitude", &RtxOptions::cloudAltitudeObject(),
-                            0.1f, 0.5f, 12.0f, "%.1f km", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Cloud layer altitude (km above the ground).");
-        RemixGui::DragFloat("Depth", &RtxOptions::cloudThicknessObject(),
-                            0.05f, 0.1f, 5.0f, "%.2f km", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Vertical depth of the cloud layer in km.");
-        RemixGui::DragFloat("Curvature", &RtxOptions::cloudCurvatureObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Sky-dome curvature. 0 = real-planet radius (nearly flat ceiling, "
-            "horizon-grazing clouds stretch far); 1 = tight dome (clouds curve "
-            "visibly down to the horizon). Atmosphere math unaffected.");
-        RemixGui::DragFloat3("Color", &RtxOptions::cloudColorObject(),
-                             0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Base cloud albedo (RGB).");
+        ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+        if (ImGui::TreeNode("Basic")) {
+          RemixGui::DragFloat("Coverage", &RtxOptions::cloudCoverageMeanObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How much of the sky has clouds. 0 = clear, 1 = overcast.");
+          RemixGui::DragFloat("Cloud Type", &RtxOptions::cloudTypeMeanObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Cloud shape from stratus to cumulus. 0 = flat stratus, "
+              "0.5 = stratocumulus, 1 = tall cumulus.");
+          RemixGui::DragFloat("Density", &RtxOptions::cloudDensityObject(),
+                              0.05f, 0.0f, 4.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Cloud opacity. Higher = thicker / darker clouds.");
+          RemixGui::DragFloat("Altitude", &RtxOptions::cloudAltitudeObject(),
+                              0.1f, 0.5f, 12.0f, "%.1f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Cloud layer altitude (km above the ground).");
+          RemixGui::DragFloat("Depth", &RtxOptions::cloudThicknessObject(),
+                              0.05f, 0.1f, 5.0f, "%.2f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Vertical depth of the cloud layer in km.");
+          RemixGui::ColorEdit3("Color", &RtxOptions::cloudColorObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Base cloud albedo (RGB). Click the swatch for a color picker.");
+          ImGui::TreePop();
+        }
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Wind");
-        RemixGui::DragFloat("Wind Speed", &RtxOptions::cloudWindSpeedObject(),
-                            0.005f, 0.0f, 1.0f, "%.3f km/s", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How fast the cloud field scrolls in km/s.");
-        RemixGui::DragFloat("Wind Direction", &RtxOptions::cloudWindDirectionObject(),
-                            1.0f, 0.0f, 360.0f, "%.1f\xc2\xb0", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Compass direction the wind blows toward in degrees. "
-            "0 = +X, 90 = +Z.");
+        if (ImGui::TreeNode("Shaping")) {
+          if (ImGui::TreeNode("Variation")) {
+            RemixGui::DragFloat("Coverage Spread", &RtxOptions::cloudCoverageSpreadObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Spatial variation around the Coverage mean. 0 = uniform across "
+                "the sky, 1 = mixed clear / cloudy patches.");
+            RemixGui::DragFloat("Coverage Patch Size", &RtxOptions::cloudCoverageNoiseScaleObject(),
+                                0.0001f, 0.0001f, 0.01f, "%.4f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Spatial frequency of the coverage variation. SMALLER value = "
+                "LARGER coverage patches (broad weather regions); larger value = "
+                "finer patchwork. Default 0.0033.");
+            RemixGui::DragFloat("Type Spread", &RtxOptions::cloudTypeSpreadObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Spatial variation around the Cloud Type mean. 0 = uniform type "
+                "everywhere, 1 = full stratus-to-cumulus range across the sky.");
+            RemixGui::DragFloat("Type Patch Size", &RtxOptions::cloudTypeNoiseScaleObject(),
+                                0.0001f, 0.0001f, 0.0034f, "%.4f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Spatial frequency of the cloud-type variation. SMALLER value = "
+                "LARGER patches of one cloud type; larger value = finer mix. "
+                "Capped at 0.0034 because faster variation puts visible 2D "
+                "cell structure at sub-cumulus scales. Independent of Coverage "
+                "Patch Size. Default 0.001.");
+            RemixGui::DragFloat("Anvil Spread", &RtxOptions::cloudAnvilBiasObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Cumulus top inflation. 0 = flat tops, 1 = mushroom-cap anvils. "
+                "Most visible on tall cumulus / thunderstorm scenes.");
+            ImGui::TreePop();
+          }
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Lighting");
-        RemixGui::DragFloat("Forward Scatter", &RtxOptions::cloudPhaseG1Object(),
-                            0.01f, 0.0f, 0.99f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Strength of the silver-lining glow when looking toward the sun. "
-            "Higher = sharper rim of bright light around backlit clouds.");
-        RemixGui::DragFloat("Glow Spread", &RtxOptions::cloudPhaseG2Object(),
-                            0.01f, 0.0f, 0.99f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Width of the softer secondary glow lobe around the silver "
-            "lining. Higher = tighter / brighter halo; lower = broader / "
-            "softer in-scatter envelope. Default 0.3.");
-        RemixGui::DragFloat("Multi-Scatter", &RtxOptions::cloudMsScaleObject(),
-                            0.05f, 0.0f, 2.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Strength of the milky brightness on the underside of cumulus "
-            "clouds. 1.0 = Nubis Cubed paper baseline; higher = brighter "
-            "cumulus bottoms, lower = flatter lighting.");
+          if (ImGui::TreeNode("Detail & Edges")) {
+            RemixGui::DragFloat("Texture Scale", &RtxOptions::cloudNoiseTileKmObject(),
+                                1.0f, 6.0f, 24.0f, "%.0f km", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "World-space tile size for the 3D cloud noise. Smaller = visible "
+                "repetition; larger = lower-frequency detail. Re-bakes the noise "
+                "volume live on change.");
+            RemixGui::Checkbox("Seamless Cloud Field", &RtxOptions::cloudHexTilingEnableObject());
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Randomizes the cloud noise tiling on a triangle lattice so the "
+                "texture repeat can never show, while preserving the cloud look. "
+                "Uncheck for the legacy periodic field. Applies live.");
+            RemixGui::DragFloat("Noise Frequency", &RtxOptions::cloudNoiseBaseFreqScaleObject(),
+                                0.01f, 0.25f, 4.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Multiplier on the baked cloud noise frequency. 1.0 = current "
+                "look. Raise for smaller/busier cloud features, lower for "
+                "larger ones. Re-bakes the noise volume live as you drag "
+                "(brief hitch per change).");
+            RemixGui::DragFloat("Edge Detail", &RtxOptions::cloudDetailStrengthObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "High-frequency detail concentrated at cloud EDGES \xe2\x80\x94 grows "
+                "wispy cauliflower billows OUTWARD from silhouettes while dense cores stay "
+                "solid. 0 = smooth edges (legacy look). Detail frequency is "
+                "tunable via rtx.atmosphere.cloudDetailScale in user.conf.");
+            RemixGui::DragFloat("Edge Softness", &RtxOptions::cloudEdgeSoftnessObject(),
+                                0.005f, 0.02f, 0.4f, "%.3f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Width of the coverage-gate transition band \xe2\x80\x94 how soft the "
+                "cloud silhouette is. Lower = crisper edges, tighter silhouette; "
+                "higher = softer edges but a broader faint skirt that can read as a "
+                "halo. Affects the view only; self-shadowing is held at the legacy "
+                "softness so this won't shift cloud lighting.");
+            RemixGui::DragFloat("Edge Haze Fade", &RtxOptions::cloudEdgeAmbientFadeObject(),
+                                0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Fades the (horizon-tinted) ambient on the thinnest edge samples so "
+                "the soft skirt around clouds doesn't read as dirty grey-brown haze "
+                "\xe2\x80\x94 the faintest edges fall toward transparent instead. "
+                "Higher = scrub more of the haze tint (can dim thin wisps); 0 = off. "
+                "Backlit edges keep their glow (only ambient is faded).");
+            ImGui::TreePop();
+          }
 
-        RemixGui::DragFloat("Ground Shadow", &RtxOptions::cloudShadowStrengthObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How strongly clouds cast shadows on terrain. 0 = no cloud "
-            "shadows, 1 = full voxel-grid cumulus-shaped shadow patches.");
+          if (ImGui::TreeNode("Columns")) {
+            // Per-cloud column model (always on since 2026-06-19; the legacy
+            // global-slab shaping was removed). Every cloud gets its own base,
+            // tower height and complete vertical shape from the placement map.
+            RemixGui::DragFloat("Cloud Cell Size", &RtxOptions::cloudCellSizeKmObject(),
+                                0.05f, 0.5f, 6.0f, "%.2f km", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Average footprint of a cloud cluster in km. Smaller = many "
+                "small clouds; larger = fewer, broader cloud banks. Re-bakes "
+                "the placement map live on change.");
+            RemixGui::DragFloat("Top Variation", &RtxOptions::cloudColumnTopVariationObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "How much cloud-top heights vary from cloud to cloud. 0 = all "
+                "tops at the same altitude (flat deck); higher = a varied "
+                "skyline of taller and shorter clouds. Applies live.");
+            RemixGui::DragFloat("Top Shape", &RtxOptions::cloudColumnTopShapeObject(),
+                                0.01f, 0.1f, 2.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "How cloud height follows cloud thickness toward the cluster "
+                "core. Low = even the thin edges tower (blocky); high = only "
+                "the dense cores rise (domed, feathered edges). Default 0.6.");
+            RemixGui::DragFloat("Base Undulation", &RtxOptions::cloudColumnBaseVariationObject(),
+                                0.01f, 0.0f, 0.4f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "How much local cloud bases drift above the layer altitude, as "
+                "a fraction of the layer depth. 0 = machined-flat ceiling; "
+                "higher = gently undulating cloud bases. Applies live.");
+            RemixGui::DragFloat("Edge Feather", &RtxOptions::cloudColumnFeatherObject(),
+                                0.01f, 0.05f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Width of the transition band at cloud-cluster edges. Narrow = "
+                "crisp, solid-cored clouds with sharp gaps; wide = soft, wispy "
+                "transitions between cloud and sky. Applies live.");
+            RemixGui::DragFloat("Underside Shading", &RtxOptions::cloudUndersideLightSigmaObject(),
+                                0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "How quickly the light filtering down through each cloud dies "
+                "out. The underside brightness then varies continuously with "
+                "the water above every point — dark cores, bright thin spots, "
+                "smooth gradients — instead of one flat-lit sheet. Higher = "
+                "darker, more dramatic undersides; 0 = underside darkening off "
+                "(flat-lit base). Sets the SHAPE of the darkening; its overall "
+                "strength and sunset fade are set by Bottom Darkening "
+                "(Lighting). Applies live.");
+            ImGui::TreePop();
+          }
+          ImGui::TreePop();
+        }
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Layer 2 (Cirrus)");
-        RemixGui::Checkbox("Enable Layer 2",
-                           &RtxOptions::cloudLayer2EnableObject());
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Adds a second high-altitude cloud deck on top of the main "
-            "layer. Off by default. Voxel-grid terrain shadows still come "
-            "from layer 1 only.");
-        RemixGui::DragFloat("Layer 2 Altitude", &RtxOptions::cloudLayer2AltitudeObject(),
-                            0.1f, 0.5f, 20.0f, "%.1f km", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Layer-2 altitude in km. Default 7.5 km targets the cirrus band.");
-        RemixGui::DragFloat("Layer 2 Depth", &RtxOptions::cloudLayer2ThicknessObject(),
-                            0.05f, 0.05f, 3.0f, "%.2f km", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Vertical depth of the layer-2 slab. Cirrus is thin \xe2\x80\x94 default 0.5 km.");
-        RemixGui::DragFloat("Layer 2 Coverage", &RtxOptions::cloudLayer2CoverageMeanObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How much of the sky has layer-2 clouds. Defaults sparser than "
-            "layer 1 so cirrus reads as patches, not overcast.");
-        RemixGui::DragFloat("Layer 2 Coverage Spread", &RtxOptions::cloudLayer2CoverageSpreadObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Spatial variation around the Layer 2 Coverage mean. Independent "
-            "of Layer 1's Coverage Spread.");
-        RemixGui::DragFloat("Layer 2 Cloud Type", &RtxOptions::cloudLayer2TypeMeanObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Cloud type for layer 2. Low values (~0.05) read as stratiform "
-            "wisps \xe2\x80\x94 appropriate for cirrus.");
-        RemixGui::DragFloat("Layer 2 Type Spread", &RtxOptions::cloudLayer2TypeSpreadObject(),
-                            0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Spatial variation around the Layer 2 Cloud Type mean. "
-            "Independent of Layer 1's Type Spread.");
-        RemixGui::DragFloat("Layer 2 Density", &RtxOptions::cloudLayer2DensityScaleObject(),
-                            0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "Per-step density multiplier for layer 2 only. Cirrus is "
-            "optically thin \xe2\x80\x94 default 0.30 keeps it from competing with the "
-            "main cumulus deck.");
+        if (ImGui::TreeNode("Lighting")) {
+          RemixGui::DragFloat("Forward Scatter", &RtxOptions::cloudPhaseG1Object(),
+                              0.01f, 0.0f, 0.99f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Strength of the silver-lining glow when looking toward the sun. "
+              "Higher = sharper rim of bright light around backlit clouds.");
+          RemixGui::DragFloat("Glow Spread", &RtxOptions::cloudPhaseG2Object(),
+                              0.01f, 0.0f, 0.99f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Width of the softer secondary glow lobe around the silver "
+              "lining. Higher = tighter / brighter halo; lower = broader / "
+              "softer in-scatter envelope. Default 0.3.");
+          RemixGui::DragFloat("Multi-Scatter", &RtxOptions::cloudMsScaleObject(),
+                              0.05f, 0.0f, 2.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Strength of the milky brightness on the underside of cumulus "
+              "clouds. 1.0 = Nubis Cubed paper baseline; higher = brighter "
+              "cumulus bottoms, lower = flatter lighting.");
+          RemixGui::DragFloat("Ground Shadow", &RtxOptions::cloudShadowStrengthObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How strongly clouds cast shadows on terrain. 0 = no cloud "
+              "shadows, 1 = full voxel-grid cumulus-shaped shadow patches.");
+          RemixGui::DragFloat("Bottom Darkening", &RtxOptions::cloudBottomDarkeningObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Overall strength of the cloud-underside darkening. Scales the "
+              "analytic per-column light field (whose shape is set by Underside "
+              "Shading) on the multi-scatter and ambient terms; the direct sun "
+              "beam (silver lining) is unaffected. Strongest with the sun "
+              "overhead and fades out toward the horizon, where the low sun "
+              "lights the bases directly (sunset glow). 0 = uniformly lit "
+              "(paper baseline).");
+          RemixGui::DragFloat("Sky Fill", &RtxOptions::cloudSkyAmbientFillObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How strongly cloud undersides pick up the open sky around them. "
+              "Adds the overhead sky color as fill light that bypasses Bottom "
+              "Darkening (skylight reaches the base from below/around, not "
+              "through the cloud), so a bright daytime sky lifts gloomy "
+              "undersides and tints them with the real sky color. Fades on its "
+              "own at sunset. Higher = brighter, more sky-colored bases; 0 = "
+              "undersides ignore the open sky.");
+          RemixGui::DragFloat("Sky Cloud Bleed", &RtxOptions::cloudSkyBleedStrengthObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How strongly the clouds tint the sky around them (the reverse of "
+              "Sky Fill). The sky picks up cloud-colored light next to clouds, "
+              "so an orange sunset deck warms the blue gaps and a grey overcast "
+              "greys the surrounding sky, instead of clouds and sky looking like "
+              "two separate layers. Fades to nothing in open sky far from any "
+              "cloud. Higher = more cloud color in the sky; 0 = off. Needs the "
+              "secondary cloud LUT (Performance).");
+          ImGui::TreePop();
+        }
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Atmosphere");
-        RemixGui::DragFloat("Distance Haze", &RtxOptions::cloudAerialHazePerKmObject(),
-                            0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How much distant cloud samples dim toward atmospheric color "
-            "(per-km haze extinction on cloud radiance). Higher = softer, "
-            "more washed-out distant clouds; 0 = no haze (clouds stay bright "
-            "all the way to horizon). Does NOT prevent the horizon white "
-            "wall \xe2\x80\x94 that's the Horizon Fade slider below. Default 0.05.");
-        RemixGui::DragFloat("Horizon Fade", &RtxOptions::cloudAerialFadePerKmObject(),
-                            0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
-        RemixGui::SetTooltipToLastWidgetOnHover(
-            "How quickly distant cloud samples stop piling up extinction "
-            "(per-km fade rate on alpha accumulation). Higher = sky shows "
-            "through earlier at the horizon; 0 = no fade (clouds can pile "
-            "into a solid white wall on horizon-grazing rays through thick "
-            "overcast). Does NOT affect cloud appearance close to camera. "
-            "Default 0.15.");
+        // Cloud Motion (fork — 2026-06-21, unification). One subtree for every
+        // way the cloud field moves/changes: bulk wind advection, in-place field
+        // morphing, and edge boil. All three are integrated by a single per-frame
+        // accumulator (RtxAtmosphere::advanceCloudMotion), so the slow weather
+        // "Weather Variation" (Weather panel) that varies wind speed/direction
+        // composes smoothly here rather than snapping the field. Rates are
+        // independent (no cross-coupling). Any speed at 0 freezes that part.
+        if (ImGui::TreeNode("Cloud Motion")) {
+          RemixGui::DragFloat("Wind Speed", &RtxOptions::cloudWindSpeedObject(),
+                              0.005f, 0.0f, 1.0f, "%.3f km/s", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How fast the whole cloud field drifts across the sky (km/s).");
+          RemixGui::DragFloat("Wind Direction", &RtxOptions::cloudWindDirectionObject(),
+                              1.0f, 0.0f, 360.0f, "%.1f\xc2\xb0", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Compass direction the wind blows toward in degrees. "
+              "0 = +X, 90 = +Z.");
+
+          ImGui::Separator();
+
+          RemixGui::DragFloat("Morph Speed", &RtxOptions::cloudEvolutionSpeedObject(),
+                              0.0005f, 0.0f, 0.05f, "%.4f km/s", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How fast cloud formations form and dissolve in place (km/s). "
+              "Scrolls the base 3D noise through the volume, decorrelated from "
+              "wind. 0 = field frozen (legacy rigid drift).");
+          RemixGui::DragFloat("Morph Vertical Bias", &RtxOptions::cloudEvolutionVerticalBiasObject(),
+                              0.02f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Share of the morph scroll along the volume's vertical axis [0..1]. "
+              "Higher = more in-place churn; lower = more lateral sliding.");
+          RemixGui::DragFloat("Edge Boil Speed", &RtxOptions::cloudBoilSpeedObject(),
+                              0.001f, 0.0f, 0.05f, "%.4f km/s", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How fast cloud edge billows churn (km/s), independent of the base "
+              "shape. Only active when edge detail strength > 0. 0 = edges frozen.");
+
+          ImGui::TextDisabled("Slow weather-scale wind/coverage wander: Weather "
+                              "\xe2\x86\x92 Weather Variation");
+          ImGui::TreePop();
+        }
+
+        if (ImGui::TreeNode("Layer 2")) {
+          RemixGui::Checkbox("Enable Layer 2",
+                             &RtxOptions::cloudLayer2EnableObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Adds a second high-altitude cloud deck on top of the main "
+              "layer. Off by default. Voxel-grid terrain shadows still come "
+              "from layer 1 only.");
+          ImGui::BeginDisabled(!layer2On);
+          RemixGui::DragFloat("Layer 2 Altitude", &RtxOptions::cloudLayer2AltitudeObject(),
+                              0.1f, 0.5f, 20.0f, "%.1f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Layer-2 altitude in km. Default 7.5 km targets the cirrus band.");
+          RemixGui::DragFloat("Layer 2 Depth", &RtxOptions::cloudLayer2ThicknessObject(),
+                              0.05f, 0.05f, 3.0f, "%.2f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Vertical depth of the layer-2 slab. Cirrus is thin \xe2\x80\x94 default 0.5 km.");
+          RemixGui::DragFloat("Layer 2 Coverage", &RtxOptions::cloudLayer2CoverageMeanObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How much of the sky has layer-2 clouds. Defaults sparser than "
+              "layer 1 so cirrus reads as patches, not overcast.");
+          RemixGui::DragFloat("Layer 2 Cloud Type", &RtxOptions::cloudLayer2TypeMeanObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Cloud type for layer 2. Low values (~0.05) read as stratiform "
+              "wisps \xe2\x80\x94 appropriate for cirrus.");
+          RemixGui::DragFloat("Layer 2 Type Spread", &RtxOptions::cloudLayer2TypeSpreadObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Spatial variation around the Layer 2 Cloud Type mean. "
+              "Independent of Layer 1's Type Spread.");
+          RemixGui::DragFloat("Layer 2 Density", &RtxOptions::cloudLayer2DensityScaleObject(),
+                              0.01f, 0.0f, 2.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Per-step density multiplier for layer 2 only. Lower values keep "
+              "the echo deck from competing with the main cumulus deck.");
+          RemixGui::DragInt("Layer 2 Step Floor", &RtxOptions::cloudLayer2StepFloorObject(),
+                            1.0f, 2, 64, "%d", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Minimum march steps through the echo deck (hit on near-zenith "
+              "sightlines). The deck is marched more cheaply than layer 1 "
+              "(which floors at 32); raise for a smoother deck at higher cost.");
+          RemixGui::DragInt("Layer 2 Max Steps", &RtxOptions::cloudLayer2StepMaxObject(),
+                            1.0f, 2, 128, "%d", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Hard cap on echo-deck samples per ray \xe2\x80\x94 the deck's performance "
+              "governor. Between the floor and this cap the count follows Cloud "
+              "Sample Spacing (cloudViewStepKm).");
+          RemixGui::ColorEdit3("Layer 2 Color", &RtxOptions::cloudLayer2ColorObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Base color (albedo) of the echo deck, independent of the main "
+              "cloud Color. Defaults to the same near-white; tint it to "
+              "differentiate the upper deck. All other look knobs stay shared "
+              "with layer 1.");
+          ImGui::EndDisabled();
+          ImGui::TreePop();
+        }
+
+        if (ImGui::TreeNode("Performance")) {
+          RemixGui::Checkbox("Fast Cloud Reflections", &RtxOptions::cloudSecondaryLutEnableObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Reflections and indirect light sample a small per-frame cloud "
+              "lookup table instead of re-marching the cloud volume per ray. "
+              "Large performance win on cloudy skies; reflected clouds also "
+              "match the main sky exactly. Uncheck to restore the legacy "
+              "per-ray cloud march for comparison.");
+          RemixGui::DragFloat("Cloud Render Scale", &RtxOptions::cloudRenderResolutionScaleObject(),
+                              0.05f, 0.25f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Resolution of the cloud render relative to the internal render "
+              "resolution. 0.5 = quarter the pixels (~4x cheaper clouds, "
+              "slightly softer); 1.0 = native (legacy). Applies live.");
+          RemixGui::DragFloat("Cloud Sample Spacing", &RtxOptions::cloudViewStepKmObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Distance between cloud samples along each view ray, in km. "
+              "This is the fix for the horizontal banding near the horizon: "
+              "sightlines there cross 50+ km of cloud layer, and the old "
+              "fixed 32-sample march spaced samples too far apart to resolve "
+              "the clouds.\n\nPERFORMANCE: cost scales with how many samples "
+              "a ray needs -- overhead sightlines are unchanged, but "
+              "horizon-heavy views can take up to Max Cloud Samples / 32 "
+              "times the cloud cost (2x at the defaults). Raise the spacing "
+              "or lower Max Cloud Samples to claw the cost back, or set 0 "
+              "to restore the legacy fixed march (banding returns). "
+              "Cloud Render Scale above also directly offsets this cost. "
+              "Applies live.");
+          RemixGui::DragInt("Max Cloud Samples", &RtxOptions::cloudViewSamplesMaxObject(),
+                            1.0f, 32, 256, "%d", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Hard cap on cloud samples per ray -- the performance governor "
+              "for Cloud Sample Spacing. 64 resolves the default spacing "
+              "out to ~6 km of cloud span; lower values cost less but let "
+              "a little banding back in at the far horizon. 32 = legacy "
+              "cost ceiling. Applies live.");
+          ImGui::TreePop();
+        }
+
+        if (ImGui::TreeNode("Horizon & Haze")) {
+          RemixGui::DragFloat("Curvature", &RtxOptions::cloudCurvatureObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Sky-dome curvature. 0 = real-planet radius (nearly flat ceiling, "
+              "horizon-grazing clouds stretch far); 1 = tight dome (clouds curve "
+              "visibly down to the horizon). Atmosphere math unaffected.");
+          RemixGui::DragFloat("Distance Haze", &RtxOptions::cloudAerialHazePerKmObject(),
+                              0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How much distant cloud samples dim toward atmospheric color "
+              "(per-km haze extinction on cloud radiance). Higher = softer, "
+              "more washed-out distant clouds; 0 = no haze (clouds stay bright "
+              "all the way to horizon). Does NOT prevent the horizon white "
+              "wall \xe2\x80\x94 that's the Horizon Fade slider below. Default 0.05.");
+          RemixGui::DragFloat("Horizon Fade", &RtxOptions::cloudAerialFadePerKmObject(),
+                              0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How quickly distant cloud samples stop piling up extinction "
+              "(per-km fade rate on alpha accumulation). Higher = sky shows "
+              "through earlier at the horizon; 0 = no fade (clouds can pile "
+              "into a solid white wall on horizon-grazing rays through thick "
+              "overcast). Does NOT affect cloud appearance close to camera. "
+              "Default 0.15.");
+          ImGui::TreePop();
+        }
 
         ImGui::TreePop();
       }

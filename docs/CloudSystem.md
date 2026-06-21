@@ -2,7 +2,7 @@
 
 Remix Plus ships a fully procedural volumetric cloud layer with
 physically-based lighting. The system sits on top of the Hillaire
-physical atmosphere (`rtx.skyMode = 1` -- Physical Atmosphere) and
+physical atmosphere (`rtx.skyMode = 1` -- Numos) and
 shares the per-frame LUT cadence with the rest of the atmosphere
 pipeline. There are no cloud assets to author: the field, the
 lighting, the terrain shadows, and the fog interactions are all
@@ -84,33 +84,60 @@ plus one consumer wire-in inside the volumetric pass.
 
 The cloud field participates in three places outside its own RT:
 
-- **Cloud-on-terrain shadows at NEE entry points.** When
-  `cloudVoxelShadowsEnable` is true (default), the surface and
-  volume sun-NEE helpers
-  ([`sampleAtmosphereSunLight` / `sampleAtmosphereSunLightVolume`](../src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh))
-  project the receiver position up to the slab base along the sun
-  direction, sample `D_sun` at the entry voxel, and apply a Beer-Lambert
-  Transmittance = `exp(-OD * cloudDensity * cloudShadowMarchStrength)`.
-  This replaces the older `evalCloudGroundShadow` 2D coverage proxy
-  for the NEE path only -- terrain shows cumulus-shaped drifting
-  shadow patches that match the cloud silhouettes overhead.
+- **Cloud-on-terrain shadows folded onto the sun (sun-only).**
+  A cloud shadow is just attenuation of the SUN along the sun direction, so it
+  is applied where that is physically true: onto the sun's own radiance, *before*
+  the sun is summed with other lights and *before* denoising. The sun is a real
+  Remix distant light (see "directional lights" below), so the surface fold lives
+  in the standard sun NEE: when `cloudVoxelShadowsEnable` is true (default) and
+  the sampled light is the flagged atmosphere sun (`atmosphereCloudShadowed`), the
+  direct integrator
+  ([`integrator_direct.slangh`](../src/dxvk/shaders/rtx/algorithm/integrator_direct.slangh))
+  samples the cloud transmittance toward the sun via
+  `sampleCloudGroundShadow_OptionB` and folds it onto the light's NEE radiance as
+  `radiance *= pow(cloudT, cloudShadowFactorStrength)`. The volumetric path folds
+  the same factor onto the per-froxel sun radiance in
+  `sampleAtmosphereSunLightVolume`. Terrain shows cumulus-shaped drifting shadow
+  patches matching the cloud silhouettes overhead, and only the sun is darkened --
+  indoors it is automatically a no-op (the sun's direct contribution is already
+  ~0 from the roof-occluded shadow ray), and lamps / point lights are never
+  touched. (Before 2026-06-21 the fold lived in a bespoke `sampleAtmosphereSunLight`
+  sun NEE; that path was removed when the sun became a real distant light.)
 
-  The per-pixel surface shadow rides a separate `PrimaryCloudShadowFactor`
-  R16F screen-extent texture *around* the denoiser:
-  `sampleAtmosphereSunLight` opts the pre-denoise radiance out of the
-  analytical cloud darkening (`getTransmittanceToSun(..., skipCloudShadow=true)`)
-  and writes the per-pixel `newShadow` ∈ [0, 1] into the texture;
-  composite multiplies `pow(newShadow, cloudShadowFactorStrength)` onto
-  post-denoise primary direct radiance. Routing the high-frequency
-  cumulus pattern around NRD / DLSS-RR prevents the denoiser from
-  smearing the shadow edges away. The volumetric path applies
-  `newShadow` directly to volumetric radiance (no factor texture --
-  the volumetric denoiser tolerates the high-frequency signal on its
-  own bilateral domain).
+  **Why this is correct, and what it deleted.** Because the factor rides the
+  sun's contribution alone (multiplied alongside the geometric sun-shadow ray):
+  indoors it is automatically a no-op for every surface type (walls, decals,
+  viewmodels, particles) -- the sun's direct contribution is already ~0 indoors
+  from the roof-occluded NEE shadow ray, so multiplying by the cloud factor
+  changes nothing, with no per-pixel geometry test. Lamps/point lights are never
+  touched. The same fold is applied to the sun distant light in the indirect
+  integrator, so bounce light off cloud-shadowed ground is correct for free, with
+  no double-count (the legitimate sky-bounce reduction lives in `evalSkyRadiance`). This single change deleted the entire
+  geometry-blindness compensation stack: the sealed-interior zenith up-ray gate,
+  the viewmodel/decal camera-origin correction (and its `Surface::isDecalCategory`
+  flag across three C++ files), the camera-side triangle-normal flip, and the
+  dusk/dawn horizon gate in `sampleCloudGroundShadow_OptionB_impl` (the grazing-
+  sun OD blowup now only crushes the already-attenuated sun, never lamps).
 
+  **The screen-space system is deleted.** Previously the per-pixel `newShadow`
+  rode a `PrimaryCloudShadowFactor` screen-extent texture *around* the denoiser
+  and composite multiplied `pow(newShadow, cloudShadowFactorStrength)` onto the
+  post-denoise primary **direct** radiance (the combined buffer of ALL lights).
+  That single decision was geometry- and light-blind and spawned the whole
+  compensation stack. The texture, its write/clear, all bindings, the composite
+  application, and debug view 878 are removed. Accepted tradeoff: the per-cumulus
+  pattern now passes through NRD / DLSS-RR, which can soften the crisp shadow
+  edges -- the cost of doing it in the physically correct place. (The indirect
+  composite multiply, `cloudShadowIndirectStrength`, was removed earlier on
+  2026-06-18 as issue #37; its CB slot is a reserved pad.)
+
+  The volumetric path folds the same `pow(transmittance, cloudShadowFactorStrength)`
+  onto the per-froxel sun radiance in `sampleAtmosphereSunLightVolume` (it always
+  applied the shadow into radiance directly -- that was already architecturally
+  correct; the contrast curve was added for parity).
   `computeGroundReflectionAnalytical` (multiscatter, sentinel position
-  `vec3(0, 0, 0)`) keeps the analytical cloud darkening
-  (`skipCloudShadow=false`, the helper default) -- migrating that path
+  `vec3(0, 0, 0)`) keeps the analytical cloud darkening (`skipCloudShadow=false`,
+  the helper default) -- it never reaches the sun-NEE fold-in, and migrating it
   to the voxel grid would poison the global ambient.
 
 - **Volumetric god-rays.** The volume integrator's sun-NEE path
@@ -148,25 +175,89 @@ The cloud field participates in three places outside its own RT:
    ambient that brightens shadowed and overcast fog.
 4. Tune cloud appearance through the dev menu under
    **Atmosphere -> Clouds** (sub-trees for coverage, type, lighting,
-   multi-scatter, sun-shadow, sky-ambient, drift) or by setting any
-   `rtx.atmosphere.cloud*` key in `rtx.conf`. The most common knobs:
+   multi-scatter, sun-shadow, sky-ambient, cloud motion) or by
+   setting any `rtx.atmosphere.cloud*` key in `rtx.conf`. The most
+   common knobs:
    - `cloudCoverageMean` -- overall cloudiness, 0 = clear, 1 = overcast.
    - `cloudDensity` -- per-cumulus opacity multiplier.
    - `cloudAltitude` / `cloudThickness` -- vertical placement.
    - `cloudShadowMarchStrength` -- pre-denoise darkness of cloud-on-terrain
      shadows (multiplier inside the `exp(-OD * density * march)` term).
-   - `cloudShadowStrength` -- master enable for the same; defaults to 0,
-     so out of the box cloud shadows on terrain are *off* even though
-     the voxel grid is baked. Raise to 1.0 for the physical baseline.
-   - `cloudShadowFactorStrength` -- post-denoise visible-contrast knob
-     applied by composite as `pow(newShadow, strength)`. Default 4.0 --
-     raw `newShadow` at strength 1 reads too faint against the analytical
-     atmospheric transmittance. Raise to sharpen cumulus shadow contrast,
-     lower to soften.
+   - `cloudShadowStrength` -- master fade for the same; defaults to 0.5,
+     so out of the box cloud shadows on terrain are at half strength. 0
+     disables them; 1.0 is the full physical baseline.
+   - `cloudShadowFactorStrength` -- artistic contrast curve on the cloud
+     shadow, applied as `pow(cloudTransmittance, strength)` where the shadow is
+     folded onto the SUN's radiance in the NEE (it lived in composite before the
+     2026-06-19 sun-only re-architecture; same knob, new home). Default 4.0 --
+     the raw transmittance at strength 1 reads too faint. Raise to sharpen
+     cumulus shadow contrast, lower to soften.
+
+## Cloud motion: one integrator, three sources
+
+Everything that moves or changes the clouds runs through a single
+per-frame **cloud-motion integrator**
+(`RtxAtmosphere::advanceCloudMotion`, fork — 2026-06-21). It advances
+three persistent offset accumulators by `offset += velocity * dt` once
+per frame; the const `getAtmosphereArgs` (called many times per frame)
+just reads them into `cloudWindOffset` / `cloudEvolutionOffset*` /
+`cloudBoilPhase`.
+
+> **Why an integrator (the bug it fixed).** These offsets used to be
+> computed stateless as `instantaneousSpeed * totalElapsedTime` inside
+> the const accessor. That is only correct while wind is constant. The
+> slow weather drift (source 3 below) varies `cloudWindSpeed` /
+> `cloudWindDirection`, so every frame the *entire accumulated offset*
+> re-scaled or rotated about the origin — the whole field visibly
+> jumped/slid. Integrating instantaneous velocity instead means a
+> changing wind smoothly *eases* the field, so the weather drift now
+> composes correctly. The three sources feed the same integrator but
+> keep independent rates (no cross-coupling).
+
+The three sources:
+
+1. **Wind advection** (`cloudWindSpeed` / `cloudWindDirection`).
+   Rigid bulk translation of the whole field across the sky. The
+   prebaked noise tile-wraps at `cloudNoiseTileKm` (12 km), so at the
+   default 0.02 km/s the field exactly repeats every ~10 min of travel.
+
+2. **Field evolution** (`cloudEvolutionSpeed`, `cloudEvolutionVerticalBias`,
+   `cloudBoilSpeed`; dev-menu **Atmosphere -> Clouds -> Cloud Motion**).
+   Added 2026-06-21. Makes the cloud field *morph in place* rather than
+   only sliding: the base 3D noise is sampled at a slowly-evolving
+   offset (dominated by a vertical scroll through the volume's
+   decorrelated, tile-wrapping Y axis), so formations form and dissolve
+   locally; an independent faster scroll on the edge-detail tap
+   (`cloudBoilSpeed`) churns the cauliflower billows at the silhouette.
+   Because the evolution scroll is decorrelated from wind, it also
+   breaks the 10-min wind tile-repeat. The offset feeds the **view-path**
+   density sampler only -- it does not touch the placement map, hex
+   lattice, column model, or height fraction, so cluster locations and
+   altitudes stay put while shapes change. The baked sun/ambient shadow
+   grids are intentionally *not* evolved in v1 (they keep describing the
+   slow bulk field; matching the boil into them is future work). Any
+   speed at 0 freezes that lever and is bit-identical to the legacy
+   rigid behavior. This system replaced the old global-scalar "breathing"
+   (see below) as the source of cloud shape change.
+
+3. **Weather-parameter drift** (`__weather.drift_speed` /
+   `__weather.drift_intensity`; dev-menu **Weather -> Weather Variation**
+   -- renamed from "Cloud Drift" to avoid colliding with Cloud Motion; in
+   `rtx_fork_weather.cpp`). Slowly modulates a few *global* weather
+   scalars over time so the sky's overall character changes. As of
+   2026-06-21 it is **de-pulsed and trimmed**: the old fast layer had a
+   base period of exactly 30 s, whose dominant sine produced a clearly
+   visible whole-sky pulse every ~30 s with all fields cresting in
+   lockstep -- that fast layer is removed (slow multi-minute layer only),
+   and the table is cut from 9 fields to the 3 genuinely weather-scale
+   ones (`cloudCoverageMean`, `cloudWindSpeed`, `cloudWindDirection`).
+   The shape-ish fields it used to wobble globally (density, thickness,
+   type, anvil, coverage spread) are now handled locally by field
+   evolution instead.
 
 ## Debug views
 
-The cloud system carries four dedicated debug views, all under the
+The cloud system carries five dedicated debug views, all under the
 dev-menu **Debug View** combo or by writing
 `rtx.debugView.debugViewIdx = <N>`. Source enum lives in
 [`src/dxvk/shaders/rtx/utility/debug_view_indices.h`](../src/dxvk/shaders/rtx/utility/debug_view_indices.h).
@@ -178,7 +269,12 @@ dev-menu **Debug View** combo or by writing
 | 875 | Cloud-on-terrain production-call-shape diagnostic. Re-runs the same `sampleCloudGroundShadow_OptionB` call the NEE path uses, per pixel, in grayscale. A divergence between this view and the actual in-game shadow pattern points to a writer/reader split between the production raygen pass and this debug pass. |
 | 876 | Cloud render RT -- shows the raw Nubis Cubed lighting output before composite, for A/B against analytical `evalClouds`. |
 | 877 | Raw `D_sun` optical depth at the production NEE call shape (sibling of 875). Stops at the `dSunTex.SampleLevel` -- no `exp()`, no `mix(cloudShadowStrength)`. RGB encodes magnitude (R/G) + UVW.x (B); paints magenta for surface-above-slab and blue for sun-below-horizon sentinels. Use to diagnose whether shadow problems are bake (OD wrong) vs path (helper output wrong) vs read (saturate/pow killing it). |
-| 878 | Raw `PrimaryCloudShadowFactor` texture as integrate_direct writes it, in grayscale. Direct A/B with 875 -- they should show the SAME spatial pattern at the SAME brightness (post the 2026-05-19 ratio→newShadow simplification). Divergence indicates writer/reader path mismatch. |
+
+Debug view 878 (raw `PrimaryCloudShadowFactor` texture) was **removed**
+2026-06-19 with the screen-space cloud-shadow system. Use 875/877 (which read
+the `D_sun` grid directly) for cloud-on-terrain shadow diagnostics; the cloud
+shadow now folds onto the sun radiance in the NEE and has no screen-space
+texture to inspect.
 
 ## Indirect / PSR / Reflection rays
 
@@ -210,17 +306,33 @@ future-work item.
   particularly large mirror-like puddles at sunset, where the
   reflected sky's cloud lighting model does not match the direct
   sky's.
-- **Cloud-on-terrain shadow strength defaults to 0.**
+- **Cloud-on-terrain shadow strength defaults to 0.5.**
   `cloudShadowStrength` is the master fade between "full sun on the
   ground" and "voxel-baked cloud shadow on the ground." It ships at
-  0 so the default appearance is unchanged from the analytical baseline.
-  Raise it to 1.0 to see the cumulus-shaped drift patches; tune the
-  visible contrast separately with `cloudShadowFactorStrength`.
+  0.5 (half strength); set 0 to disable, 1.0 for the full physical
+  baseline. Tune the visible contrast separately with
+  `cloudShadowFactorStrength`.
 - **Sky-ambient ships off.** `cloudSkyAmbientStrength = 0` by default
   so the volumetric pass is bit-identical to the no-fork baseline.
   This is intentional rollback safety; in-game review flips it on.
 
 ## Future work
+
+- **Sun-only direct cloud factor (DONE).** The cloud shadow folds onto the sun's
+  radiance pre-denoise — on the surface via the real sun distant light in the
+  direct/indirect integrators (gated on `atmosphereCloudShadowed`), and in fog via
+  `sampleAtmosphereSunLightVolume` — so it darkens only the sun and is
+  automatically correct indoors for every surface type. The whole
+  geometry-blindness compensation stack (sealed-interior zenith gate,
+  viewmodel/decal origin correction + `isDecalCategory` flag, normal flip,
+  dusk/dawn horizon gate) and the screen-space `PrimaryCloudShadowFactor` system
+  were deleted, as was the bespoke `sampleAtmosphereSunLight` sun NEE (2026-06-21,
+  when the sun became a real distant light). The one residual is the accepted tradeoff of option (b): the
+  per-cumulus pattern now passes through NRD / DLSS-RR and the denoiser can
+  soften the crisp shadow edges. If that softening reads as too mushy in review,
+  the follow-on is option (a) -- a dedicated denoised sun-direct buffer with its
+  own NRD/DLSS-RR wiring -- which would restore the around-the-denoiser routing
+  without the geometry hacks.
 
 - **Per-direction cloud LUT.** Would let indirect / PSR / reflection
   rays see Nubis Cubed clouds, removing the primary-vs-reflection
@@ -231,13 +343,13 @@ future-work item.
 - **Runtime-baked NVDF + SDF.** A C-procedural cloud field replacing
   the prebaked FBM noise volume; preserves the macro/micro decoupling
   at cumulus silhouettes that the FBM cannot.
-- **Post-DLSS cloud shadow re-modulation.** The current path applies
-  `pow(newShadow, cloudShadowFactorStrength)` to direct radiance
-  pre-DLSS (composite runs at downscale extent). Moving the apply to
-  post-DLSS at upscale resolution would prevent the DLSS / TAA temporal
-  reprojection from smearing cumulus shadow edges. Requires routing the
-  factor texture (or a recomputed version) through to a post-upscale
-  pass.
+- **Sun-direct denoiser channel (supersedes the old post-DLSS re-modulation
+  item).** With the cloud shadow now folded onto the sun radiance pre-denoise,
+  NRD / DLSS-RR can soften the cumulus shadow edges. A dedicated denoised
+  sun-direct buffer (option (a) above) would let the high-frequency cumulus
+  pattern be re-applied after upscale at full resolution, recovering the crisp
+  edges the old screen-space texture preserved -- but without any of the
+  geometry-blindness hacks, since it would still be a sun-only signal.
 
 ## Cross-references
 

@@ -72,9 +72,12 @@
 
 #define INTEGRATE_DIRECT_BINDING_NEE_CACHE_SAMPLE                                   72
 
-#define INTEGRATE_DIRECT_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_OUTPUT                 73
+// Slot 73 was INTEGRATE_DIRECT_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_OUTPUT (fork
+// screen-space cloud shadow write). Removed 2026-06-19 — the cloud shadow now
+// folds onto the sun radiance in the NEE, no screen-space texture. Number left
+// reserved (no descriptor bound).
 
-// Aliased Inputs/Outputs 
+// Aliased Inputs/Outputs
 
 #define INTEGRATE_DIRECT_BINDING_ALIASED_DATA_0  80
 #define INTEGRATE_DIRECT_BINDING_SECONDARY_WORLD_POSITION_WORLD_TRIANGLE_NORMAL_INPUT (INTEGRATE_DIRECT_BINDING_ALIASED_DATA_0 + 0)

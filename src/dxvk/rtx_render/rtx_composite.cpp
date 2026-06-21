@@ -67,7 +67,6 @@ namespace dxvk {
         CONSTANT_BUFFER(COMPOSITE_CONSTANTS_INPUT)
         TEXTURE2D(COMPOSITE_BSDF_FACTOR_INPUT)
         TEXTURE2D(COMPOSITE_BSDF_FACTOR2_INPUT)
-        TEXTURE2D(COMPOSITE_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT)
         SAMPLER3D(COMPOSITE_VOLUME_FILTERED_RADIANCE_AGE_INPUT)
         SAMPLER3D(COMPOSITE_VOLUME_FILTERED_RADIANCE_Y_INPUT)
         SAMPLER3D(COMPOSITE_VOLUME_FILTERED_RADIANCE_CO_CG_INPUT)
@@ -111,7 +110,6 @@ namespace dxvk {
         CONSTANT_BUFFER(COMPOSITE_CONSTANTS_INPUT)
         TEXTURE2D(COMPOSITE_BSDF_FACTOR_INPUT)
         TEXTURE2D(COMPOSITE_BSDF_FACTOR2_INPUT)
-        TEXTURE2D(COMPOSITE_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT)
         SAMPLER3D(COMPOSITE_VOLUME_FILTERED_RADIANCE_AGE_INPUT)
         SAMPLER3D(COMPOSITE_VOLUME_FILTERED_RADIANCE_Y_INPUT)
         SAMPLER3D(COMPOSITE_VOLUME_FILTERED_RADIANCE_CO_CG_INPUT)
@@ -339,7 +337,6 @@ namespace dxvk {
     const DxvkReSTIRGIRayQuery& restirGI = ctx->getCommonObjects()->metaReSTIRGIRayQuery();
     ctx->bindResourceView(COMPOSITE_BSDF_FACTOR_INPUT, rtOutput.m_bsdfFactor.view, nullptr);
     ctx->bindResourceView(COMPOSITE_BSDF_FACTOR2_INPUT, restirGI.getBsdfFactor2().view, nullptr);
-    ctx->bindResourceView(COMPOSITE_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT, rtOutput.m_primaryCloudShadowFactor.view, nullptr);
     ctx->bindResourceView(COMPOSITE_ALPHA_GBUFFER_INPUT, rtOutput.m_alphaBlendGBuffer.view, nullptr);
 
     // Note: Clamp to edge used to avoid interpolation to black on the edges of the view.
@@ -494,7 +491,13 @@ namespace dxvk {
 
     compositeArgs.domeLightArgs = domeLightArgs;
     compositeArgs.skyBrightness = RtxOptions::skyBrightness();
-    compositeArgs.cloudShadowFactorStrength = std::max(RtxOptions::cloudShadowFactorStrength(), 0.0f);
+    // Cloud-shadow composite application removed 2026-06-19 (fork). The
+    // screen-space PrimaryCloudShadowFactor texture and the pow(factor,
+    // cloudShadowFactorStrength) multiply on post-denoise primary direct radiance
+    // were deleted when the cloud shadow moved onto the sun term in the NEE
+    // (atmosphere_common.slangh). The contrast knob is now populated into
+    // atmosphereArgs (rtx_atmosphere.cpp). composite_args.h::pad1/pad2 are the
+    // retired cloudShadowFactorStrength / cloudShadowIndirectStrength CB slots.
 
     Rc<DxvkBuffer> cb = getCompositeConstantsBuffer();
     ctx->writeToBuffer(cb, 0, sizeof(CompositeArgs), &compositeArgs);

@@ -98,7 +98,11 @@ struct VolumeArgs {
   float maxAttenuationDistanceForNoAtmosphere;
   uint resetHistory;
   float fogSunVisibilityGain;
-  float pad0;
+  // Gain on the volumetric froxel cache as read by surface consumers
+  // (particles/decals/PSR/SAB Path B) via evalVolumetricNEE (fork — issue #36).
+  // Was a hardcoded 0.0 ("kConsumerMultiplier") that left alpha-blended
+  // particles unlit. Reuses the former pad0 slot; CB layout unchanged.
+  float volumetricConsumerGain;
 };
 
 #ifdef __cplusplus

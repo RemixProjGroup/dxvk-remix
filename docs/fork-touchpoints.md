@@ -216,7 +216,7 @@ check will enforce it if discipline slips.
   *Pins ImGui and ImPlot contexts at the top of `wndProcHandler` to prevent context corruption when plugin activity drifts GImGui off the dev menu's context between frames. Call site passes `m_context` and `m_plotContext` directly — no friend declaration needed.*
 
 - **Block** at `ImGUI::showRenderingSettings` (sky mode UI section) — ~154 LOC. **Migrated** to `fork_hooks::showAtmosphereUI` in `rtx_fork_atmosphere.cpp`.
-  *Adds the Sky Mode combo (Skybox Rasterization / Physical Atmosphere), atmosphere preset buttons (Earth, Mars, Clear Sky, Polluted/Hazy, Alien World, Desert Planet), and the full atmosphere parameter tree (sun, density sliders, advanced coefficients) under the Sky Tuning collapsing header. The `skyModeCombo` static was moved from `dxvk_imgui.cpp` into the fork-owned atmosphere file. No friend declaration needed.*
+  *Adds the Sky Mode combo (Skybox Rasterization / Numos), atmosphere preset buttons (Earth, Mars, Clear Sky, Polluted/Hazy, Alien World, Desert Planet), and the full atmosphere parameter tree (sun, density sliders, advanced coefficients) under the Sky Tuning collapsing header. The `skyModeCombo` static was moved from `dxvk_imgui.cpp` into the fork-owned atmosphere file. No friend declaration needed.*
 
 - **Block** at `ImGUI::showMainMenu` (wrapper tab handling) — ~6 LOC. **Partially migrated** to `fork_hooks::wrapperTabDraw` in `rtx_fork_overlay.cpp`.
   *The `kTab_Wrapper` guard (`remixapi_imgui_HasDrawCallback()` check + `continue`) remains as an inline tweak in the tab loop (structural control flow, not extractable). The case body (`remixapi_imgui_InvokeDrawCallback()`) is wrapped as `fork_hooks::wrapperTabDraw()`. No friend declaration needed.*
@@ -326,13 +326,13 @@ initializer list and can't be lifted into a separate TU.
   *Constructs the `RtxAtmosphere` instance during `RtxContext` initialization.*
 
 - **Hook** at `RtxContext::updateRaytraceArgsConstantBuffer` (sky mode + atmosphere section) → `fork_hooks::updateAtmosphereConstants` in `rtx_fork_atmosphere.cpp`
-  *Sets `constants.skyMode`, detects sky mode transitions (clearing skybox buffers on switch to Physical Atmosphere), and calls `m_atmosphere->initialize` / `computeLuts` / `getAtmosphereArgs` to populate the atmosphere constant block.*
+  *Sets `constants.skyMode`, detects sky mode transitions (clearing skybox buffers on switch to Numos), and calls `m_atmosphere->initialize` / `computeLuts` / `getAtmosphereArgs` to populate the atmosphere constant block.*
 
 - **Hook** at `RtxContext::bindCommonRayTracingResources` (atmosphere LUT bindings) → `fork_hooks::bindAtmosphereLuts` in `rtx_fork_atmosphere.cpp`
   *Ensures the atmosphere object is initialized and binds the three atmosphere LUT textures (`BINDING_ATMOSPHERE_TRANSMITTANCE_LUT`, `BINDING_ATMOSPHERE_MULTISCATTERING_LUT`, `BINDING_ATMOSPHERE_SKY_VIEW_LUT`) for all passes that declare them in common_bindings.*
 
 - **Hook** at `RtxContext::rasterizeSky` (physical atmosphere sky skip) → `fork_hooks::injectRtxAtmosphereSkySkip` in `rtx_fork_atmosphere.cpp`
-  *Returns early from rasterized sky rendering when Physical Atmosphere mode is active. No private-member access; no friend declaration required.*
+  *Returns early from rasterized sky rendering when Numos mode is active. No private-member access; no friend declaration required.*
 
 - **Hook** at `RtxContext::dispatchScreenOverlay` (method body + ScreenOverlayShader class) → `fork_hooks::dispatchScreenOverlay` in `rtx_fork_overlay.cpp`
   *`ScreenOverlayShader` lifted to `rtx_fork_overlay.cpp`; `dispatchScreenOverlay` is now a one-line delegate. The hook alpha-composites a plugin-uploaded RGBA buffer over the final tone-mapped image using the compute shader.*
@@ -523,6 +523,24 @@ initializer list and can't be lifted into a separate TU.
 
 ---
 
+## src/dxvk/rtx_render/rtx_instance_manager.cpp
+
+**Category:** index-only
+
+- **Inline tweak** at `InstanceManager::onInstanceUpdated` surface-meta block (~line 988, beside `isAnimatedWater`) — REVERTED 2026-06-19, comment-only.
+  *Previously set `currentInstance.surface.isDecalCategory` for the cloud-shadow zenith gate. The gate and flag were deleted when the cloud shadow moved onto the sun term in the NEE (no geometry test needed); only a "removed" comment remains.*
+
+---
+
+## src/dxvk/rtx_render/rtx_materials.h
+
+**Category:** index-only
+
+- **Inline tweak** at `RtSurface` flags block (~line 336) + `RtSurface::writeGPUData` `flags0` packing (~line 121) — REVERTED 2026-06-19, comment-only.
+  *Previously added `bool isDecalCategory` packed into `flags0` bit 2 for the cloud-shadow zenith gate. Removed with the gate; `flags0` bit 2 is free again. Only "removed" comments remain.*
+
+---
+
 ## src/dxvk/rtx_render/rtx_options.h
 
 **Pre-refactor fork footprint:** +32 / -0 LOC (audit 2026-04-18)
@@ -533,7 +551,7 @@ initializer list and can't be lifted into a separate TU.
 **Rationale:** All fork additions are an enum definition and `RTX_OPTION(...)` macro declarations inside the `RtxOptions` class body. `RTX_OPTION` expands to an inline static member declaration — it is structurally part of the class definition and cannot be lifted into a separate TU or wrapped in a hook. There is no function body to extract.
 
 - **Inline tweak** at `(file scope namespace dxvk)` (SkyMode enum) — ~5 LOC.
-  *Declares the `SkyMode` enum class (`SkyboxRasterization = 0`, `PhysicalAtmosphere = 1`). Required by `RtxOptions::skyMode` below and by atmosphere hook code in `rtx_fork_atmosphere.cpp` (via the `rtx_options.h` include chain).*
+  *Declares the `SkyMode` enum class (`SkyboxRasterization = 0`, `Numos = 1`). Required by `RtxOptions::skyMode` below and by atmosphere hook code in `rtx_fork_atmosphere.cpp` (via the `rtx_options.h` include chain).*
 
 - **Inline tweak** at `RtxOptions` class body (skyMode RTX_OPTION) — ~2 LOC.
   *Declares `RTX_OPTION("rtx", SkyMode, skyMode, SkyMode::SkyboxRasterization, ...)` immediately after the existing sky-related options block. Consumed by `fork_hooks::updateAtmosphereConstants` in `rtx_fork_atmosphere.cpp`.*
@@ -592,7 +610,7 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** — weather-preset cold-default alignment (2026-05-26). Three RTX_OPTION cold defaults aligned to the `WEATHER_PRESET_VALUES_overcast` block in `rtx_fork_weather.h`: `transmittanceColor` (0.999, 0.999, 0.999) → (0.995, 0.995, 0.995), `transmittanceMeasurementDistanceMeters` 200.0 → 500.0, `anisotropy` 0.0 → 0.05 (mapped from `volumetricAnisotropy` in the preset). Companion to the matching `rtx_options.h` block — same rationale: the dormant "(none / dormant)" weather preset path leaves cold RTX_OPTIONs untouched, so the cold defaults themselves had to move to match overcast.
 
-- **Inline tweak** — new `fogSunVisibilityGain` RTX_OPTION (2026-05-26). `rtx.volumetrics.fogSunVisibilityGain` (default 5.0, range 0.0–50.0) replaces the historical hardcoded artistic gain (x5 with a misleading "10x" comment in the gmod-rtx port) that was previously baked into the per-cache-write expression in fork-owned `atmosphere_common.slangh`. Read by `volume_composite_helpers.slangh::integrateVolumetricNEE` (consumer-side fog application only — surface consumers still read the cache straight). Companions: `rtx_global_volumetrics.cpp` (CB populate), `volume_args.h` (CB field), submodule fork edit at `rtxdi-sdk/include/volumetrics/rtx/algorithm/volume_composite_helpers.slangh`.
+- **Inline tweak** — new `fogSunVisibilityGain` RTX_OPTION (2026-05-26; default lowered 5.0→1.0 on 2026-06-15). `rtx.volumetrics.fogSunVisibilityGain` (default 1.0, range 0.0–50.0) replaces the historical hardcoded artistic gain (x5 with a misleading "10x" comment in the gmod-rtx port) that was previously baked into the per-cache-write expression in fork-owned `atmosphere_common.slangh`. Default is now physical (1.0 = no boost) rather than the gmod-era ~5x. Read by `volume_composite_helpers.slangh::integrateVolumetricNEE` (consumer-side fog application only — surface consumers still read the cache straight). Companions: `rtx_global_volumetrics.cpp` (CB populate), `volume_args.h` (CB field), submodule fork edit at `rtxdi-sdk/include/volumetrics/rtx/algorithm/volume_composite_helpers.slangh`.
 
 ---
 
@@ -811,7 +829,7 @@ initializer list and can't be lifted into a separate TU.
 **Category:** index-only
 
 - **Inline tweak** at `tryHandleSky` (~line 145) — 6-line addition for physical atmosphere sky skip.
-  *Returns `TryHandleSkyResult::SkipSubmit` early for any draw with `cameraType == CameraType::Sky` when Physical Atmosphere mode is active, preventing rasterized skybox geometry from being submitted.*
+  *Returns `TryHandleSkyResult::SkipSubmit` early for any draw with `cameraType == CameraType::Sky` when Numos mode is active, preventing rasterized skybox geometry from being submitted.*
 
 ---
 
@@ -861,14 +879,14 @@ initializer list and can't be lifted into a separate TU.
 - **Block** at `(file scope)` (atmosphere include) — ~1 LOC, planned target `fork_hooks::atmosphereInclude` in `rtx_fork_atmosphere.slangh`.
   *Adds `#include "rtx/pass/atmosphere/atmosphere_common.slangh"`.*
 
-- **Block** at `evalAtmosphereSunNEE` (full function) — ~100 LOC, planned target `fork_hooks::evalAtmosphereSunNEEDirect` in `rtx_fork_atmosphere.slangh`.
-  *Implements primary-bounce sun NEE for physical atmosphere: samples sun direction + cone angle, traces multiple jittered shadow rays for soft shadows, averages visibility, evaluates BRDF split-weight, and accumulates diffuse/specular sun radiance.*
+- **Block** at `evalAtmosphereSunNEE` (full function) — ~40 LOC, planned target `fork_hooks::evalAtmosphereSunNEEDirect` in `rtx_fork_atmosphere.slangh`.
+  *Implements primary-bounce sun NEE for physical atmosphere: samples sun direction + cone angle, traces multiple jittered shadow rays for soft shadows, averages visibility, evaluates BRDF split-weight, and accumulates diffuse/specular sun radiance. As of the 2026-06-19 sun-only cloud-shadow re-architecture this function no longer touches clouds at all — the cloud-on-terrain shadow folds onto the sun's radiance inside `sampleAtmosphereSunLight` (atmosphere_common.slangh), so the per-pixel `PrimaryCloudShadowFactor` write, the sealed-interior zenith up-ray gate, and the viewmodel/decal/normal-flip origin corrections were all deleted here. 2026-06-20: taught the shadow ray about thin-opaque subsurface — it now traces with `visibilityModeEnableSubsurfaceMaterials` and skips the `NdotL <= 0` early-out (both the up-front check and the per-sample jitter skip) for thin-opaque materials, so backlit translucency works under the physical-atmosphere sun (it is the only sun NEE in skyMode==1; the SSS-capable standard path only runs for RTXDI/RIS lights).*
 
 - **Block** at `evalAtmosphereMoonNEE` (full function) — ~100 LOC, planned target `fork_hooks::evalAtmosphereMoonNEEDirect` in `rtx_fork_atmosphere.slangh`.
-  *Primary-bounce moon NEE -- mirror of evalAtmosphereSunNEE for the moon. Calls `sampleAtmosphereMoonLight` with a u_pick blue-noise sample so one of the enabled, above-horizon moons is importance-picked per ray (weight = brightness × phaseGlow × elevation). Soft-shadow cone jitter via `getJitteredSunDirection` (direction-agnostic). Accumulated contribution divided by `moonSample.solidAnglePdf` (discrete pick PDF) so multi-moon importance sampling stays unbiased over many frames. Added by 2026-05-07 moon sun-parity workstream.*
+  *Primary-bounce moon NEE -- mirror of evalAtmosphereSunNEE for the moon. Calls `sampleAtmosphereMoonLight` with a u_pick blue-noise sample so one of the enabled, above-horizon moons is importance-picked per ray (weight = brightness × phaseGlow × elevation). Soft-shadow cone jitter via `getJitteredSunDirection` (direction-agnostic). Accumulated contribution divided by `moonSample.solidAnglePdf` (discrete pick PDF) so multi-moon importance sampling stays unbiased over many frames. Added by 2026-05-07 moon sun-parity workstream. 2026-06-20: same thin-opaque subsurface fix as the sun path (`visibilityModeEnableSubsurfaceMaterials` + thin-opaque-gated `NdotL <= 0` early-outs) so moonlit translucency matches.*
 
 - **Block** at `integrateDirectPath` (atmosphere sun NEE call site) — ~14 LOC, planned target `fork_hooks::directPathAtmosphereSunCall` in `rtx_fork_atmosphere.slangh`.
-  *Calls `evalAtmosphereSunNEE` in the direct-path integrator when `cb.skyMode == 1`.*
+  *Calls `evalAtmosphereSunNEE` in the direct-path integrator when `cb.skyMode == 1`. 2026-06-21 (experiment branch): the gate also requires `debugSkyBisectFlags` bit 2 clear — when the sun/moon are injected as real distant lights (`rtx.atmosphere.useDirectionalLights`), bit 2 is set and this bespoke sun+moon NEE block is skipped to avoid double-counting.*
 
 - **Block** at `integrateDirectPath` (atmosphere moon NEE call site) — ~12 LOC, planned target `fork_hooks::directPathAtmosphereMoonCall` in `rtx_fork_atmosphere.slangh`.
   *Calls `evalAtmosphereMoonNEE` immediately after `evalAtmosphereSunNEE` in the direct-path integrator when `cb.skyMode == 1`. Sun and moon NEE are independent samples -- both can be valid at twilight, both invalid during pure daytime / pure-night-with-no-moons; each early-outs cheaply when invalid. Added by 2026-05-07 moon sun-parity workstream.*
@@ -966,6 +984,15 @@ initializer list and can't be lifted into a separate TU.
 
 ---
 
+## src/dxvk/shaders/rtx/concept/surface/surface.h
+
+**Category:** index-only
+
+- **Inline tweak** at `Surface` flags properties (~line 306, after `isVertexColorBakedLighting`) — REVERTED 2026-06-19, comment-only.
+  *Previously added the `Surface::isDecalCategory` property (`data0b.z` bit 2) read by the cloud-shadow zenith gate. Removed with the gate; bit 2 is free again. Only a "freed" comment remains.*
+
+---
+
 ## src/dxvk/shaders/rtx/pass/common_binding_indices.h
 
 **Pre-refactor fork footprint:** +9 / -1 LOC (audit 2026-04-18)
@@ -1009,6 +1036,23 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** at `(file scope)` (atmosphere FAST-noise texture declaration) (~line 138) — 2-line addition (2026-05-09).
   *Declares `AtmosphereFastNoise` as a `Texture2DArray<float2>` resource bound at `BINDING_ATMOSPHERE_FAST_NOISE` (slot 205). Used by the `fastJitter()` helper in `atmosphere_common.slangh` for cloud ray-march sample-distribution jitter.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/composite/composite.comp.slang
+
+**Category:** migrate
+
+- **Block** at `compositePixel` (cloud-shadow application) — REMOVED 2026-06-19, comment-only.
+  *The entire screen-space cloud-shadow application in composite is gone. The **indirect** multiply was removed 2026-06-18 (issue #37, double-count + geometry-blind). The **direct** multiply (`pow(PrimaryCloudShadowFactor, cloudShadowFactorStrength)` onto post-denoise primary direct radiance) was removed 2026-06-19 when the cloud shadow was re-architected onto the SUN's radiance pre-denoise inside `sampleAtmosphereSunLight` — it now darkens only the sun (correct indoors for all surface types, no per-pixel gate). The `PrimaryCloudShadowFactor` texture binding is also removed; only a removal comment remains in the shader.*
+
+---
+
+## src/dxvk/shaders/rtx/pass/composite/composite_args.h
+
+**Category:** index-only
+
+- **Inline tweak** — cloud-shadow CB fields, now both reserved pads. *Two former cloud-shadow CB slots are now reserved `float pad1` / `float pad2` (CB layout ABI-unchanged). `pad1` held `cloudShadowFactorStrength` until 2026-06-19, when the cloud shadow moved onto the sun term in the NEE and the composite application was deleted (the knob now lives in `atmosphere_args.h::cloudShadowFactorStrength`, reusing the former `pad_artistic0` slot there). `pad2` held `cloudShadowIndirectStrength` until 2026-06-18 (issue #37 indirect multiply removal). Rename-to-pad rather than delete keeps the slots ABI-stable.*
 
 ---
 
@@ -1234,6 +1278,9 @@ the fork-owned ImGui surface.
 
 - **Inline tweak** at `fork_hooks::showAtmosphereUI` (weather UI call site) — ~1 LOC.
   *Calls `fork_hooks::showWeatherUI()` between the Moons and Clouds collapsing-header tree blocks so the Weather Presets panel appears in the correct visual position in the Atmosphere dev menu.*
+
+- **Block** (anonymous namespace) + call from `fork_hooks::updateAtmosphereConstants` (directional sun/moon lights — experiment, branch `experiment/atmosphere-directional-sun`, 2026-06-21) — ~180 LOC.
+  *When `rtx.atmosphere.useDirectionalLights` is on and skyMode==Numos, injects the sun + each enabled moon as externally-tracked `RtDistantLight`s (via `LightManager::createExternallyTrackedLight` / `updateExternallyTrackedLight`) so they go through the standard NEE/RTXDI path and SSS/decals/viewmodels are handled by the unified pipeline. Radiance is the CPU port of `sampleAtmosphereSunLight`/`sampleAtmosphereMoonLight` ÷ π (distant-light irradiance convention); transmittance is the CPU port of the closed-form `getAtmosphericTransmittanceForDir` so sunset reddening is preserved. The bespoke `evalAtmosphereSunNEE`/`MoonNEE` are gated off via `debugSkyBisectFlags` bit 2. KNOWN v1 limitation: no cloud-on-terrain shadow.*
 
 ---
 
@@ -1496,5 +1543,780 @@ Fork resolution: restore the numerical hemisphere integration in the LUT bake AN
 
 - **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
   *Adds a `RemixGui::DragFloat("Multiscatter Physical Strength", …, 0.0f, 1.0f, "%.2f", sliderFlags)` widget at the end of the Atmosphere → Advanced ImGui tree (right after Ozone Layer Width), with a tooltip explaining the artistic-vs-physical tradeoff. ~6 LOC.*
+
+---
+
+## Workstream — Cloud realism: edge detail erosion, bottom darkening, vertical stretch (fork — 2026-06-10)
+
+Three perceptual cloud upgrades, all live-tunable, all reverting to the prior look at their zero/identity values. (1) **Edge detail erosion** — a second tap of the prebaked Worley-carved noise volume at `cloudDetailScale`× the base frequency perturbs the density field *before* the coverage gate, displacing the silhouette iso-surface with 60–500 m cauliflower teeth while saturated cores stay solid. (2) **Bottom darkening** — a vertical light gradient on the Nubis Cubed multi-scatter and ambient terms; the paper's `M` term barely attenuates (`sigma_ms` ≈ 0.05–0.25) and `pow(1 - dim_profile, 0.5)` is top/bottom symmetric, so undersides previously read uniformly lit. The direct beam is exempt so silver linings survive. (3) **Vertical stretch** — lowers the Y noise-sample frequency relative to horizontal so cloud bodies become convective columns rather than round blobs (towering cumulus). New args ride in repurposed pad slots; constant-buffer layout unchanged.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions.
+  *In `sampleCloudDensityTextured`: step 4b applies the detail-erosion tap pre-threshold (`density += strength * 0.6 * (detailNoise - 0.6)`, erosion-biased), and the texcoord mapping divides Y frequency by `cloudVerticalStretch`. `sampleCloudDensityForShadow` applies the identical Y-stretch (the baked D_sun / D_ambient grids must describe the same shapes the view-march renders) but skips the detail tap (cheap path; un-eroded grids over-shadow edges conservatively). In `evalNubisCubedSample`: `bottomGradient = mix(1 - cloudBottomDarkening, 1, smoothstep(0, cloudBottomDarkeningHeight, heightFraction))` multiplies the multi-scatter `M` and `L_ambient` terms only.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned additions.
+  *Repurposes `pad_cloudVoxel0..2` as `cloudBottomDarkening` / `cloudBottomDarkeningHeight` / `cloudDetailStrength`, `pad_nubisCubed0` as `cloudDetailScale`, and `pad_cloudLayer2_0` as `cloudVerticalStretch`. No layout change (same pattern as `cloudNoiseWarpStrength`).*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *Adds 5 RTX_OPTIONs to the `rtx.atmosphere` cluster: `cloudDetailStrength` (0.6), `cloudDetailScale` (4.3), `cloudBottomDarkening` (0.55), `cloudBottomDarkeningHeight` (0.65), `cloudVerticalStretch` (1.6).*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned additions.
+  *Inside `getAtmosphereArgs()`: populates the five new args from RtxOptions, replacing the former pad zero-writes. ~5 LOC net.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
+  *Adds "Edge Detail" + "Vertical Stretch" `DragFloat`s to the Clouds → Coverage & Shape ImGui section and "Bottom Darkening" to Clouds → Lighting. The fine-tune knobs (`cloudDetailScale`, `cloudBottomDarkeningHeight`) stay user.conf-only per the 2026-05-19 menu-simplification discipline.*
+
+---
+
+## Workstream — Cloud march/bake perf pass + vertical-coherence rework (fork — 2026-06-10)
+
+Performance pass on the per-frame cloud noise evaluation, each piece validated in-game via a step-by-step bisect ladder after an earlier all-at-once landing broke the cloudscape (root causes: an uncompensated warp-amplitude loss and config drift contaminating the first bisect — see the cloud-realism memory notes). Also replaces the rev-1 `cloudVerticalStretch` Y-domain stretch (stacked-puffs artifact) with a fixed-slice coherence blend, shipped EXPERIMENTAL/default-inert because its look (vertical smearing at high values) isn't approved either.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions.
+  *(1) Anti-tile warp refactored into offset form (`computeCloudNoiseWarpOffsetKm`) and HOISTED to once per ray in the two voxel-grid bake integrals (was 4 perlin evals per tap × 8 taps × 2.1M voxels × 2 grids per frame; the warp's ~25 km shortest wavelength makes per-tap recompute pure waste). `sampleCloudDensityForShadow` gains a `warpOffsetKm` caller-provided parameter. (2) Warp octaves switched from constant-z `perlinNoise3D` planes to new `perlinNoise2D` (4 corners, branch-free gradient pick, ~2.5× cheaper) with `kWarp2DGain = 1.4` compensating the unit-vs-sqrt(2) gradient amplitude — the uncompensated version visibly weakened the warp's load-bearing field shred. (3) The per-sample 720 cycles/km analytic perlin detail is removed (1.4 m wavelength vs ≥100 m steps = unresolvable grain), preserving its hidden −0.05 mean bias as a constant. (4) `cloudVerticalStretch` rev 2: fixed-Y-slice coherence blend with variance re-expansion anchored on the bake's ~0.4 mean, in BOTH density samplers so the self-shadow grids match.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang`** — fork-owned additions.
+  *Coverage/type Worley control fields hoisted out of the march loop: evaluated at slab entry + exit (4 evals/ray), lerped per step (was 2 × 9-hash evals per step × 32 steps).*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *`cloudVerticalStretch` default 1.6 → 1.0 (bit-exact identity) and description rewritten to mark the feature EXPERIMENTAL pending a sky-system-level solution to towering cumulus.*
+
+---
+
+## Workstream — Secondary-ray cloud LUT (fork — 2026-06-10, perf)
+
+Every indirect / PSR / reflection ray reaching sky-miss previously ran the full analytical `evalClouds` march in `evalSkyRadiance` — a hidden per-ray cost estimated to rival the visible cloud pass. Those rays now sample a 256×128 RGBA16F dome LUT (azimuth × elevation, horizon-concentrated `elevation = (π/2)·v²`) baked once per frame with the same Nubis Cubed march the visible cloud RT uses. Deliberate look change: secondary rays now see the same clouds the primaries see instead of the legacy Wrenninge analytical approximation; `rtx.atmosphere.cloudSecondaryLutEnable = False` restores the legacy per-ray march. Cloud parallax across scene-scale ray-origin offsets is negligible versus km-scale cloud distances — the same camera-anchored approximation the per-frame voxel grids already make.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — NEW fork-owned file.
+  *Shared cloud-march library extracted from `cloud_render.comp.slang`: `CloudShadeContext` + `buildCloudShadeContext` (the pixel-independent sun/sky/moon precompute that previously lived in main()), `sampleCloudSunOpticalDepth_local`, `marchCloudSlab` (with generic `tMinClamp` / `tMaxClamp` segment params; 0/0 reproduces the pre-extraction march bit-for-bit), and the `marchCloudLayers` layer-1+2 wrapper. Included after `atmosphere_common.slangh` under the established binding-then-include layout.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_secondary_lut.comp.slang`** — NEW fork-owned file.
+  *Per-frame dome LUT bake. Bindings 0–11 in lockstep with `cloud_render.comp.slang` (slot 6 is its own RW output). Marches the full slab per dome texel at `cloudViewSamples` steps via the shared `marchCloudLayers`; clear-sky early-out mirrors `cloud_render`; frame-constant per-texel jitter keeps the LUT temporally stable.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang`** — fork-owned changes.
+  *March implementation moved to `cloud_march_common.slangh`; main() now builds the shade context via `buildCloudShadeContext` and calls `marchCloudLayers` with 0/0 clamps — behavior-neutral extraction, bit-identical output.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned addition.
+  *`cloudDomeUvToDir` / `cloudDomeDirToUv` dome-direction mapping shared by the LUT writer and the `evalSkyRadiance` sampler (lives here because the sample side does not include the march library).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned addition.
+  *New middle branch in `evalSkyRadiance`'s cloud-layer selection: non-primary rays with `cloudSecondaryLutEnable` sample `AtmosphereCloudSecondaryLut` via `cloudDomeDirToUv` + the sky-view sampler (REPEAT-U wraps the azimuth seam) and reconcile alpha exactly like the existing cloud-RT branch (opacity = 1 − transmittance). Below-horizon directions clamp to the horizon row.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned addition.
+  *Repurposes `pad_c5_0` as `uint cloudSecondaryLutEnable`. No layout change (same pattern as `cloudNoiseWarpStrength`).*
+
+- **`src/dxvk/shaders/rtx/pass/common_binding_indices.h`** — upstream-touched, inline tweak (~12 LOC).
+  *Adds `BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT 215` next to the other fork atmosphere bindings and appends `TEXTURE2D(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT)` to `COMMON_RAYTRACING_BINDINGS`.*
+
+- **`src/dxvk/shaders/rtx/pass/common_bindings.slangh`** — upstream-touched, inline tweak (~10 LOC).
+  *Declares `Texture2D<float4> AtmosphereCloudSecondaryLut` at the new binding, alongside the other fork atmosphere declarations.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds `RTX_OPTION("rtx.atmosphere", bool, cloudSecondaryLutEnable, true, …)` directly before the C5 `cloudRenderRTEnable`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned additions.
+  *`CloudSecondaryLutShader` class, `m_cloudSecondaryLut` resource (256×128 RGBA16F) + `getCloudSecondaryLut()` accessor + `kCloudSecondaryLut*` constants, `dispatchCloudSecondaryLut` (per-frame, after the voxel-grid bakes behind the existing write→read barrier, gated on the option), `getAtmosphereArgs` populates the gate from RtxOptions, and `bindResources` binds the new slot.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
+  *`fork_hooks::bindAtmosphereLuts` binds the LUT at `BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT`; adds the "Fast Cloud Reflections" checkbox to the Clouds ImGui tree.*
+
+---
+
+## Workstream — Half-res cloud render RT (fork — 2026-06-11, perf)
+
+The visible cloud march ran once per DLSS-input pixel at up to 32 steps. Clouds are soft, low-frequency content, so the cloud RT is now allocated at `cloudRenderResolutionScale` (default 0.5) of the downscale extent and bilinearly upsampled at the sky-miss composite — ~4× fewer marched pixels at the default. The temporal-smoothing path runs after the upsample at full downscale resolution, so its stabilization is unchanged. Scale 1.0 lands the sample uv on texel centers of a same-size RT and matches the legacy `Load` to float precision (live A/B via the "Cloud Render Scale" slider).
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *The primary-ray cloud-RT branch in `evalSkyRadiance` normalizes pixelCoord by `args.cloudRenderFullDimX/Y` and bilinearly samples the RT via the sky-view sampler (uv clamped a half-texel inside so screen content never wraps through REPEAT-U); falls back to the legacy `Load` while the published extent is still zero (first frames).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned addition.
+  *Repurposes `pad_c5_1/2` as `cloudRenderFullDimX/Y` (the downscale extent the RT is composited into). No layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds `RTX_OPTION("rtx.atmosphere", float, cloudRenderResolutionScale, 0.5f, …)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned additions.
+  *`ensureCloudRenderRT` records the full downscale extent in new `m_cloudRenderFullExtent` and allocates the RT at the clamped scale (a live scale change reallocates via the existing extent-mismatch path); `getAtmosphereArgs` publishes the full extent. Dispatch group math already keys off the (now scaled) `m_cloudRenderExtent`.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *Adds the "Cloud Render Scale" DragFloat to the Clouds ImGui tree.*
+
+---
+
+## Workstream — Cloud noise hex de-tiling, stage A (fork — 2026-06-11)
+
+Root-cause fix for the prebaked noise volume's periodic repeat (the artifact the anti-tile warp was added to hide). The horizontal plane is partitioned into an equilateral-triangle lattice (golden-ratio multiple of the tile period, so lattice and texture can't resonate); each vertex carries a hash-derived random texture-space XZ offset, and samples blend their triangle's three offset taps with Heitz & Neyret 2018's variance-preserving operator (mean/variance of the field preserved → look unchanged; periodicity destroyed). Weights are pow-4 sharpened so triangle interiors (~70% of area) take a 1-tap fast path; only edge bands pay 3 trilinear taps. Ships alongside the UNCHANGED anti-tile warp — stage B walks the warp down with bake-frequency compensation after in-game validation (the warp's frequency-multiplying Jacobian is load-bearing for the look; see the cloud-realism memory notes).
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions.
+  *New `CloudHexTile` / `computeCloudHexTile` (skewed triangle grid + per-vertex hash offsets + pow-4 weight sharpening + dominant-vertex sort), `kCloudNoiseFieldMean` (0.4 — shared anchor with the vertical-coherence re-expansion), and `sampleCloudNoiseHexBlend` (3-tap variance-preserving blend). `sampleCloudDensityTextured`'s base tap branches: hex fast path = tricubic at the dominant offset, blend zones = 3-tap trilinear blend, off = legacy tricubic. `sampleCloudDensityForShadow` mirrors the same lattice/offsets/blend trilinearly so the baked D_sun / D_ambient grids shadow the same de-tiled field. The vertical-coherence footprint slice follows the dominant vertex's offset in both samplers. The detail-erosion tap stays single-tap (its sub-3 km repeat is not the visible artifact; revisit at stage B).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned addition.
+  *Repurposes `padCloudLook0` as `float cloudHexTilingEnable`. No layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds `RTX_OPTION("rtx.atmosphere", bool, cloudHexTilingEnable, true, …)` before `cloudNoiseWarpStrength`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned addition.
+  *`getAtmosphereArgs` populates the gate from RtxOptions (replacing the former pad zero-write).*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *Adds the "Seamless Cloud Field" checkbox to the Clouds ImGui tree, next to the Anti-Tile Warp slider it will eventually retire.*
+
+---
+
+## Workstream — Cloud noise hex de-tiling, stage B enabler (fork — 2026-06-11)
+
+Exposes the bake's base/detail FBM frequency as a live-rebake multiplier so the anti-tile-warp walk-down can be tuned interactively: the warp's Jacobian multiplies the field's horizontal frequency 2-3x and the tuned look depends on that shred, so as `cloudNoiseWarpStrength` comes down, `cloudNoiseBaseFreqScale` goes up to fold equivalent frequency content into the bake itself. Default 1.0 = bit-identical bake; the actual walk-down is an in-game tuning session, not a code change.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/rtx_cloud_noise_baker.comp.slang`** — fork-owned change.
+  *`baseFreq` / `detailFreq` become `0.5 / 2.0 × clamp(args.cloudNoiseBaseFreqScale, 0.25, 4)` (4x ratio preserved); the periodic-lattice snapping already handles non-default products.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned addition.
+  *Repurposes `padCloudLook1` as `float cloudNoiseBaseFreqScale`. No layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds `RTX_OPTION("rtx.atmosphere", float, cloudNoiseBaseFreqScale, 1.0f, …)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned additions.
+  *`getAtmosphereArgs` populates the new field; `needsCloudNoiseRebake` / `cacheCloudNoiseBakeInputs` gain the new input (`m_cachedBaseFreqScale`) so dragging the slider re-bakes the volume live.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *Adds the "Noise Frequency" DragFloat next to the Anti-Tile Warp slider with the walk-down pairing explained in its tooltip.*
+
+---
+
+## Workstream — Cloud noise hex de-tiling, stage B landing (fork — 2026-06-11)
+
+The in-game warp walk-down validated cleanly at warp **0** with the bake frequency left at its default 1.0 — with hex-tiling killing the repeat at the source, no frequency compensation turned out to be needed. The warp default is retired accordingly; the knob survives as a pure organic-distortion effect. Warp 0 also takes the early-out in `applyCloudNoiseAntiTileWarp`, refunding 4 perlin2D evaluations per march sample.
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *`cloudNoiseWarpStrength` default 0.75 → 0.0; doc strings for it and `cloudNoiseBaseFreqScale` updated to describe the post-retirement roles (warp = optional look knob, hex-tiling owns de-tiling).*
+
+---
+
+## Workstream — Anti-tile warp removal (fork — 2026-06-11)
+
+Follow-up to the stage B landing: with the warp retired at 0 and hex de-tiling user-validated as the root-cause fix, the entire warp implementation is dead code and is removed. All deleted code was fork-owned; no upstream lines return.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned removal.
+  *Deletes `perlinGradient2D` / `perlinNoise2D` (warp-only helpers), `computeCloudNoiseWarpOffsetKm` / `applyCloudNoiseAntiTileWarp`, the warp call in `sampleCloudDensityTextured`, the `warpOffsetKm` parameter from both `sampleCloudDensityForShadow` overloads, and the per-ray warp hoists in the D_sun / D_ambient bake integrals.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`cloudNoiseWarpStrength` reverts to padding (`padCloudC2`, its original slot) — CB layout unchanged.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned removal.
+  *Drops the `cloudNoiseWarpStrength` RTX_OPTION; `cloudHexTilingEnable` / `cloudNoiseBaseFreqScale` doc strings scrubbed of warp pairing references.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs` zeroes `padCloudC2` instead of populating the warp strength.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned removal.
+  *Drops the "Anti-Tile Warp" slider from the Clouds ImGui tree; "Seamless Cloud Field" / "Noise Frequency" tooltips scrubbed of warp references.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/rtx_cloud_noise_baker.comp.slang`** — comment-only cleanup (walk-down rationale removed).
+
+---
+
+## Workstream — Sky perf: split sky-LUT cache keys (fork — 2026-06-11)
+
+First change of the non-cloud sky optimization workstream. The three sky LUT bakes (transmittance / multiscatter / sky-view) shared one memcmp gate over the whole normalized `AtmosphereArgs`, with two per-frame failure modes: the game-driven sidereal `starRotation` (pushed every frame at night, feeds no LUT bake) re-baked the full cascade every frame, and a moving time-of-day sun re-baked the heavy transmittance + multiscatter pair (multiscatter alone: 32×32 texels × 64 dirs × 20 steps of transmittance taps) even though neither reads sun direction. Each bake now compares a key normalized down to the fields it actually reads. Gated by `skyLutCacheKeySplitEnable` (default on; legacy single-gate path preserved verbatim for A/B).
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *Adds `RTX_OPTION("rtx.atmosphere", bool, skyLutCacheKeySplitEnable, true, …)` next to the other atmosphere perf gates.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned additions.
+  *New `normalizeForSkyViewLutKey` (base normalize + star / Milky Way fields zeroed) and `normalizeForTransmittanceMsKey` (additionally zeroes sun direction / illuminance / disk size, Mie g, MS blend weight, and all moon fields), cached as `m_cachedSkyViewKey` / `m_cachedTransmittanceMsKey`. `computeLuts` gates the transmittance+MS pair and the sky-view bake independently (tms-dirty implies sky-view-dirty; barrier ordering unchanged); both branches keep the other path's caches coherent so the option can be toggled live without a spurious re-bake.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *Adds the "Minimal Sky LUT Re-bakes" checkbox to the Atmosphere → Advanced ImGui tree.*
+
+Note: `rtx.atmosphere.cloudNoiseWarpStrength` lines in existing user confs become unknown-option no-ops after this change.
+
+---
+
+## Workstream — Sky perf: per-dispatch bisect toggles (fork — 2026-06-11, diagnostic)
+
+Measurement aid for the sky perf workstream. The atmosphere pass runs several per-frame dispatches that no production option can skip — `dispatchCloudRender` in particular runs whenever its RT is valid, independent of `cloudRenderRTEnable` — so frame-time A/B via the production toggles mis-attributes their cost. Three default-ON `debugDispatch*` toggles let a live ImGui session skip each dispatch individually and read the frame-time delta. Skipping leaves consumers reading stale data (frozen clouds / shadows): diagnostic only, defaults unchanged rendering.
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *`debugDispatchCloudVoxelGrids` / `debugDispatchCloudRender` / `debugDispatchCloudSkyTransmittance`, all default true.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`computeLuts` wraps the D_sun + D_ambient bakes, the cloud render dispatch, and the cloud-sky-transmittance bake in their respective toggles (barriers move inside the gates; ordering unchanged when enabled).*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *New "Perf Bisect (Diagnostic)" ImGui tree with the three checkboxes + pointers to the existing production toggles useful in the same session.*
+
+---
+
+## Workstream — Sky perf: NEE shadow-ray budget clamps (fork — 2026-06-11)
+
+Third change of the sky perf workstream — the first to target where the milliseconds actually are. Bisect results showed all atmosphere compute dispatches together ≈ the known 2 ms cloud budget; the remaining ~2.7 ms (day) / ~3.7 ms (night) of the skyMode A/B delta lives in the integrators: with physical atmosphere on, sun NEE traces an anisotropy-driven 1–12 soft-shadow visibility rays per primary pixel (`getSunSoftShadowParams`; ~4 at typical Mie g) plus half that per indirect bounce vertex, and moon NEE adds a constant 4 (+2 indirect) at night. The denoised pipeline temporally converges one blue-noise-jittered ray per frame, so the loops are oversampled. Two clamp knobs cap the counts at the single source (`sampleAtmosphereSunLight` / `sampleAtmosphereMoonLight`), so primary and the half-rate secondary paths both inherit. Defaults 0 = legacy uncapped (bit-identical); set 1 for the perf win after visual validation.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Repurposes `padMoonNee0` / `padMoonNee1` as `uint sunShadowMaxSamples` / `uint moonShadowMaxSamples`. No layout change.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions.
+  *Clamp applied after `getSunSoftShadowParams` in `sampleAtmosphereSunLight` and after the constant-4 assignment in `sampleAtmosphereMoonLight`; 0 = uncapped.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *`RTX_OPTION("rtx.atmosphere", int, sunShadowMaxSamples, 0, …)` / `moonShadowMaxSamples`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs` populates the two fields (replacing the pad zero-writes).*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *"Sun Shadow Ray Cap" / "Moon Shadow Ray Cap" DragInts in the Atmosphere → Advanced ImGui tree.*
+
+---
+
+## Workstream — Sky perf: shader-path bisect toggles (fork — 2026-06-11, diagnostic)
+
+Extends the per-dispatch bisect kit into the integrators: with the dispatch costs known (~1.8 ms ≈ cloud budget) and the NEE rays capped, the residual skyMode delta splits across two shader paths that host-side toggles can't reach. Two default-true diagnostic options pack into one CB gate word (`debugSkyBisectFlags`, former `padMoonNee2` slot — layout unchanged): bit 0 skips atmosphere sun+moon NEE at both integrator call sites (sun/moon lighting goes black), bit 1 makes `evalSkyRadiance` return flat grey immediately (isolates the full per-ray miss-path cost; the skipped temporal-history write self-heals on re-enable via the frame-id age check). Defaults = bits clear = production paths, bit-identical.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Repurposes `padMoonNee2` as `uint debugSkyBisectFlags`. No layout change.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned addition.
+  *Flat-grey early return at the top of `evalSkyRadiance` behind bit 1.*
+
+- **`src/dxvk/shaders/rtx/algorithm/integrator_direct.slangh` / `integrator_indirect.slangh`** — fork-owned change (upstream files, one-line condition edits).
+  *The `cb.skyMode == 1` atmosphere-NEE gates additionally require bit 0 clear.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *`debugEnableAtmosphereNee` / `debugEnableSkyMissShading`, both default true.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs` packs the two options into the flag word.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *"Atmosphere Sun/Moon NEE" / "Full Sky Miss Shading" checkboxes in the Perf Bisect (Diagnostic) ImGui tree.*
+
+Follow-up (same day): `debugDispatchSkyLuts` (rtx_options.h, default true) freezes the whole LUT bake cascade — the last untoggleable GPU piece of the atmosphere; with a moving time-of-day sun the sky-view LUT re-bakes every frame by design, and this measures that. `computeLuts` short-circuits the gate block when off (rtx_atmosphere.cpp); "Sky LUT Bakes" checkbox added to the Perf Bisect tree (rtx_fork_atmosphere.cpp).
+
+---
+
+## Workstream — Sky perf: sky-view re-bake granularity (fork — 2026-06-11)
+
+Production fix for the per-frame sky-view re-bake the frozen-cascade bisect identified (objective frame-time improvement, no visual hit). With a continuously-animating time-of-day sun, the sky-view cache key sees a new `sunDirection` every frame. `skyViewRebakeGranularityDeg` (default 0 = legacy every-frame behavior; recommended 0.1) quantizes the sun and moon directions INSIDE the sky-view cache key, so continuous motion flips the memcmp only when a direction crosses a granularity step — the bake itself always uses exact current values, so each re-bake is exact and staleness between re-bakes is bounded by the step angle. All non-direction fields stay exact (sliders / presets re-bake immediately). Applies to the split-key path (`skyLutCacheKeySplitEnable`, on by default).
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *`RTX_OPTION("rtx.atmosphere", float, skyViewRebakeGranularityDeg, 0.0f, …)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned addition.
+  *`quantizeDirComponent` helper; `normalizeForSkyViewLutKey` quantizes `sunDirection` + all moon directions by the option's step (no-op at 0). The transmittance/MS key is unaffected (it zeroes those fields outright).*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *"Sky Re-bake Granularity" DragFloat in the Atmosphere → Advanced ImGui tree.*
+
+---
+
+## Workstream — Sky perf: pin validated defaults + retire workstream UI (fork — 2026-06-11)
+
+Closing commit of the sky perf workstream. In-game validation confirmed the two production levers (sun/moon NEE shadow-ray caps at 1, sky-view re-bake granularity at 0.1°) deliver the measured wins with no visual hit, so their defaults are pinned and the workstream's ImGui surface is retired per the user's call ("this is in a good enough spot now"). All options remain conf-tunable; only the UI is removed.
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Defaults: `sunShadowMaxSamples` 0 → 1, `moonShadowMaxSamples` 0 → 1, `skyViewRebakeGranularityDeg` 0.0 → 0.1. Doc strings note the validation; 0 still selects legacy behavior via conf.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned removal.
+  *Drops from the UI: the "Minimal Sky LUT Re-bakes" checkbox, the "Sun/Moon Shadow Ray Cap" DragInts, the "Sky Re-bake Granularity" DragFloat (Atmosphere → Advanced), and the entire "Perf Bisect (Diagnostic)" tree. The underlying options (`skyLutCacheKeySplitEnable`, the caps, the granularity, and the six `debug*` bisect toggles) stay declared and conf-tunable for future regression hunting.*
+
+---
+
+## Workstream — Cloud perf: voxel-grid re-bake granularity (fork — 2026-06-11)
+
+Post-workstream follow-up at the user's request: the perf-bisect freeze of the per-frame D_sun / D_ambient bakes showed a large win with no short-term visual change — the staleness only accumulates as wind / camera / sun move. Same pattern as the sky-view fix: a cache key (`normalizeForVoxelGridKey`) quantizes the grid bake's motion inputs — wind scroll + camera position by `cloudVoxelGridRebakeGranularityKm`, sun/moon directions by the existing `skyViewRebakeGranularityDeg` — so the grids re-bake once per step of actual motion instead of every frame, staleness bounded by the step. Cloud parameter changes stay exact in the key (same-frame re-bake) and a cloud-noise re-bake force-clears the cached key. In-game validated at 0.1 km (default): ~0.7 ms saved, no visible stepping in cloud lighting or terrain shadows; 0 = legacy every-frame via conf. Note this lever lives on the cloud side — full-rate bakes were the deliberate 2026-05-19 decision against the stuttery fixed-cadence 8-frame round-robin; motion-quantized bounded-error steps passed where fixed cadence failed. Conf-only like the other workstream knobs (no UI).
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *`RTX_OPTION("rtx.atmosphere", float, cloudVoxelGridRebakeGranularityKm, 0.1f, …)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned additions.
+  *`normalizeForVoxelGridKey` (sky-view key base + wind/camera re-injected quantized), `m_cachedVoxelGridKey`, the dirty gate around the two grid dispatches in `computeLuts`, and the force-clear on cloud-noise re-bake.*
+
+---
+
+## Workstream — Per-column cloud model (column-shaping rework) (fork — 2026-06-12)
+
+Root-cause rework of the "stacked separated layers" read that made the volumetric cloud system look like flat 2D planes. Previously EVERY vertical shaping signal — the height-LUT density envelope (which at cumulus types even baked TWO density peaks separated by a thinner neck), the coverage-threshold scale band, the anvil pow gate, the Nubis dim profile and the bottom-darkening gradient — keyed on the GLOBAL slab height fraction, so every cloud in the sky shared one vertical recipe pinned to absolute altitude (flat global base/top planes, horizontal lighting bands), while the thresholded isotropic 3D noise placed mass independently per altitude (vertically disconnected stacked puffs within a column). The rework introduces a baked 512×512 RGBA8 **cloud placement map** (R = Worley-cell cluster field, G = per-cloud top-height jitter, B = base lift; tiled at `cloudNoiseTileKm`, de-tiled by the SAME hex lattice as the 3D noise so cluster and texture travel together) and derives per-column cloud presence + local base/top from it; the sample height is re-normalized to each column's own [base, top] and ALL vertical shaping plus the Nubis lighting proxies key on that per-cloud height. The 3D noise keeps its texture/erosion role but no longer decides placement. Gated by `cloudColumnShapingEnable` (default on; legacy global-slab path preserved bit-exact for A/B).
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_placement_map_baker.comp.slang`** — NEW fork-owned file.
+  *Periodic 2D Worley + value-noise FBM construction of the cluster / top-jitter / base-lift fields; integer cells-per-tile snapping from `cloudCellSizeKm` so the map tiles seamlessly.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions + changes.
+  *New `kCloudPlacementFieldMean`, `sampleCloudPlacement` (hex-de-tiled tap; R variance-preserving blend, G/B weighted average), `CloudColumn` / `computeCloudColumn` (coverage remap of the cluster field over a `cloudColumnFeather` band; base lift; presence^`cloudColumnTopShape` × jitter top). Both density samplers hoist the hex tile, sample placement, early-out outside the column (before any 3D taps — a perf win at partial coverage), re-normalize the height fraction to the column span, and gate on per-column presence instead of weather coverage; the primary overload returns the per-cloud `shapeHeightFraction` via a new out param. Both samplers + both voxel-bake optical-depth helpers gain a `Texture2D<float4> placementMap` parameter.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned change.
+  *`marchCloudSlab` consumes the out-param overload and passes the per-cloud `shapeHf` to `evalNubisCubedSample`, so the dim profile / SDF proxy / bottom darkening track each cloud's own base/top instead of painting global altitude bands. The moon-shadow tap plumbs the placement map.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_height_lut_baker.comp.slang`** — fork-owned change.
+  *Gains the args CB (binding 0; output moves to 1) and a second curve family for column mode: single-lobe envelope (smoothstep rise, fall reaching exactly 0 at hf=1 for cumulus) replacing the legacy trapezoid + secondary anvil bump — the two-peak profile was itself a baked-in stacked-strata structure. Legacy family preserved verbatim for the gate-off path; G channel (threshold widening near each cloud's own top) unchanged and now carries the anvil look alone in column mode.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *`evalClouds` + `sampleCloudSunOpticalDepth` pass `AtmosphereCloudPlacementMap` (from common bindings) into the density sampler — the analytical fallback gets the column model automatically.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang` / `cloud_secondary_lut.comp.slang`** — fork-owned additions.
+  *Declare `AtmosphereCloudPlacementMap` at local binding 12 (sampled with the slot-2 cloud-noise sampler).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_sun_density_grid.comp.slang` / `cloud_ambient_density_grid.comp.slang`** — fork-owned additions.
+  *Declare the placement map at local binding 4 and pass it through the optical-depth helpers so the baked D_sun / D_ambient grids shadow the same column shapes the view march renders.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Repurposes `padCloudLook2` → `cloudColumnShapingEnable`, `padCloudC2` → `cloudCellSizeKm`, `pad_cr0..2` → `cloudColumnTopVariation` / `cloudColumnTopShape` / `cloudColumnBaseVariation`, `pad_c6_0` → `cloudColumnFeather`. No CB layout change.*
+
+- **`src/dxvk/shaders/rtx/pass/common_binding_indices.h`** — fork-owned addition (index-only).
+  *Adds `BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP = 216` + a `TEXTURE2D` entry in `COMMON_RAYTRACING_BINDINGS`.*
+
+- **`src/dxvk/shaders/rtx/pass/common_bindings.slangh`** — fork-owned addition (index-only).
+  *Declares `AtmosphereCloudPlacementMap` at the new slot for the raytrace TUs (analytical evalClouds fallback).*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *`cloudColumnShapingEnable` (true), `cloudCellSizeKm` (2.0), `cloudColumnTopVariation` (0.45), `cloudColumnTopShape` (0.6), `cloudColumnBaseVariation` (0.12), `cloudColumnFeather` (0.35).*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned additions + changes.
+  *`m_cloudPlacementMap` (512² RGBA8) + `kCloudPlacementMapSize`, `dispatchCloudPlacementMapBake` (init + live re-bake via `needsCloudPlacementRebake` on `cloudCellSizeKm` / `cloudNoiseTileKm`), height-LUT re-bake on `cloudColumnShapingEnable` flip (`m_cachedHeightLutColumnMode`; the baker now binds the args CB at 0 / output at 1), voxel-grid key force-clear when either shape input re-bakes, placement binds: slot 12 in `dispatchCloudRender` / `dispatchCloudSecondaryLut`, slot 4 in both voxel-grid bakes, `BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP` in `bindResources`, and `getAtmosphereArgs` fills for the six repurposed fields. Shader-class parameter lists updated accordingly.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
+  *`bindAtmosphereLuts` binds the placement map at the common slot; new "Cloud Columns" ImGui group (Volumetric Cloud Columns checkbox + Cloud Cell Size / Top Variation / Top Shape / Base Undulation / Edge Feather sliders); Vertical Stretch tooltip notes columns supersede it.*
+
+---
+
+## Workstream — Per-column underside contrast (column-shaping rev 2) (fork — 2026-06-12)
+
+First in-game pass on the column model reported a residual "layered" read on the overcast underside. Diagnosis: the deck base's dominant light is the Nubis multi-scatter M term, which is horizontally near-uniform at production settings (sigma_ms is tiny so exp(-sigma_ms·D_sun) ≈ 1; the bottom-darkening gradient is a pure function of height) — so the underside renders as one flat-lit sheet with only fine erosion lace on top: a dark lace plane over a bright plane reads as two stacked 2D layers. Real deck undersides carry km-scale cellular relief because base brightness follows per-column water depth (thick columns occlude downwelling light, thin columns transmit it). The fix scales the bottom-darkening amount by each sample's column span (already derived by the column model), so the underside brightness is driven by the same placement field that shapes the clouds — moving with wind, matching the baked shadows.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned changes.
+  *`sampleCloudDensityTextured`'s primary overload gains an `out float columnSpan` (topFrac − baseFrac; 1.0 legacy); `evalNubisCubedSample` gains a `columnSpan` parameter and scales `cloudBottomDarkening` by `mix(1, span, cloudColumnUndersideContrast)` before building the bottom gradient. Contrast 0 or span 1 reproduce the uniform legacy darkening exactly.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned change.
+  *`marchCloudSlab` threads the span from the density sampler into the lighting call.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Repurposes `pad_c6_1` → `cloudColumnUndersideContrast`. No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *`RTX_OPTION("rtx.atmosphere", float, cloudColumnUndersideContrast, 0.65f, …)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs` fills the new field (replacing the pad zero-write).*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *"Underside Contrast" DragFloat in the Cloud Columns ImGui group.*
+
+(Superseded the same day by rev 3 below — the flat per-column scaling produced flat dark smudges in-game; the option and its mechanism were replaced before any release.)
+
+---
+
+## Workstream — Analytic downwelling light field (column-shaping rev 3) (fork — 2026-06-12)
+
+Second in-game pass: rev 2's span-scaled darkening produced big FLAT dark smudges — user verdict "worse… changed the point at which this becomes visible, never fixing the root cause." Root cause, finally named precisely: the underside LIGHT FIELD has no 3D structure. Under a deck, T_primary ≈ 0; the dominant M term varies ≤~20-40% (sigma_ms 0.05–0.25 over D_sun ≈ 2) and that residual comes from the 8-tap voxel-grid D_sun (km-scale mush); ambient's exp(-D_ambient) saturates to ~0. With per-point illumination near-constant, the only visible pattern is opacity silhouetted against a flat backdrop — every density/shaping change just swaps the wallpaper. Rev 3 computes the downwelling light analytically from the column model: the height LUT gains a B channel holding the cumulative envelope integral from each per-cloud height to the cloud top, so `downTau = ∫envelope × columnSpan × cloudThickness × cloudDensity` is the exact macroscopic water above any sample at full resolution (no voxel grid, no taps); `exp(-cloudUndersideLightSigma × downTau)` (a diffusion-flavored sigma, far below beam extinction) lights the multi-scatter and ambient terms. Underside brightness now varies continuously with the actual water distribution — dark cores, bright thin spots, in-cell gradients. Legacy mode (column shaping off, or sigma 0) keeps the constant bottom-darkening gradient bit-for-bit.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_height_lut_baker.comp.slang`** — fork-owned change.
+  *Output RG8 → RGBA8; B = midpoint-rule ∫_hf^1 envelope(u) du of the active curve family (re-baked on mode flip as before).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned changes.
+  *New `cloudTypeProfileIntegralFromTop` (closed-form trapezoid integral, the no-LUT fallback) + `cloudHeightProfileDownIntegral` (LUT B channel / fallback). `evalNubisCubedSample`: rev 2's spanFactor block replaced by the `verticalLight` selector — column mode = analytic Beer-Lambert on downTau, legacy = the constant gradient; M multiplies `verticalLight`; ambient = `ambient_shape × verticalLight` in column mode (replacing the saturating `exp(-D_ambient)` tap — same quantity, better estimate; multiplying both would double-count).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang` / `cloud_secondary_lut.comp.slang`** — fork-owned change.
+  *`AtmosphereCloudHeightLut` declarations `Texture2D<float2>` → `Texture2D<float4>`.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`cloudColumnUndersideContrast` (rev 2, pad_c6_1) → `cloudUndersideLightSigma`. No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Drops `cloudColumnUndersideContrast`; adds `RTX_OPTION("rtx.atmosphere", float, cloudUndersideLightSigma, 0.12f, …)`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned changes.
+  *Height LUT resource format R8G8 → R8G8B8A8; args fill swaps to the new option.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *"Underside Contrast" slider replaced by "Underside Shading" (sigma). Tooltip notes it supersedes Bottom Darkening while Cloud Columns are on.*
+
+---
+
+## Workstream — Adaptive cloud-march sampling (fork — 2026-06-12)
+
+Companion fix shipped with column-shaping rev 3, prompted by a community diagram suggesting the march be confined to the shell volume — it already is (marchCloudSlab intersects base + top shells), but the adjacent real defect is the FIXED step count across that volume: 32 uniform steps over a span that varies from ~4 km (zenith) to 50+ km (horizon-grazing through the curved shell) puts ~1.6 km steps against ~2 km cloud features at low elevations. The aliasing, averaged by jitter + the temporal EMA, renders as soft horizontal BANDS concentrated toward the horizon — a direct contributor to the "stacked layers" read. The march now holds a target step LENGTH: count = span / cloudViewStepKm, floored at cloudViewSamples (zenith cost unchanged) and capped at cloudViewSamplesMax; the column model's pre-tap early-outs keep added steps cheap where the slab is empty. cloudViewStepKm = 0 restores the legacy fixed count exactly.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned change.
+  *`marchCloudSlab` computes `effSampleCount` from the clamped span and the step target; loop + rayFrac use it. Applies to both consumers (cloud render RT + secondary dome LUT).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Repurposes `pad_cloudSunsetAmbient0` → `cloudViewStepKm` and `padStarCloud0` → `cloudViewSamplesMax`. No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *`cloudViewStepKm` (0.3) + `cloudViewSamplesMax` (128).*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs` fills both (replacing the pad zero-writes).*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned addition.
+  *"March Step Size" DragFloat next to Cloud Render Scale; the cap stays conf-only.*
+
+- **Clarity pass (same day, post-validation):** the in-game fix was user-validated with an accepted perf cost, so the controls now state it plainly: slider renamed "Cloud Sample Spacing" with a PERFORMANCE paragraph in the tooltip (cost scales up to cap/32 ≈ 4x on horizon-heavy views at defaults; how to trade it back), and the cap is exposed as a "Max Cloud Samples" DragInt (the perf governor). Option docstrings updated to match.
+
+---
+
+## Workstream — Night cloud-lighting knob rebase (fork — 2026-06-14)
+
+Night clouds read too bright. The earlier suspicion (the moon-cloud directional term) was wrong: the dominant contributor is the STAR-coupling term, added uniformly and uncolored to every cloud sample (`nightLight += nightSkyColor × starBrightness × starAmbientCouplingStrength × nightFactor`), so it lifts the whole deck — and tints it blue via nightSkyColor — across the entire sky, not just near the moon. At the old default (0.03 × starBrightness 0.5 × nightSkyColor) it produced ~0.006 blue, larger and more pervasive than the moon's ~0.003 silver-lining peak. The knobs were also mis-scaled: the sub-0.01 night-radiance smallness lived inside the user-facing gains, so the only sane values were ~0.001 ("having 0.001 be the only reasonable one is painful"). Fix = rebase to O(1): the smallness moves into internal shader constants so the knobs read as a "multiple of the calibrated night level," and the star default drops to a user-tested 0.25. moonAmbientAirglow is unchanged in effect (it was never the problem). Both the RT march and the legacy analytical evalClouds get the identical edit so the day→night crossfade stays bit-matched.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned change.
+  *`buildCloudShadeContext` nightLight: internal `kStarCloudCoupling = 0.008f` and `kMoonAirglowScale = 0.0015f` factored out of the star-coupling and moon-airglow terms so the user-facing gains become O(1).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *Identical `kStarCloudCoupling` / `kMoonAirglowScale` factoring in the legacy `evalClouds` nightLight block (crossfade parity with the RT path).*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *`starAmbientCouplingStrength` default 0.03 → 0.25; `moonAmbientAirglow` default 0.0015 → 1.0; both docstrings rewritten as "multiple of the calibrated night level."*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *"Star Ambient Coupling" DragFloat range 0–0.1 / %.4f → 0–3 / %.2f so the O(1) default isn't clamped; tooltip updated.*
+
+---
+
+## Workstream — Cloud edge detail via threshold modulation (rev 4) (fork — 2026-06-14)
+
+The additive edge-detail (rev 3) was trapped in a thin blobby rind hugging the silhouette: its containment window (`smoothstep(coverageThreshold - 0.15, coverageThreshold, density)`) keyed on the pre-detail base density and was one-sided, so detail could only displace the iso-surface from INSIDE — it could never grow billows outward. Widening the window traded the rind for a half-res smear halo (the additive positive lobe lifts a broad sub-threshold clear-sky margin into faint density on soft edges, which the half-res render + bilinear upsample smear). Rev 4 changes the mechanism: the detail tap now wobbles the COVERAGE THRESHOLD (the gate position) instead of the density field, zero-mean about kCloudNoiseFieldMean (0.4). This beats both modes at once — (a) the threshold can drop below the base value so billows grow OUTWARD past the silhouette (no rind), and (b) the gate self-localizes the effect so far-outside samples stay hard-0 (no faint margin to smear) and far-inside stay 1 (no interior holes); the modulation only bites in the gate transition band, so no explicit edge window is needed. Unlike the rejected rev-2 erosion remap it never touches the noise field — it only moves the gate, the same slide-3 anvil lever step 4a uses at low frequency. User-validated in-game ("this is perfect"). Supersedes the prior rind-vs-smear tradeoff; rev 3's window and the rejected tunable-reach knob are both gone.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`sampleCloudDensityTextured` step 4b: additive `density +=` + `edgeWindow` replaced by `coverageThreshold -= cloudDetailStrength * 0.5 * (detailNoise - kCloudNoiseFieldMean)`, clamped `≥ 0`. Internal `kEdgeDetailThreshold = 0.5` (wobble→threshold scale). No new options; `cloudDetailStrength = 0` is bit-identical. Shadow sampler still skips detail.*
+
+---
+
+## Workstream — Artistic sunset color controls (fork — 2026-06-14)
+
+Two artistic knobs to recover sunset warmth/saturation lost when commit `3e37062b` moved sunset reddening onto the physical Hillaire two-term LUT model: the broadband multiscatter "fill" reads pale-blue and desaturates the warm single-scatter, so the physically-correct sunset renders undersaturated. Both apply inside `evalAtmosphereRadiance` (the sky-view LUT bake integral), so the baked LUT carries them and clouds inherit the warmer ambient for free (cloud warm ambient samples the sky-view LUT). Both default to 1.0 = physical (no change). `sunsetSaturation` ramps in only near the horizon (off above ~24°, `sin 0.4`) so midday sky is untouched; `multiScatterStrength` is a global scale on the fill term. This is artistic control on top of the physical model — NOT a revert to the pre-`3e37062b` analytical air-mass reddening.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned additions.
+  *In `evalAtmosphereRadiance`'s per-sample loop: `multiScatterContrib *= args.multiScatterStrength` after the analytical/LUT blend. Before `return L`: a luma-preserving saturation boost `lerp(vec3(luma), L, satGain)` where `satGain = lerp(1, args.sunsetSaturation, 1 - smoothstep(0, 0.4, sunDir.y))`. Both no-ops at the 1.0 defaults.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned additions.
+  *Repurposes the trailing `pad_cloudEdge1` slot as `multiScatterStrength` (completes the cloud-edge 16-byte row, layout unchanged), then appends a new 16-byte row `sunsetSaturation` + `pad_artistic0..2`. CB grows by one row; all prior field offsets unchanged.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *Adds `multiScatterStrength` (1.0) and `sunsetSaturation` (1.0) RTX_OPTIONs to the `rtx.atmosphere` cluster, immediately after `multiScatterPhysicalStrength`.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned additions.
+  *`getAtmosphereArgs()`: sets both args from RtxOptions unconditionally (after `multiScatterPhysicalStrength`), so the sky reddens with clouds disabled. `normalizeForTransmittanceMsKey()`: zeroes both (like `multiScatterPhysicalStrength`) — they feed only the sky-view bake, not the transmittance/MS LUTs, so changing them must not re-bake the heavy pair.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
+  *Adds "Multiscatter Strength" (0–2) and "Sunset Saturation" (0–3) `DragFloat`s to the Atmosphere → Advanced ImGui tree, immediately after "Multiscatter Physical Strength", each with an explanatory tooltip. ~10 LOC.*
+
+---
+
+## Workstream — Sun-only cloud-on-terrain shadow re-architecture (fork — 2026-06-19)
+
+Moves the cloud-on-terrain shadow from a post-denoise screen-space texture
+(multiplied onto the combined direct buffer in composite) to a pre-denoise
+fold-in on the SUN's radiance inside the sun NEE. This deletes the whole
+geometry-blindness compensation stack (sealed-interior zenith up-ray gate,
+viewmodel/decal origin correction, camera-side normal flip, dusk/dawn horizon
+gate) and the screen-space plumbing it required. Several of the removed
+screen-space pieces (the `PrimaryCloudShadowFactor` resource + its binding
+indices/tables, debug view 878) were never previously inventoried — a prior
+fridge-list gap, now closed by removal.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`AtmosphereSunSample`: drops the `cloudShadowFactor` member. `sampleAtmosphereSunLight`: folds the cloud shadow onto the sun by `result.radiance *= pow(sampleCloudGroundShadow_OptionB(...), args.cloudShadowFactorStrength)` (gated on `cloudVoxelShadowsEnable`); the early issue-#37 factor computation and the long screen-space wire-in comment are gone. `sampleAtmosphereSunLightVolume`: same `pow(..., cloudShadowFactorStrength)` curve added for parity (was a plain multiply). `sampleCloudGroundShadow_OptionB_impl`: horizon gate removed (the grazing-sun OD blowup now only darkens the already-attenuated sun, never lamps).*
+
+- **`src/dxvk/shaders/rtx/algorithm/integrator_direct.slangh`** — fork-owned change.
+  *`evalAtmosphereSunNEE`: deletes the sealed-interior zenith up-ray gate, the viewmodel/decal camera-origin branches, the triangle-normal flip, and the `PrimaryCloudShadowFactor[pixelCoordinate]` write. The cloud shadow now arrives folded into `sunSample.radiance`.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Repurposes the trailing `pad_artistic0` slot as `cloudShadowFactorStrength` (CB layout ABI-unchanged); the knob moved here from composite_args.h.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs()`: populates `args.cloudShadowFactorStrength = max(RtxOptions::cloudShadowFactorStrength(), 0)` in the cloud-shadow block.*
+
+- **`src/dxvk/shaders/rtx/pass/composite/composite.comp.slang`** — fork-owned change.
+  *Removes the post-denoise `pow(PrimaryCloudShadowFactor, cloudShadowFactorStrength)` multiply on primary direct radiance (and the texelFetch). Only an architecture comment remains.*
+
+- **`src/dxvk/shaders/rtx/pass/composite/composite_args.h`** + **`src/dxvk/rtx_render/rtx_composite.cpp`** — fork-owned change.
+  *`cloudShadowFactorStrength` CB slot renamed to reserved `pad1` (ABI-stable); the composite populate of it is removed.*
+
+- **`src/dxvk/shaders/rtx/pass/composite/composite_bindings.slangh`** + **`composite_binding_indices.h`** + **`rtx_composite.cpp`** — index-only, fork.
+  *Removes the `PrimaryCloudShadowFactor` `Texture2D` declaration, the two `TEXTURE2D(COMPOSITE_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT)` parameter-list entries, and the `bindResourceView`. Binding slot 19 left reserved (number not reused).*
+
+- **`src/dxvk/shaders/rtx/pass/integrate/integrate_direct.slangh`** + **`integrate_direct_bindings.slangh`** + **`integrate_direct_binding_indices.h`** + **`rtx_pathtracer_integrate_direct.cpp`** — index-only, fork.
+  *Removes the per-frame `PrimaryCloudShadowFactor` clear, the `RWTexture2D<float> PrimaryCloudShadowFactor` declaration, the `RW_TEXTURE2D` parameter-list entry, and the `bindResourceView`. Binding slot 73 left reserved.*
+
+- **`src/dxvk/rtx_render/rtx_resources.cpp`** + **`rtx_resources.h`** — index-only, fork.
+  *Removes the `m_primaryCloudShadowFactor` `Resource` member and its `createImageResource` alloc.*
+
+- **`src/dxvk/shaders/rtx/utility/debug_view_indices.h`** + **`debug_view.comp.slang`** + **`debug_view_binding_indices.h`** + **`rtx_debug_view.cpp`** — index-only, fork.
+  *Removes debug view 878 (`DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW`): the enum define (number burned, not reused), the case arm, the `DebugViewPrimaryCloudShadowFactor` declaration, the binding-index define (slot 38 reserved), the `TEXTURE2D` parameter-list entry, the `bindResourceView`, and the selector-list label. Views 875/877 (D_sun grid reads) stay.*
+
+- **`src/dxvk/rtx_render/rtx_instance_manager.cpp`** + **`rtx_materials.h`** + **`src/dxvk/shaders/rtx/concept/surface/surface.h`** — index-only, fork (REVERTED).
+  *Reverts the `Surface::isDecalCategory` flag (CPU set, `flags0` bit 2 pack, shader property) added 2026-06-18; bit 2 is free again. Only "removed/freed" comments remain.*
+
+---
+
+## Workstream — Cloud ImGui simplification (fork — 2026-06-15)
+
+Restructured the flat ~45-control `Clouds` menu (7 non-collapsible `TextDisabled` dividers, everything always expanded) into a workflow-grouped tree of collapsible sub-nodes. No options, CB fields, or shader behavior change — pure ImGui reorganization.
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *`Clouds` node rebuilt as: `Basic` (open by default: Coverage, Cloud Type, Density, Altitude, Depth, Color) · `Shaping ▸ {Variation, Detail & Edges, Columns}` · `Lighting` · `Wind` · `Layer 2` · `Performance` · `Horizon & Haze` (Curvature moved here from "Look"). The `Color` control is a `ColorEdit3` swatch/picker. Mode-inert controls are greyed via `ImGui::BeginDisabled`: the six Columns sliders when `cloudColumnShapingEnable` is off, `Bottom Darkening` when it is on (Underside Shading supersedes it), and the Layer 2 body when `cloudLayer2Enable` is off. The "Vertical Stretch" slider (`cloudVerticalStretch`) is removed from the menu — the option stays conf-only (experimental / superseded by Columns). All tooltips preserved.*
+
+---
+
+## Workstream — Remove legacy cloud paths + realistic sun-gated underside darkening (fork — 2026-06-19)
+
+Two dead cloud code paths were removed and the column model made the only path: (1) the **legacy analytical `evalClouds` view-march** in `atmosphere_sky.slangh` (already compile-gated out behind `ATMOSPHERE_CLOUD_VIEW_MARCH`, used as a runtime A/B fallback that was never the validated default — clouds come from the `cloud_render` compute pass on primary rays and the secondary dome LUT on indirect/PSR/reflection rays), and (2) the **legacy global-slab shaping** (`cloudColumnShapingEnable == false`): the trapezoid+anvil height-profile curve family, the gate-off branches in the density/bake samplers, and the constant bottom-darkening gradient. With the legacy gradient gone, **bottom darkening was reworked** into the column model as a physically-motivated underside light field driven by cloud density *and* sun position: the analytic downwelling `exp(-cloudUndersideLightSigma × downTau)` (density / overlying-water term, unchanged shape) now scales by `cloudBottomDarkening` (overall strength) × `smoothstep(0, 0.35, sunElev)` so the darkening is strongest at high sun and **fades out toward the horizon** — the low sun rakes under the deck and the warm ambient / silver-lining terms light the bases (classic lit-orange sunset undersides). `cloudBottomDarkening` default 0.55 → 1.0 so the high-sun look matches the validated rev-3 column underside bit-for-bit; only low-sun behavior is new. The legacy ambient `exp(-D_ambient)` tap is gone (the analytic `verticalLight` replaces it), so `sampleDAmbient` is no longer called from `evalNubisCubedSample`.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *Deleted `evalClouds` (the whole `#ifdef ATMOSPHERE_CLOUD_VIEW_MARCH` block) and its only consumer `sampleCloudSunOpticalDepth`. The cloud-source `else` branch in `evalSkyRadiance` (both RT + secondary-LUT off) is now an unconditional transparent `vec4(0)` fallback, no `#ifdef`. Stale `evalClouds` comment references updated.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_height_lut_baker.comp.slang`** — fork-owned change.
+  *Deleted the legacy `densityEnvelope` (trapezoid+anvil) R-curve and the `cloudColumnShapingEnable` mode select; `densityEnvelopeColumn` is now used unconditionally for both R and the B integral. `coverageThresholdScale` (G) unchanged.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned changes.
+  *Dropped the `cloudColumnShapingEnable` gate in `sampleCloudDensityTextured` and the bake-mirror sampler (column derivation now unconditional). `evalNubisCubedSample`: `verticalLight` reworked from the column/legacy `if-else` to the single realistic sun-gated form (`mix(1, exp(-sigma·downTau), cloudBottomDarkening × smoothstep(0, kUndersideSunFadeElev, sunElev))`, `kUndersideSunFadeElev = 0.35`); ambient term is now `ambient_shape × verticalLight` unconditionally; `sampleDAmbient` call removed (unused).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`cloudColumnShapingEnable` → `padCloudLook2` and `cloudBottomDarkeningHeight` → `pad_cloudVoxel1` (both reverted to pad placeholders). No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Removed `cloudColumnShapingEnable` and `cloudBottomDarkeningHeight` RTX_OPTIONs. `cloudBottomDarkening` default 0.55 → 1.0, description reworked (sun-gated strength). `cloudUndersideLightSigma` description reworked (no more legacy-gradient / column-mode wording).*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp` / `.h`** — fork-owned changes.
+  *Removed the `m_cachedHeightLutColumnMode` member + the height-LUT flip-rebake in `computeLuts` (the LUT bakes one curve family once at init). Dropped the `cloudColumnShapingEnable` / `cloudBottomDarkeningHeight` args fills. Updated the bake doc comments.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *Removed the "Volumetric Cloud Columns" checkbox and the `BeginDisabled`/`EndDisabled` gating around the Columns sliders and Bottom Darkening (all always enabled now). Reworked the Bottom Darkening + Underside Shading tooltips (strength × shape; sunset fade).*
+
+- **`RtxOptions.md`** — hand-edited to match (removed the two options, updated `cloudBottomDarkening` / `cloudUndersideLightSigma`); regenerate in-app for canonical form.
+
+---
+
+## Workstream — Cloud sky-dome ambient fill (clouds reflect the sky) (fork — 2026-06-19)
+
+First half of the sky↔cloud color-coupling work. Symptom: under a bright blue daytime sky the cloud undersides read dark / gloomy, and clouds never take on the surrounding sky's color, because the cloud ambient samples the sky-view LUT in only TWO directions — toward the sun (warm) and the anti-sun horizon (cool) — and `buildCloudShadeContext` deliberately skips the overhead/zenith sky (the old comment feared zenith would blue-tint sunset cumulus). So the large bright sky dome that lights real cloud bottoms from below/around is never sampled. Fix: add a zenith sky-view sample and a new ambient term, the "sky-dome fill," that the underside picks up WITHOUT the bottom-darkening attenuation (that skylight reaches the base from below/around, not filtered down through the overlying water). It reads the zenith color, so a bright daytime dome lifts gloomy undersides and tints them with the actual sky; at sunset the zenith sample is dim so the term self-fades and the warm top-down ambient carries the look (the validated sunset is preserved bit-for-bit at fill 0, and nearly so at the 0.5 default since zenith→0 there). The companion sky←clouds half (cloud radiance bleeding into the visible sky) is still pending.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned changes.
+  *`CloudShadeContext` gains `skyRadianceZenith`; `buildCloudShadeContext` samples `sampleSkyAmbientForVolume(vec3(0,1,0), …) * dayFactor` (same cloud-occlusion + day gate as warm/cool) and assigns it; the `evalNubisCubedSample` call passes it through.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`evalNubisCubedSample` gains a `skyRadianceZenith` param; ambient split into `topAmbient = ambient_shape × verticalLight × skyRadiance` (legacy, attenuated) + `domeFill = ambient_shape × cloudSkyAmbientFill × skyRadianceZenith` (NOT attenuated by verticalLight); `result.ambient = topAmbient + domeFill`.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`pad_cloudVoxel1` (the freed cloudBottomDarkeningHeight slot) → `cloudSkyAmbientFill`. No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h` / `rtx_atmosphere.cpp`** — fork-owned changes.
+  *New `RTX_OPTION(float, cloudSkyAmbientFill, 0.5f, …)`; `getAtmosphereArgs` fills `args.cloudSkyAmbientFill`.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *"Sky Fill" DragFloat added to the Clouds → Lighting tree after Bottom Darkening, with tooltip.*
+
+- **`RtxOptions.md`** — hand-edited to add `cloudSkyAmbientFill`; regenerate in-app for canonical form.
+
+---
+
+## Workstream — Sky-reflects-clouds bleed (sky picks up cloud color) (fork — 2026-06-19)
+
+Second half of the sky↔cloud color coupling. Symptom: the visible sky and the cloud layer are composited independently (`radiance = mix(sky, cloud.rgb, cloud.a)` in `evalSkyRadiance`), so a colored deck never tints the clear sky — leaving vivid blue gaps between orange sunset clouds (and a too-clean sky around grey overcast). Fix: before the cloud composite, add a fraction of the LOCAL cloud radiance to `radiance` as colored inscatter. The source is the secondary cloud dome LUT (`AtmosphereCloudSecondaryLut`) sampled in the view direction — it is low-res (256×128), hence inherently smooth, giving a neighborhood-averaged cloud color per direction (bright/colored next to a cloud, ~0 in open sky far from any) with no extra blur pass. Because it is added BEFORE the composite, the composite's own `(1 - cloudAlpha)` factor keeps the bleed in the visible-sky fraction and out of opaque cloud cores. Gated on the secondary LUT being baked (default on) and `cloudSkyBleedStrength > 0`. Pairs with the clouds←sky "sky-dome fill" (Sky Fill); together the two close the loop so clouds and sky share color in both directions at all times of day.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *In `evalSkyRadiance`, after the cloud-source selection and before the temporal-smoothing/composite: sample the secondary dome LUT at `cloudDomeDirToUv(viewDirYUp)` and `radiance += cloudSkyBleedStrength * bleedCloud.rgb`.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`padCloudLook2` (the freed cloudColumnShapingEnable slot) → `cloudSkyBleedStrength`. No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h` / `rtx_atmosphere.cpp`** — fork-owned changes.
+  *New `RTX_OPTION(float, cloudSkyBleedStrength, 0.3f, …)`; `getAtmosphereArgs` fills `args.cloudSkyBleedStrength`.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *"Sky Cloud Bleed" DragFloat added to the Clouds → Lighting tree after "Sky Fill", with tooltip.*
+
+- **`RtxOptions.md`** — hand-edited to add `cloudSkyBleedStrength`; regenerate in-app for canonical form.
+
+---
+
+## Workstream — Sky color correctness: physical multiscatter default (fork — 2026-06-19)
+
+The clear sky read wrong vs reality at all times of day: over-saturated/wrong blue hue, no warm horizon, and a flat zenith→horizon gradient. Two Opus research passes converged on the cause: the DEFAULT multiscatter path was the analytical inline fit (`multiScatterPhysicalStrength` defaulted to 0), which is a flat, isotropic (no phase, no transmittance), strongly blue-biased fill added uniformly in every direction — it raises the floor everywhere (flattening the gradient) and desaturates the warm horizon. The `sunsetSaturation` knob had been added purely to band-aid this (a desaturation mask is itself the tell the base output was wrong). Fix: make the physical Hillaire multiscatter LUT the default and retire the band-aid. Also fixed a real dimensional bug in the analytical path (kept for A/B): its `computeGroundReflectionAnalytical` / `computeAirMultiscatteringAnalytical` baked `sunIlluminance` in, then the caller multiplied by `sunIlluminance` again — `sunIlluminance²` (≈225× at the default 15) — whereas the LUT-baker twins correctly omit it. Separately, the user's per-game config had non-physical coefficient overrides (Mie 4× low, Rayleigh ~35% low, Mie g 0.99); the code defaults are already the canonical Bruneton/Hillaire values, so those were corrected in the game's rtx.conf (not in-repo).
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned changes.
+  *`multiScatterPhysicalStrength` default 0.0 → 1.0 (physical LUT is now the default multiscatter); `sunsetSaturation` default 1.0 → (briefly 0.5) → 1.0 (band-aid retired now that the base is correct). Descriptions rewritten.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`computeGroundReflectionAnalytical` / `computeAirMultiscatteringAnalytical` no longer bake in `sunIlluminance` (the caller applies it once, matching the physical LUT twins and `contribLut`); fixes the `sunIlluminance²` double-count on the analytical A/B path. Call-site comment added so it isn't re-introduced.*
+
+---
+
+## Workstream — Sky-reflects-clouds bleed: mip-blur fix (fork — 2026-06-19)
+
+The first cut of the sky<-clouds bleed sampled the 256x128 secondary cloud dome LUT at mip 0 and added it to the sky. Result: cloud EDGES read pixelated/faceted (a single bilinear tap of a near-binary low-res signal steps across the LUT's coarse texels at silhouettes, and the coarse dome silhouette is misaligned with the sharp screen-space cloud RT), and the sky "barely changed color" (a true gap samples ~0 cloud in its exact direction — no neighborhood spread). An Opus debug pass identified both and prescribed a pre-blurred coarse-mip source. Fix: give the secondary LUT a mip chain, regenerate it (Gaussian) each frame after the bake, and sample a coarse mip (mip 4 = 16x8) for the bleed — one tap = a wide neighborhood blur, which removes the facets AND spreads cloud color smoothly into the gaps next to clouds. Re-enabled by default (`cloudSkyBleedStrength` 0 -> 0.15).
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned changes.
+  *`m_cloudSecondaryLut` becomes an `RtxMipmap::Resource` (6 mips, 256x128 -> 8x4) via `RtxMipmap::createResource`; the bake binds `.views[0]` (mip 0) for the storage write; after the dispatch a write->read barrier + `RtxMipmap::updateMipmap(..., Gaussian)` fills mips 1..5 (ctx is the RtxContext, cast from the DxvkContext param). Added `#include "rtx_mipmap.h"`.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *The shared sky-view sampler gains `mipmapLodMax = VK_LOD_CLAMP_NONE` so explicit-LOD mip sampling works (harmless for the mip-less sky-view LUT / cloud RT).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *The bleed samples `AtmosphereCloudSecondaryLut` at `kBleedMip = 4.0` instead of 0.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`cloudDomeDirToUv` wraps u with `frac()` so dome sampling no longer depends on sampler address mode (the mip-gen uses a CLAMP sampler).*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — `cloudSkyBleedStrength` default 0.0 -> 0.15 (re-enabled).
+
+---
+
+## Workstream — Cloud direct energy conservation + multiscatter sunset gather fix (fork — 2026-06-19)
+
+Two physically-motivated lighting corrections, both addressing "lit things out-bright/mis-color the sky they composite against." WIP: shipped + deployed for in-game look validation, NOT yet eyeballed — values/approach may change after the look-check.
+
+(1) **Cloud direct dual-lobe energy conservation.** The Nubis direct term summed two full-amplitude phase lobes (`L_direct = T_primary*HG1 + M*HG2`); HG1 and HG2 each integrate to 1 over the sphere, so the in-scatter phase integrated to up to (1+M) ≈ 2 — the cloud scattered up to ~2× the energy one scattering event can redistribute, worst at the sunlit edge where both lobes fire at once, so lit clouds out-brightened the physical sky LUT. Reformulated as an energy-conserving convex blend (phase integral 1), lerped from the legacy additive sum by a strength knob for in-game A/B. Brings the sun path onto the bounded-energy footing the moon path already had.
+
+(2) **Multiscatter sunset gather fix.** The MS LUT gather in `computeMultiscattering` swept zenith 0..π at a SINGLE azimuth (`rayDir = vec3(sinZenith, cosZenith, 0)`, x-y plane), but the sun lies in the y-z plane (x=0), so every gather ray sat 90° from the sun and the integral never sampled the sun-ward sky. At sunset it gathered only the blue sky orthogonal to the sun and missed the warm reddened horizon → pale-blue MS fill (sky too blue, warm band couldn't climb, clouds inherited the cold ambient via the sky-view LUT). Fixed to a proper 2D sphere quadrature (8 zenith × 8 azimuth, same 64 samples); the sinZenith Jacobian + 2π/N normalization are kept so a uniform integrand changes <1% — corrects the integral's direction/color without shifting the tuned brightness. Knob-free. (A first attempt — a `multiScatterReddening` tint knob — was reverted as a hack once the gather bug was found.)
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *In `evalNubisCubedSample`, the direct term `T_primary*HG1 + M*HG2` becomes `A*(1 - s*w) + B*(1 - s*(1-w))` with `A = T_primary*HG1`, `B = M*HG2`, `s = cloudEnergyConserve`, `w = cloudMsLobeWeight`. s=0 reproduces the legacy additive sum byte-for-byte.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/multiscattering_lut.comp.slang`** — fork-owned change.
+  *`computeMultiscattering` gather loop: single-azimuth 64× zenith sweep → nested 8 zenith × 8 azimuth full-sphere quadrature; `rayDir` gains an azimuth term. Jacobian + 2π/N normalization unchanged (uniform-integrand magnitude preserved to <1%).*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`pad_artistic1` / `pad_artistic2` (trailing slots of the `cloudShadowFactorStrength` 16-byte row) → `cloudEnergyConserve` / `cloudMsLobeWeight`. No CB layout change.*
+
+- **`src/dxvk/rtx_render/rtx_options.h` / `rtx_atmosphere.cpp`** — fork-owned changes.
+  *New `RTX_OPTION(float, cloudEnergyConserve, 1.0f, …)` and `RTX_OPTION(float, cloudMsLobeWeight, 0.5f, …)` after `cloudPhaseG2`; `getAtmosphereArgs` fills both `args.*`.*
+
+- **`RtxOptions.md`** — PENDING: `cloudEnergyConserve` / `cloudMsLobeWeight` not yet added; regenerate in-app for canonical form.
+
+---
+
+## Workstream — Sunset "neon cloud" fixes: cloud sun-transmittance Mie + dayFactor rolloff (fork — 2026-06-20)
+
+Final two corrections that fixed the right-before-sunset "neon orange clouds" (flat, too bright, too saturated; worst at sun elevation below sun.y ~0.2, recovering once the sun is well below the horizon). Both validated in-game.
+
+(1) **Mie/aerosol extinction added to the cloud + moon sun-direction transmittance.** `getAtmosphericTransmittanceForDir` (the analytical Kasten-Young model that lights clouds + moons; the sky body uses the transmittance LUT) was composing extinction as Rayleigh + ozone only — the Mie term was MISSING, while the LUT (transmittance_lut.comp.slang) correctly includes Rayleigh + Mie + ozone. At a low sun the omitted grey aerosol extinction left the cloud beam under-extinguished, so cloud direct light stayed a bright, fully-saturated red while the LUT-lit sky looked correct. Added the Mie slant optical depth (`mieScaleHeight * airMass`), mirroring the LUT's extinction composition — physically the aerosol extinction that dims a hazy setting sun, and it realigns the cloud/moon sun color with the sky.
+
+(2) **Cloud daytime-lighting rolloff widened through the sunset approach.** `buildCloudShadeContext`'s `dayFactor = smoothstep(-0.05, 0.02, sun.y)` held the cloud's sun + sky-ambient lighting at FULL brightness until the geometric horizon, then crashed to night — so through the whole low-sun band (where airTrans + the sky-view LUT are most saturated) the clouds were lit at full strength = full-bright, full-saturated, flat orange. Widened the upper bound to 0.20 (~11.5°) so the daytime cloud lighting dims PROGRESSIVELY as the sun descends (physically: the scene darkens through sunset); the reddest light is no longer the brightest. Above 0.20 daytime is unchanged (golden hour untouched); horizon dayFactor ~0.2, reaching 0 at -0.05 where the moon/night terms take over.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`getAtmosphericTransmittanceForDir`: add `- args.mieScattering * (args.mieScaleHeight * airMass)` to the transmittance exponent (Rayleigh + Mie + ozone, matching the LUT bake). Stale "mirrors lines 308-328" comment corrected.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned change.
+  *`buildCloudShadeContext`: `dayFactor` smoothstep upper bound 0.02 → 0.20 for a progressive sunset-approach dim of all sun-derived cloud lighting.*
+
+---
+
+## Workstream — Layer-2 "echo deck" rework (fork — 2026-06-21)
+
+Replaced the old layer-2 path (a fully-independent second `marchCloudSlab` pass that inherited layer 1's ~32-step floor and tapped the layer-1-only `D_sun` grid for a decorrelated cloudscape, so every deck sample read stale residual) with a lean **echo deck**: the *same* per-column cloud-slab density model at a higher, gapped altitude, marched cheaply. Perf comes from a low, **user-adjustable** step budget (the dominant lever — deck cost is ~linear in step count) and an analytic sun-shadow proxy in place of the stale `D_sun` grid tap. Variety ("varied echo") comes from the deck's own coverage/type means + `cloudLayer2NoiseSeed`, which decorrelates its control field from layer 1 while sharing the same field machinery. The column-placement model is deliberately KEPT — it provides the per-sample early-out that refunds the placement tap, contrary to the earlier (now-corrected) analysis. The deck DOES take moonlight (same Beer-Lambert shadow + Wrenninge phase as layer 1, deck-aware self-shadow tap) so the two decks read consistently at night. 3 `cloudLayer2*` options were added (2 step-budget + 1 color) and 1 removed (`cloudLayer2CoverageSpread`); the rest are unchanged. Validated in-game 2026-06-21 (works after the CB-alignment fix below); same-day follow-ups: density/thickness/type decoupled from the main layer, the deck's coverage "tiling" fixed (coverage spread forced uniform + option removed), and an independent deck color.
+
+**Same-day follow-ups (2026-06-21):**
+- **Density/thickness/type decoupling.** The deck ran on a copy of the main `args`, so main-layer sliders (most visibly `cloudDensity`) bled into the deck. `marchCloudLayers` now overrides on `args2`: `cloudDensity` → fixed `kEchoDeckExtinction = 1.8` (= cloudDensity's default, so the deck decouples from the live slider with no look change at default), `cloudThickness` → `cloudLayer2Thickness`, `cloudTypeMean` → `cloudLayer2TypeMean` (the shared lighting — `sampleCloudSdf`, `sampleDimProfile`, underside down-integral — reads these directly rather than via the deck slab params). `marchEchoDeck` also rebuilds `ctx.moonBaseSigma` from the decoupled density. Coverage was already deck-specific. Audit conclusion: all OTHER look knobs (phase, multi-scatter, detail, bottom-darkening, edge, anvil, etc.) stay shared by "same slab" design — only color was split out (below).
+- **Coverage "tiling" fix.** The single-octave Worley coverage field, amplified by the spread slider, read as a fine tiled/stippled texture at the deck's distance (~3 km cells subtend a tiny angle). A de-tile attempt (domain-warp + extra octave) made it worse (small/smudgy), so it was reverted; instead `marchCloudLayers` forces the deck's `cloudCoverageSpread` to 0 — coverage collapses to a uniform `cloudLayer2CoverageMean` sheet, no field, no tiling. `cloudLayer2CoverageSpread` was removed as an option (its arg slot kept as `pad_cloudLayer2CoverageSpread` to preserve CB layout). Type spread is still available.
+- **Independent deck color.** New `cloudLayer2Color` (Vector3, defaults to cloudColor's near-white). `marchCloudLayers` overrides `args2.cloudColor`. The one look knob split from layer 1, per user request.
+- **GPU-hang backstop.** `marchEchoDeck` hard-caps the step count at `kEchoStepHardCap = 256` so a future CB misread can't escalate to a device hang.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`evalNubisCubedSample` gains a trailing `float dSunOverride` param: `< 0` samples the `D_sun` voxel grid (production path, byte-identical to before); `>= 0` is used verbatim and the grid tap is skipped. Only the echo-deck march passes `>= 0`.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned change.
+  *New `marchEchoDeck` (lean second-deck march: `cloudLayer2StepFloor`/`cloudLayer2StepMax` step budget — default 8/16 — honoring `cloudViewStepKm`; analytic `dSunProxy = (1 - shapeHf) × thickness × densityScale`; otherwise identical density model + control fields + per-sample moon block + Beer-Lambert/aerial as `marchCloudSlab`). The moon shadow uses a new slab-parametric `sampleCloudSunOpticalDepth_localSlab` so the deck self-shadows against ITS altitude band (the args-default helper keys on layer 1's slab → zero density at the deck = unshadowed). `marchCloudLayers`' layer-2 branch calls `marchEchoDeck` instead of a second `marchCloudSlab` (the old moon-coefficient zeroing is gone — the deck wants moonlight). `marchCloudSlab`'s `evalNubisCubedSample` call passes `dSunOverride = -1.0` (grid path). Both consumers (view RT + secondary dome LUT) inherit via `marchCloudLayers`.*
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Adds a 16-byte (vec4) tail block: `cloudLayer2StepFloor`, `cloudLayer2StepMax`, + `pad_cloudLayer2Step0/1`. No free pad slots remained, so the CB grows — but it MUST grow by a whole vec4 or `sizeof(AtmosphereArgs)` stops being 16-byte aligned and the whole-struct `updateBuffer` corrupts the cbuffer (the new tail fields read garbage → marchEchoDeck's step count blows up → GPU hang → solid black when layer 2 is on). A first draft appended bare scalars (8 bytes) and hit exactly that; the two pad words fix it. Future additions should consume the pads first.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Added `cloudLayer2StepFloor` (uint32, 8) and `cloudLayer2StepMax` (uint32, 16). Rewrote `cloudLayer2Enable` / `cloudLayer2Altitude` / `cloudLayer2Thickness` / `cloudLayer2DensityScale` help strings to describe the echo deck + inter-deck gap; corrected three stale default-value mentions (7.5 km / 0.5 km / 0.30 vs the actual 5.5 / 2.0 / 0.65). No option removed or renamed.*
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *Packs `args.cloudLayer2StepFloor` / `cloudLayer2StepMax` from the new RtxOptions alongside the existing `cloudLayer2*` packing.*
+
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *Adds "Layer 2 Step Floor" / "Layer 2 Max Steps" `DragInt` widgets to the Layer 2 imgui node; refreshed the Layer 2 Density tooltip off the old cirrus framing.*
+
+- **`RtxOptions.md`** — regenerated; reflects the 3 new options (`cloudLayer2StepFloor`, `cloudLayer2StepMax`, `cloudLayer2Color`) and the removed `cloudLayer2CoverageSpread`.
+
+  (The `atmosphere_args.h` / `rtx_options.h` / `rtx_atmosphere.cpp` / `rtx_fork_atmosphere.cpp` bullets above also cover the follow-up `cloudLayer2Color` field/option/packing/picker; the args color field is a second vec4-aligned tail block — `vec3 cloudLayer2Color` + `pad_cloudLayer2Color0`. The de-tile attempt was reverted: the deck's coverage tiling is instead handled by forcing `cloudCoverageSpread` to 0 and removing the `cloudLayer2CoverageSpread` option, see below.)
+
+---
+
+## Workstream — Dead-code removal + stale-doc cleanup (fork — 2026-06-21)
+
+Audit-driven cleanup of the sky/cloud system; no behavior change. Removed two unused shader helpers — `evalSunDisk` (`atmosphere_sky.slangh`) and `uvToSkyViewLutParams` (`atmosphere_common.slangh`); removed the orphaned `rtx.atmosphere.sunDisc` option (never consumed — the sun disc renders via the sun-as-distant-light / NEE path) along with its `RemixSkyAPI.md` row and a `RemixApiChangelog.md` "Removed" entry. Demoted the three dead `cloudVoxelGrid*` dirty/offset args fields to `pad_*` reserves (CPU zero-writes dropped) — kept as pads so the CB layout is unchanged. Corrected ~30 stale comments + 3 user-facing RTX_OPTION descriptions that referenced the long-removed analytical `evalClouds` path / "no consumer in this commit" voxel grids as if current; each description was re-verified against its consumer before rewording. `RtxOptions.md` regenerated.
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Removed the `sunDisc` RTX_OPTION; reworded `cloudRenderRTEnable` / `cloudSecondaryLutEnable` / `cloudHeightLutEnable` descriptions to drop the removed-evalClouds references (off = cloudless; secondary rays get clouds from the dome LUT). The "original 17 atmosphere options" historical list earlier in this file still names `sunDisc` — left as history.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`, `atmosphere_common.slangh`** — fork-owned change.
+  *Deleted `evalSunDisk` / `uvToSkyViewLutParams`; comment fixes for removed-evalClouds references.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *`cloudVoxelGridFrameOffset` / `…SunDirty` / `…AmbientDirty` → `pad_*`; comment fixes.*
+- **Comment-only doc-rot fixes** in `cloud_render.comp.slang`, `cloud_secondary_lut.comp.slang`, `cloud_march_common.slangh`, `common_bindings.slangh`, `common_binding_indices.h`, `debug_view.comp.slang`, `rtx_atmosphere.cpp/.h`, `rtx_debug_view.cpp`. No functional change.
+- **`RtxOptions.md` / `docs/RemixSkyAPI.md` / `docs/RemixApiChangelog.md`** — regenerated / `sunDisc` row removed / `[0.4.3] Removed` entry added.
+
+---
+
+## Workstream — Cloud drift overhaul: field evolution (fork — 2026-06-21)
+
+Replaces the artificial-looking cloud "drift." The old motion had two pieces: rigid wind advection (fine) and a separate global weather-parameter `drift` (`rtx_fork_weather.cpp`) that modulated 9 cloud scalars with a sum-of-sines whose **fast layer had base period exactly 30 s** — its dominant inner sine was a clean 30 s beat, and all 9 fields shared one phase clock, so the whole sky visibly "breathed" in lockstep every ~30 s. The fix moves shape change **into the field** (differential advection, the Nubis/Decima trick) and demotes the global scalar drift to genuinely slow weather-scale change. Two new view-path levers, both reverting to legacy rigid behavior at speed 0: **morph** (a slow 3D scroll of the base noise sample position, Y-dominant so it samples a continuously different, tile-wrapping slice → formations form/dissolve in place, also breaking the 12 km wind tile-repeat) and **edge boil** (an independent faster scroll on the edge-detail tap → billows churn at the silhouette). No constant-buffer growth — four reserve pad slots are reused.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Reuses the three contiguous `pad_cloudVoxelGrid{FrameOffset,SunDirty,AmbientDirty}` slots (from the 2026-06-21 dead-code pass) as `cloudEvolutionOffsetX/Y/Z` (float; the two former `uint` slots retype to float), and the `pad_cloudLayer2CoverageSpread` slot as `cloudBoilPhase`. CB layout byte-identical.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *In `sampleCloudDensityTextured` (view path only): builds `noiseSamplePos = perturbed + cloudEvolutionOffset` and a parallel `noiseTexcoord`, used for the base 3D tap (incl. hex variants) and the step-3b footprint slice ONLY — placement map, hex lattice, column model, and height fraction stay on the real `perturbed`/`texcoord` so cluster location and altitude are unaffected. Step 4b detail tap adds `cloudBoilPhase * kBoilDir` (fixed off-axis unit dir) to its sample position. The shadow sampler (`sampleCloudDensityForShadow`) is intentionally NOT evolved in v1 (baked grids keep describing the bulk field).*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *In `getAtmosphereArgs()`: accumulates the morph offset from `cloudEvolutionSpeed` / `cloudEvolutionVerticalBias` (Y-dominant + diagonal XZ remainder) and the boil phase from `cloudBoilSpeed`, both × `timeSeconds` (mirrors the existing `cloudWindOffset` pattern). Zeros the four new per-frame fields in `normalizeForSkyLutCache` so the sky-LUT memcmp gate doesn't fire every frame.*
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Adds `cloudEvolutionSpeed` (0.0015), `cloudBoilSpeed` (0.004), `cloudEvolutionVerticalBias` (0.8) to the `rtx.atmosphere` cluster.*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *Adds an "Evolution" subtree (Morph Speed / Morph Vertical Bias / Edge Boil Speed) to Atmosphere → Clouds, next to "Wind". Named distinctly from the weather "Cloud Drift" subtree to avoid confusion.*
+- **`src/dxvk/rtx_render/rtx_fork_weather.cpp`** — fork-owned change.
+  *De-pulse: `driftOffsetForField` drops the fast 30 s layer (slow-only now); removed `kDriftFastPeriodSec`. `kDriftTable` trimmed 9 → 3 (kept `cloudCoverageMean`, `cloudWindSpeed`, `cloudWindDirection` — the weather-scale fields field evolution does not reproduce; dropped the shape-ish density/thickness/type/anvil/coverage-spread entries now owned by field evolution). `static_assert` updated to 3.*
+- **`RtxOptions.md`** — REGEN PENDING (run Remix with `DXVK_DOCUMENTATION_WRITE_RTX_OPTIONS_MD=1`): will add the 3 new options.
+
+---
+
+## Workstream — Cloud motion unification + advection integrator fix (fork — 2026-06-21)
+
+Folds the three cloud-motion sources (wind advection, field-evolution morph/boil, and the slow weather-parameter drift) into ONE per-frame integrator, fixing a latent bug. The wind/evolution/boil offsets were computed stateless as `instantaneousSpeed * timeSeconds` inside the `const` `getAtmosphereArgs` (called ~12×/frame, hence stateless). That is only correct while wind is constant — but the weather blender writes drift-modulated `cloudWindSpeed`/`cloudWindDirection` into the Derived config layer, so each frame the *entire accumulated offset* re-scaled (speed change) or rotated about the origin (direction change), snapping the whole field. Replaced with persistent accumulators advanced once per frame by `offset += velocity * dt`, so a varying wind eases the field instead of jumping. Rates stay independent (no cross-coupling). No CB/shader change — only how the CPU fills the existing `cloudWindOffset` / `cloudEvolutionOffset*` / `cloudBoilPhase` fields. Also: merged the "Wind" + "Evolution" dev-menu subtrees into one "Cloud Motion" tree, and bumped `cloudLayer2StepMax` 16 → 32.
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h`** — fork-owned change.
+  *Adds `void advanceCloudMotion(float dt)` (public) and three persistent accumulator members `m_cloudAdvectOffset` (Vector2) / `m_cloudEvolutionOffset` (Vector3) / `m_cloudBoilPhase` (float), next to the other per-frame-pushed members.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *Implements `advanceCloudMotion` (integrates wind from drift-modulated `cloudWindSpeed`/`cloudWindDirection`, plus morph + boil, `+= vel*dt`, with a `dt<=0` pause guard). `getAtmosphereArgs` now reads the three members instead of computing `speed*timeSeconds`. `normalizeForSkyLutCache` already zeros those per-frame fields (unchanged).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *Calls `ctx.m_atmosphere->advanceCloudMotion(GlobalTime::get().deltaTime())` once per frame in `updateAtmosphereConstants` (Numos block, alongside the camera-basis push); adds `#include "../util/util_global_time.h"`. Merges the Wind + Evolution UI subtrees into one "Cloud Motion" tree with a pointer to the Weather → Cloud Drift slow modulator.*
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *`cloudLayer2StepMax` default 16 → 32 (per request — layer-2 echo-deck step budget to match layer 1's `cloudViewSamples = 32`).*
+- **`RtxOptions.md`** — REGEN PENDING: reflects the `cloudLayer2StepMax` default change.
+
+---
+
+## Workstream — Rename weather "Cloud Drift" → "Weather Variation" (fork — 2026-06-21, UI clarity)
+
+Pure dev-menu/label rename to stop the word collision with the new Atmosphere → Clouds → "Cloud Motion" tree. The weather-parameter wander (slow, preset-driven modulation of coverage + wind) is a different layer from the per-frame field motion; calling both "drift"/"motion" in adjacent panels was confusing. The `__weather.drift_*` GameStateStore API keys and the internal `m_drift*` members are UNCHANGED — only user-facing strings moved.
+
+- **`src/dxvk/rtx_render/rtx_fork_weather.cpp`** — fork-owned change.
+  *Subtree "Cloud Drift" → "Weather Variation"; slider/button labels "Drift …" → "Variation …"; tooltips note the unchanged `__weather.drift_*` keys; added a one-line pointer to Cloud Motion.*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *Cloud Motion tree's cross-reference text updated to point at "Weather → Weather Variation".*
+- **`docs/CloudSystem.md`, `docs/integrators/weather-presets.md`** — updated the dev-menu sub-tree name references (keys unchanged).
+
+---
+
+## Workstream — Remove the bespoke atmosphere sun/moon NEE (fork — 2026-06-21)
+
+Graduates the "sun/moon as real distant lights" work from an experiment-with-fallback to the **sole** sun/moon path in Numos, deleting the now-redundant bespoke atmosphere NEE that was previously only runtime-gated off. Supersedes the earlier `evalAtmosphere*NEE*` touchpoint entries above. Runtime-neutral at default settings (the bespoke path was already gated off whenever `useDirectionalLights` was on, the default). Cloud-on-terrain shadows are unaffected — they fold per-pixel onto the real sun distant light in the integrators (gated on `atmosphereCloudShadowed` + `cloudVoxelShadowsEnable`); the volumetric fold via `sampleAtmosphereSunLightVolume` is unchanged.
+
+- **`src/dxvk/shaders/rtx/algorithm/integrator_direct.slangh`** — fork-owned change.
+  *Deleted `evalAtmosphereSunNEE` + `evalAtmosphereMoonNEE` and their gated call block; the direct path now lights the atmosphere sun/moon purely via the standard NEE on the injected distant lights.*
+- **`src/dxvk/shaders/rtx/algorithm/integrator_indirect.slangh`** — fork-owned change.
+  *Deleted `evalAtmosphereSunNEESecondary` + `evalAtmosphereMoonNEESecondary` and their gated secondary call block.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *Deleted the now-orphaned surface samplers `sampleAtmosphereSunLight` / `sampleAtmosphereMoonLight` and their private `pickMoon` helper (only the bespoke NEE called them). The volumetric samplers (`sampleAtmosphereSunLightVolume`, …) are retained — still used by the RTXDI volume integrator.*
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Removed the `useDirectionalLights` RTX_OPTION (injection is now unconditional in Numos) and the dead `debugEnableAtmosphereNee` diagnostic; reworded `directionalLightRadianceScale` (no longer references the toggle).*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`debugSkyBisectFlags` now packs only bit 1 (`debugEnableSkyMissShading`); bit 0 (atmosphere NEE) and bit 2 (directional-lights skip) retired with the bespoke NEE.*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *`fhSyncAtmosphereDistantLights` now gates on `skyMode == Numos` only (dropped the `useDirectionalLights` condition); comments de-experimentalised.*
+- **`docs/CloudSystem.md`** — updated the cloud-on-terrain shadow section to the real-distant-light fold; corrected `cloudShadowStrength` default (0 → **0.5**).
+- **`RtxOptions.md`** — REGEN PENDING (drops `useDirectionalLights` + `debugEnableAtmosphereNee`).
 
 ---

@@ -298,22 +298,12 @@
 // Sentinels: magenta = surface above slab top; blue = sun below horizon
 // or otherwise unreachable. Black would be ambiguous, so we paint instead.
 #define DEBUG_VIEW_CLOUD_GROUND_SHADOW_RAW_OD 877
-// Raw post-denoise cloud-shadow factor texture diagnostic (fork — 2026-05-18,
-// iteration #3 grayscale 2026-05-19). Visualizes PrimaryCloudShadowFactor as
-// integrate_direct writes it, BEFORE composite's saturate() + pow() collapse
-// the > 1 ratio amplification at clear pixels. Encoded as PURE GRAYSCALE
-// (factor / 10 clamped to [0, 1]) for direct A/B comparison with enum 875.
-// Iteration history: #1 linear /10 saturated too early; #2 log10 compressed
-// foreground variation behind cyan; #3 grayscale mirrors 875's encoding so
-// shapes can be compared by eye.
-// Discrimination (toggle 875 <-> 878 in same outdoor cell):
-//   878 shows same shapes as 875 but brighter -> wire-in correct, fix saturate
-//   878 uniform foreground while 875 varies   -> writer-reader divergence
-//                                                (likely sampler / binding mismatch
-//                                                 between production and debug-view)
-//   878 uniform mid-gray everywhere           -> factor stuck at default 1.0;
-//                                                texture not being written
-#define DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW 878
+// Enum 878 (DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW) RETIRED 2026-06-19 with the
+// screen-space cloud-shadow system (it visualized the removed
+// PrimaryCloudShadowFactor texture). The cloud shadow now folds onto the sun
+// radiance in the NEE; use 875/877 (D_sun grid reads) for diagnostics. The
+// number is left burned (not reused) so saved configs referencing 878 fall
+// through to the default view rather than aliasing a new one.
 
 
 enum class CompositeDebugView : uint32_t {

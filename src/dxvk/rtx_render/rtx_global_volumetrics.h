@@ -141,12 +141,22 @@ namespace dxvk {
                args.minValue = Vector3(0.0f, 0.0f, 0.0f), args.maxValue = Vector3(1.0f, 1.0f, 1.0f));
     RTX_OPTION_ARGS("rtx.volumetrics", float, anisotropy, 0.05f, "The anisotropy of the scattering phase function (-1 being backscattering, 0 being isotropic, 1 being forward scattering).",
                     args.minValue = -1.0f, args.maxValue = 1.0f);
-    RTX_OPTION_ARGS("rtx.volumetrics", float, fogSunVisibilityGain, 5.0f,
+    RTX_OPTION_ARGS("rtx.volumetrics", float, fogSunVisibilityGain, 1.0f,
                     "Artistic visibility gain applied to the sun's contribution to volumetric fog in-scattering. "
-                    "Volumetric fog needs more energy than physical math delivers at normal exposure to read as fog; "
-                    "this dial scales fog-side sun visibility without affecting surface lighting (decals/particles/PSR/SAB read the cache straight). "
-                    "Historical default 5.0 matches the artistic gain the gmod-rtx port originally baked into the cache.",
+                    "Scales fog-side sun visibility without affecting surface lighting (decals/particles/PSR/SAB read the cache straight). "
+                    "Default 1.0 = physical (no boost); raise it if fog reads too weak at normal exposure. "
+                    "The gmod-rtx port historically baked in a ~5x artistic gain here.",
                     args.minValue = 0.0f, args.maxValue = 50.0f);
+    RTX_OPTION_ARGS("rtx.volumetrics", float, volumetricConsumerGain, 0.008f,
+                    "Gain on the volumetric froxel radiance cache as read by surface consumers "
+                    "(alpha-blended particles/decals, PSR, and SAB Path B) through evalVolumetricNEE. "
+                    "This was a hardcoded 0.0 that left those surfaces unlit by the volumetric cache "
+                    "(black particles). The cache is filled by per-froxel sun-visibility rays from "
+                    "positions in the air, so large values can produce false glow on alpha-blended "
+                    "surfaces that are actually in shadow; the small default (0.008, tuned against "
+                    "GTA IV) restores atmospheric tint on smoke/dust without obvious leaking. Set to "
+                    "0.0 to fully disable (the prior hardcoded behavior) if a game shows false glow.",
+                    args.minValue = 0.0f, args.maxValue = 1.0f);
     RTX_OPTION("rtx.volumetrics", bool, enableInPortals, false,
                "Enables using extra frustum-aligned volumes for lighting in portals.\n"
                "Note that enabling this option will require 3x the memory of the typical froxel grid as well as degrade performance in some cases.\n"

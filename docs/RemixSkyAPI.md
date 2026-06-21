@@ -42,7 +42,7 @@ plugin without polluting the user's config file.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `rtx.skyMode` | int | `0` | Sky rendering mode. `0` = SkyboxRasterization (traditional skybox); `1` = PhysicalAtmosphere (Hillaire scattering). All `rtx.atmosphere.*` options below only take effect in mode `1`. |
+| `rtx.skyMode` | int | `0` | Sky rendering mode. `0` = SkyboxRasterization (traditional skybox); `1` = Numos (Hillaire scattering). All `rtx.atmosphere.*` options below only take effect in mode `1`. |
 
 ### Sun pose (game-driven, push every frame)
 
@@ -58,7 +58,6 @@ time-of-day should push them every frame — the last write wins.
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `rtx.atmosphere.sunDisc` | bool | `True` | Render the sun disc itself (not just its lighting contribution). |
 | `rtx.atmosphere.sunSize` | float | `0.545` | Sun disc angular diameter, degrees. |
 | `rtx.atmosphere.sunIntensity` | float | `1.0` | Sun brightness multiplier. |
 | `rtx.atmosphere.sunIlluminance` | Vector3 | `20, 20, 20` | Base illuminance color/intensity (multiplied by `sunIntensity`). |

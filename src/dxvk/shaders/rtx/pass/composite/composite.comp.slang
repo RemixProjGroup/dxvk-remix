@@ -127,26 +127,15 @@ void loadInputRadiance(
   unpackDenoiserRadiance(primaryDirectDiffuseRadiance, cb.primaryDirectDenoiser);
   unpackDenoiserRadiance(primaryDirectSpecularRadiance, cb.primaryDirectDenoiser);
 
-  // Post-denoise cumulus shadow application (fork — 2026-05-18, simplified
-  // 2026-05-19 after the getTransmittanceToSun split). The factor texture
-  // now holds raw newShadow ∈ [0, 1] from sampleCloudGroundShadow_OptionB
-  // — the prior ratio-correction (newShadow / oldShadow) was eliminated
-  // when integrate_direct stopped baking the analytical cloud shadow into
-  // pre-denoise radiance. Multiplying here lets the high-frequency cumulus
-  // pattern modulate primary direct lighting without NRD / DLSS-RR smearing
-  // the per-cloud variation away. Default value 1.0 (no modulation) when
-  // sun NEE didn't run or the voxel-grid wire-in is disabled. Specular
-  // gets the same factor as diffuse — sun shadows occlude both lobes
-  // identically; only the post-shadow BRDF response differs.
-  //
-  // pow(factor, cb.cloudShadowFactorStrength) is the user-tunable contrast
-  // curve. saturate() is now a defensive no-op (factor ∈ [0, 1] by
-  // construction), kept for robustness against future texture-format
-  // changes or partial-write corner cases.
-  const float primaryCloudShadowFactor = saturate(texelFetch(PrimaryCloudShadowFactor, pixelCoordinate, 0).x);
-  const float primaryCloudShadowFactorScaled = pow(primaryCloudShadowFactor, cb.cloudShadowFactorStrength);
-  primaryDirectDiffuseRadiance *= primaryCloudShadowFactorScaled;
-  primaryDirectSpecularRadiance *= primaryCloudShadowFactorScaled;
+  // Cloud-on-terrain shadow is NO LONGER applied here (fork — 2026-06-19).
+  // The screen-space PrimaryCloudShadowFactor texture and its post-denoise
+  // pow()-and-multiply were deleted when the cloud shadow was re-architected
+  // onto the sun term: it is now folded onto the SUN's radiance pre-denoise
+  // inside sampleAtmosphereSunLight (atmosphere_common.slangh), so it darkens
+  // only the sun and never the lamps/point lights that also accumulate into
+  // this combined direct buffer. The artistic contrast knob
+  // (cloudShadowFactorStrength) moved with it into the NEE fold-in. See
+  // docs/CloudSystem.md.
 
   vec3 secondaryCombinedDiffuseRadiance = vec3(0);
   vec3 secondaryCombinedSpecularRadiance = vec3(0);
@@ -179,6 +168,20 @@ void loadInputRadiance(
       unpackDenoiserRadiance(primaryIndirectSpecularRadiance, cb.primaryIndirectDenoiser);
     }
   }
+
+  // Cloud-on-terrain shadow is NOT applied in composite at all any more (fork —
+  // 2026-06-19, sun-only re-architecture). History:
+  //   * The indirect screen-space multiply was removed 2026-06-18 (issue #37) —
+  //     it double-counted the cloud occlusion that evalSkyRadiance already
+  //     carries on escaped indirect rays, and was geometry-blind indoors.
+  //   * The direct screen-space multiply (pow(PrimaryCloudShadowFactor, k)) was
+  //     removed 2026-06-19 — the cloud shadow now folds onto the SUN's radiance
+  //     pre-denoise inside sampleAtmosphereSunLight, so it darkens only the sun
+  //     and is automatically correct indoors (sun direct is already ~0 from the
+  //     roof-occluded NEE) for every surface type, with no per-pixel geometry
+  //     test. The legitimate outdoor ambient dimming under a cumulus is still
+  //     carried physically through evalSkyRadiance; the volumetric god-ray path
+  //     folds the cloud shadow in sampleAtmosphereSunLightVolume.
 
   // Signal enablement overrides
   if (!cb.compositePrimaryDirectDiffuse) primaryDirectDiffuseRadiance = 0;
