@@ -259,6 +259,20 @@ public:
    */
   AtmosphereArgs getAtmosphereArgs() const;
 
+  /**
+   * \brief Advance the unified cloud-motion accumulators by one frame
+   *        (fork — 2026-06-21, cloud-motion unification).
+   *
+   * Integrates wind advection + field-evolution morph + edge boil as
+   * `offset += velocity * dt` from the live (drift-modulated) RtxOptions, into
+   * persistent members read by the const getAtmosphereArgs(). MUST be called
+   * exactly once per frame (from updateAtmosphereConstants, alongside the other
+   * per-frame setters); getAtmosphereArgs is called many times per frame and so
+   * cannot integrate. Replaces the former stateless `speed * timeSeconds`, which
+   * mis-scaled/rotated the whole field whenever the weather drift varied wind.
+   */
+  void advanceCloudMotion(float dt);
+
 private:
   void createLutResources(Rc<DxvkContext> ctx);
   void dispatchTransmittanceLut(Rc<DxvkContext> ctx);
@@ -391,6 +405,15 @@ private:
   // flips cloudVoxelShadowsEnable, by which point the setter will have run
   // at least one frame.
   Vector3  m_cameraWorldPosYUpKm   { 0.0f, 0.0f, 0.0f };
+
+  // Unified cloud-motion accumulators (fork — 2026-06-21). Integrated once per
+  // frame by advanceCloudMotion() (offset += velocity * dt) and read by the const
+  // getAtmosphereArgs() into cloudWindOffset / cloudEvolutionOffset* / cloudBoilPhase.
+  // Persistent integration (vs the old stateless speed*timeSeconds) is what lets
+  // the slow weather drift vary wind speed/direction without snapping the field.
+  Vector2  m_cloudAdvectOffset     { 0.0f, 0.0f };  // wind translation (km)
+  Vector3  m_cloudEvolutionOffset  { 0.0f, 0.0f, 0.0f };  // morph scroll (km)
+  float    m_cloudBoilPhase        { 0.0f };  // edge-boil scroll phase (km)
 
   // Cloud history ping-pong (fork). Screen-space RGBA16F (premultiplied
   // radiance, alpha) used by the temporal-smoothing path inside

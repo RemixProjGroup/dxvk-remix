@@ -120,11 +120,18 @@ namespace dxvk { namespace fork_weather { namespace {
   // periods (1.0, 1.527, 0.701) chosen so the sum doesn't repeat for many
   // hours of phase advance.
   //
-  // The two-layer model (fast 30s + slow 300s) is summed in
-  // driftOffsetForField with weights 0.4 / 0.6.
+  // De-pulsed (fork — 2026-06-21): the old two-layer model had a fast layer with
+  // base period 30 s, whose dominant inner sine (weight 0.5) was exactly 30 s.
+  // That produced a clearly perceptible whole-sky "breathing" beat every ~30 s —
+  // all drift fields share one phase clock, so coverage/density/type all crested
+  // in lockstep. The fast layer is GONE; only the slow (multi-minute) layer
+  // remains, so this subsystem now reads as genuine slow weather change rather
+  // than a rhythm. Local cloud SHAPE change (formation/dissolution, edge boil) is
+  // now owned by the field-evolution system in the cloud taps
+  // (cloudEvolutionSpeed / cloudBoilSpeed), which evolves the field spatially
+  // instead of pulsing a global scalar.
   // ---------------------------------------------------------------------------
 
-  constexpr float kDriftFastPeriodSec = 30.0f;
   constexpr float kDriftSlowPeriodSec = 300.0f;
 
   float driftNoise1D(float phaseSeconds, float periodSeconds, float fieldSeed) {
@@ -135,23 +142,34 @@ namespace dxvk { namespace fork_weather { namespace {
          + 0.20f * std::sin(kTwoPi * (p / 0.701f) + fieldSeed * 2.331f);
   }
 
-  // Per-field two-layer drift offset, normalized to ~[-relativeAmp, +relativeAmp].
+  // Per-field slow drift offset, normalized to ~[-relativeAmp, +relativeAmp].
+  // Slow-layer only (the fast 30 s layer was removed — see note above). The slow
+  // layer's shortest inner period is ~210 s (3.5 min), so there is no short-cycle
+  // tell. fieldIndex still seeds the phase so the few remaining fields stay
+  // decorrelated from each other.
   float driftOffsetForField(int fieldIndex, float phaseSeconds, float relativeAmp) {
     constexpr float kFieldSeedStep = 0.6180f;  // golden-ratio-ish for low correlation
-    const float seedFast = static_cast<float>(fieldIndex) * kFieldSeedStep;
     const float seedSlow = static_cast<float>(fieldIndex) * kFieldSeedStep + 100.0f;
-    const float nFast = driftNoise1D(phaseSeconds, kDriftFastPeriodSec, seedFast);
     const float nSlow = driftNoise1D(phaseSeconds, kDriftSlowPeriodSec, seedSlow);
-    const float nTotal = 0.4f * nFast + 0.6f * nSlow;
-    return nTotal * relativeAmp;
+    return nSlow * relativeAmp;
   }
 
   // ---------------------------------------------------------------------------
-  // Drift field table — 9 of 27 WeatherSnapshot fields drift.
+  // Drift field table — weather-SCALE fields only (fork — 2026-06-21).
+  //
+  // Trimmed from 9 to 3. The shape-ish fields (cloudDensity, cloudThickness,
+  // cloudTypeMean/Spread, cloudCoverageSpread, cloudAnvilBias) were removed:
+  // drifting them as a GLOBAL scalar is exactly the artificial "whole-sky
+  // breathing" the field-evolution rework replaced — those shape changes are now
+  // produced locally and incoherently by cloudEvolutionSpeed / cloudBoilSpeed in
+  // the cloud taps. What remains is the genuinely weather-scale stuff the field
+  // evolution does NOT reproduce: how cloudy the sky is overall (cloudCoverageMean)
+  // and how the wind gusts/shifts (cloudWindSpeed / cloudWindDirection).
   //
   // Color, optical, sky/moon, atmosphere, volumetric, and noise-scale fields
-  // are intentionally excluded (drift would look sickly, break calibration,
-  // or re-tile the cloud field — see spec section "Drift fields").
+  // remain excluded (drift would look sickly, break calibration, or re-tile the
+  // cloud field — see spec section "Drift fields"). fieldIndex values are kept at
+  // their original numbers so each field's noise seed is unchanged.
   //
   // amplitudeMode:
   //   Proportional — final delta is delta_table * intensity * field_value
@@ -185,18 +203,13 @@ namespace dxvk { namespace fork_weather { namespace {
   static const DriftFieldEntry kDriftTable[] = {
     // name                    idx  mode                       relAmp   min     max
     { "cloudCoverageMean",      0,   DriftMode::Proportional,   0.15f,   0.0f,   1.0f,    DRIFT_FIELD_ACCESSORS(cloudCoverageMean)   },
-    { "cloudCoverageSpread",    1,   DriftMode::Proportional,   0.25f,   0.0f,   1.0f,    DRIFT_FIELD_ACCESSORS(cloudCoverageSpread) },
-    { "cloudTypeMean",          2,   DriftMode::Proportional,   0.10f,   0.0f,   1.0f,    DRIFT_FIELD_ACCESSORS(cloudTypeMean)       },
-    { "cloudTypeSpread",        3,   DriftMode::Proportional,   0.20f,   0.0f,   1.0f,    DRIFT_FIELD_ACCESSORS(cloudTypeSpread)     },
-    { "cloudDensity",           4,   DriftMode::Proportional,   0.10f,   0.0f,   kInf,    DRIFT_FIELD_ACCESSORS(cloudDensity)        },
-    { "cloudThickness",         5,   DriftMode::Proportional,   0.08f,   0.0f,   kInf,    DRIFT_FIELD_ACCESSORS(cloudThickness)      },
     { "cloudWindSpeed",         6,   DriftMode::Proportional,   0.30f,   0.0f,   kInf,    DRIFT_FIELD_ACCESSORS(cloudWindSpeed)      },
     { "cloudWindDirection",     7,   DriftMode::AbsoluteDeg,   10.0f,   -kInf,  kInf,    DRIFT_FIELD_ACCESSORS(cloudWindDirection)  },
-    { "cloudAnvilBias",         8,   DriftMode::Proportional,   0.15f,   0.0f,   kInf,    DRIFT_FIELD_ACCESSORS(cloudAnvilBias)      },
   };
 
   static constexpr int kDriftFieldCount = static_cast<int>(sizeof(kDriftTable) / sizeof(kDriftTable[0]));
-  static_assert(kDriftFieldCount == 9, "Drift table must have exactly 9 entries (per spec)");
+  static_assert(kDriftFieldCount == 3, "Drift table must have exactly 3 weather-scale entries "
+                "(de-pulsed 2026-06-21: shape fields moved to field evolution)");
 
   // ---------------------------------------------------------------------------
   // applyDriftToSnapshot — mutate interp in place by adding per-field drift

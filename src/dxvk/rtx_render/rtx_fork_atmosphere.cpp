@@ -23,6 +23,7 @@
 #include "rtx/pass/raytrace_args.h"
 #include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/atmosphere/atmosphere_args.h" // MAX_MOONS (showAtmosphereUI moon loop)
+#include "../util/util_global_time.h" // GlobalTime::get().deltaTime (cloud-motion integrator)
 #include "imgui/imgui.h"              // ImGui::Button, ImGui::Text, etc. (showAtmosphereUI)
 #include "rtx_imgui.h"                // RemixGui::DragFloat, ComboWithKey (showAtmosphereUI)
 #include <cstdio>                     // std::snprintf (renderMoonUI label)
@@ -276,6 +277,13 @@ namespace fork_hooks {
         ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
       }
       ctx.m_atmosphere->initialize(&ctx);
+
+      // Unified cloud-motion integrator (fork — 2026-06-21). Advance the wind /
+      // morph / boil accumulators exactly once per frame, before getAtmosphereArgs
+      // (called many times per frame) reads them. dt comes from the same GlobalTime
+      // clock the weather blender uses, so the drift-modulated wind it reads is
+      // consistent with the parameters the blender wrote this frame.
+      ctx.m_atmosphere->advanceCloudMotion(GlobalTime::get().deltaTime());
 
       // Cloud render compute pass setup (Nubis Cubed 2023, fork — 2026-05-12, C4).
       // Push the per-frame camera basis and ensure the screen-space RT is
@@ -1435,16 +1443,45 @@ namespace fork_hooks {
           ImGui::TreePop();
         }
 
-        if (ImGui::TreeNode("Wind")) {
+        // Cloud Motion (fork — 2026-06-21, unification). One subtree for every
+        // way the cloud field moves/changes: bulk wind advection, in-place field
+        // morphing, and edge boil. All three are integrated by a single per-frame
+        // accumulator (RtxAtmosphere::advanceCloudMotion), so the slow weather
+        // "Cloud Drift" (Weather panel) that varies wind speed/direction composes
+        // smoothly here rather than snapping the field. Rates are independent (no
+        // cross-coupling). Any speed at 0 freezes that part.
+        if (ImGui::TreeNode("Cloud Motion")) {
           RemixGui::DragFloat("Wind Speed", &RtxOptions::cloudWindSpeedObject(),
                               0.005f, 0.0f, 1.0f, "%.3f km/s", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
-              "How fast the cloud field scrolls in km/s.");
+              "How fast the whole cloud field drifts across the sky (km/s).");
           RemixGui::DragFloat("Wind Direction", &RtxOptions::cloudWindDirectionObject(),
                               1.0f, 0.0f, 360.0f, "%.1f\xc2\xb0", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
               "Compass direction the wind blows toward in degrees. "
               "0 = +X, 90 = +Z.");
+
+          ImGui::Separator();
+
+          RemixGui::DragFloat("Morph Speed", &RtxOptions::cloudEvolutionSpeedObject(),
+                              0.0005f, 0.0f, 0.05f, "%.4f km/s", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How fast cloud formations form and dissolve in place (km/s). "
+              "Scrolls the base 3D noise through the volume, decorrelated from "
+              "wind. 0 = field frozen (legacy rigid drift).");
+          RemixGui::DragFloat("Morph Vertical Bias", &RtxOptions::cloudEvolutionVerticalBiasObject(),
+                              0.02f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Share of the morph scroll along the volume's vertical axis [0..1]. "
+              "Higher = more in-place churn; lower = more lateral sliding.");
+          RemixGui::DragFloat("Edge Boil Speed", &RtxOptions::cloudBoilSpeedObject(),
+                              0.001f, 0.0f, 0.05f, "%.4f km/s", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How fast cloud edge billows churn (km/s), independent of the base "
+              "shape. Only active when edge detail strength > 0. 0 = edges frozen.");
+
+          ImGui::TextDisabled("Slow weather-scale wind/coverage drift: Weather "
+                              "\xe2\x86\x92 Cloud Drift");
           ImGui::TreePop();
         }
 

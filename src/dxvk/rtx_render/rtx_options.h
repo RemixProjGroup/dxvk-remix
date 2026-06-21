@@ -1474,6 +1474,21 @@ namespace dxvk {
     RTX_OPTION("rtx.atmosphere", Vector3, cloudColor, Vector3(0.89f, 0.92f, 1.0f), "Base cloud color (albedo).");
     RTX_OPTION("rtx.atmosphere", float, cloudWindSpeed, 0.02f, "Cloud drift speed in km/s. Clouds scroll with this velocity.");
     RTX_OPTION("rtx.atmosphere", float, cloudWindDirection, 45.0f, "Cloud wind direction in degrees (0 = +X, 90 = +Z).");
+    RTX_OPTION("rtx.atmosphere", float, cloudEvolutionSpeed, 0.0015f,
+               "Cloud field-evolution (morph) speed in km/s. Slowly scrolls the base 3D noise "
+               "sample position through the volume — dominated by a vertical scroll through the "
+               "decorrelated, tile-wrapping Y axis — so cloud formations form and dissolve in "
+               "place instead of translating rigidly with the wind. Decorrelated from wind, so it "
+               "also breaks the wind tile-repeat. 0 = field frozen (legacy rigid behavior).");
+    RTX_OPTION("rtx.atmosphere", float, cloudBoilSpeed, 0.004f,
+               "Cloud edge-boil speed in km/s. Scrolls the high-frequency edge-detail tap "
+               "independently of the base shape so cauliflower billows churn and rebuild at the "
+               "silhouette. Only has effect when cloudDetailStrength > 0. 0 = edges frozen.");
+    RTX_OPTION("rtx.atmosphere", float, cloudEvolutionVerticalBias, 0.8f,
+               "Fraction of the cloud field-evolution scroll directed along the volume's vertical "
+               "(Y) axis [0..1]. Higher = more in-place morphing (clouds form/dissolve); lower = "
+               "more lateral sliding. The remainder is split into a fixed diagonal X/Z drift for "
+               "decorrelation.");
     RTX_OPTION("rtx.atmosphere", float, cloudShadowStrength, 0.5f,
                "How strongly overcast clouds dim ground and atmosphere lighting [0..1]. "
                "1.0 = full physical voxel-grid shadow contribution from cloudVoxelShadowsEnable; "
@@ -2117,7 +2132,7 @@ namespace dxvk {
                "cloudViewSamples = 32); this is the deck's own floor, hit on "
                "short (near-zenith) sightlines. Raise for a smoother deck at "
                "higher cost. Applies live.");
-    RTX_OPTION("rtx.atmosphere", uint32_t, cloudLayer2StepMax, 16,
+    RTX_OPTION("rtx.atmosphere", uint32_t, cloudLayer2StepMax, 32,
                "Hard cap on layer-2 echo-deck samples per ray [2..128] — the "
                "deck's performance governor, analogous to cloudViewSamplesMax "
                "for layer 1. Between the floor and this cap the step count "

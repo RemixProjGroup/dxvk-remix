@@ -2251,3 +2251,39 @@ Audit-driven cleanup of the sky/cloud system; no behavior change. Removed two un
 - **`RtxOptions.md` / `docs/RemixSkyAPI.md` / `docs/RemixApiChangelog.md`** — regenerated / `sunDisc` row removed / `[0.4.3] Removed` entry added.
 
 ---
+
+## Workstream — Cloud drift overhaul: field evolution (fork — 2026-06-21)
+
+Replaces the artificial-looking cloud "drift." The old motion had two pieces: rigid wind advection (fine) and a separate global weather-parameter `drift` (`rtx_fork_weather.cpp`) that modulated 9 cloud scalars with a sum-of-sines whose **fast layer had base period exactly 30 s** — its dominant inner sine was a clean 30 s beat, and all 9 fields shared one phase clock, so the whole sky visibly "breathed" in lockstep every ~30 s. The fix moves shape change **into the field** (differential advection, the Nubis/Decima trick) and demotes the global scalar drift to genuinely slow weather-scale change. Two new view-path levers, both reverting to legacy rigid behavior at speed 0: **morph** (a slow 3D scroll of the base noise sample position, Y-dominant so it samples a continuously different, tile-wrapping slice → formations form/dissolve in place, also breaking the 12 km wind tile-repeat) and **edge boil** (an independent faster scroll on the edge-detail tap → billows churn at the silhouette). No constant-buffer growth — four reserve pad slots are reused.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Reuses the three contiguous `pad_cloudVoxelGrid{FrameOffset,SunDirty,AmbientDirty}` slots (from the 2026-06-21 dead-code pass) as `cloudEvolutionOffsetX/Y/Z` (float; the two former `uint` slots retype to float), and the `pad_cloudLayer2CoverageSpread` slot as `cloudBoilPhase`. CB layout byte-identical.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *In `sampleCloudDensityTextured` (view path only): builds `noiseSamplePos = perturbed + cloudEvolutionOffset` and a parallel `noiseTexcoord`, used for the base 3D tap (incl. hex variants) and the step-3b footprint slice ONLY — placement map, hex lattice, column model, and height fraction stay on the real `perturbed`/`texcoord` so cluster location and altitude are unaffected. Step 4b detail tap adds `cloudBoilPhase * kBoilDir` (fixed off-axis unit dir) to its sample position. The shadow sampler (`sampleCloudDensityForShadow`) is intentionally NOT evolved in v1 (baked grids keep describing the bulk field).*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *In `getAtmosphereArgs()`: accumulates the morph offset from `cloudEvolutionSpeed` / `cloudEvolutionVerticalBias` (Y-dominant + diagonal XZ remainder) and the boil phase from `cloudBoilSpeed`, both × `timeSeconds` (mirrors the existing `cloudWindOffset` pattern). Zeros the four new per-frame fields in `normalizeForSkyLutCache` so the sky-LUT memcmp gate doesn't fire every frame.*
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *Adds `cloudEvolutionSpeed` (0.0015), `cloudBoilSpeed` (0.004), `cloudEvolutionVerticalBias` (0.8) to the `rtx.atmosphere` cluster.*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *Adds an "Evolution" subtree (Morph Speed / Morph Vertical Bias / Edge Boil Speed) to Atmosphere → Clouds, next to "Wind". Named distinctly from the weather "Cloud Drift" subtree to avoid confusion.*
+- **`src/dxvk/rtx_render/rtx_fork_weather.cpp`** — fork-owned change.
+  *De-pulse: `driftOffsetForField` drops the fast 30 s layer (slow-only now); removed `kDriftFastPeriodSec`. `kDriftTable` trimmed 9 → 3 (kept `cloudCoverageMean`, `cloudWindSpeed`, `cloudWindDirection` — the weather-scale fields field evolution does not reproduce; dropped the shape-ish density/thickness/type/anvil/coverage-spread entries now owned by field evolution). `static_assert` updated to 3.*
+- **`RtxOptions.md`** — REGEN PENDING (run Remix with `DXVK_DOCUMENTATION_WRITE_RTX_OPTIONS_MD=1`): will add the 3 new options.
+
+---
+
+## Workstream — Cloud motion unification + advection integrator fix (fork — 2026-06-21)
+
+Folds the three cloud-motion sources (wind advection, field-evolution morph/boil, and the slow weather-parameter drift) into ONE per-frame integrator, fixing a latent bug. The wind/evolution/boil offsets were computed stateless as `instantaneousSpeed * timeSeconds` inside the `const` `getAtmosphereArgs` (called ~12×/frame, hence stateless). That is only correct while wind is constant — but the weather blender writes drift-modulated `cloudWindSpeed`/`cloudWindDirection` into the Derived config layer, so each frame the *entire accumulated offset* re-scaled (speed change) or rotated about the origin (direction change), snapping the whole field. Replaced with persistent accumulators advanced once per frame by `offset += velocity * dt`, so a varying wind eases the field instead of jumping. Rates stay independent (no cross-coupling). No CB/shader change — only how the CPU fills the existing `cloudWindOffset` / `cloudEvolutionOffset*` / `cloudBoilPhase` fields. Also: merged the "Wind" + "Evolution" dev-menu subtrees into one "Cloud Motion" tree, and bumped `cloudLayer2StepMax` 16 → 32.
+
+- **`src/dxvk/rtx_render/rtx_atmosphere.h`** — fork-owned change.
+  *Adds `void advanceCloudMotion(float dt)` (public) and three persistent accumulator members `m_cloudAdvectOffset` (Vector2) / `m_cloudEvolutionOffset` (Vector3) / `m_cloudBoilPhase` (float), next to the other per-frame-pushed members.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *Implements `advanceCloudMotion` (integrates wind from drift-modulated `cloudWindSpeed`/`cloudWindDirection`, plus morph + boil, `+= vel*dt`, with a `dt<=0` pause guard). `getAtmosphereArgs` now reads the three members instead of computing `speed*timeSeconds`. `normalizeForSkyLutCache` already zeros those per-frame fields (unchanged).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *Calls `ctx.m_atmosphere->advanceCloudMotion(GlobalTime::get().deltaTime())` once per frame in `updateAtmosphereConstants` (Numos block, alongside the camera-basis push); adds `#include "../util/util_global_time.h"`. Merges the Wind + Evolution UI subtrees into one "Cloud Motion" tree with a pointer to the Weather → Cloud Drift slow modulator.*
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned change.
+  *`cloudLayer2StepMax` default 16 → 32 (per request — layer-2 echo-deck step budget to match layer 1's `cloudViewSamples = 32`).*
+- **`RtxOptions.md`** — REGEN PENDING: reflects the `cloudLayer2StepMax` default change.
+
+---

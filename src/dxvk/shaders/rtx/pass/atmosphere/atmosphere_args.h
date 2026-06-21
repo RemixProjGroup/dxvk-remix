@@ -226,9 +226,11 @@ struct AtmosphereArgs {
   float cloudDensity;       // Overall opacity/density multiplier
 
   float cloudAltitude;      // Altitude of cloud layer (km)
-  float pad_cloudLayer2CoverageSpread; // was cloudLayer2CoverageSpread (removed 2026-06-21 — deck
-                                       // coverage spread forced to 0). Kept as a pad to preserve
-                                       // CB layout; reuse this slot before growing the struct.
+  float cloudBoilPhase;     // Accumulated edge-boil scroll phase (km) — drives the detail tap's
+                            // offset along a fixed internal direction so cloud edges churn
+                            // independently of the base shape (fork — 2026-06-21, field-evolution
+                            // rework). 0 = frozen. Reuses the former pad_cloudLayer2CoverageSpread
+                            // slot; CB layout unchanged.
   float cloudEnabled;       // 1.0 if clouds should be rendered, 0.0 otherwise
   float cloudShadowStrength;// How strongly clouds dim ground/atmosphere lighting [0..1]
 
@@ -293,11 +295,18 @@ struct AtmosphereArgs {
   float cloudVoxelGridExtentKm;     // Horizontal extent of camera-centered grid (default 12.0 km)
   float cloudVoxelGridVerticalKm;   // Vertical extent — populated CPU-side from cloudThickness
   // The three below were informational round-robin/dirty scalars with no shader
-  // consumer; demoted to reserve pads 2026-06-21 (kept to preserve CB layout —
-  // reuse these slots before growing the struct).
-  float pad_cloudVoxelGridFrameOffset;
-  uint  pad_cloudVoxelGridSunDirty;
-  uint  pad_cloudVoxelGridAmbientDirty;
+  // consumer; demoted to reserve pads 2026-06-21, then reused the same day as the
+  // base field-evolution scroll offset (fork — field-evolution rework). This is a
+  // slow 3D offset added to the base 3D noise sample position only (NOT to
+  // heightFraction / hex placement / column model), so the cloud field morphs in
+  // place — clouds form and dissolve — while altitude and placement stay put. The
+  // Y component scrolls through the volume's decorrelated, tile-wrapping vertical
+  // axis (the dominant morph term); X/Z add lateral decorrelation. 0 = frozen.
+  // Three separate scalars reuse the three contiguous voxel-grid pad slots, so the
+  // CB layout is byte-identical.
+  float cloudEvolutionOffsetX;
+  float cloudEvolutionOffsetY;
+  float cloudEvolutionOffsetZ;
   // The three fields below reuse the former pad_cloudVoxel0..2 slots so the
   // constant-buffer layout is unchanged.
   float cloudBottomDarkening;       // [0,1] strength of the sun-gated underside darkening (multi-scatter + ambient)

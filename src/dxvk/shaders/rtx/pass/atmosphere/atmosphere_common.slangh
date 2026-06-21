@@ -2127,6 +2127,23 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
       frac(perturbed.y / args.cloudNoiseTileKm),
       frac(perturbed.z / args.cloudNoiseTileKm));
 
+  // Field-evolution scroll (fork — 2026-06-21). The base 3D noise is sampled at
+  // an additional slowly-evolving offset so the cloud field MORPHS in place
+  // (formations form / dissolve) instead of translating rigidly with wind. The
+  // dominant Y component scrolls through the volume's decorrelated, tile-wrapping
+  // vertical axis → genuine churn, not a slide. This offset feeds ONLY the base
+  // 3D tap and its footprint slice below — the placement map, hex lattice, column
+  // model, and height fraction all stay on the real `perturbed`/`texcoord`, so
+  // cloud clusters keep their sky location and altitude while their shape evolves.
+  // Offset 0 (cloudEvolutionSpeed 0) makes noiseTexcoord == texcoord (legacy).
+  vec3 noiseSamplePos = perturbed + vec3(args.cloudEvolutionOffsetX,
+                                         args.cloudEvolutionOffsetY,
+                                         args.cloudEvolutionOffsetZ);
+  vec3 noiseTexcoord = vec3(
+      frac(noiseSamplePos.x / args.cloudNoiseTileKm),
+      frac(noiseSamplePos.y / args.cloudNoiseTileKm),
+      frac(noiseSamplePos.z / args.cloudNoiseTileKm));
+
   // 2b. Per-column cloud model (fork — 2026-06-11, column-shaping rework).
   //     The hex tile is computed BEFORE the 3D taps (hoisted from step 3)
   //     because the placement tap shares its lattice offsets. When the
@@ -2170,16 +2187,16 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   float texturedNoise;
   if (hexOn) {
     if (hex.w1 > 0.95f) {
-      vec3 hexCoord = vec3(frac(texcoord.x + hex.off1.x), texcoord.y,
-                           frac(texcoord.z + hex.off1.y));
+      vec3 hexCoord = vec3(frac(noiseTexcoord.x + hex.off1.x), noiseTexcoord.y,
+                           frac(noiseTexcoord.z + hex.off1.y));
       texturedNoise = sampleTricubicBSpline(cloudNoise3D, cloudSampler,
                                             hexCoord, vec3(256.0f));
     } else {
-      texturedNoise = sampleCloudNoiseHexBlend(hex, texcoord, cloudNoise3D, cloudSampler);
+      texturedNoise = sampleCloudNoiseHexBlend(hex, noiseTexcoord, cloudNoise3D, cloudSampler);
     }
   } else {
     texturedNoise = sampleTricubicBSpline(cloudNoise3D, cloudSampler,
-                                          texcoord, vec3(256.0f));
+                                          noiseTexcoord, vec3(256.0f));
   }
 
   // 3b. Vertical coherence (fork — 2026-06-10, rev 2 of cloudVerticalStretch).
@@ -2209,9 +2226,10 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
     // Hex de-tiling: shift the footprint slice by the DOMINANT vertex's
     // offset so the footprint tracks the same randomized field the base
     // sample reads (a full 3-tap footprint blend isn't worth it for this
-    // default-inert stabilizer).
-    vec2 fpXZ = hexOn ? vec2(frac(texcoord.x + hex.off1.x), frac(texcoord.z + hex.off1.y))
-                      : vec2(texcoord.x, texcoord.z);
+    // default-inert stabilizer). Uses noiseTexcoord so the footprint tracks the
+    // same evolving field as the base 3D tap (fork — 2026-06-21, field evolution).
+    vec2 fpXZ = hexOn ? vec2(frac(noiseTexcoord.x + hex.off1.x), frac(noiseTexcoord.z + hex.off1.y))
+                      : vec2(noiseTexcoord.x, noiseTexcoord.z);
     float footprint = cloudNoise3D.SampleLevel(cloudSampler,
         vec3(fpXZ.x, kFootprintSliceY, fpXZ.y), 0).r;
     float blended = mix(texturedNoise, footprint, k);
@@ -2280,7 +2298,15 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   //     sampler (sampleCloudDensityForShadow) still skips the whole term, and
   //     cloudDetailStrength = 0 leaves coverageThreshold untouched (bit-identical).
   if (args.cloudDetailStrength > 0.0f) {
-    vec3 detailCoord = frac(perturbed * (args.cloudDetailScale / args.cloudNoiseTileKm));
+    // Edge boil (fork — 2026-06-21, field evolution): scroll the detail tap along
+    // a fixed internal direction at cloudBoilSpeed, INDEPENDENT of the base
+    // shape's wind + evolution, so the erosion field slides relative to the
+    // silhouette and cauliflower billows churn/rebuild at the edge. The direction
+    // is decorrelated from both wind (XZ) and the evolution scroll (Y-dominant).
+    // cloudBoilPhase is accumulated km; 0 = frozen edges (legacy).
+    const vec3 kBoilDir = vec3(0.6092f, 0.7109f, 0.3517f);  // ~unit, off-axis
+    vec3 boilPos = perturbed + args.cloudBoilPhase * kBoilDir;
+    vec3 detailCoord = frac(boilPos * (args.cloudDetailScale / args.cloudNoiseTileKm));
     float detailNoise = cloudNoise3D.SampleLevel(cloudSampler, detailCoord, 0).r;
     // kEdgeDetailThreshold scales the wobble into threshold units; at the 0.6
     // default strength the typical excursion is ~±0.1, with growth peaks to

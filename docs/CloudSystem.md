@@ -172,8 +172,9 @@ The cloud field participates in three places outside its own RT:
    ambient that brightens shadowed and overcast fog.
 4. Tune cloud appearance through the dev menu under
    **Atmosphere -> Clouds** (sub-trees for coverage, type, lighting,
-   multi-scatter, sun-shadow, sky-ambient, drift) or by setting any
-   `rtx.atmosphere.cloud*` key in `rtx.conf`. The most common knobs:
+   multi-scatter, sun-shadow, sky-ambient, cloud motion) or by
+   setting any `rtx.atmosphere.cloud*` key in `rtx.conf`. The most
+   common knobs:
    - `cloudCoverageMean` -- overall cloudiness, 0 = clear, 1 = overcast.
    - `cloudDensity` -- per-cumulus opacity multiplier.
    - `cloudAltitude` / `cloudThickness` -- vertical placement.
@@ -188,6 +189,67 @@ The cloud field participates in three places outside its own RT:
      2026-06-19 sun-only re-architecture; same knob, new home). Default 4.0 --
      the raw transmittance at strength 1 reads too faint. Raise to sharpen
      cumulus shadow contrast, lower to soften.
+
+## Cloud motion: one integrator, three sources
+
+Everything that moves or changes the clouds runs through a single
+per-frame **cloud-motion integrator**
+(`RtxAtmosphere::advanceCloudMotion`, fork — 2026-06-21). It advances
+three persistent offset accumulators by `offset += velocity * dt` once
+per frame; the const `getAtmosphereArgs` (called many times per frame)
+just reads them into `cloudWindOffset` / `cloudEvolutionOffset*` /
+`cloudBoilPhase`.
+
+> **Why an integrator (the bug it fixed).** These offsets used to be
+> computed stateless as `instantaneousSpeed * totalElapsedTime` inside
+> the const accessor. That is only correct while wind is constant. The
+> slow weather drift (source 3 below) varies `cloudWindSpeed` /
+> `cloudWindDirection`, so every frame the *entire accumulated offset*
+> re-scaled or rotated about the origin — the whole field visibly
+> jumped/slid. Integrating instantaneous velocity instead means a
+> changing wind smoothly *eases* the field, so the weather drift now
+> composes correctly. The three sources feed the same integrator but
+> keep independent rates (no cross-coupling).
+
+The three sources:
+
+1. **Wind advection** (`cloudWindSpeed` / `cloudWindDirection`).
+   Rigid bulk translation of the whole field across the sky. The
+   prebaked noise tile-wraps at `cloudNoiseTileKm` (12 km), so at the
+   default 0.02 km/s the field exactly repeats every ~10 min of travel.
+
+2. **Field evolution** (`cloudEvolutionSpeed`, `cloudEvolutionVerticalBias`,
+   `cloudBoilSpeed`; dev-menu **Atmosphere -> Clouds -> Cloud Motion**).
+   Added 2026-06-21. Makes the cloud field *morph in place* rather than
+   only sliding: the base 3D noise is sampled at a slowly-evolving
+   offset (dominated by a vertical scroll through the volume's
+   decorrelated, tile-wrapping Y axis), so formations form and dissolve
+   locally; an independent faster scroll on the edge-detail tap
+   (`cloudBoilSpeed`) churns the cauliflower billows at the silhouette.
+   Because the evolution scroll is decorrelated from wind, it also
+   breaks the 10-min wind tile-repeat. The offset feeds the **view-path**
+   density sampler only -- it does not touch the placement map, hex
+   lattice, column model, or height fraction, so cluster locations and
+   altitudes stay put while shapes change. The baked sun/ambient shadow
+   grids are intentionally *not* evolved in v1 (they keep describing the
+   slow bulk field; matching the boil into them is future work). Any
+   speed at 0 freezes that lever and is bit-identical to the legacy
+   rigid behavior. This system replaced the old global-scalar "breathing"
+   (see below) as the source of cloud shape change.
+
+3. **Weather-parameter drift** (`__weather.drift_speed` /
+   `__weather.drift_intensity`; dev-menu **Weather -> Cloud Drift**, in
+   `rtx_fork_weather.cpp`). Slowly modulates a few *global* weather
+   scalars over time so the sky's overall character changes. As of
+   2026-06-21 it is **de-pulsed and trimmed**: the old fast layer had a
+   base period of exactly 30 s, whose dominant sine produced a clearly
+   visible whole-sky pulse every ~30 s with all fields cresting in
+   lockstep -- that fast layer is removed (slow multi-minute layer only),
+   and the table is cut from 9 fields to the 3 genuinely weather-scale
+   ones (`cloudCoverageMean`, `cloudWindSpeed`, `cloudWindDirection`).
+   The shape-ish fields it used to wobble globally (density, thickness,
+   type, anvil, coverage spread) are now handled locally by field
+   evolution instead.
 
 ## Debug views
 

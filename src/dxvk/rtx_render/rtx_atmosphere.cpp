@@ -347,6 +347,14 @@ namespace {
   void normalizeForSkyLutCache(AtmosphereArgs& args) {
     args.timeSeconds                 = 0.0f;
     args.cloudWindOffset             = vec2(0.0f, 0.0f);
+    // Field-evolution / boil scroll (fork — 2026-06-21): per-frame animated, feeds
+    // only the view-path cloud taps (not any LUT bake), so zero them in the key
+    // exactly like cloudWindOffset to keep the sky-LUT memcmp gate from firing
+    // every frame.
+    args.cloudEvolutionOffsetX       = 0.0f;
+    args.cloudEvolutionOffsetY       = 0.0f;
+    args.cloudEvolutionOffsetZ       = 0.0f;
+    args.cloudBoilPhase              = 0.0f;
     args.cloudRenderFrameIdx         = 0u;
     args.cloudRenderForwardYUp       = vec3(0.0f, 0.0f, 0.0f);
     args.cloudRenderRightYUp         = vec3(0.0f, 0.0f, 0.0f);
@@ -640,14 +648,20 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudAltitude = RtxOptions::cloudAltitude();
     args.cloudEnabled = RtxOptions::cloudEnabled() ? 1.0f : 0.0f;
 
-    // Accumulated wind offset. Wind scrolling is driven by timeSeconds so the
-    // motion is continuous across frames even though we only store a scalar
-    // offset per axis.
-    constexpr float kDegToRadLocal = 3.14159265358979323846f / 180.0f;
-    float windAngle = RtxOptions::cloudWindDirection() * kDegToRadLocal;
-    float windSpeed = RtxOptions::cloudWindSpeed();
-    args.cloudWindOffset.x = std::cos(windAngle) * windSpeed * args.timeSeconds;
-    args.cloudWindOffset.y = std::sin(windAngle) * windSpeed * args.timeSeconds;
+    // Unified cloud motion (fork — 2026-06-21). Wind advection, field-evolution
+    // morph, and edge boil are all integrated once per frame by advanceCloudMotion()
+    // (offset += velocity * dt) into persistent members; this const accessor just
+    // reads them. This replaced the former stateless `speed * timeSeconds`: that
+    // form mis-scaled/rotated the entire accumulated field whenever the slow
+    // weather drift varied cloudWindSpeed / cloudWindDirection (it multiplied the
+    // instantaneous speed by total elapsed time instead of integrating). See
+    // advanceCloudMotion().
+    args.cloudWindOffset.x     = m_cloudAdvectOffset.x;
+    args.cloudWindOffset.y     = m_cloudAdvectOffset.y;
+    args.cloudEvolutionOffsetX = m_cloudEvolutionOffset.x;
+    args.cloudEvolutionOffsetY = m_cloudEvolutionOffset.y;
+    args.cloudEvolutionOffsetZ = m_cloudEvolutionOffset.z;
+    args.cloudBoilPhase        = m_cloudBoilPhase;
 
     args.cloudShadowStrength = RtxOptions::cloudShadowStrength();
     args.cloudAnisotropy = RtxOptions::cloudAnisotropy();
@@ -1603,6 +1617,46 @@ void RtxAtmosphere::setCloudRenderCameraBasis(const Vector3& forwardYUp,
 
 void RtxAtmosphere::setCloudShadowCameraPosition(const Vector3& cameraWorldPosYUpKm) {
   m_cameraWorldPosYUpKm = cameraWorldPosYUpKm;
+}
+
+// Unified cloud-motion integrator (fork — 2026-06-21). Called exactly once per
+// frame from updateAtmosphereConstants. Integrates all three cloud-motion sources
+// as offset += velocity * dt into persistent members that the const
+// getAtmosphereArgs() reads. Wind velocity comes from the LIVE cloudWindSpeed /
+// cloudWindDirection — which already carry the slow weather drift (written to the
+// Derived config layer by the weather blender) — so the drift now composes
+// smoothly: a varying wind velocity eases the field instead of re-scaling/rotating
+// the whole accumulated offset the way the old `speed * timeSeconds` did. Morph
+// and boil stay independent absolute rates (no cross-coupling, by design).
+// Precision: the accumulators grow ~speed * sessionTime, same as the old form; the
+// shader's frac() wraps them. No modulo-wrap in v1 (parity) — a future robustness
+// item if very long sessions show drift in the wrap.
+void RtxAtmosphere::advanceCloudMotion(float dt) {
+  // Guard pause / first-frame / pathological dt. <= 0 leaves the field frozen
+  // exactly where it is (no jump on resume).
+  if (!(dt > 0.0f)) {
+    return;
+  }
+
+  constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+
+  // Wind advection — drift-modulated speed/direction, integrated.
+  const float windAngle = RtxOptions::cloudWindDirection() * kDegToRad;
+  const float windSpeed = RtxOptions::cloudWindSpeed();  // km/s
+  m_cloudAdvectOffset.x += std::cos(windAngle) * windSpeed * dt;
+  m_cloudAdvectOffset.y += std::sin(windAngle) * windSpeed * dt;
+
+  // Field-evolution morph — Y-dominant scroll through the volume (in-place
+  // morphing) with the XZ remainder split diagonally for lateral decorrelation.
+  const float evoSpeed = RtxOptions::cloudEvolutionSpeed();  // km/s
+  const float vBias    = std::min(std::max(RtxOptions::cloudEvolutionVerticalBias(), 0.0f), 1.0f);
+  const float lateral  = (1.0f - vBias) * 0.70710678f;
+  m_cloudEvolutionOffset.y += vBias   * evoSpeed * dt;
+  m_cloudEvolutionOffset.x += lateral * evoSpeed * dt;
+  m_cloudEvolutionOffset.z += lateral * evoSpeed * dt;
+
+  // Edge boil — single scalar phase expanded along a fixed direction in the shader.
+  m_cloudBoilPhase += RtxOptions::cloudBoilSpeed() * dt;  // km/s integrated
 }
 
 void RtxAtmosphere::dispatchCloudRender(Rc<DxvkContext> ctx) {
