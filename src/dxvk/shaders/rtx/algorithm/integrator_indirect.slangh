@@ -878,6 +878,23 @@ void integratePathVertex(
 
 
       lightSample.solidAnglePdf = invSelectionPdf > 0 ? lightSample.solidAnglePdf / invSelectionPdf : 0.0;
+
+      // Cloud-on-terrain shadow on the atmosphere sun (real distant light) for
+      // secondary bounces — mirror of the primary path in integrator_direct.slangh.
+      // fork — experiment 2026-06-21.
+      if (lightSampleValid && cb.skyMode == 1 && cb.atmosphereArgs.cloudVoxelShadowsEnable != 0u
+          && lightIdx != kInvalidLightIdx)
+      {
+        const DecodedPolymorphicLight cloudShadowLight = decodePolymorphicLight(lights[lightIdx]);
+        if (cloudShadowLight.atmosphereCloudShadowed)
+        {
+          const vec3 dirToSun = normalize(lightSample.position - surfaceInteraction.position);
+          const float cloudT = sampleCloudGroundShadow_OptionB(
+              surfaceInteraction.position, dirToSun, cb.atmosphereArgs, cb.isZUp != 0);
+          lightSample.radiance *= pow(cloudT, cb.atmosphereArgs.cloudShadowFactorStrength);
+        }
+      }
+
       vec3 diffuseLight, specularLight;
       const bool isDiffusionProfileSss = (cb.sssArgs.enableDiffusionProfile && isSubsurfaceDiffusionProfileMaterial(opaqueSurfaceMaterialInteraction));
       evaluateUnshadowedLight(lightSample, opaqueSurfaceMaterialInteraction, rayInteraction, normalize(lightSample.position - surfaceInteraction.position), diffuseLight, specularLight);
@@ -994,8 +1011,12 @@ void integratePathVertex(
     
     // Evaluate direct sun lighting from physical atmosphere for secondary bounces
     // (debugSkyBisectFlags bit 0: perf-bisect skip — fork, diagnostic)
+    // (debugSkyBisectFlags bit 2: sun/moon are real distant lights sampled via the
+    //  standard indirect NEE — skip this bespoke secondary path to avoid double-
+    //  counting the bounced sun/moon. fork — experiment 2026-06-21.)
     if (cb.skyMode == 1 && isNeeEnabledOnBounce
-        && (cb.atmosphereArgs.debugSkyBisectFlags & 1u) == 0u) // Physical atmosphere mode
+        && (cb.atmosphereArgs.debugSkyBisectFlags & 1u) == 0u
+        && (cb.atmosphereArgs.debugSkyBisectFlags & 4u) == 0u) // Physical atmosphere mode, bespoke secondary NEE
     {
       vec3 sunDiffuse = vec3(0.0f);
       vec3 sunSpecular = vec3(0.0f);

@@ -131,7 +131,7 @@ namespace fork_hooks {
       };
 
       // m_direction is the propagation direction (toward the ground) = -toBody.
-      auto ensureLight = [&](RtLight*& slot, const Vector3& propDir, float halfAngle, const Vector3& radiance) {
+      auto ensureLight = [&](RtLight*& slot, const Vector3& propDir, float halfAngle, const Vector3& radiance, bool cloudShadowed) {
         const Vector3 clamped(std::max(radiance.x, 0.0f), std::max(radiance.y, 0.0f), std::max(radiance.z, 0.0f));
         auto dl = RtDistantLight::tryCreate(propDir, std::max(halfAngle, kMinHalfAngle), clamped);
         if (!dl) {
@@ -143,6 +143,9 @@ namespace fork_hooks {
         // after getNumFramesToPutLightsToSleep() frames — which froze the sun's
         // direction (it stopped tracking sunRotation/sunElevation).
         rtl.isDynamic = true;
+        // When set, the NEE folds the per-pixel cloud-on-terrain transmittance
+        // onto this light's contribution (distant-light GPU flags bit 2).
+        rtl.atmosphereCloudShadowed = cloudShadowed;
         if (slot == nullptr) {
           slot = lm.createExternallyTrackedLight(rtl);
         } else {
@@ -169,7 +172,7 @@ namespace fork_hooks {
         const Vector3 toSun = toWorld(sunDirYUp);
         const Vector3 propDir = (sunDirYUp.y > 0.0f) ? Vector3(-toSun.x, -toSun.y, -toSun.z)
                                                      : Vector3(0.0f, -1.0f, 0.0f);
-        ensureLight(g_atmoLights.sun, propDir, args.sunAngularRadius, radiance);
+        ensureLight(g_atmoLights.sun, propDir, args.sunAngularRadius, radiance, /*cloudShadowed=*/true);
       }
 
       // ---- Moons (lazily created; mirror sampleAtmosphereMoonLight radiance) ----
@@ -203,7 +206,7 @@ namespace fork_hooks {
         const Vector3 toMoon = toWorld(dirN);
         const Vector3 propDir = lit ? Vector3(-toMoon.x, -toMoon.y, -toMoon.z) : Vector3(0.0f, -1.0f, 0.0f);
         // Half-angle = the moon's physical angular radius (same as the sun).
-        ensureLight(g_atmoLights.moons[i], propDir, m.angularRadius, radiance);
+        ensureLight(g_atmoLights.moons[i], propDir, m.angularRadius, radiance, /*cloudShadowed=*/false);
       }
     }
   }  // anonymous namespace

@@ -1275,8 +1275,14 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
   // granularity, any other parameter exactly. Cloud-body lighting and (when
   // enabled) terrain cumulus shadows read grids that are stale by at most
   // one step between re-bakes.
+  // Force a per-frame voxel-grid re-bake whenever cloud ground shadows are on, so
+  // the terrain shadow is fully up to date with zero granularity stepping (fork —
+  // 2026-06-21, requested). When shadows are OFF the grid is only needed for
+  // cloud-body lighting (which tolerates one step of staleness), so it falls back
+  // to the km granularity gate — meaning toggling cloudVoxelShadowsEnable measures
+  // the full cost of the cloud-shadow feature (per-frame grid bake + the NEE fold).
   bool voxelGridsDirty = true;
-  if (RtxOptions::cloudVoxelGridRebakeGranularityKm() > 0.0f) {
+  if (RtxOptions::cloudVoxelGridRebakeGranularityKm() > 0.0f && !RtxOptions::cloudVoxelShadowsEnable()) {
     AtmosphereArgs voxelKey = getAtmosphereArgs();
     normalizeForVoxelGridKey(voxelKey);
     voxelGridsDirty = memcmp(&voxelKey, &m_cachedVoxelGridKey, sizeof(AtmosphereArgs)) != 0;

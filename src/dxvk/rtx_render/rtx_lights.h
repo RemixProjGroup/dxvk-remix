@@ -411,7 +411,7 @@ struct RtDistantLight {
 
   void applyTransform(const Matrix4& lightToWorld);
 
-  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false) const;
+  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false, bool atmosphereCloudShadowed = false) const;
 
   bool operator==(const RtDistantLight& rhs) const = delete;
 
@@ -645,6 +645,10 @@ struct RtLight {
   uint32_t isStaticCount = 0;
   bool isDynamic = false;
   bool ignoreViewModel = false;
+  // fork — 2026-06-21: when set, the NEE multiplies this light's contribution by
+  // the per-pixel atmosphere cloud-on-terrain transmittance (used for the
+  // injected sun distant light). Encoded as distant-light GPU flags bit 2.
+  bool atmosphereCloudShadowed = false;
 
 private:
   // Type-specific Light Information

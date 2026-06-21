@@ -645,6 +645,26 @@ void integrateDirectPath(
 
     const bool isDiffusionProfileSss = (cb.sssArgs.enableDiffusionProfile && isSubsurfaceDiffusionProfileMaterial(opaqueSurfaceMaterialInteraction));
 
+    // Cloud-on-terrain shadow on the atmosphere sun (real distant light): fold the
+    // per-pixel cloud transmittance onto the flagged light's NEE radiance. This is
+    // the physically-correct successor to the bespoke sampleAtmosphereSunLight fold
+    // — applied to a real light so it is per-pixel, correct indoors (the light's own
+    // shadow ray handles the roof), denoised, and free for every surface type.
+    // fork — experiment 2026-06-21.
+    if ((rtxdiLightSampleValid || risLightSampleValid)
+        && cb.skyMode == 1 && cb.atmosphereArgs.cloudVoxelShadowsEnable != 0u
+        && lightIdx != kInvalidLightIdx)
+    {
+      const DecodedPolymorphicLight cloudShadowLight = decodePolymorphicLight(lights[lightIdx]);
+      if (cloudShadowLight.atmosphereCloudShadowed)
+      {
+        const vec3 dirToSun = normalize(lightSample.position - primarySurfaceInteraction.position);
+        const float cloudT = sampleCloudGroundShadow_OptionB(
+            primarySurfaceInteraction.position, dirToSun, cb.atmosphereArgs, cb.isZUp != 0);
+        lightSample.radiance *= pow(cloudT, cb.atmosphereArgs.cloudShadowFactorStrength);
+      }
+    }
+
     // Evaluate NEE
     if (rtxdiLightSampleValid || risLightSampleValid || isDiffusionProfileSss)
     {

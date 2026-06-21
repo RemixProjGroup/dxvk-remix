@@ -1470,7 +1470,7 @@ namespace dxvk {
     RTX_OPTION("rtx.atmosphere", Vector3, cloudColor, Vector3(0.89f, 0.92f, 1.0f), "Base cloud color (albedo).");
     RTX_OPTION("rtx.atmosphere", float, cloudWindSpeed, 0.02f, "Cloud drift speed in km/s. Clouds scroll with this velocity.");
     RTX_OPTION("rtx.atmosphere", float, cloudWindDirection, 45.0f, "Cloud wind direction in degrees (0 = +X, 90 = +Z).");
-    RTX_OPTION("rtx.atmosphere", float, cloudShadowStrength, 0.10f,
+    RTX_OPTION("rtx.atmosphere", float, cloudShadowStrength, 0.5f,
                "How strongly overcast clouds dim ground and atmosphere lighting [0..1]. "
                "1.0 = full physical voxel-grid shadow contribution from cloudVoxelShadowsEnable; "
                "0 = shadows fully muted (voxel grid still runs but its output is mixed away).");
