@@ -364,6 +364,19 @@ DxvkMemory::DxvkMemory() { }
     m_device          (device),
     m_devProps        (device->adapter()->deviceProperties()),
     m_memProps        (device->adapter()->memoryProperties()) {
+    // NV-DXVK: Intel discrete GPUs (e.g. Arc B-series) expose a dedicated VRAM heap and are
+    // NOT unified-memory, so the 80% heap budget below was never applied to them. With no
+    // budget the allocator happily over-commits VRAM under heavy texture / path-tracing load,
+    // and once the driver's real budget is exceeded the device is lost
+    // (VK_ERROR_DEVICE_LOST) on Arc. Treat Intel like UMA here so over-budget device-local
+    // allocations spill to system memory (tryAllocDeviceMemory returns empty -> the allocator
+    // falls back to another memory type) instead of exhausting VRAM. NVIDIA and AMD keep their
+    // existing behaviour. This mirrors the driver-memory-budget adherence DXVK added for
+    // Intel Battlemage.
+    const bool capDeviceLocalHeapBudget =
+      m_device->isUnifiedMemoryArchitecture()
+      || (m_device->properties().core.properties.vendorID == uint32_t(DxvkGpuVendor::Intel));
+
     for (uint32_t i = 0; i < m_memProps.memoryHeapCount; i++) {
       m_memHeaps[i].properties = m_memProps.memoryHeaps[i];
       m_memHeaps[i].budget     = 0;
@@ -371,7 +384,7 @@ DxvkMemory::DxvkMemory() { }
       /* Target 80% of a heap on systems where we want
        * to avoid oversubscribing memory heaps */
       if ((m_memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
-       && (m_device->isUnifiedMemoryArchitecture()))
+       && capDeviceLocalHeapBudget)
         m_memHeaps[i].budget = (8 * m_memProps.memoryHeaps[i].size) / 10;
     }
     
