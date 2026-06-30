@@ -88,6 +88,21 @@ namespace dxvk {
       }
     }
 
+    // NV-DXVK start: cross-vendor geometry correctness (AMD/Intel).
+    // By default Remix builds the BVH directly from the game's own D3D9 vertex/index
+    // buffers (rtx.useBuffersDirectly, an NVIDIA-tuned zero-copy optimization). On AMD
+    // and Intel that races the game's per-frame buffer reuse - the driver timing that
+    // hides the hazard on NVIDIA does not hold - so transforms read stale/aliased data
+    // and geometry collapses to a point or explodes to infinity (the known "meshes
+    // exploding / garbled" class of bug). Force a geometry copy on non-NVIDIA so the BVH
+    // is built from owned, fully-written buffers. setDeferred targets the Derived layer,
+    // so an explicit user rtx.conf value (User layer) still wins, and NVIDIA keeps the
+    // zero-copy fast path. Applied for every preset/path before applyPendingValues below.
+    if (m_device->properties().core.properties.vendorID != static_cast<uint32_t>(DxvkGpuVendor::Nvidia)) {
+      RtxOptions::useBuffersDirectly.setDeferred(false);
+    }
+    // NV-DXVK end
+
     // Configure shader manager to understand bindless layouts
     ShaderManager::getInstance()->addGlobalExtraLayout(pCommon->getSceneManager().getBindlessResourceManager().getGlobalBindlessTableLayout(BindlessResourceManager::Buffers));
     ShaderManager::getInstance()->addGlobalExtraLayout(pCommon->getSceneManager().getBindlessResourceManager().getGlobalBindlessTableLayout(BindlessResourceManager::Textures));

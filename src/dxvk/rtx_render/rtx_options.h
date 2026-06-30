@@ -677,14 +677,16 @@ namespace dxvk {
     struct Compatibility {
       friend class ImGUI;
       friend class RtxOptions;
-      // The RTX shaders assume a 32-lane subgroup (wave32). On devices whose native
-      // subgroup width differs (notably Intel Arc, which dispatches SIMD8/16/32), this
-      // pins compute and ray-tracing pipelines to a 32-lane subgroup via
-      // VK_EXT_subgroup_size_control, avoiding incorrect results and GPU hangs. Only takes
-      // effect on Intel GPUs that support a required subgroup size of 32; NVIDIA/AMD are
-      // unaffected. Disable only for debugging.
-      RTX_OPTION("rtx.compatibility", bool, pinIntelSubgroupSize, true,
-                 "Pin compute/ray-tracing pipelines to a 32-lane subgroup on Intel GPUs that assume wave32 in the RTX shaders. Only affects Intel hardware; NVIDIA/AMD are unchanged.");
+      // EXPERIMENTAL, default OFF. The RTX shaders assume a 32-lane subgroup (wave32);
+      // Intel Arc dispatches SIMD8/16/32. This option enables VK_EXT_subgroup_size_control
+      // and pins compute/ray-tracing pipelines to a 32-lane subgroup on Intel.
+      // It is OFF by default because a blanket pin is unsafe: Vulkan requires a compute
+      // shader's local workgroup size to be <= requiredSubgroupSize * maxComputeWorkgroupSubgroups,
+      // so forcing 32 on large-workgroup shaders yields an invalid pipeline (-> VK_ERROR_DEVICE_LOST),
+      // and forcing SIMD32 on register-heavy shaders spills and runs slow. Only enable it to
+      // experiment on Intel; NVIDIA/AMD never enable the feature and are unaffected either way.
+      RTX_OPTION("rtx.compatibility", bool, pinIntelSubgroupSize, false,
+                 "EXPERIMENTAL (Intel only, default off). Enables VK_EXT_subgroup_size_control and pins compute/ray-tracing pipelines to a 32-lane subgroup. A blanket pin can cause device-lost or slowdowns (see the Vulkan workgroup-size constraint), so leave off unless experimenting. NVIDIA/AMD are never affected.");
     };
     // NV-DXVK end
 

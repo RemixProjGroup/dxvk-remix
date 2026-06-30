@@ -35,6 +35,9 @@
 // NV-DXVK start: Remix message box utilities
 #include "rtx_render/rtx_env.h"
 // NV-DXVK end:
+// NV-DXVK start: Intel GPU compatibility - read the subgroup-size-control opt-in
+#include "rtx_render/rtx_options.h"
+// NV-DXVK end:
 // NV-DXVK start: Provide error code on exception
 #include <remix/remix_c.h>
 // NV-DXVK end
@@ -410,6 +413,17 @@ namespace dxvk {
       enabledFeatures.khrBufferDeviceAddress.bufferDeviceAddress = VK_TRUE;
     }
 
+    // NV-DXVK start: Intel GPU compatibility - only enable VK_EXT_subgroup_size_control
+    // when the experimental Intel opt-in is set. Enabling it lets the driver vary the
+    // subgroup size for un-pinned pipelines, which corrupts subgroup-dependent shaders on
+    // AMD/Intel. By default we disable the extension entirely so device creation stays
+    // byte-for-byte stock on every vendor.
+    if (!(m_deviceInfo.core.properties.vendorID == static_cast<uint32_t>(DxvkGpuVendor::Intel)
+          && RtxOptions::Compatibility::pinIntelSubgroupSize())) {
+      devExtensions.extSubgroupSizeControl.setMode(DxvkExtMode::Disabled);
+    }
+    // NV-DXVK end
+
     DxvkNameSet extensionsEnabled;
 
     if (!m_deviceExtensions.enableExtensions(
@@ -617,10 +631,15 @@ namespace dxvk {
     }
     // NV-DXVK end
 
-    // NV-DXVK start: Intel GPU compatibility - enable subgroup size control so the runtime
-    // can request a fixed 32-lane subgroup for compute/RT pipelines on devices (notably
-    // Intel Arc) whose native subgroup width differs from the wave32 the RTX shaders assume.
-    if (devExtensions.extSubgroupSizeControl) {
+    // NV-DXVK start: Intel GPU compatibility - subgroup size control.
+    // Only enable the feature on Intel AND when the experimental opt-in is set. Enabling
+    // subgroupSizeControl lets the driver vary the subgroup size for un-pinned pipelines,
+    // which changes shader behaviour and (combined with the blanket 32-lane pin) can cause
+    // device-lost / slowdowns on Intel. So by default we do NOT enable it, leaving device
+    // creation identical to stock (native fixed subgroup size). NVIDIA/AMD never enable it.
+    if (devExtensions.extSubgroupSizeControl
+        && m_deviceInfo.core.properties.vendorID == static_cast<uint32_t>(DxvkGpuVendor::Intel)
+        && RtxOptions::Compatibility::pinIntelSubgroupSize()) {
       enabledFeatures.extSubgroupSizeControl.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
       enabledFeatures.extSubgroupSizeControl.pNext = std::exchange(enabledFeatures.core.pNext, &enabledFeatures.extSubgroupSizeControl);
       enabledFeatures.extSubgroupSizeControl.subgroupSizeControl = m_deviceFeatures.extSubgroupSizeControl.subgroupSizeControl;

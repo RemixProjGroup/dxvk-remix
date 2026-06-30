@@ -108,8 +108,11 @@ namespace dxvk {
       info.stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
       info.access = VK_ACCESS_SHADER_WRITE_BIT;
       info.size   = static_cast<VkDeviceSize>(newCapacity) * sizeof(uint32_t);
+      // HOST_COHERENT so the CPU sees the GPU's writes next frame without an explicit
+      // invalidate; HOST_CACHED keeps the per-instance reads cheap. Works the same on
+      // NVIDIA and Intel (both expose a host-visible+coherent memory type).
       m_resultBuffer = dev->createBuffer(info,
-                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
+                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
                                          DxvkMemoryStats::Category::RTXBuffer,
                                          "RTX GPU Scene - Keep Results");
     }
