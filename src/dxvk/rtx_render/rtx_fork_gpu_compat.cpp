@@ -20,11 +20,14 @@
 #include "rtx_fork_gpu_compat.h"
 
 #include "dxvk_device.h"
-#include "dxvk_adapter.h"   // DxvkGpuVendor
+#include "dxvk_adapter.h"   // DxvkGpuVendor, DxvkAdapter::formatProperties
 #include "rtx_options.h"    // UpscalerType, RtxOptions
 #include "rtx_xess.h"       // DxvkXeSS::isXeSSLibraryAvailable
 
 #include "vulkan/vulkan_core.h"  // VkShaderStageFlags / required-subgroup-size limits
+
+#include <mutex>
+#include <unordered_map>
 
 namespace dxvk {
 
@@ -99,6 +102,55 @@ namespace dxvk {
         return UpscalerType::XeSS;
       }
       return UpscalerType::TAAU;
+    }
+
+    bool gpuCompatNeedsBlasVertexFormatConversion(const DxvkDevice* device, uint32_t vkFormat) {
+      // NVIDIA is left byte-for-byte unchanged. It advertises acceleration-structure
+      // vertex-buffer support for every format Remix's geometry path treats as "GPU
+      // friendly", so it never needs a conversion and we skip the query entirely.
+      if (vendorOf(device) == DxvkGpuVendor::Nvidia) {
+        return false;
+      }
+
+      // Cache the per-format answer: this is queried per cached geometry and the device's
+      // format capabilities are immutable for the device's lifetime.
+      static dxvk::mutex s_mutex;
+      static std::unordered_map<uint32_t, bool> s_needsConversion;
+
+      {
+        std::lock_guard<dxvk::mutex> lock(s_mutex);
+        const auto it = s_needsConversion.find(vkFormat);
+        if (it != s_needsConversion.end()) {
+          return it->second;
+        }
+      }
+
+      // bufferFeatures carries VK_FORMAT_FEATURE_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR
+      // for formats usable as BLAS triangle vertex data. Only R32G32_SFLOAT,
+      // R32G32B32_SFLOAT, R16G16(B16A16)_SFLOAT and R16G16(B16A16)_SNORM are guaranteed by
+      // the spec; anything else (e.g. R32G32B32A32_SFLOAT) is optional and absent on Arc.
+      const VkFormatProperties props = device->adapter()->formatProperties(static_cast<VkFormat>(vkFormat));
+      const bool asVertexSupported =
+        (props.bufferFeatures & VK_FORMAT_FEATURE_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR) != 0;
+      const bool needsConversion = !asVertexSupported;
+
+      {
+        std::lock_guard<dxvk::mutex> lock(s_mutex);
+        s_needsConversion[vkFormat] = needsConversion;
+      }
+
+      if (needsConversion) {
+        Logger::warn(str::format(
+          "[gpu-compat] Vertex format ", vkFormat, " has no acceleration-structure "
+          "vertex-buffer support on this GPU; converting geometry to R32G32B32_SFLOAT for "
+          "the BVH build to avoid corrupt geometry / device loss."));
+      } else {
+        Logger::info(str::format(
+          "[gpu-compat] Vertex format ", vkFormat, " is acceleration-structure capable; "
+          "using it directly."));
+      }
+
+      return needsConversion;
     }
 
   } // namespace fork_hooks

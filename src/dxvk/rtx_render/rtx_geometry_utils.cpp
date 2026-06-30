@@ -35,6 +35,7 @@
 
 #include "rtx_context.h"
 #include "rtx_options.h"
+#include "rtx_fork_gpu_compat.h"  // fork_hooks::gpuCompatNeedsBlasVertexFormatConversion
 
 #include "rtx/pass/view_model/view_model_correction_binding_indices.h"
 #include "rtx/pass/opacity_micromap/bake_opacity_micromap_binding_indices.h"
@@ -829,7 +830,21 @@ namespace dxvk {
     ScopedCpuProfileZone();
     // When forceNormals is set, we can't use the fast interleaved copy path because
     // we need to change the vertex layout to include normal space.
-    if (input.isVertexDataInterleaved() && input.areFormatsGpuFriendly() && !forceNormals) {
+    bool useFastCopy = input.isVertexDataInterleaved() && input.areFormatsGpuFriendly() && !forceNormals;
+
+    // NV-DXVK: the fast path copies the game's vertex buffer untouched and feeds its native
+    // format straight into the BLAS build. NVIDIA supports every "GPU friendly" format for
+    // acceleration-structure vertex data, but Intel Arc does not advertise it for some
+    // (notably R32G32B32A32_SFLOAT) - which yields a corrupt BVH (stretched / exploded
+    // geometry) and a ray-traversal device-loss. When the device can't build a BVH from
+    // this position format directly, fall through to the interleave path below, which emits
+    // VK_FORMAT_R32G32B32_SFLOAT (a guaranteed AS vertex format). The hook returns false on
+    // NVIDIA, so this never changes the NVIDIA path.
+    if (useFastCopy && fork_hooks::gpuCompatNeedsBlasVertexFormatConversion(ctx->getDevice().ptr(), input.positionBuffer.vertexFormat())) {
+      useFastCopy = false;
+    }
+
+    if (useFastCopy) {
       const size_t vertexBufferSize = input.vertexCount * input.positionBuffer.stride();
       ctx->copyBuffer(output.historyBuffer[0], 0, input.positionBuffer.buffer(), input.positionBuffer.offset(), vertexBufferSize);
 

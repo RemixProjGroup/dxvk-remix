@@ -50,6 +50,18 @@ namespace dxvk {
     // RtxOptions::updateGraphicsPresets.
     UpscalerType gpuCompatDefaultUpscaler(const DxvkDevice* device);
 
+    // True when the game's native vertex position format cannot be consumed directly by an
+    // acceleration-structure (BVH) build on this device, so the geometry must be converted
+    // to VK_FORMAT_R32G32B32_SFLOAT first. Remix's "GPU friendly" fast path copies the
+    // game's vertex buffer untouched and feeds its native format straight into the BLAS.
+    // NVIDIA advertises acceleration-structure vertex-buffer support for every format Remix
+    // treats as friendly (notably R32G32B32A32_SFLOAT); Intel Arc does not, which produces
+    // a garbage BVH - stretched / exploded geometry - and a ray-traversal device-loss.
+    // Driven by the device's actual VkFormatProperties, so NVIDIA always returns false and
+    // is byte-for-byte unchanged. `vkFormat` is a VkFormat value. Result is cached per
+    // format. Called from RtxGeometryUtils::cacheVertexDataOnGPU.
+    bool gpuCompatNeedsBlasVertexFormatConversion(const DxvkDevice* device, uint32_t vkFormat);
+
   } // namespace fork_hooks
 
 } // namespace dxvk

@@ -2365,7 +2365,13 @@ edits are vendor-gated and additive. Also bumps the vendored Intel XeSS SDK to
 the latest 2.x (v2.1.1).
 
 - **`src/dxvk/rtx_render/rtx_fork_gpu_compat.cpp` / `.h`** — fork-owned new module (slim header, `fork_hooks::` impl).
-  *`gpuCompatSkipShaderPrewarm`, `gpuCompatRequiredSubgroupSize` (returns 32 on Intel only), `gpuCompatFallbackUpscaler`, `gpuCompatDefaultUpscaler`.*
+  *`gpuCompatSkipShaderPrewarm`, `gpuCompatRequiredSubgroupSize` (returns 32 on Intel only), `gpuCompatFallbackUpscaler`, `gpuCompatDefaultUpscaler`, `gpuCompatNeedsBlasVertexFormatConversion` (true when the game's native vertex position format lacks `VK_FORMAT_FEATURE_ACCELERATION_STRUCTURE_VERTEX_BUFFER_BIT_KHR` on this device — e.g. R32G32B32A32_SFLOAT on Arc; cached per format; always false on NVIDIA).*
+- **`src/dxvk/rtx_render/rtx_geometry_utils.cpp`** — hook call site.
+  *`cacheVertexDataOnGPU` skips the native-format fast-copy and forces the interleave path (which emits `VK_FORMAT_R32G32B32_SFLOAT`) when `fork_hooks::gpuCompatNeedsBlasVertexFormatConversion` reports the position format is not AS-buildable on this GPU. Prevents corrupt BVH geometry (stretched/exploded meshes) and the ray-traversal device-loss on Intel Arc. No-op on NVIDIA (hook returns false → identical fast path).*
+- **`src/dxvk/dxvk_memory.cpp`** — inline tweak.
+  *Extends the device-local 80% heap-budget (previously UMA-only) to Intel GPUs so discrete Arc respects a VRAM budget; over-budget device allocations spill to system memory instead of exhausting VRAM (`VK_ERROR_DEVICE_LOST`). NVIDIA/AMD unchanged.*
+- **`src/dxvk/rtx_render/rtx_initializer.cpp`** — inline tweak (geometry correctness).
+  *Forces `rtx.useBuffersDirectly = false` (Derived layer) on non-NVIDIA so the BVH is built from owned, fully-written buffers rather than the game's per-frame D3D9 buffers. NVIDIA keeps the zero-copy path; explicit user config still wins.*
 - **`src/dxvk/dxvk_extensions.h`** — inline tweak.
   *Adds `extSubgroupSizeControl` (`VK_EXT_subgroup_size_control`, `DxvkExtMode::Optional`) to `DxvkDeviceExtensions`.*
 - **`src/dxvk/dxvk_device_info.h`** — inline tweak.
