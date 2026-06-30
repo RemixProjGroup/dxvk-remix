@@ -20,8 +20,11 @@ Limitations:
 Debugging:
 Enable debugging view [Is Inside Frustum](../RtxOptions.md) or [rtx.debugView.debugViewIdx = 700](../src/dxvk/shaders/rtx/utility/debug_view_indices.h), green means inside frustum, red means outside. All pixels that the ray is not missing are expected to be green. Please report bug if find any artifacts or wrong results on the debugging view.
 
+GPU-based anti-culling (implemented):
+- The per-instance AABB-vs-frustum test can be offloaded to a GPU compute pass via [rtx.gpuScene.enable](../RtxOptions.md) (default off; requires object anti-culling). When enabled, `RtxGpuScene` (`src/dxvk/rtx_render/rtx_gpu_scene.cpp`) uploads the retained instances' object-space AABBs and transforms to a persistent GPU buffer and runs `gpu_scene_anticulling.comp.slang`, which performs the same frustum test as the CPU fast path and writes a per-instance keep bit. The result is consumed by `DrawCallTracker::garbageCollectReplacementInstances` on the following frame (one frame of latency — imperceptible for anti-culling, since instances persist across many frames). Instances with no GPU result yet fall back to the CPU test, and the GPU result is conservative (errs toward keeping geometry), so it never drops geometry the renderer needs.
+- Indirect BVH generation (`vkCmdBuildAccelerationStructuresIndirectKHR`) is deliberately not used: the `accelerationStructureIndirectBuild` feature is unsupported on current NVIDIA and Intel GPUs, so the keep decision is computed on the GPU and consumed by the existing CPU-driven instance lifetime / TLAS path, avoiding the extra synchronizations a fully indirect path would require.
+
 Future plans:
-- GPU-based anti-culling: Since each instance is independent, optimizing with GPU is a viable option. However, the lack of indirect BVH generation commands necessitates additional synchronizations and copies, potentially impacting performance compared to the current CPU version.
 - Initial frame geometries prediction: Addressing the issue of missing geometries at the beginning of the game remains a challenge. Options include fetching shadow passes or moving the camera around to pre-warm the BVH.
 
 ## Anti-Culling Lights

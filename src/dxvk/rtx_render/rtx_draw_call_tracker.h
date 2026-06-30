@@ -34,6 +34,7 @@ namespace dxvk {
 class DxvkDevice;
 class RtCamera;
 class RayPortalManager;
+class RtxGpuScene;
 
 // Tracks draw calls across frames by mapping each draw call to a ReplacementInstance.
 // Uses a two-level hash lookup (identity hash for L1, tracking hash + spatial proximity
@@ -76,9 +77,13 @@ public:
   // Garbage collect expired ReplacementInstances. Object anti-culling keeps mesh RIs alive
   // if their bounding box intersects the camera frustum. Light content uses the camera's
   // light anti-culling frustum (wider FOV) and extended lifetime.
+  // When gpuScene is non-null and enabled, the per-instance frustum keep decision is
+  // sourced from the GPU anti-culling pass (one frame of latency) instead of the CPU
+  // SAT loop; instances with no GPU result yet fall back to the CPU test.
   void garbageCollectReplacementInstances(
       RtCamera& camera,
-      bool isAntiCullingSupported);
+      bool isAntiCullingSupported,
+      const RtxGpuScene* gpuScene = nullptr);
 
   void clear();
 

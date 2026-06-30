@@ -7,6 +7,9 @@
 #include "rtx_render/rtx.h"
 #include "rtx_render/rtx_options.h"
 #include "rtx_render/rtx_opacity_micromap_manager.h"
+// NV-DXVK start: Intel GPU compatibility (subgroup size pin)
+#include "rtx_render/rtx_fork_gpu_compat.h"
+// NV-DXVK end
 #include "../util/util_threadpool.h"
 #include "../util/util_singleton.h"
 
@@ -300,6 +303,20 @@ namespace dxvk {
     Logger::debug(str::format("Compiling raytracing pipeline: ", m_shaders.debugName ? m_shaders.debugName : "<debug name missing>"));
 
     assert(m_layout != nullptr);
+
+    // NV-DXVK start: Intel GPU compatibility - pin ray-tracing shader stages to a 32-lane
+    // subgroup on Intel where the driver allows it, matching the wave32 assumptions in the
+    // RTX shaders. No-op (returns 0) on NVIDIA/AMD, so their pipelines are unchanged. The
+    // create-info struct lives until vkCreateRayTracingPipelinesKHR returns; all qualifying
+    // stages share it since they request the same size.
+    VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT requiredSubgroupSize = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT };
+    requiredSubgroupSize.requiredSubgroupSize = 32u;
+    for (auto& stage : m_stages) {
+      if (fork_hooks::gpuCompatRequiredSubgroupSize(m_pipeMgr->m_device, stage.stage) == 32u) {
+        stage.pNext = &requiredSubgroupSize;
+      }
+    }
+    // NV-DXVK end
 
     // Assemble the shader stages and recursion depth info into the ray tracing pipeline
     VkRayTracingPipelineCreateInfoKHR rayPipelineInfo{ VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR };

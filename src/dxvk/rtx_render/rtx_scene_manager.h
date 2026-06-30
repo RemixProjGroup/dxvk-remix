@@ -41,6 +41,7 @@
 #include "rtx_camera_manager.h"
 #include "rtx_draw_call_cache.h"
 #include "rtx_draw_call_tracker.h"
+#include "rtx_gpu_scene.h"
 #include "rtx_sparse_unique_cache.h"
 #include "rtx_light_manager.h"
 #include "rtx_instance_manager.h"
@@ -446,6 +447,10 @@ private:
   std::unordered_map<XXH64_hash_t, uint32_t> m_currentFrameMeshHashes;
 
   DrawCallTracker m_drawCallTracker;
+
+  // GPU-driven anti-culling (default-off; see rtx.gpuScene.enable). When enabled,
+  // offloads the per-instance frustum test in garbageCollection() to the GPU.
+  RtxGpuScene m_gpuScene;
 };
 
 }  // namespace nvvk

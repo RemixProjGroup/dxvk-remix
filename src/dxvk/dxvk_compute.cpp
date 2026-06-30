@@ -28,6 +28,9 @@
 #include "dxvk_pipemanager.h"
 #include "dxvk_spec_const.h"
 #include "dxvk_state_cache.h"
+// NV-DXVK start: Intel GPU compatibility (subgroup size pin)
+#include "rtx_render/rtx_fork_gpu_compat.h"
+// NV-DXVK end
 
 namespace dxvk {
   
@@ -172,6 +175,17 @@ namespace dxvk {
     info.layout               = m_layout->pipelineLayout();
     info.basePipelineHandle   = VK_NULL_HANDLE;
     info.basePipelineIndex    = -1;
+
+    // NV-DXVK start: Intel GPU compatibility - pin the compute subgroup to 32 lanes on
+    // Intel so the wave32-assuming RTX (ray-query) shaders are correct and don't hang.
+    // Returns 0 (no-op) on NVIDIA/AMD, leaving the pipeline unchanged there.
+    VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT requiredSubgroupSize = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT };
+    const uint32_t pinnedSubgroupSize = fork_hooks::gpuCompatRequiredSubgroupSize(m_pipeMgr->m_device, VK_SHADER_STAGE_COMPUTE_BIT);
+    if (pinnedSubgroupSize != 0) {
+      requiredSubgroupSize.requiredSubgroupSize = pinnedSubgroupSize;
+      info.stage.pNext = &requiredSubgroupSize;
+    }
+    // NV-DXVK end
     
     // Time pipeline compilation for debugging purposes
     dxvk::high_resolution_clock::time_point t0, t1;

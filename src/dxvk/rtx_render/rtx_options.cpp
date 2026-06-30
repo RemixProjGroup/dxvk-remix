@@ -38,6 +38,9 @@
 #include "dxvk_device.h"
 #include "rtx_global_volumetrics.h"
 #include "rtx_scene_manager.h"
+// NV-DXVK start: Intel GPU compatibility (vendor-aware default upscaler)
+#include "rtx_fork_gpu_compat.h"
+// NV-DXVK end
 
 namespace dxvk {
   RtxOptions* RtxOptions::s_instance = nullptr;
@@ -279,7 +282,11 @@ namespace dxvk {
       return false;
     }
     
-    assert(GpuCount > 0);
+    // NV-DXVK: guard against a zero count (graceful on non-NVIDIA / hybrid systems)
+    // rather than asserting, which would abort debug builds.
+    if (GpuCount == 0) {
+      return false;
+    }
 
     archInfo.version = NV_GPU_ARCH_INFO_VER;
     // Note: Currently only using the first returned GPU Handle. Ideally this should use the GPU Handle Vulkan is using
@@ -440,6 +447,11 @@ namespace dxvk {
         // Default to low if we don't know the hardware
         Logger::info("Non-NVIDIA architecture detected, setting default graphics settings to Low");
         preferredDefault = GraphicsPreset::Low;
+
+        // NV-DXVK: pick the upscaler that matches this GPU (Intel -> XeSS, otherwise
+        // TAAU) instead of leaving the default at DLSS and relying on the runtime
+        // fallback. DLSS is unavailable off NVIDIA, so this is purely a better default.
+        RtxOptions::upscalerType.setDeferred(fork_hooks::gpuCompatDefaultUpscaler(device));
 
         // Setup some other known good defaults for other IHVs.
         RtxOptions::resolutionScale.setDeferred(0.5f);

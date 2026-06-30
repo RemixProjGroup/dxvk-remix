@@ -23,6 +23,7 @@
 #include "rtx_options.h"
 #include "rtx_ray_portal_manager.h"
 #include "rtx_intersection_test.h"
+#include "rtx_gpu_scene.h"
 #include "dxvk_device.h"
 #include "../util/util_struct_hash.h"
 
@@ -367,7 +368,8 @@ namespace dxvk {
 
   void DrawCallTracker::garbageCollectReplacementInstances(
       RtCamera& camera,
-      bool isAntiCullingSupported) {
+      bool isAntiCullingSupported,
+      const RtxGpuScene* gpuScene) {
 
     const uint32_t currentFrame = m_device->getCurrentFrameId();
     const uint32_t numFramesToKeepObjects = RtxOptions::numFramesToKeepInstances();
@@ -418,10 +420,18 @@ namespace dxvk {
           // own frustum (which doesn't match ours) and should be preserved.
           if (!keepAlive && objectAntiCullingEnabled && !forceGC
               && isAntiCullingSupported && hasMeshes && !exemptFromAntiCulling) {
-            keepAlive = !aabbIntersectsFrustum(
-                camera,
-                replacementInstance->geometryBoundingBox,
-                replacementInstance->objectToWorld);
+            // Prefer the GPU anti-culling result (computed last frame) when available;
+            // otherwise compute the SAT/frustum test on the CPU as usual.
+            bool gpuKeep = false;
+            if (gpuScene != nullptr &&
+                gpuScene->tryGetKeep(replacementInstance->identityHash, /* geometry */ true, gpuKeep)) {
+              keepAlive = gpuKeep;
+            } else {
+              keepAlive = !aabbIntersectsFrustum(
+                  camera,
+                  replacementInstance->geometryBoundingBox,
+                  replacementInstance->objectToWorld);
+            }
           }
 
           // Light anti-culling for mesh replacement lights. Mirrors the old
@@ -436,10 +446,16 @@ namespace dxvk {
             const bool withinExtendedLifetime =
                 replacementInstance->frameLastSeen + numFramesToKeepLights > currentFrame;
             if (withinExtendedLifetime) {
-              keepAlive = !aabbIntersectsFrustum(
-                  camera,
-                  replacementInstance->lightBoundingBox,
-                  replacementInstance->objectToWorld);
+              bool gpuKeep = false;
+              if (gpuScene != nullptr &&
+                  gpuScene->tryGetKeep(replacementInstance->identityHash, /* geometry */ false, gpuKeep)) {
+                keepAlive = gpuKeep;
+              } else {
+                keepAlive = !aabbIntersectsFrustum(
+                    camera,
+                    replacementInstance->lightBoundingBox,
+                    replacementInstance->objectToWorld);
+              }
             }
           }
         }

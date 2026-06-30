@@ -33,6 +33,9 @@
 #include "rtx_context.h"
 #include "rtx_asset_exporter.h"
 #include "rtx_options.h"
+// NV-DXVK start: Intel GPU compatibility (vendor-aware upscaler fallback)
+#include "rtx_fork_gpu_compat.h"
+// NV-DXVK end
 #include "rtx_bindless_resource_manager.h"
 #include "rtx_opacity_micromap_manager.h"
 #include "rtx_asset_replacer.h"
@@ -542,7 +545,9 @@ namespace dxvk {
     }
 
     if (RtxOptions::upscalerType() == UpscalerType::DLSS && !common->metaDLSS().supportsDLSS()) {
-      RtxOptions::upscalerType.setDeferred(UpscalerType::TAAU);
+      // NV-DXVK: pick the upscaler that matches this GPU when DLSS is unavailable
+      // (Intel -> XeSS, otherwise TAAU) instead of always falling back to TAAU.
+      RtxOptions::upscalerType.setDeferred(fork_hooks::gpuCompatFallbackUpscaler(m_device.ptr()));
     }
 
     if (DxvkDLFG::enable() && !common->metaDLFG().supportsDLFG()) {

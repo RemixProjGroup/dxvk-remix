@@ -38,6 +38,9 @@
 #include "rtx_tone_mapping.h"
 #include "rtx_neural_radiance_cache.h"
 #include "rtx_ray_reconstruction.h"
+// NV-DXVK start: Intel GPU compatibility (prewarm deadlock workaround)
+#include "rtx_fork_gpu_compat.h"
+// NV-DXVK end
 
 namespace dxvk {
   RtxInitializer::RtxInitializer(DxvkDevice* device)
@@ -147,7 +150,8 @@ namespace dxvk {
     // long stutters whenever a yet to be compiled pipeline comes into use).
     if (!asyncShaderPrewarming()
         // WAR: Shader prewarming caused a deadlock on AMD in the past so it is forcibly disabled, should re-evaluate this at some point.
-        || m_device->properties().core.properties.vendorID == static_cast<uint32_t>(DxvkGpuVendor::Amd)) {
+        // NV-DXVK: extended to Intel as well (same async-pipeline-compile hang class); see fork_hooks::gpuCompatSkipShaderPrewarm.
+        || fork_hooks::gpuCompatSkipShaderPrewarm(m_device)) {
       return;
     }
 

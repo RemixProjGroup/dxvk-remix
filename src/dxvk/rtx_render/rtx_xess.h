@@ -84,6 +84,11 @@ namespace dxvk {
     uint32_t calcRecommendedJitterSequenceLength() const;
     float calcRecommendedMipBias() const;
 
+    // Static helper to check if the XeSS library loaded/initialised at all. Public so
+    // cross-vendor compatibility code can pick XeSS as the default/fallback upscaler on
+    // Intel only when it is actually usable.
+    static bool isXeSSLibraryAvailable();
+
   protected:
 
     // RtxPass interface
@@ -102,9 +107,6 @@ namespace dxvk {
     void setSetting(const char* name, const char* value);
     void getOutputSize(uint32_t& width, uint32_t& height) const;
     xess_quality_settings_t presetToQuality(XeSSPreset preset) const;
-    
-    // Static helper to check if XeSS library is available at all
-    static bool isXeSSLibraryAvailable();
 
     // Member variables - organized after methods per style guide
     bool m_initialized;

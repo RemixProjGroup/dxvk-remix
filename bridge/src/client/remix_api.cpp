@@ -20,6 +20,17 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// This translation unit *defines* the remixapi_* entry points (the bridge client
+// implements the Remix API and forwards it to the server). Declare REMIXAPI as
+// dllexport — matching the local definitions — before remix_c.h is pulled in via
+// util_remixapi.h. Without this the header declares them dllimport, and taking
+// their address for the interface vtable (interf.GetUIState = remixapi_GetUIState, …)
+// produced LNK4217 "locally defined symbol imported" warnings on the x86 client.
+// The 64-bit runtime sets this the same way (via /DREMIX_LIBRARY_EXPORTS=1).
+#ifndef REMIX_LIBRARY_EXPORTS
+#define REMIX_LIBRARY_EXPORTS
+#endif
+
 #include "log/log.h"
 #include "util_bridgecommand.h"
 #include "util_devicecommand.h"

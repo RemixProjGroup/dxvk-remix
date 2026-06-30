@@ -343,7 +343,7 @@ namespace dxvk {
           DxvkDeviceFeatures  enabledFeatures) {
     DxvkDeviceExtensions devExtensions;
 
-    std::array<DxvkExt*, 43> devExtensionList = {{
+    std::array<DxvkExt*, 44> devExtensionList = {{
       &devExtensions.amdMemoryOverallocationBehaviour,
       &devExtensions.amdShaderFragmentMask,
       &devExtensions.ext4444Formats,
@@ -389,6 +389,9 @@ namespace dxvk {
       &devExtensions.khrExternalSemaphore,
       &devExtensions.khrExternalSemaphoreWin32,
       &devExtensions.extShaderAtomicFloat,
+      // NV-DXVK start: Intel GPU compatibility (subgroup size control)
+      &devExtensions.extSubgroupSizeControl,
+      // NV-DXVK end
     }};
 
     // Only enable Cuda interop extensions in 64-bit builds in
@@ -611,6 +614,17 @@ namespace dxvk {
       enabledFeatures.khrSynchronization2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR;
       enabledFeatures.khrSynchronization2.pNext = std::exchange(enabledFeatures.core.pNext, &enabledFeatures.khrSynchronization2);
       enabledFeatures.khrSynchronization2.synchronization2 = VK_TRUE;
+    }
+    // NV-DXVK end
+
+    // NV-DXVK start: Intel GPU compatibility - enable subgroup size control so the runtime
+    // can request a fixed 32-lane subgroup for compute/RT pipelines on devices (notably
+    // Intel Arc) whose native subgroup width differs from the wave32 the RTX shaders assume.
+    if (devExtensions.extSubgroupSizeControl) {
+      enabledFeatures.extSubgroupSizeControl.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
+      enabledFeatures.extSubgroupSizeControl.pNext = std::exchange(enabledFeatures.core.pNext, &enabledFeatures.extSubgroupSizeControl);
+      enabledFeatures.extSubgroupSizeControl.subgroupSizeControl = m_deviceFeatures.extSubgroupSizeControl.subgroupSizeControl;
+      enabledFeatures.extSubgroupSizeControl.computeFullSubgroups = m_deviceFeatures.extSubgroupSizeControl.computeFullSubgroups;
     }
     // NV-DXVK end
 
@@ -1027,6 +1041,14 @@ namespace dxvk {
       m_deviceInfo.nvRayTracingInvocationReorderProperties.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.nvRayTracingInvocationReorderProperties);
     }
 
+    // NV-DXVK start: Intel GPU compatibility - query subgroup size control limits so we
+    // can decide whether a 32-lane subgroup can be requested for compute/RT pipelines.
+    if (m_deviceExtensions.supports(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME)) {
+      m_deviceInfo.extSubgroupSizeControl.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES_EXT;
+      m_deviceInfo.extSubgroupSizeControl.pNext = std::exchange(m_deviceInfo.core.pNext, &m_deviceInfo.extSubgroupSizeControl);
+    }
+    // NV-DXVK end
+
     // Query full device properties for all enabled extensions
     m_vki->vkGetPhysicalDeviceProperties2(m_handle, &m_deviceInfo.core);
     
@@ -1129,6 +1151,13 @@ namespace dxvk {
       m_deviceFeatures.extShaderAtomicFloat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
       m_deviceFeatures.extShaderAtomicFloat.pNext = std::exchange(m_deviceFeatures.core.pNext, &m_deviceFeatures.extShaderAtomicFloat);
     }
+
+    // NV-DXVK start: Intel GPU compatibility (subgroup size control)
+    if (m_deviceExtensions.supports(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME)) {
+      m_deviceFeatures.extSubgroupSizeControl.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
+      m_deviceFeatures.extSubgroupSizeControl.pNext = std::exchange(m_deviceFeatures.core.pNext, &m_deviceFeatures.extSubgroupSizeControl);
+    }
+    // NV-DXVK end
 
     m_vki->vkGetPhysicalDeviceFeatures2(m_handle, &m_deviceFeatures.core);
   }

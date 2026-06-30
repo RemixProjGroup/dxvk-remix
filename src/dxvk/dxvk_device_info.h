@@ -28,6 +28,9 @@ namespace dxvk {
     VkPhysicalDeviceFloatControlsPropertiesKHR                khrShaderFloatControls;
     VkPhysicalDeviceOpacityMicromapPropertiesEXT              extOpacityMicromapProperties;
     VkPhysicalDeviceRayTracingInvocationReorderPropertiesNV   nvRayTracingInvocationReorderProperties;
+    // NV-DXVK start: Intel GPU compatibility (VK_EXT_subgroup_size_control)
+    VkPhysicalDeviceSubgroupSizeControlPropertiesEXT          extSubgroupSizeControl;
+    // NV-DXVK end
   };
 
 
@@ -60,6 +63,10 @@ namespace dxvk {
 
     // NV-DXVK start: opacity micromap
     VkPhysicalDeviceSynchronization2FeaturesKHR               khrSynchronization2;
+    // NV-DXVK end
+
+    // NV-DXVK start: Intel GPU compatibility (VK_EXT_subgroup_size_control)
+    VkPhysicalDeviceSubgroupSizeControlFeaturesEXT            extSubgroupSizeControl;
     // NV-DXVK end
   };
 

@@ -364,6 +364,12 @@ namespace dxvk {
     // NV-DXVK start:
     DxvkExt extShaderAtomicFloat              = { VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME,                DxvkExtMode::Optional };
     // NV-DXVK end
+
+    // NV-DXVK start: Intel GPU compatibility - lets us pin compute/RT pipelines to a
+    // 32-lane subgroup on devices (notably Intel Arc) whose native subgroup width
+    // differs, matching the wave32 assumptions baked into the RTX shaders.
+    DxvkExt extSubgroupSizeControl            = { VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME,              DxvkExtMode::Optional };
+    // NV-DXVK end
   };
   
   /**

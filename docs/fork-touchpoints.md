@@ -2350,3 +2350,77 @@ Adds the `rtx.atmosphere.skyIndirectRadianceScale` knob (default **1.0** = physi
 - **`RtxOptions.md`** — REGEN PENDING (adds `rtx.atmosphere.skyIndirectRadianceScale`).
 
 ---
+
+## Workstream — Intel / cross-vendor GPU compatibility + XeSS bump (fork — 2026-06-30)
+
+Makes the runtime run on Intel Arc (and stay correct on AMD) without freezing or
+erroring, while leaving NVIDIA/AMD behaviour byte-for-byte unchanged. The RTX
+shaders assume a 32-lane subgroup (wave32); Intel dispatches SIMD8/16/32, which
+caused wrong output and GPU hangs (TDR → freeze / device-lost → error dialog).
+The fix pins compute + ray-tracing pipelines to a 32-lane subgroup via
+`VK_EXT_subgroup_size_control` **on Intel only**, extends the prewarm-deadlock
+workaround (previously AMD-only) to Intel, and routes upscaler selection so each
+vendor gets its matching upscaler (NVIDIA→DLSS, Intel→XeSS, AMD→TAAU). All upstream
+edits are vendor-gated and additive. Also bumps the vendored Intel XeSS SDK to
+the latest 2.x (v2.1.1).
+
+- **`src/dxvk/rtx_render/rtx_fork_gpu_compat.cpp` / `.h`** — fork-owned new module (slim header, `fork_hooks::` impl).
+  *`gpuCompatSkipShaderPrewarm`, `gpuCompatRequiredSubgroupSize` (returns 32 on Intel only), `gpuCompatFallbackUpscaler`, `gpuCompatDefaultUpscaler`.*
+- **`src/dxvk/dxvk_extensions.h`** — inline tweak.
+  *Adds `extSubgroupSizeControl` (`VK_EXT_subgroup_size_control`, `DxvkExtMode::Optional`) to `DxvkDeviceExtensions`.*
+- **`src/dxvk/dxvk_device_info.h`** — inline tweak.
+  *Adds `VkPhysicalDeviceSubgroupSizeControlPropertiesEXT` to `DxvkDeviceInfo` and `VkPhysicalDeviceSubgroupSizeControlFeaturesEXT` to `DxvkDeviceFeatures`.*
+- **`src/dxvk/dxvk_adapter.cpp`** — inline tweaks.
+  *Adds the ext to `devExtensionList` (array size 43→44); queries its properties/features; enables `subgroupSizeControl`/`computeFullSubgroups` and chains the feature pNext in `createDevice`.*
+- **`src/dxvk/dxvk_compute.cpp`** — hook call site.
+  *Chains a `VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT` into the compute stage's pNext when `fork_hooks::gpuCompatRequiredSubgroupSize` returns 32 (Intel only; 0 = no-op on NVIDIA/AMD).*
+- **`src/dxvk/dxvk_raytracing.cpp`** — hook call site.
+  *Same pin, looped over the RT shader stages before `vkCreateRayTracingPipelinesKHR`.*
+- **`src/dxvk/rtx_render/rtx_initializer.cpp`** — hook call site.
+  *Replaces the inline `vendorID == Amd` prewarm-skip with `fork_hooks::gpuCompatSkipShaderPrewarm(m_device)` (covers AMD + Intel).*
+- **`src/dxvk/rtx_render/rtx_context.cpp`** — inline tweak.
+  *DLSS-unsupported fallback now uses `fork_hooks::gpuCompatFallbackUpscaler(m_device.ptr())` (Intel→XeSS) instead of hard-coded TAAU.*
+- **`src/dxvk/rtx_render/rtx_options.cpp`** — inline tweaks.
+  *Auto-preset non-NVIDIA branch sets `upscalerType` from `fork_hooks::gpuCompatDefaultUpscaler(device)`; `assert(GpuCount > 0)` in the NVAPI arch query replaced with a graceful early-return.*
+- **`src/dxvk/rtx_render/rtx_options.h`** — inline tweak.
+  *Adds `RtxOptions::Compatibility::pinIntelSubgroupSize` (default true) kill-switch.*
+- **`src/dxvk/rtx_render/rtx_xess.h`** — inline tweak.
+  *Moves `static bool isXeSSLibraryAvailable()` to public so the compat module can pick XeSS only when the library loaded.*
+- **`src/dxvk/meson.build`** — inline tweak.
+  *Registers `rtx_render/rtx_fork_gpu_compat.cpp` / `.h`.*
+- **`submodules/xess`** — submodule pin bump `v2.1.0(+2)` → **`v2.1.1`** (latest 2.x; headers unchanged, so no `rtx_xess.cpp` API changes).
+- **`RtxOptions.md`** — REGEN PENDING (adds `rtx.compatibility.pinIntelSubgroupSize`).
+
+---
+
+## Workstream — GPU-driven anti-culling (GPU scene) (fork — 2026-06-30)
+
+Offloads the per-instance AABB-vs-frustum anti-culling test (the O(N) CPU SAT loop
+in `DrawCallTracker::garbageCollectReplacementInstances`) to a GPU compute pass over
+a persistent candidate buffer. Default-off (`rtx.gpuScene.enable`); the CPU path is
+unchanged when off, so there is zero regression. The GPU result is read back with
+one frame of latency (safe for anti-culling) and is conservative (errs toward
+keeping geometry); unknown instances fall back to the CPU test. Indirect TLAS build
+is intentionally not used — `accelerationStructureIndirectBuild` is unsupported on
+current NVIDIA/Intel GPUs.
+
+- **`src/dxvk/rtx_render/rtx_gpu_scene.cpp` / `.h`** — fork-owned new subsystem (`RtxGpuScene`: persistent candidate/result buffers, dispatch, host readback, ImGui, `rtx.gpuScene.enable`).
+- **`src/dxvk/shaders/rtx/pass/instance_culling/gpu_scene_anticulling_binding_indices.h`** — fork-owned new (constants + candidate struct + bindings).
+- **`src/dxvk/shaders/rtx/pass/instance_culling/gpu_scene_anticulling_bindings.slangh`** — fork-owned new (binding declarations).
+- **`src/dxvk/shaders/rtx/pass/instance_culling/gpu_scene_anticulling.comp.slang`** — fork-owned new (ports the CPU fast-path `boundingBoxIntersectsFrustum`; writes per-instance keep bits).
+- **`src/dxvk/rtx_render/rtx_draw_call_tracker.h`** — inline tweak.
+  *Forward-declares `RtxGpuScene`; adds an optional `const RtxGpuScene*` parameter to `garbageCollectReplacementInstances`.*
+- **`src/dxvk/rtx_render/rtx_draw_call_tracker.cpp`** — inline tweak.
+  *Includes `rtx_gpu_scene.h`; the object + light keep checks query `gpuScene->tryGetKeep(identityHash, …)` first and fall back to the CPU SAT test.*
+- **`src/dxvk/rtx_render/rtx_scene_manager.h`** — inline tweak.
+  *Includes `rtx_gpu_scene.h`; adds the `RtxGpuScene m_gpuScene` member.*
+- **`src/dxvk/rtx_render/rtx_scene_manager.cpp`** — inline tweaks.
+  *Constructs `m_gpuScene(device)`; `garbageCollection()` passes the GPU scene when enabled; `prepareSceneData` dispatches the cull over the current replacement instances.*
+- **`src/dxvk/imgui/dxvk_imgui.cpp`** — inline tweak.
+  *Includes `rtx_gpu_scene.h`; renders the "GPU Scene (Anti-Culling)" controls inside the Anti-Culling header.*
+- **`src/dxvk/meson.build`** — inline tweak.
+  *Registers `rtx_render/rtx_gpu_scene.cpp` / `.h`.*
+- **`docs/AntiCullingSystem.md`** — updated: "GPU-based anti-culling" moved from Future plans to implemented.
+- **`RtxOptions.md`** — REGEN PENDING (adds `rtx.gpuScene.enable`).
+
+---

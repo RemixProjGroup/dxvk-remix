@@ -142,6 +142,7 @@ namespace dxvk {
     , m_rayPortalManager(device, this)
     , m_drawCallCache(device)
     , m_drawCallTracker(device)
+    , m_gpuScene(device)
     , m_bindlessResourceManager(device)
     , m_pReplacer(new AssetReplacer())
     , m_terrainBaker(new TerrainBaker())
@@ -316,8 +317,11 @@ namespace dxvk {
 
     // ReplacementInstance GC: marks owned instances/lights for GC
     // and clears their back-pointers while they are still alive.
+    // When the GPU scene is enabled, the per-instance frustum keep decision comes from
+    // last frame's GPU anti-culling pass (the dispatch happens later in prepareSceneData).
     m_drawCallTracker.garbageCollectReplacementInstances(
-        getCamera(), m_isAntiCullingSupported);
+        getCamera(), m_isAntiCullingSupported,
+        RtxGpuScene::isEnabled() ? &m_gpuScene : nullptr);
 
     // Instance/light GC: removes entities marked for GC by ReplacementInstance::clear()
     // or marked on creation (ephemeral copies). Back-pointers are already null.
@@ -2168,6 +2172,19 @@ namespace dxvk {
     m_instanceManager.findPortalForVirtualInstances(m_cameraManager, m_rayPortalManager);
     m_instanceManager.createViewModelInstances(ctx, m_cameraManager, m_rayPortalManager);
     m_instanceManager.createPlayerModelVirtualInstances(ctx, m_cameraManager, m_rayPortalManager);
+
+    // NV-DXVK: GPU-driven anti-culling. Compute this frame's per-instance frustum keep
+    // decisions on the GPU; next frame's garbageCollection() consumes them (one frame of
+    // latency, safe for anti-culling). Default-off, so this is skipped entirely otherwise.
+    if (RtxGpuScene::isEnabled() && m_isAntiCullingSupported) {
+      const auto& replacementInstances = m_drawCallTracker.getReplacementInstances();
+      std::vector<ReplacementInstance*> candidates;
+      candidates.reserve(replacementInstances.size());
+      for (const auto& ri : replacementInstances) {
+        candidates.push_back(ri.get());
+      }
+      m_gpuScene.dispatchAntiCulling(ctx, getCamera(), candidates);
+    }
 
     m_accelManager.mergeInstancesIntoBlas(ctx, execBarriers, textureManager.getTextureTable(), m_cameraManager, m_instanceManager, m_opacityMicromapManager.get());
 

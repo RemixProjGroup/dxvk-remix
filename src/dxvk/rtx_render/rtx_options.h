@@ -673,6 +673,21 @@ namespace dxvk {
       }
     };
 
+    // NV-DXVK start: cross-vendor GPU compatibility (notably Intel Arc)
+    struct Compatibility {
+      friend class ImGUI;
+      friend class RtxOptions;
+      // The RTX shaders assume a 32-lane subgroup (wave32). On devices whose native
+      // subgroup width differs (notably Intel Arc, which dispatches SIMD8/16/32), this
+      // pins compute and ray-tracing pipelines to a 32-lane subgroup via
+      // VK_EXT_subgroup_size_control, avoiding incorrect results and GPU hangs. Only takes
+      // effect on Intel GPUs that support a required subgroup size of 32; NVIDIA/AMD are
+      // unaffected. Disable only for debugging.
+      RTX_OPTION("rtx.compatibility", bool, pinIntelSubgroupSize, true,
+                 "Pin compute/ray-tracing pipelines to a 32-lane subgroup on Intel GPUs that assume wave32 in the RTX shaders. Only affects Intel hardware; NVIDIA/AMD are unchanged.");
+    };
+    // NV-DXVK end
+
     // Resolve Options
     // Todo: Potentially document that after a number of resolver interactions is exhausted the next interaction will be treated as a hit regardless.
     RTX_OPTION_ARGS("rtx", uint8_t, primaryRayMaxInteractions, 32,
