@@ -90,7 +90,13 @@ namespace UTIL_NS {
   };
 
   class MessageChannelServer : public MessageChannelBase {
-    static constexpr uint32_t kHandshakeTimeoutMs = 5000;
+    // Per-attempt timeout for the non-blocking handshake send. The send aborts early when
+    // the game window is hung (still loading), so this only bounds the wait while the game
+    // is pumping but slow.
+    static constexpr uint32_t kHandshakeTimeoutMs = 1000;
+    // Delay between handshake attempts while the game window is not yet pumping messages.
+    // Keeps the worker thread from busy-spinning without ever blocking the game.
+    static constexpr uint32_t kHandshakeRetrySleepMs = 100;
   public:
     using WindowMessageHandlerType =
       std::function<LRESULT(HWND, UINT, WPARAM, LPARAM)>;

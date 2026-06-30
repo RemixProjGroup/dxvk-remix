@@ -220,25 +220,49 @@ bool MessageChannelServer::init(HWND clientWindow,
 
 bool MessageChannelServer::handshake() {
   if (canSend()) {
+    // NV-DXVK: the handshake delivers our worker thread id to the game's window so the
+    // client can talk back. The game's window thread is frequently busy during level load
+    // (in the bridge it can be blocked inside a forwarded D3D9 call), so it is not pumping
+    // messages yet. The original send used SMTO_BLOCK with a 5s timeout: a *blocking*
+    // cross-process SendMessage that (a) stalls our worker for the full 5s every attempt
+    // and (b) refuses to service inbound sends while it waits, which can deadlock against
+    // the game's own cross-process sends and leaves the game window "Not Responding" until
+    // it times out. Switch to a non-blocking send that aborts immediately when the window
+    // is hung (SMTO_ABORTIFHUNG), drop SMTO_BLOCK so inbound sends are still serviced, and
+    // sleep briefly between attempts. The handshake now completes the instant the game
+    // starts pumping, without ever freezing it. Result semantics are unchanged: a non-zero
+    // return means the message was delivered.
+    bool loggedWaiting = false;
+
     // Run the handshake loop until success, error or destruction
     while (!m_isDestroying) {
-      // do handshake with a timeout
       Logger::debug(format_string("Client message window: %x", m_clientWindow));
+      DWORD_PTR msgResult = 0;
       LRESULT result = ::SendMessageTimeout(m_clientWindow, m_handshakeMsgId,
-        m_workerThreadId, 0, SMTO_BLOCK, kHandshakeTimeoutMs, nullptr);
+        m_workerThreadId, 0, SMTO_NORMAL | SMTO_ABORTIFHUNG, kHandshakeTimeoutMs, &msgResult);
 
-      if (result == TRUE) {
+      if (result != 0) {
         break;
       }
 
-      if (GetLastError() != ERROR_TIMEOUT) {
+      const DWORD lastError = GetLastError();
+      // ERROR_TIMEOUT (window pumping but slow) and 0 (window hung -> aborted) are both
+      // "not ready yet"; anything else is a real failure.
+      if (lastError != ERROR_TIMEOUT && lastError != 0) {
         Logger::err(format_string("Message channel %s handshake failed with %d.",
-                                  m_handshakeMsgName, GetLastError()));
+                                  m_handshakeMsgName, lastError));
         return false;
       }
 
-      Logger::warn(format_string("Message channel %s handshake timeout. "
-                                 "Retrying...", m_handshakeMsgName));
+      if (!loggedWaiting) {
+        Logger::info(format_string("Message channel %s: waiting for the game window to "
+                                   "start processing messages (still loading)...",
+                                   m_handshakeMsgName));
+        loggedWaiting = true;
+      }
+
+      // Yield so we neither busy-spin nor block the game; retry once it is ready.
+      ::Sleep(kHandshakeRetrySleepMs);
     }
 
     // Bail out if class is being destroyed
