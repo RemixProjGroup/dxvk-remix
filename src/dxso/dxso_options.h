@@ -57,6 +57,15 @@ namespace dxvk {
 
     /// Whether or not we can rely on robustness2 to handle oob constant access
     bool robustness2Supported;
+
+    /// NV-DXVK: Vertex-capture precision. When true, the injected vertex-capture code
+    /// performs the perspective divide in clip space (clipPos.xyz / clipPos.w) BEFORE the
+    /// inverse-projection multiply, instead of multiplying the raw (large) clip-space
+    /// position by invProj. The two are mathematically equivalent, but doing the divide
+    /// first keeps the values in NDC range, which avoids catastrophic fp32 precision loss
+    /// on large-world games (exploding/merged geometry) on non-NVIDIA GPUs. Enabled on
+    /// non-NVIDIA only; NVIDIA keeps the byte-identical original emission.
+    bool vertexCaptureEarlyPerspectiveDivide;
   };
 
 }
