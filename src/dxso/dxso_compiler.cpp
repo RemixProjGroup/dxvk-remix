@@ -3777,35 +3777,12 @@ void DxsoCompiler::emitControlFlowGenericLoop(
     // clip space (gl_Position)
     const uint32_t clipPos = m_module.opLoad(vec4TypeId, m_vs.oPos.id);
 
-    // clip -> view position (xyz).
-    uint32_t view3;
-    if (m_moduleInfo.options.vertexCaptureEarlyPerspectiveDivide) {
-      // NV-DXVK (non-NVIDIA): do the perspective divide in clip space first
-      // (clipPos.xyz / clipPos.w -> NDC) so the inverse-projection multiply runs on
-      // NDC-range values, then divide out the resulting w. Mathematically identical to the
-      // NVIDIA path below, but it avoids the catastrophic fp32 precision loss that multiplies
-      // the raw (large) clip-space position by invProj on AMD/Intel - the cause of
-      // exploding / merged large-world geometry. NVIDIA emits the unchanged path in the else.
-      const uint32_t clipW    = m_module.opCompositeExtract(floatType, clipPos, 1, &lit3);
-      const uint32_t invClipW = m_module.opFDiv(floatType, oneF, clipW);
-      const uint32_t clipXYZ  = m_module.opVectorShuffle(vec3TypeId, clipPos, clipPos, 3, lit012);
-      const uint32_t ndc3     = m_module.opVectorTimesScalar(vec3TypeId, clipXYZ, invClipW);
-      const uint32_t nx = m_module.opCompositeExtract(floatType, ndc3, 1, &lit0);
-      const uint32_t ny = m_module.opCompositeExtract(floatType, ndc3, 1, &lit1);
-      const uint32_t nz = m_module.opCompositeExtract(floatType, ndc3, 1, &lit2);
-      uint32_t ndc4Comps[4] = { nx, ny, nz, oneF };
-      const uint32_t ndc4     = m_module.opCompositeConstruct(vec4TypeId, 4, ndc4Comps);
-      const uint32_t viewH    = m_module.opVectorTimesMatrix(vec4TypeId, ndc4, invProj);
-      const uint32_t viewW    = m_module.opCompositeExtract(floatType, viewH, 1, &lit3);
-      const uint32_t invViewW = m_module.opFDiv(floatType, oneF, viewW);
-      const uint32_t viewXYZ  = m_module.opVectorShuffle(vec3TypeId, viewH, viewH, 3, lit012);
-      view3 = m_module.opVectorTimesScalar(vec3TypeId, viewXYZ, invViewW);
-    } else {
-      // Original emission (NVIDIA, byte-identical): invProj applied to the raw clip-space
-      // position. The resulting view position already has w == 1, so no divide is required.
-      const uint32_t viewH = m_module.opVectorTimesMatrix(vec4TypeId, clipPos, invProj);
-      view3 = m_module.opVectorShuffle(vec3TypeId, viewH, viewH, 3, lit012);
-    }
+    // clip -> view (homogeneous), then early perspective divide
+    const uint32_t viewH = m_module.opVectorTimesMatrix(vec4TypeId, clipPos, invProj);
+    const uint32_t wComp = m_module.opCompositeExtract(floatType, viewH, 1, &lit3);
+    const uint32_t invW = m_module.opFDiv(floatType, oneF, wComp);
+
+    const uint32_t view3 = m_module.opVectorShuffle(vec3TypeId, viewH, viewH, 3, lit012);
 
     const uint32_t vx = m_module.opCompositeExtract(floatType, view3, 1, &lit0);
     const uint32_t vy = m_module.opCompositeExtract(floatType, view3, 1, &lit1);

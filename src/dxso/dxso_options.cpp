@@ -45,13 +45,6 @@ namespace dxvk {
     alphaTestWiggleRoom = options.alphaTestWiggleRoom;
 
     robustness2Supported = devFeatures.extRobustness2.robustBufferAccess2;
-
-    // NV-DXVK: do the early (clip-space) perspective divide in vertex capture on non-NVIDIA
-    // only. NVIDIA's fp32 tolerates multiplying the raw large clip-space position by invProj;
-    // AMD/Intel lose precision there and large-world geometry explodes/merges. NVIDIA keeps
-    // the original emission byte-for-byte.
-    vertexCaptureEarlyPerspectiveDivide =
-      (devInfo.core.properties.vendorID != static_cast<uint32_t>(DxvkGpuVendor::Nvidia));
   }
 
 }
