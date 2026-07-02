@@ -1318,8 +1318,8 @@ namespace dxvk {
 
     RTX_OPTION("rtx.atmosphere", float, starPsfSharpness, 20.0f,
                "PSF Gaussian exponent for procedural stars. Controls the per-star spread "
-               "in cube-grid-cell space (gridScale=400 → 13.5 arcmin/cell). Lower = wider "
-               "softer stars; higher = sharper pinpoints. At 1080p/90° FOV, k=20 yields "
+               "in cube-grid-cell space (gridScale=400 -> 13.5 arcmin/cell). Lower = wider "
+               "softer stars; higher = sharper pinpoints. At 1080p/90 deg FOV, k=20 yields "
                "~1-pixel-FWHM (anti-aliased), k=800 yields ~0.08-pixel-FWHM (severe sub-"
                "pixel flicker on camera motion). 8-30 is the useful range for typical "
                "render resolutions; reduce starBrightness if widening the PSF makes stars "
@@ -1807,7 +1807,7 @@ namespace dxvk {
                "Per-km haze extinction applied to cloud RADIANCE (effect A of "
                "the aerial-perspective fork). Dims distant cloud samples "
                "toward atmospheric color so they read as 'softer / duller "
-               "with distance.' Visual softness control \xe2\x80\x94 does NOT prevent "
+               "with distance.' Visual softness control - does NOT prevent "
                "the horizon white wall by itself. 0 = no haze. Default 0.05.");
     RTX_OPTION("rtx.atmosphere", float, cloudAerialFadePerKm, 0.15f,
                "Per-km fade extinction applied to cloud ALPHA accumulation "

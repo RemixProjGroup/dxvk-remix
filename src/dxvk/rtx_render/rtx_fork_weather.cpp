@@ -296,7 +296,36 @@ namespace dxvk { namespace fork_weather { namespace {
   // language: float -> DragFloat, bool -> Checkbox, Vector3 -> ColorEdit3 swatch
   // for WK_Color (click to open a picker) else DragFloat3 for radiometric vectors
   // (e.g. sun illuminance, which carries magnitude, not a 0-1 color).
-  bool weatherDrag(const char* l, RtxOption<float>* o, float st, float mn, float mx, const char* fmt, ImGuiSliderFlags fl, WeatherFieldKind) {
+  bool weatherDrag(const char* l, RtxOption<float>* o, float st, float mn, float mx, const char* fmt, ImGuiSliderFlags fl, WeatherFieldKind kind) {
+    // Display-transform kinds (fork - 2026-07-02, UI usability): the option
+    // keeps its canonical storage unit (conf/API/blend unchanged); only the
+    // widget converts. Table min/max/step/fmt are in DISPLAY units for these.
+    // Pattern mirrors RemixGui::DragFloatMB_showGB (rtx_imgui.h).
+    if (kind == WK_SpeedKmS) {
+      // Stored km/s, displayed m/s. 0.02 km/s reads as a draggable "20.0 m/s"
+      // instead of a three-decimal crawl.
+      RemixGui::RtxOptionUxWrapper wrapper(o);
+      float valueMs = o->get() * 1000.0f;
+      const bool changed = RemixGui::DragFloat(l, &valueMs, st, mn, mx, fmt, fl);
+      if (changed) {
+        RemixGui::CheckRtxOptionPopups(o);
+        o->setDeferred(valueMs * 0.001f);
+      }
+      return changed;
+    }
+    if (kind == WK_PatchPerKm) {
+      // Stored spatial frequency (1/km), displayed as the patch wavelength in
+      // km (1/x) - the label says "Patch Size", so the number now IS a size:
+      // bigger km = bigger patches. Guards keep 1/x finite for zeroed confs.
+      RemixGui::RtxOptionUxWrapper wrapper(o);
+      float valueKm = 1.0f / std::max(o->get(), 1e-6f);
+      const bool changed = RemixGui::DragFloat(l, &valueKm, st, mn, mx, fmt, fl);
+      if (changed) {
+        RemixGui::CheckRtxOptionPopups(o);
+        o->setDeferred(1.0f / std::max(valueKm, 1.0f));
+      }
+      return changed;
+    }
     return RemixGui::DragFloat(l, o, st, mn, mx, fmt, fl);
   }
   bool weatherDrag(const char* l, RtxOption<Vector3>* o, float st, float mn, float mx, const char* fmt, ImGuiSliderFlags fl, WeatherFieldKind kind) {

@@ -32,6 +32,12 @@ namespace dxvk { namespace fork_weather {
     WK_Color,       // Vector3 tint; componentwise lerp
     WK_Vec3,        // Vector3 radiometric; componentwise lerp
     WK_Step,        // non-interpolated (bool/enum); switch at blend midpoint
+    // Display-transform kinds (fork - 2026-07-02, UI usability). Blend math is
+    // plain linear on the STORED value; only the widget converts units, so the
+    // conf/API/shader-facing value is unchanged. For these kinds the table's
+    // min/max/step/fmt columns are in DISPLAY units (they feed only the widget).
+    WK_SpeedKmS,    // stored km/s; widget displays m/s (x1000)
+    WK_PatchPerKm,  // stored spatial frequency (1/km); widget displays patch size in km (1/x)
   };
 } }
 
@@ -61,13 +67,13 @@ namespace dxvk { namespace fork_weather {
   X(float,   cloudDensity,                       1.0f,                            WK_Scalar,     "Clouds",         "Look",             "Density",                    0.0f,    10.0f,   0.05f,   "%.2f") \
   X(float,   cloudCoverageMean,                  0.5f,                            WK_Scalar,     "Clouds",         "Coverage & Shape", "Coverage",                   0.0f,    1.0f,    0.01f,   "%.2f") \
   X(float,   cloudCoverageSpread,                0.2f,                            WK_Scalar,     "Clouds",         "Coverage & Shape", "Coverage Spread",            0.0f,    1.0f,    0.01f,   "%.2f") \
-  X(float,   cloudCoverageNoiseScale,            0.0033f,                         WK_Scalar,     "Clouds",         "Coverage & Shape", "Coverage Patch Size",        0.0001f, 0.01f,   0.0001f, "%.4f") \
+  X(float,   cloudCoverageNoiseScale,            0.0033f,                         WK_PatchPerKm, "Clouds",         "Coverage & Shape", "Coverage Patch Size",        100.0f,  10000.0f, 5.0f,   "%.0f km") \
   X(float,   cloudTypeMean,                      0.5f,                            WK_Scalar,     "Clouds",         "Coverage & Shape", "Cloud Type",                 0.0f,    1.0f,    0.01f,   "%.2f") \
   X(float,   cloudTypeSpread,                    0.2f,                            WK_Scalar,     "Clouds",         "Coverage & Shape", "Type Spread",                0.0f,    1.0f,    0.01f,   "%.2f") \
-  X(float,   cloudTypeNoiseScale,                0.0034f,                         WK_Scalar,     "Clouds",         "Coverage & Shape", "Type Patch Size",            0.0001f, 0.0034f, 0.0001f, "%.4f") \
+  X(float,   cloudTypeNoiseScale,                0.0034f,                         WK_PatchPerKm, "Clouds",         "Coverage & Shape", "Type Patch Size",            294.0f,  10000.0f, 5.0f,   "%.0f km") \
   X(Vector3, cloudColor,                         Vector3(0.89f, 0.92f, 1.0f),     WK_Color,      "Clouds",         "Look",             "Color",                      0.0f,    1.5f,    0.01f,   "%.2f") \
-  X(float,   cloudWindSpeed,                     0.02f,                           WK_Scalar,     "Clouds",         "Wind",             "Wind Speed",                 0.0f,    1.0f,    0.005f,  "%.3f") \
-  X(float,   cloudWindDirection,                 45.0f,                           WK_Angle,      "Clouds",         "Wind",             "Wind Direction",             0.0f,    360.0f,  1.0f,    "%.1f\xc2\xb0") \
+  X(float,   cloudWindSpeed,                     0.02f,                           WK_SpeedKmS,   "Clouds",         "Wind",             "Wind Speed",                 0.0f,    1000.0f, 0.5f,    "%.1f m/s") \
+  X(float,   cloudWindDirection,                 45.0f,                           WK_Angle,      "Clouds",         "Wind",             "Wind Direction",             0.0f,    360.0f,  1.0f,    "%.1f deg") \
   X(float,   cloudShadowStrength,                1.0f,                            WK_Scalar,     "Clouds",         "Lighting",         "Ground Shadow",              0.0f,    1.0f,    0.01f,   "%.2f") \
   X(float,   cloudThickness,                     3.05f,                           WK_Scalar,     "Clouds",         "Look",             "Depth",                      0.0f,    10.0f,   0.05f,   "%.2f") \
   X(float, cloudUndersideLightSigma, 0.12f, WK_Scalar, "Clouds", "Lighting", "Underside Shading", 0.0f, 1.0f, 0.01f,  "%.2f") \
