@@ -2568,25 +2568,25 @@ void geometryPSRResolverVertex(
   }
   else
   {
+    vec3 skyRadiance = vec3(0);
     if (cb.domeLightArgs.active)
     {
-       emissiveRadiance += cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform) * radianceAttenuation;
+      skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
     }
 #ifdef ATMOSPHERE_AVAILABLE
     else if (cb.skyMode == 1)
     {
-      // Physical atmosphere mode
-      vec3 skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
-                                          geometryPSRResolverState.pixelCoordinate, cb.frameIdx,
-                                          cb.isZUp != 0);
-      emissiveRadiance += skyRadiance * radianceAttenuation;
+      skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+                                    geometryPSRResolverState.pixelCoordinate, cb.frameIdx,
+                                    cb.isZUp != 0);
     }
 #endif
     else
     {
-      // Skybox rasterization mode - output radiance from sky probe
-       emissiveRadiance += cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0) * radianceAttenuation;
+      skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
     }
+    skyRadiance *= calcVolumetricAttenuation(cb.volumeArgs, none, true, 0.0f, ray.origin, ray.direction);
+    emissiveRadiance += skyRadiance * radianceAttenuation;
   }
 
   // Note: Emissive radiance handled first so objects with opacity do not attenuate themselves.

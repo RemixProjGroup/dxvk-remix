@@ -861,7 +861,7 @@ initializer list and can't be lifted into a separate TU.
   *Preserves the design for the deprecated `isOccluder` surface property that would have shown sky behind occluder surfaces; kept commented for future reference.*
 
 - **Block** at `geometryPSRResolverVertex` (PSR hit — atmosphere sky radiance) — ~9 LOC, planned target `fork_hooks::geoResolverPsrAtmosphere` in `rtx_fork_atmosphere.slangh`.
-  *Adds atmosphere sky-radiance evaluation in the PSR resolver's emissive radiance accumulation path when physical atmosphere mode is active.*
+  *Adds atmosphere sky-radiance evaluation in the PSR resolver's emissive radiance accumulation path when physical atmosphere mode is active. Volumetric attenuation (2026-07-04): the three sky branches (dome light / Numos atmosphere / SkyProbe) were unified into a common `skyRadiance` that is multiplied by `calcVolumetricAttenuation` before accumulation, matching the primary-miss path — fixes reflected sky on water being brighter than the directly-visible sky under fog.*
 
 - **Block** at `geometryPSRResolverVertex` (PSR hit — occluder comment block) — ~45 LOC (fully commented out), planned target `fork_hooks::geoResolverPsrOccluder` in `rtx_fork_atmosphere.slangh`.
   *Same occluder design-preservation comment block for the PSR path.*
