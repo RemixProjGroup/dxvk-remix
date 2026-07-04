@@ -604,8 +604,8 @@ namespace dxvk {
     volumeArgs.multiScatteringEstimate = multiScatteringEstimate;
     volumeArgs.enableReferenceMode = enableReferenceMode();
     volumeArgs.volumetricFogAnisotropy = anisotropy();
-    volumeArgs.fogSunVisibilityGain = fogSunVisibilityGain();
-    volumeArgs.volumetricConsumerGain = volumetricConsumerGain();
+    volumeArgs.fogSunVisibilityGain = RtxOptions::skyMode() == SkyMode::Numos ? fogSunVisibilityGain() : 1.0f;
+    volumeArgs.volumetricConsumerGain = RtxOptions::skyMode() == SkyMode::Numos ? volumetricConsumerGain() : 1.0f;
 
     volumeArgs.enableNoiseFieldDensity = enableHeterogeneousFog();
     volumeArgs.noiseFieldSubStepSize = noiseFieldSubStepSizeMeters() * RtxOptions::getMeterToWorldUnitScale();

@@ -598,7 +598,7 @@ initializer list and can't be lifted into a separate TU.
 
 **Category:** index-only
 
-- **Inline tweak** at `RtxGlobalVolumetrics::dispatch` (volumeArgs population block) — 1 LOC (2026-05-26). Populates `volumeArgs.fogSunVisibilityGain` from the matching RTX_OPTION. Adjacent to the existing `volumetricFogAnisotropy` populate; same trivial pattern. Companion to the new field in `volume_args.h` and the new option in `rtx_global_volumetrics.h`.
+- **Inline tweak** at `RtxGlobalVolumetrics::dispatch` (volumeArgs population block) — 2 LOC (2026-05-26; Numos-gated 2026-07-04). Populates `volumeArgs.fogSunVisibilityGain` and `volumeArgs.volumetricConsumerGain` from the matching RTX_OPTIONs, forced to 1.0 unless `RtxOptions::skyMode() == SkyMode::Numos` — both gains are Numos-atmosphere compensations and must not perturb stock volumetrics in rasterized-sky mode. Adjacent to the existing `volumetricFogAnisotropy` populate. Companion to the fields in `volume_args.h` and the options in `rtx_global_volumetrics.h`.
 
 ---
 
