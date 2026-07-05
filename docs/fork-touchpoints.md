@@ -600,6 +600,8 @@ initializer list and can't be lifted into a separate TU.
 
 - **Inline tweak** at `RtxGlobalVolumetrics::dispatch` (volumeArgs population block) — 2 LOC (2026-05-26; Numos-gated 2026-07-04). Populates `volumeArgs.fogSunVisibilityGain` and `volumeArgs.volumetricConsumerGain` from the matching RTX_OPTIONs, forced to 1.0 unless `RtxOptions::skyMode() == SkyMode::Numos` — both gains are Numos-atmosphere compensations and must not perturb stock volumetrics in rasterized-sky mode. Adjacent to the existing `volumetricFogAnisotropy` populate. Companion to the fields in `volume_args.h` and the options in `rtx_global_volumetrics.h`.
 
+- **Inline tweak** at `RtxGlobalVolumetrics::showImguiSettings` (advanced material section) — 3 widgets (2026-05-26/2026-06-28/2026-07-05). Fork sliders "Fog Sun Visibility Gain", "Atmosphere Sun Fog Scale", and "Volumetric Consumer Gain" alongside the stock advanced material widgets, exposing the fork gain options for tuning.
+
 ---
 
 ## src/dxvk/rtx_render/rtx_global_volumetrics.h
