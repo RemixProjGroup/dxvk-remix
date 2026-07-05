@@ -1047,6 +1047,9 @@ initializer list and can't be lifted into a separate TU.
 
 **Category:** migrate
 
+- **Inline tweak** at `applySkyContribution` (sky-miss composition) — 2026-07-05.
+  *Removes the SkyMatte `SkyLight.SampleLevel` else-branch on primary miss. Since sync `1448e4e77`, `geometry_resolver.slangh` already writes rasterized SkyProbe (`skyMode==0`) or Numos `evalSkyRadiance` (`skyMode==1`) into `SharedRadiance` on primary miss; composite was double-counting the same sky via SkyMatte. Commit `49229eda4` fixed the double sky by removing the geometry_resolver branch, which broke DLSS-RR particle ordering — this composite-side skip restores official `83150626ef` particle behavior while keeping single sky. Dome-light path unchanged.*
+
 - **Block** at `compositePixel` (cloud-shadow application) — REMOVED 2026-06-19, comment-only.
   *The entire screen-space cloud-shadow application in composite is gone. The **indirect** multiply was removed 2026-06-18 (issue #37, double-count + geometry-blind). The **direct** multiply (`pow(PrimaryCloudShadowFactor, cloudShadowFactorStrength)` onto post-denoise primary direct radiance) was removed 2026-06-19 when the cloud shadow was re-architected onto the SUN's radiance pre-denoise inside `sampleAtmosphereSunLight` — it now darkens only the sun (correct indoors for all surface types, no per-pixel gate). The `PrimaryCloudShadowFactor` texture binding is also removed; only a removal comment remains in the shader.*
 
