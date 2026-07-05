@@ -1895,7 +1895,7 @@ void geometryResolverVertex(
     // Fork: sky-radiance accumulation on miss. Three paths:
     //   1. dome-light texture if dome light is active
     //   2. Hillaire atmosphere (ATMOSPHERE_AVAILABLE-gated) if skyMode == 1
-    //   3. legacy skybox rasterization probe otherwise
+    //   3. legacy skybox rasterization otherwise (matte or probe, see below)
     vec3 skyRadiance;
     if (cb.domeLightArgs.active)
     {
@@ -1919,8 +1919,19 @@ void geometryResolverVertex(
                                      /*isPrimaryRay=*/ true);
     }
 #endif
+    else if (!geometryResolverState.directionAltered)
+    {
+      // Camera ray (never teleported): sample the screen-space sky matte — the
+      // game's own sky raster for this exact pixel. Pixel-exact, unlike the
+      // SkyProbe cubemap whose parameterization has a visible gradient
+      // discontinuity (seam) along cube-face edges.
+      const vec2 screenUV = cameraPixelCoordinateToScreenUV(cb.camera, ivec2(geometryResolverState.pixelCoordinate));
+      skyRadiance = cb.skyBrightness * SkyMatte.SampleLevel(screenUV, 0);
+    }
     else
     {
+      // Ray crossed a ray portal — its direction no longer corresponds to the
+      // rasterized view, so only the direction-based probe is valid here.
       skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
     }
 
