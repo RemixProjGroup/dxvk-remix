@@ -2355,3 +2355,56 @@ Adds the `rtx.atmosphere.skyIndirectRadianceScale` knob (default **1.0** = physi
 - **`RtxOptions.md`** — REGEN PENDING (adds `rtx.atmosphere.skyIndirectRadianceScale`).
 
 ---
+
+## Workstream — Cloud detail-shading pass (fork — 2026-07-14)
+
+Attacks the "blobby clouds" read at its root: the edge-detail field previously only wobbled the coverage threshold (silhouette), while every lighting input (D_sun grid, dim profile, SDF proxy) is km-scale smooth — so threshold-grown billows were invisible inside the cloud body. The same detail signal now also SHADES: billow micro-AO (grown knuckles brighten, carved crevices darken, gated by SDF surface proximity so cores stay clean), a Schneider powder term (thin sun-facing wisps darken; faded toward the sun so silver linings survive), a wispy-base/billowy-top character flip over the bottom quarter of each column, and a height-fading horizontal shear on the detail tap. View path only; the cheap shadow sampler and the validated self-shadow bakes are untouched; every knob at 0 is bit-identical legacy.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`sampleCloudDensityTextured` grows an `out float detailSigned` (zero-mean character-shaped detail signal; convenience overload forwards a dummy) and step 4b gains the character flip + base shear; the tap now also runs when only micro-AO wants it. `evalNubisCubedSample` gains the `detailSigned` param plus the micro-AO (ambient + MS body lobe only, clamp [0.15, 1.25]) and powder blocks.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned change.
+  *Both march loops (layer 1 + echo deck) thread `detailSigned` from the density sampler into the lighting evaluator.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Reclaims the `pad_cloudShadowTint` (vec3) + `pad_cloudShadowTintStrength` row as `cloudMicroAoStrength` / `cloudPowderStrength` / `cloudDetailHeightCharacter` / `cloudDetailBaseShearKm`; CB layout unchanged.*
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *4 RTX_OPTIONs in the `rtx.atmosphere` cluster after `cloudDetailScale`: `cloudMicroAoStrength` (0.6), `cloudPowderStrength` (0.5), `cloudDetailHeightCharacter` (0.7), `cloudDetailBaseShearKm` (0.2).*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs` populates the four fields.*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *4 sliders (Detail Shading / Powder Darkening / Base Wispiness / Base Wisp Shear) in the Detail & Edges tree.*
+- **`RtxOptions.md`** — REGEN PENDING (4 new options).
+
+---
+
+## Workstream — Lightning (fork — 2026-07-14)
+
+In-cloud lightning flashes plus a synchronized transient scene light, driven by a CPU strike scheduler. Strikes fire via a per-frame Bernoulli draw at `lightningStrikesPerMinute` (memoryless Poisson — adapts instantly to the weather blender's continuous rate ramp), place themselves in a 1 km–`lightningRangeKm` annulus around the camera at cloud-base height, and run a ~70 ms-decay envelope with 0–2 restrike pulses. The in-cloud emissive scales with local density via the Beer-Lambert accumulation, so a strike where the column model placed no cloud lights nothing. The flash is compile-gated (`CLOUD_MARCH_LIGHTNING`) to the screen cloud pass only — the persistent secondary-ray cloud LUT must never bake a transient flash. `lightningEnable` (default TRUE) is a master mute; the rate (default 0) is the real switch, raised by storm weather presets (thunderstorm 12/min, rainstorm 4/min) via the new 53rd preset field `lightningStrikesPerMinute`.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned addition.
+  *Two new vec4 rows at the struct end: (`lightningStrikePosKm`, `lightningFlashIntensity`) and (`lightningColor`, `lightningEnvelope` — the raw envelope, so the scene light calibrates independently).*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** — fork-owned addition.
+  *`CLOUD_MARCH_LIGHTNING` gate (default 0) + `evalLightningFlash` (inverse-square, 0.5 km soft core, 0.35/km extinction reach) added to both march loops' in-scatter source.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang`** — fork-owned addition.
+  *Defines `CLOUD_MARCH_LIGHTNING 1` before including the march header (sole flash consumer).*
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned additions.
+  *`advanceLightning(dt)` scheduler (xorshift32, envelope decay, restrikes, annulus placement) + `requestLightningStrike()` static latch for the Test Strike button; `getAtmosphereArgs` publishes the lightning CB fields; `normalizeForSkyLutCache` zeroes them (per-frame animated, never feeds a LUT bake).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned additions.
+  *`advanceLightning` tick after the camera-position push; transient `RtSphereLight` (150 m emitter, persistent handle, zero-radiance between strikes, NOT cloudShadowed) in `fhSyncAtmosphereDistantLights`; "Lightning" ImGui tree (enable + Test Strike + rate/intensities/range/color).*
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned additions.
+  *6 RTX_OPTIONs: `lightningEnable` (true), `lightningStrikesPerMinute` (0), `lightningFlashIntensity` (50), `lightningSceneLightIntensity` (2000), `lightningRangeKm` (10), `lightningColor` (blue-white).*
+- **`src/dxvk/rtx_render/rtx_fork_weather.h` / `rtx_fork_weather.cpp`** — fork-owned additions.
+  *`lightningStrikesPerMinute` as weather-preset field 53 (WK_Scalar, Clouds → Lightning): FIELD_LIST row + all 12 preset value macros + the four hand-listed sites (tooltip map, `snapshotRenderer`, `WVARIES`, gated `writeBlendedToDerivedLayer`).*
+- **`RtxOptions.md`** — REGEN PENDING (6 lightning options + 12 preset fields).
+
+---
+
+## Workstream — Weather preset retune (fork — 2026-07-14)
+
+Look-check driven ("thunderstorm looks like a normal day — the sky is blue, there's a lot of light"). Root cause: every preset inherited the clear-day Rayleigh spectrum and only dimmed the sun. The moody presets now retune three axes — sky COLOR (`rayleighScattering` flattened toward grey; sandstorm inverts the spectrum for an orange-brown sky), MURK (`aerosolDensity` up), and LIGHT (`sunIlluminance` cut hard, `skyIndirectRadianceScale` reduced). `cloudShadowStrength` is 1.0 in ALL presets (per request). Thunderstorm/rainstorm also tighten `cloudAerialFadePerKm` so horizon blue can't bleed through the deck. Clear is deliberately untouched. Because `rayleighScattering` and `skyIndirectRadianceScale` now vary across presets, their `weatherVaries` gates fire and both get written during a blend (comment updated at the write site).
+
+- **`src/dxvk/rtx_render/rtx_fork_weather.h`** — fork-owned change.
+  *Per-preset values only (no structural change): shadow 1.0 ×12; graded sky/murk/light retunes for overcast, drizzle, rainstorm, thunderstorm, snow, blizzard, foggy; sandstorm orange sky + warm night sky; smoggy brown-grey; hazy milky; partlyCloudy coverage 0.35 / type 0.65.*
+- **`src/dxvk/rtx_render/rtx_fork_weather.cpp`** — fork-owned change.
+  *Stale "neutral in every preset" gate comment updated in `writeBlendedToDerivedLayer`.*
+
+---

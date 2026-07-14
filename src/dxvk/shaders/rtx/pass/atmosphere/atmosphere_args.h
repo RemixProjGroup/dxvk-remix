@@ -236,8 +236,22 @@ struct AtmosphereArgs {
   float cloudCurvature;     // 0 = Earth-scale dome, 1 = tight dome
 
   // ----- Cloud volumetric / appearance enhancements (fork) -----
-  vec3 pad_cloudShadowTint;        // was cloudShadowTint (removed 2026-06-21 — no shader consumer)
-  float pad_cloudShadowTintStrength; // was cloudShadowTintStrength (removed 2026-06-21). Reclaimable pads.
+  // Cloud detail-shading pass (fork — 2026-07-14). Four scalars reuse the
+  // former pad_cloudShadowTint (vec3) + pad_cloudShadowTintStrength row, so
+  // the CB layout is unchanged.
+  float cloudMicroAoStrength;       // [0..1] billow-scale shading modulation from the
+                                    // edge-detail field (bright knuckles / dark crevices
+                                    // near the cloud surface). 0 = off (legacy smooth shading).
+  float cloudPowderStrength;        // [0..1] Schneider powder darkening of low-density
+                                    // sun-facing samples (crevice / edge darkening when the
+                                    // sun is behind the viewer). 0 = off.
+  float cloudDetailHeightCharacter; // [0..1] height-keyed erosion character: flips the
+                                    // detail signal about the field mean at the cloud BASE
+                                    // (carve-leaning ragged wisps) while tops keep the
+                                    // growth-leaning billow read. 0 = uniform (legacy).
+  float cloudDetailBaseShearKm;     // Horizontal displacement of the detail tap at the cloud
+                                    // base (km), fading to 0 at the top — sheared/streaked
+                                    // base wisps. 0 = no shear (legacy).
 
   float cloudThickness;        // Cloud-slab vertical depth, km
   float cloudLayer2TypeSpread; // [0,1] cloud-type variation for layer 2 (independent of layer 1)
@@ -532,4 +546,26 @@ struct AtmosphereArgs {
   // appending a bare vec3 would straddle the row boundary and corrupt the CB).
   vec3  cloudLayer2Color;        // Deck base color; defaults to cloudColor's near-white
   float pad_cloudLayer2Color0;   // reserve — completes the vec4 row
+
+  // Lightning (fork — 2026-07-14). Two whole vec4 rows (CB alignment rule
+  // above). The CPU-side strike scheduler (RtxAtmosphere::advanceLightning)
+  // drives a flickering flash envelope; the view-path cloud march adds an
+  // emissive glow around the strike position (compile-gated to the screen
+  // cloud pass only — the secondary-ray cloud LUT must never bake a transient
+  // flash in), and fhSyncAtmosphereDistantLights injects a transient sphere
+  // light at the same position so the scene flashes too. Both rows are zeroed
+  // in normalizeForSkyLutCache so a flash never invalidates the sky-LUT
+  // cache key.
+  vec3  lightningStrikePosKm;     // Strike position, world-anchored Y-up km (same
+                                  // frame as cameraWorldPosYUpKm / samplePos).
+  float lightningFlashIntensity;  // Envelope × lightningFlashIntensity option,
+                                  // premultiplied. 0 = no active flash (the cloud
+                                  // march skips the term entirely).
+
+  vec3  lightningColor;           // Flash tint (linear RGB), shared by the in-cloud
+                                  // glow and the scene sphere light.
+  float lightningEnvelope;        // RAW flicker envelope [0..~1.2], before any
+                                  // intensity scaling — the scene-light sync scales
+                                  // this by lightningSceneLightIntensity so the two
+                                  // consumers calibrate independently.
 };

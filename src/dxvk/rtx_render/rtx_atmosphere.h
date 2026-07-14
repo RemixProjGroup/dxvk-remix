@@ -27,6 +27,8 @@
 #include "rtx_fast_noise.h"
 #include "rtx/pass/atmosphere/atmosphere_args.h"
 
+#include <atomic>
+
 namespace dxvk {
 
 class DxvkContext;
@@ -273,6 +275,26 @@ public:
    */
   void advanceCloudMotion(float dt);
 
+  /**
+   * \brief Advance the lightning strike scheduler (fork — 2026-07-14)
+   *
+   * Decays the flash flicker envelope, fires restrike pulses, and schedules /
+   * places new strikes around the camera. MUST be called exactly once per
+   * frame (from updateAtmosphereConstants), after the camera-position push so
+   * placement uses this frame's camera. getAtmosphereArgs publishes the
+   * resulting envelope + strike position into the lightning CB fields.
+   */
+  void advanceLightning(float dt);
+
+  /**
+   * \brief Queue a lightning strike for the next advanceLightning tick
+   *
+   * ImGui "Test Strike" hook. Static so the panel code doesn't need the
+   * atmosphere instance; consumed (and cleared) once per frame. Ignored while
+   * lightningEnable is off.
+   */
+  static void requestLightningStrike();
+
 private:
   void createLutResources(Rc<DxvkContext> ctx);
   void dispatchTransmittanceLut(Rc<DxvkContext> ctx);
@@ -414,6 +436,17 @@ private:
   Vector2  m_cloudAdvectOffset     { 0.0f, 0.0f };  // wind translation (km)
   Vector3  m_cloudEvolutionOffset  { 0.0f, 0.0f, 0.0f };  // morph scroll (km)
   float    m_cloudBoilPhase        { 0.0f };  // edge-boil scroll phase (km)
+
+  // Lightning strike scheduler state (fork — 2026-07-14). Advanced once per
+  // frame by advanceLightning(); published by getAtmosphereArgs() into the
+  // lightning CB fields. See the scheduler comment in rtx_atmosphere.cpp for
+  // the envelope / restrike / inter-arrival model.
+  Vector3  m_lightningStrikePosKm       { 0.0f, 0.0f, 0.0f };
+  float    m_lightningEnvelope          { 0.0f };   // raw flicker envelope [0..~1.2]
+  int      m_lightningPulsesLeft        { 0 };      // restrike pulses of the active flash
+  float    m_lightningTimeToPulse       { 0.0f };   // seconds to the next restrike pulse
+  uint32_t m_lightningRngState          { 0x9E3779B9u };  // xorshift32 state
+  static std::atomic<bool> s_lightningStrikeRequested;    // ImGui Test Strike latch
 
   // Cloud history ping-pong (fork). Screen-space RGBA16F (premultiplied
   // radiance, alpha) used by the temporal-smoothing path inside

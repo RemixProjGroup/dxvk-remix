@@ -49,6 +49,17 @@
 // AtmosphereCloudSkyTransmittanceLut, AtmosphereSkyViewSampler) —
 // the established binding-then-include layout both consumers use.
 
+// Lightning flash gate (fork — 2026-07-14). The in-cloud flash emissive is a
+// TRANSIENT per-frame effect, so only the screen-space cloud pass
+// (cloud_render.comp.slang, which #defines this to 1 before including) may
+// evaluate it. The secondary-ray cloud LUT (cloud_secondary_lut.comp.slang)
+// includes this same header and persists across frames — a flash baked into
+// it would linger in reflections until the next re-bake. Default 0 keeps any
+// other consumer flash-free by construction.
+#ifndef CLOUD_MARCH_LIGHTNING
+#define CLOUD_MARCH_LIGHTNING 0
+#endif
+
 // =============================================================================
 // Moon-shadow optical-depth tap.
 //
@@ -385,6 +396,26 @@ CloudShadeContext buildCloudShadeContext(AtmosphereArgs args) {
 // 0/0 reproduces the pre-extraction march bit-for-bit. Both current callers
 // pass 0/0 — the clamps support split-march experiments (two clamped
 // segments partition the slab exactly, with no double-counted extinction).
+#if CLOUD_MARCH_LIGHTNING
+// In-cloud lightning flash glow (fork — 2026-07-14, tier 1). Radiance added to
+// the in-scatter source at a march sample: inverse-square falloff about the
+// strike position, softened over a ~0.5 km core (the strike is a channel, not
+// a point), with an extinction-flavored exp standing in for the flash light's
+// own attenuation through intervening cloud (no occlusion march — the cloud in
+// front of the SAMPLE already attenuates via viewTransmittance). The caller's
+// (1 - stepTransmittance) accumulation factor scales this by local density, so
+// the glow lights cloud material only — a strike positioned where the column
+// model placed no cloud simply lights nothing.
+vec3 evalLightningFlash(vec3 samplePos, AtmosphereArgs args) {
+  vec3 dv = samplePos - args.lightningStrikePosKm;
+  float d2 = dot(dv, dv);
+  const float kFlashCoreSoftKm2 = 0.25f;      // ~0.5 km channel-glow core
+  const float kFlashExtinctionPerKm = 0.35f;  // in-cloud reach of the glow
+  float fall = exp(-sqrt(d2) * kFlashExtinctionPerKm) / (d2 + kFlashCoreSoftKm2);
+  return args.lightningColor * (args.lightningFlashIntensity * fall);
+}
+#endif
+
 // =============================================================================
 void marchCloudSlab(vec3   viewDirYUp,
                     float  pixelJitter,
@@ -505,10 +536,12 @@ void marchCloudSlab(vec3   viewDirYUp,
     // for the per-column underside-brightness modulation in the lighting.
     float shapeHf;
     float columnSpan;
+    float detailSigned;
     float density = sampleCloudDensityTextured(samplePos, hf, typeLocal, coverageLocal,
                                                 slabAltitudeKm, slabThicknessKm, slabDensityScale,
                                                 args, AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler,
-                                                AtmosphereCloudPlacementMap, shapeHf, columnSpan);
+                                                AtmosphereCloudPlacementMap, shapeHf, columnSpan,
+                                                detailSigned);
     if (density < 0.001f) continue;
 
     // Nubis Cubed lighting at this sample. samplePos is already Y-up, so
@@ -518,7 +551,9 @@ void marchCloudSlab(vec3   viewDirYUp,
     // slab hf: the dim profile, SDF proxy and bottom darkening then track
     // each cloud's own base/top instead of painting horizontal lighting
     // bands across the whole sky at fixed altitudes — those global bands
-    // were half of the "stacked separated layers" read.
+    // were half of the "stacked separated layers" read. detailSigned is the
+    // sampler's edge-detail relief signal, consumed by the billow micro-AO
+    // (fork — 2026-07-14, detail-shading pass).
     //
     // NOTE: the D_sun / D_ambient voxel grids are baked over the primary
     // (layer 1) slab only — layer 2 samples will read whichever residual
@@ -526,7 +561,7 @@ void marchCloudSlab(vec3   viewDirYUp,
     // contribute attenuation toward zenith and sun direction at most, and
     // cirrus is too thin to need precomputed shadow data of its own.
     NubisCubedLighting lighting = evalNubisCubedSample(
-        samplePos, shapeHf, density, columnSpan,
+        samplePos, shapeHf, density, columnSpan, detailSigned,
         viewDirYUp, ctx.sunDirYUp, ctx.sunRadiance,
         ctx.skyRadianceWarm, ctx.skyRadianceCool, ctx.skyRadianceZenith,
         args, /*isZUp=*/false, /*dSunOverride=*/-1.0f);
@@ -575,6 +610,14 @@ void marchCloudSlab(vec3   viewDirYUp,
     vec3 sampleColor = args.cloudColor
                      * (lighting.direct + lighting.ambient * ambientThinFade + moonDirectLight)
                      + ctx.nightLight;
+
+#if CLOUD_MARCH_LIGHTNING
+    // Lightning flash glow (fork — 2026-07-14): view pass only, inert unless a
+    // strike envelope is live this frame.
+    if (args.lightningFlashIntensity > 0.0f) {
+      sampleColor += evalLightningFlash(samplePos, args);
+    }
+#endif
 
     // Beer-Lambert step accumulation.
     float effectiveDensity = density * args.cloudDensity;
@@ -721,10 +764,12 @@ void marchEchoDeck(vec3   viewDirYUp,
     float hf = computeCloudHeightFraction(samplePos, args, slabAltitudeKm, slabThicknessKm);
     float shapeHf;
     float columnSpan;
+    float detailSigned;
     float density = sampleCloudDensityTextured(samplePos, hf, typeLocal, coverageLocal,
                                                 slabAltitudeKm, slabThicknessKm, slabDensityScale,
                                                 args, AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler,
-                                                AtmosphereCloudPlacementMap, shapeHf, columnSpan);
+                                                AtmosphereCloudPlacementMap, shapeHf, columnSpan,
+                                                detailSigned);
     if (density < 0.001f) continue;
 
     // Analytic sun-shadow optical depth in place of the layer-1-only D_sun
@@ -735,7 +780,7 @@ void marchEchoDeck(vec3   viewDirYUp,
     float dSunProxy = (1.0f - shapeHf) * slabThicknessKm * slabDensityScale;
 
     NubisCubedLighting lighting = evalNubisCubedSample(
-        samplePos, shapeHf, density, columnSpan,
+        samplePos, shapeHf, density, columnSpan, detailSigned,
         viewDirYUp, ctx.sunDirYUp, ctx.sunRadiance,
         ctx.skyRadianceWarm, ctx.skyRadianceCool, ctx.skyRadianceZenith,
         args, /*isZUp=*/false, /*dSunOverride=*/dSunProxy);
@@ -779,6 +824,14 @@ void marchEchoDeck(vec3   viewDirYUp,
     vec3 sampleColor = args.cloudColor
                      * (lighting.direct + lighting.ambient * ambientThinFade + moonDirectLight)
                      + ctx.nightLight;
+
+#if CLOUD_MARCH_LIGHTNING
+    // Lightning flash glow (fork — 2026-07-14): a low strike faintly lights
+    // the high deck too — same term as layer 1, distance does the fading.
+    if (args.lightningFlashIntensity > 0.0f) {
+      sampleColor += evalLightningFlash(samplePos, args);
+    }
+#endif
 
     float effectiveDensity = density * args.cloudDensity;
     float stepTransmittance = exp(-effectiveDensity * stepLen);

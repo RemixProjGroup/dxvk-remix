@@ -548,6 +548,7 @@ namespace dxvk { namespace fork_weather { namespace {
     if (std::strcmp(name, "cloudBottomDarkening") == 0) return RtxOptions::cloudBottomDarkeningObject().getDescription();
     if (std::strcmp(name, "cloudAerialFadePerKm") == 0) return RtxOptions::cloudAerialFadePerKmObject().getDescription();
     if (std::strcmp(name, "cloudAerialHazePerKm") == 0) return RtxOptions::cloudAerialHazePerKmObject().getDescription();
+    if (std::strcmp(name, "lightningStrikesPerMinute") == 0) return RtxOptions::lightningStrikesPerMinuteObject().getDescription();
     if (std::strcmp(name, "airDensity") == 0) return RtxOptions::airDensityObject().getDescription();
     if (std::strcmp(name, "aerosolDensity") == 0) return RtxOptions::aerosolDensityObject().getDescription();
     if (std::strcmp(name, "sunIlluminance") == 0) return RtxOptions::sunIlluminanceObject().getDescription();
@@ -743,7 +744,7 @@ namespace dxvk { namespace fork_weather { namespace {
   // ---------------------------------------------------------------------------
   WeatherSnapshot snapshotRenderer() {
     WeatherSnapshot s;
-    // Cloud (16)
+    // Cloud (17)
     s.cloudDensity               = RtxOptions::cloudDensity();
     s.cloudCoverageMean          = RtxOptions::cloudCoverageMean();
     s.cloudCoverageSpread        = RtxOptions::cloudCoverageSpread();
@@ -760,6 +761,7 @@ namespace dxvk { namespace fork_weather { namespace {
     s.cloudBottomDarkening     = RtxOptions::cloudBottomDarkening();
     s.cloudAerialFadePerKm     = RtxOptions::cloudAerialFadePerKm();
     s.cloudAerialHazePerKm     = RtxOptions::cloudAerialHazePerKm();
+    s.lightningStrikesPerMinute = RtxOptions::lightningStrikesPerMinute();
     // Atmosphere (5)
     s.airDensity                 = RtxOptions::airDensity();
     s.aerosolDensity             = RtxOptions::aerosolDensity();
@@ -860,6 +862,7 @@ namespace dxvk { namespace fork_weather { namespace {
   WVARIES(cloudBottomDarkening)
   WVARIES(cloudAerialFadePerKm)
   WVARIES(cloudAerialHazePerKm)
+  WVARIES(lightningStrikesPerMinute)
   WVARIES(moonNeeStrength)
   WVARIES(moonAtmosphericCouplingStrength)
   WVARIES(rayleighScattering)
@@ -867,7 +870,7 @@ namespace dxvk { namespace fork_weather { namespace {
   WVARIES(skyIndirectRadianceScale)
 #undef WVARIES
   void writeBlendedToDerivedLayer(const WeatherSnapshot& interp) {
-    // Cloud (16)
+    // Cloud (17)
     RtxOptions::cloudDensityObject().setImmediately(interp.cloudDensity);
     RtxOptions::cloudCoverageMeanObject().setImmediately(interp.cloudCoverageMean);
     RtxOptions::cloudCoverageSpreadObject().setImmediately(interp.cloudCoverageSpread);
@@ -884,9 +887,15 @@ namespace dxvk { namespace fork_weather { namespace {
     if (weatherVaries_cloudBottomDarkening())     RtxOptions::cloudBottomDarkeningObject().setImmediately(interp.cloudBottomDarkening);
     if (weatherVaries_cloudAerialFadePerKm())     RtxOptions::cloudAerialFadePerKmObject().setImmediately(interp.cloudAerialFadePerKm);
     if (weatherVaries_cloudAerialHazePerKm())     RtxOptions::cloudAerialHazePerKmObject().setImmediately(interp.cloudAerialHazePerKm);
+    // Lightning rate (fork — 2026-07-14): varies out of the box (thunderstorm /
+    // rainstorm are nonzero), but keep the gate so zeroing every preset stops
+    // the weather system from clobbering a game's own lightning config.
+    if (weatherVaries_lightningStrikesPerMinute()) RtxOptions::lightningStrikesPerMinuteObject().setImmediately(interp.lightningStrikesPerMinute);
     // Atmosphere (5); rayleighScattering (daytime sky colour) and skyIndirectRadianceScale
-    // (sky light) are neutral in every preset today, so gate them to avoid clobbering
-    // the game's own sky tint / sky-fill brightness.
+    // (sky light) VARY since the 2026-07-14 storm retune (storm presets flatten the
+    // Rayleigh spectrum toward grey and pull down the sky fill), so both now write.
+    // The varies-gate is kept: leveling every preset back to one value re-mutes the
+    // writes so a game's own sky tint / sky-fill config isn't clobbered.
     RtxOptions::airDensityObject().setImmediately(interp.airDensity);
     RtxOptions::aerosolDensityObject().setImmediately(interp.aerosolDensity);
     RtxOptions::sunIlluminanceObject().setImmediately(interp.sunIlluminance);

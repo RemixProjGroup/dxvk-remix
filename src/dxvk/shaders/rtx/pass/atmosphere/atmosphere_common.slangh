@@ -1749,7 +1749,8 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
                                  SamplerState cloudSampler,
                                  Texture2D<float4> placementMap,
                                  out float shapeHeightFraction,
-                                 out float columnSpan) {
+                                 out float columnSpan,
+                                 out float detailSigned) {
   // shapeHeightFraction (fork — 2026-06-11, column-shaping rework): the
   // height fraction all vertical SHAPING and LIGHTING should key on,
   // re-normalized to this column's own [base, top] so every cloud carries a
@@ -1763,8 +1764,16 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   // darken their base fully, thin columns stay bright (transmitted-light cue),
   // which gives the deck underside km-scale cellular relief instead of one
   // flat-lit sheet. Both are always overwritten by the column block below.
+  // detailSigned (fork — 2026-07-14, detail-shading pass): the zero-mean,
+  // character-shaped edge-detail signal at this sample (positive = the field
+  // grew the surface outward here, negative = it carved in). Consumed by
+  // evalNubisCubedSample's billow micro-AO as a local relief proxy — the same
+  // field that wobbles the silhouette then shades it, so billows grown by the
+  // threshold get bright knuckles and carved crevices go dark. 0 when the
+  // detail tap is skipped (both strengths 0, or column early-out).
   shapeHeightFraction = heightFraction;
   columnSpan = 1.0f;
+  detailSigned = 0.0f;
 
   // 1. Wind perturbation (translation only — texture is tilable).
   //    The legacy analytic sampler applied a height-dependent shear on top of
@@ -1965,7 +1974,10 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
   //     slide-3 anvil mechanism step 4a uses at low frequency. The cheap shadow
   //     sampler (sampleCloudDensityForShadow) still skips the whole term, and
   //     cloudDetailStrength = 0 leaves coverageThreshold untouched (bit-identical).
-  if (args.cloudDetailStrength > 0.0f) {
+  //     The tap also runs when only micro-AO wants it (cloudMicroAoStrength >
+  //     0 with cloudDetailStrength == 0): the shading consumer reads the same
+  //     field even if the silhouette wobble is disabled.
+  if (args.cloudDetailStrength > 0.0f || args.cloudMicroAoStrength > 0.0f) {
     // Edge boil (fork — 2026-06-21, field evolution): scroll the detail tap along
     // a fixed internal direction at cloudBoilSpeed, INDEPENDENT of the base
     // shape's wind + evolution, so the erosion field slides relative to the
@@ -1974,17 +1986,42 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
     // cloudBoilPhase is accumulated km; 0 = frozen edges (legacy).
     const vec3 kBoilDir = vec3(0.6092f, 0.7109f, 0.3517f);  // ~unit, off-axis
     vec3 boilPos = perturbed + args.cloudBoilPhase * kBoilDir;
+    // Base wisp shear (fork — 2026-07-14, detail-shading pass): displace the
+    // detail tap horizontally by an amount that fades from cloudDetailBaseShearKm
+    // at the column base to 0 at its top, along a fixed internal azimuth
+    // (decorrelated from kBoilDir's XZ). The detail field then arrives SLANTED
+    // relative to the base shape — base-level billows streak sideways like
+    // wind-sheared scud while tops stay round. Shear only skews the tap
+    // position, so the zero-mean statistics feeding the threshold are unchanged.
+    const vec2 kShearDir = vec2(0.8f, -0.6f);  // unit
+    boilPos += vec3(kShearDir.x, 0.0f, kShearDir.y)
+             * ((1.0f - shapeHeightFraction) * args.cloudDetailBaseShearKm);
     vec3 detailCoord = frac(boilPos * (args.cloudDetailScale / args.cloudNoiseTileKm));
     float detailNoise = cloudNoise3D.SampleLevel(cloudSampler, detailCoord, 0).r;
-    // kEdgeDetailThreshold scales the wobble into threshold units; at the 0.6
-    // default strength the typical excursion is ~±0.1, with growth peaks to
-    // ~0.18 (the [0,1] detail range is wider above the 0.4 mean, giving a gentle
-    // growth lean). Clamp ≥ 0 so the anvil's threshold→0 cloud tops can't go
-    // negative (which would over-fill the gate to solid).
-    const float kEdgeDetailThreshold = 0.5f;
-    coverageThreshold -= args.cloudDetailStrength * kEdgeDetailThreshold
-                       * (detailNoise - kCloudNoiseFieldMean);
-    coverageThreshold = max(coverageThreshold, 0.0f);
+    float signedDetail = detailNoise - kCloudNoiseFieldMean;
+    // Height-keyed erosion character (fork — 2026-07-14, Nubis wispy/billowy
+    // trick). The Worley-carved field's [0,1] range is asymmetric about its
+    // 0.4 mean — wider above — so the DIRECT signal leans toward growth
+    // spikes (compact cauliflower knuckles) and the INVERTED signal leans
+    // toward carve spikes (ragged, eaten-away edges). Flip the sign over the
+    // bottom kDetailWispyBand of each column: bases read wispy/carved, tops
+    // keep the billow lean. The flip is about the field mean, so the signal
+    // stays zero-mean and adds no net coverage shift at any height.
+    // cloudDetailHeightCharacter = 0 is bit-identical legacy (uniform lean).
+    const float kDetailWispyBand = 0.25f;  // bottom fraction of the column that flips
+    float characterCurve = 2.0f * saturate(shapeHeightFraction / kDetailWispyBand) - 1.0f;
+    signedDetail *= mix(1.0f, characterCurve, saturate(args.cloudDetailHeightCharacter));
+    detailSigned = signedDetail;
+    if (args.cloudDetailStrength > 0.0f) {
+      // kEdgeDetailThreshold scales the wobble into threshold units; at the 0.6
+      // default strength the typical excursion is ~±0.1, with growth peaks to
+      // ~0.18 (the [0,1] detail range is wider above the 0.4 mean, giving a gentle
+      // growth lean). Clamp ≥ 0 so the anvil's threshold→0 cloud tops can't go
+      // negative (which would over-fill the gate to solid).
+      const float kEdgeDetailThreshold = 0.5f;
+      coverageThreshold -= args.cloudDetailStrength * kEdgeDetailThreshold * signedDetail;
+      coverageThreshold = max(coverageThreshold, 0.0f);
+    }
   }
 
   // 5. Apply the coverage gate (threshold computed in 4a above), then the
@@ -2020,10 +2057,11 @@ float sampleCloudDensityTextured(vec3 worldPosKm,
                                  Texture2D<float4> placementMap) {
   float shapeHfUnused;
   float columnSpanUnused;
+  float detailSignedUnused;
   return sampleCloudDensityTextured(worldPosKm, heightFraction, typeLocal, coverageLocal,
                                      slabAltitudeKm, slabThicknessKm, densityScale,
                                      args, cloudNoise3D, cloudSampler, placementMap,
-                                     shapeHfUnused, columnSpanUnused);
+                                     shapeHfUnused, columnSpanUnused, detailSignedUnused);
 }
 
 // Args-default overload — preserves the layer-1 behavior every existing
@@ -2501,7 +2539,7 @@ struct NubisCubedLighting {
 // different altitude would read meaningless residual from it.
 NubisCubedLighting evalNubisCubedSample(
     vec3 samplePos, float heightFraction, float density,
-    float columnSpan,
+    float columnSpan, float detailSigned,
     vec3 viewDir, vec3 sunDir,
     vec3 sunRadiance, vec3 skyRadianceWarm, vec3 skyRadianceCool,
     vec3 skyRadianceZenith,
@@ -2524,6 +2562,45 @@ NubisCubedLighting evalNubisCubedSample(
   float sigma_ms_inner = lerp(args.cloudMsSigmaDeep, args.cloudMsSigmaShallow, sdfFrac);
   float sunFrac = saturate(cosTheta / max(args.cloudMsSunDotMax, 1e-4f));
   float sigma_ms = lerp(args.cloudMsSigmaShallow, sigma_ms_inner, sunFrac) * args.cloudMsScale;
+
+  // === Billow micro-AO + powder (fork — 2026-07-14, detail-shading pass) ===
+  //
+  // Micro-AO: every other input to this evaluator (D_sun grid, dim_profile,
+  // SDF proxy) is km-scale smooth, so billows grown by the edge-detail
+  // threshold wobble were lit identically to the smooth cloud around them —
+  // they only existed at the silhouette. detailSigned is that same erosion
+  // field (zero-mean, positive = surface grew outward here), reused as a
+  // local relief proxy: grown knuckles catch more sky (brighten), carved
+  // crevices see less of it (darken). Gated by sdfFrac so deep-core samples
+  // keep the clean smooth shading — this is SURFACE relief, not interior
+  // noise. Applied to the multi-scatter body lobe and the ambient terms
+  // below; the primary forward lobe A is exempt so backlit silver linings
+  // keep their pure Beer-Lambert read. Asymmetric clamp: crevices may darken
+  // to 0.15x but knuckles brighten at most 1.25x (AO adds shadow, not light).
+  float microAo = 1.0f;
+  if (args.cloudMicroAoStrength > 0.0f) {
+    const float kMicroAoGain = 1.5f;  // detailSigned excursion (~±0.3 typical) -> shading units
+    microAo = clamp(1.0f + kMicroAoGain * args.cloudMicroAoStrength * sdfFrac * detailSigned,
+                    0.15f, 1.25f);
+  }
+
+  // Powder (Schneider 2015): a low-density region viewed with the sun at the
+  // viewer's back has few scatterers to redirect light back toward the eye,
+  // so wisps and crevice walls go DARK against the bright dense body behind
+  // them — the classic crisp-cumulus cue the raw Beer-Lambert term misses
+  // (it only ever brightens thin samples). 1 - exp(-k*density) saturates to
+  // ~1 inside the body, so the darkening self-localizes to the coverage
+  // gate's transition band (edges / crevices). Faded by view geometry: full
+  // strength viewing the sunlit face (cosTheta -> -1), off toward the sun
+  // (cosTheta -> +1) so forward-scatter silver linings are untouched.
+  float powder = 1.0f;
+  if (args.cloudPowderStrength > 0.0f) {
+    const float kPowderSharpness = 4.0f;
+    float powderTerm = 1.0f - exp(-kPowderSharpness * density);
+    float litFaceFacing = 1.0f - smoothstep(-0.3f, 0.5f, cosTheta);
+    powder = lerp(1.0f, powderTerm,
+                  saturate(args.cloudPowderStrength) * litFaceFacing);
+  }
 
   // Underside light field (fork — realistic rework 2026-06-19; supersedes the
   // column-shaping rev 3 analytic downwelling and the older constant gradient,
@@ -2597,11 +2674,15 @@ NubisCubedLighting evalNubisCubedSample(
   // energy decay (cloud_march_common.slangh) — this brings the sun path onto the
   // same footing.
   float A = T_primary * HG1;
-  float B = M * HG2;
+  // Micro-AO on the multi-scatter body lobe only (see block above): the body
+  // fill is the diffuse-ish term where local relief shading reads as detail;
+  // the forward lobe A stays pure so silver linings are unaffected.
+  float B = M * HG2 * microAo;
   float msLobeS = saturate(args.cloudEnergyConserve);
   float msLobeW = saturate(args.cloudMsLobeWeight);
-  float L_direct = A * (1.0f - msLobeS * msLobeW)
-                 + B * (1.0f - msLobeS * (1.0f - msLobeW));
+  float L_direct = (A * (1.0f - msLobeS * msLobeW)
+                  + B * (1.0f - msLobeS * (1.0f - msLobeW)))
+                 * powder;
 
   // === Ambient scattering (paper p. 142) ===
   // Per-sample warm/cool ambient blend (fork — 2026-05-21). Warm color is
@@ -2647,7 +2728,9 @@ NubisCubedLighting evalNubisCubedSample(
 
   NubisCubedLighting result;
   result.direct  = L_direct * sunRadiance;
-  result.ambient = topAmbient + domeFill;
+  // Micro-AO on the ambient: sky light is the dominant fill on non-sun-facing
+  // billows, so this is where the knuckle/crevice relief carries in most views.
+  result.ambient = (topAmbient + domeFill) * microAo;
   return result;
 }
 

@@ -157,6 +157,11 @@ Texture2D<float4> AtmosphereCloudPlacementMap;
 // follow atmosphere_common.slangh. The extraction is behavior-neutral:
 // this pass calls marchCloudLayers with 0/0 distance clamps, which is
 // bit-identical to the pre-extraction inline march.
+//
+// Lightning (fork — 2026-07-14): the screen pass is the ONLY consumer allowed
+// to evaluate the transient in-cloud flash — the LUT bake persists across
+// frames and must stay flash-free (see the gate comment in the header).
+#define CLOUD_MARCH_LIGHTNING 1
 #include "rtx/pass/atmosphere/cloud_march_common.slangh"
 
 [shader("compute")]

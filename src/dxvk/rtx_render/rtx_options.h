@@ -1706,6 +1706,75 @@ namespace dxvk {
                "keep the combined base+detail repeat period long. Default 4.3, "
                "viable range 2-12. Applies live (no re-bake).");
 
+    // Cloud detail-shading pass (fork — 2026-07-14). Four knobs that make the
+    // edge-detail field visible INSIDE the silhouette, not just on it:
+    // micro-AO reuses the detail tap as billow-scale relief shading, powder
+    // darkens low-density sun-facing wisps (Schneider 2015), and the height
+    // character / base shear give bases a ragged wind-sheared read while tops
+    // stay billowy. All apply live, all view-path only (the cheap shadow
+    // sampler and the validated self-shadow bakes are untouched); each knob
+    // at 0 is bit-identical legacy.
+    RTX_OPTION("rtx.atmosphere", float, cloudMicroAoStrength, 0.6f,
+               "Billow-scale shading from the edge-detail field [0..1]: grown "
+               "cauliflower knuckles brighten, carved crevices darken, so the "
+               "edge detail reads inside the cloud body instead of only at "
+               "the silhouette. Applies to ambient + multi-scatter body "
+               "light; silver linings are exempt. 0 = off (legacy smooth "
+               "shading).");
+    RTX_OPTION("rtx.atmosphere", float, cloudPowderStrength, 0.5f,
+               "Powder darkening [0..1] (Schneider): thin sun-facing wisps "
+               "and crevice walls go dark against the bright dense body when "
+               "the sun is behind the viewer - the classic crisp-cumulus cue. "
+               "Fades off looking toward the sun so silver linings survive. "
+               "0 = off.");
+    RTX_OPTION("rtx.atmosphere", float, cloudDetailHeightCharacter, 0.7f,
+               "Height-keyed erosion character [0..1]: flips the edge-detail "
+               "lean over the bottom quarter of each cloud so bases read "
+               "ragged/wispy while tops keep round cauliflower billows (Nubis "
+               "wispy-base / billowy-top trick). 0 = uniform character at all "
+               "heights (legacy).");
+    RTX_OPTION("rtx.atmosphere", float, cloudDetailBaseShearKm, 0.2f,
+               "Horizontal shear of the edge-detail field at each cloud's "
+               "base (km), fading to zero at its top - streaks base-level "
+               "wisps sideways like wind-sheared scud while tops stay round. "
+               "0 = no shear.");
+
+    // Lightning (fork — 2026-07-14). A CPU strike scheduler drives a
+    // flickering flash envelope; the cloud view march adds an emissive glow
+    // around the strike (tier 1) and a transient sphere light flashes the
+    // scene through the standard light path, froxel volumetrics included
+    // (tier 2). Off by default — storms are opt-in (weather-preset field
+    // candidate later).
+    RTX_OPTION("rtx.atmosphere", bool, lightningEnable, true,
+               "Lightning master switch. With this on, lightning is driven "
+               "entirely by lightningStrikesPerMinute (default 0 = no "
+               "strikes) - the weather presets raise the rate for storm "
+               "archetypes. Turn this off to mute lightning everywhere, "
+               "including storm presets and the Test Strike button.");
+    RTX_OPTION("rtx.atmosphere", float, lightningStrikesPerMinute, 0.0f,
+               "Mean lightning strike rate per minute [0..60]. Inter-strike "
+               "gaps are randomized (Poisson-like) so strikes cluster and "
+               "lull naturally. 0 = no automatic strikes (Test Strike still "
+               "works). Driven by the weather-preset system when a preset is "
+               "active (thunderstorm 12/min, rainstorm 4/min).");
+    RTX_OPTION("rtx.atmosphere", float, lightningFlashIntensity, 50.0f,
+               "Radiance scale of the in-cloud flash glow. Higher = the deck "
+               "lights up brighter and the glow reaches further through the "
+               "cloud. Tune against your sky brightness; the flash competes "
+               "with direct sunlight, so night storms need far less.");
+    RTX_OPTION("rtx.atmosphere", float, lightningSceneLightIntensity, 2000.0f,
+               "Radiance of the transient sphere light that flashes the "
+               "SCENE at the strike position (independent of the in-cloud "
+               "glow's intensity). 0 = cloud-only lightning (no ground "
+               "flash).");
+    RTX_OPTION("rtx.atmosphere", float, lightningRangeKm, 10.0f,
+               "Maximum strike distance from the camera in km [1.5..30]. "
+               "Strikes distribute uniformly by area between 1 km and this "
+               "range.");
+    RTX_OPTION("rtx.atmosphere", Vector3, lightningColor, Vector3(0.72f, 0.78f, 1.0f),
+               "Lightning flash color (linear RGB), shared by the in-cloud "
+               "glow and the scene flash. Default is a cool blue-white.");
+
     // Cloud-edge / halo tuning (fork — 2026-06-13). Two live knobs for the soft
     // fringe around cloud silhouettes: cloudEdgeSoftness sets how wide the
     // coverage-gate transition band is (the EXTENT of the skirt), and

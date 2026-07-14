@@ -97,6 +97,7 @@ namespace fork_hooks {
     struct AtmosphereDistantLightState {
       RtLight* sun = nullptr;
       RtLight* moons[MAX_MOONS] = {};
+      RtLight* lightning = nullptr;  // transient strike flash (fork — 2026-07-14)
     };
     AtmosphereDistantLightState g_atmoLights;
 
@@ -110,6 +111,10 @@ namespace fork_hooks {
           g_atmoLights.moons[i]->markForGarbageCollection();
           g_atmoLights.moons[i] = nullptr;
         }
+      }
+      if (g_atmoLights.lightning) {
+        g_atmoLights.lightning->markForGarbageCollection();
+        g_atmoLights.lightning = nullptr;
       }
     }
 
@@ -210,6 +215,50 @@ namespace fork_hooks {
         const Vector3 propDir = lit ? Vector3(-toMoon.x, -toMoon.y, -toMoon.z) : Vector3(0.0f, -1.0f, 0.0f);
         // Half-angle = the moon's physical angular radius (same as the sun).
         ensureLight(g_atmoLights.moons[i], propDir, m.angularRadius, radiance, /*cloudShadowed=*/false);
+      }
+
+      // ---- Lightning scene flash (fork — 2026-07-14, tier 2) ----
+      // A transient sphere light at the strike position so the terrain /
+      // scene flashes in sync with the in-cloud glow. Same persistent-handle
+      // pattern as the sun: created lazily on the first strike, then kept
+      // alive with zero radiance between strikes (inert — no create/destroy
+      // churn, and RTXDI keeps a stable light to resample). The froxel
+      // volumetrics pick it up automatically because it is a real light.
+      // Radiance uses the RAW envelope so the scene brightness calibrates
+      // independently of the in-cloud flash intensity. NOT cloudShadowed —
+      // the strike is below/inside the deck, folding the cloud-on-terrain
+      // shadow onto it would kill exactly the light it represents.
+      {
+        const float sceneScaleL = std::max(RtxOptions::lightningSceneLightIntensity(), 0.0f);
+        const bool lit = RtxOptions::lightningEnable()
+                      && args.lightningEnvelope > 0.001f
+                      && sceneScaleL > 0.0f;
+        // Skip entirely until the first lit frame (avoid an unused light slot).
+        if (lit || g_atmoLights.lightning != nullptr) {
+          Vector3 radiance(0.0f, 0.0f, 0.0f);
+          Vector3 posWorld(0.0f, 0.0f, 0.0f);
+          if (lit) {
+            const Vector3 c = RtxOptions::lightningColor();
+            radiance = c * (args.lightningEnvelope * sceneScaleL);
+            const Vector3 posKmYUp(args.lightningStrikePosKm.x,
+                                   args.lightningStrikePosKm.y,
+                                   args.lightningStrikePosKm.z);
+            posWorld = toWorld(posKmYUp) * args.worldUnitsPerKm;  // km Y-up -> engine units
+          }
+          // ~150 m emitter radius: reads as a channel glow, not a point spark,
+          // and keeps the sphere-light solid angle sane for RIS at km range.
+          const float radiusWorld = 0.15f * args.worldUnitsPerKm;
+          auto sl = RtSphereLight::tryCreate(posWorld, radiance, radiusWorld, RtLightShaping());
+          if (sl) {
+            RtLight rtl(*sl);
+            rtl.isDynamic = true;  // moves every strike, radiance every frame
+            if (g_atmoLights.lightning == nullptr) {
+              g_atmoLights.lightning = lm.createExternallyTrackedLight(rtl);
+            } else {
+              lm.updateExternallyTrackedLight(g_atmoLights.lightning, rtl);
+            }
+          }
+        }
       }
     }
   }  // anonymous namespace
@@ -342,6 +391,11 @@ namespace fork_hooks {
           const Vector3 cameraPosYUpKm = cameraPosWorldUnitsYUp * kmPerWorldUnit;
           ctx.m_atmosphere->setCloudShadowCameraPosition(cameraPosYUpKm);
         }
+
+        // Lightning scheduler tick (fork — 2026-07-14). After the camera push
+        // so strike placement uses this frame's camera; before computeLuts /
+        // getAtmosphereArgs so this frame's envelope reaches the CB.
+        ctx.m_atmosphere->advanceLightning(GlobalTime::get().deltaTime());
 
         // Allocate the cloud render RT at the downscale extent (the resolution
         // the geometry resolver raygen writes to and DLSS sees as its input).
@@ -1362,6 +1416,34 @@ namespace fork_hooks {
                 "wispy cauliflower billows OUTWARD from silhouettes while dense cores stay "
                 "solid. 0 = smooth edges (legacy look). Detail frequency is "
                 "tunable via rtx.atmosphere.cloudDetailScale in user.conf.");
+            // Detail-shading pass (fork — 2026-07-14): billow micro-AO, powder
+            // darkening, and the wispy-base / billowy-top character split.
+            RemixGui::DragFloat("Detail Shading", &RtxOptions::cloudMicroAoStrengthObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Shades the edge-detail billows: grown knuckles brighten, carved "
+                "crevices darken, so the detail reads INSIDE the cloud body "
+                "instead of only at the silhouette. Silver linings are exempt. "
+                "0 = off (smooth legacy shading).");
+            RemixGui::DragFloat("Powder Darkening", &RtxOptions::cloudPowderStrengthObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Darkens thin wisps and crevice walls on the sun-facing side of "
+                "clouds (the classic crisp-cumulus powder cue). Strongest with the "
+                "sun behind you; fades off toward the sun so silver linings "
+                "survive. 0 = off.");
+            RemixGui::DragFloat("Base Wispiness", &RtxOptions::cloudDetailHeightCharacterObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Splits the edge-detail character by height: cloud BASES read "
+                "ragged and eaten-away while TOPS keep round cauliflower billows. "
+                "0 = same detail character at all heights (legacy).");
+            RemixGui::DragFloat("Base Wisp Shear", &RtxOptions::cloudDetailBaseShearKmObject(),
+                                0.01f, 0.0f, 1.0f, "%.2f km", sliderFlags);
+            RemixGui::SetTooltipToLastWidgetOnHover(
+                "Slants the edge-detail field sideways at each cloud's base, fading "
+                "to none at its top - base wisps streak like wind-sheared scud "
+                "while tops stay round. 0 = no shear.");
             RemixGui::DragFloat("Edge Softness", &RtxOptions::cloudEdgeSoftnessObject(),
                                 0.005f, 0.02f, 0.4f, "%.3f", sliderFlags);
             RemixGui::SetTooltipToLastWidgetOnHover(
@@ -1529,6 +1611,56 @@ namespace fork_hooks {
 
           ImGui::TextDisabled("Slow weather-scale wind/coverage wander: Weather "
                               "-> Weather Variation");
+          ImGui::TreePop();
+        }
+
+        // Lightning (fork — 2026-07-14, tier 1+2): in-cloud flash glow + a
+        // transient scene sphere light, driven by the RtxAtmosphere strike
+        // scheduler.
+        if (ImGui::TreeNode("Lightning")) {
+          RemixGui::Checkbox("Enable Lightning", &RtxOptions::lightningEnableObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Master switch (on by default). Lightning only actually fires "
+              "when Strikes Per Minute > 0 - raised automatically by storm "
+              "weather presets. Uncheck to mute lightning everywhere, storm "
+              "presets included.");
+          ImGui::SameLine();
+          if (ImGui::Button("Test Strike", ImVec2(120, 0))) {
+            RtxAtmosphere::requestLightningStrike();
+          }
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Fire one strike right now (requires Enable Lightning; works "
+              "at 0 strikes/min). Handy for tuning intensities without "
+              "waiting on the random schedule.");
+          RemixGui::DragFloat("Strikes Per Minute", &RtxOptions::lightningStrikesPerMinuteObject(),
+                              0.1f, 0.0f, 60.0f, "%.1f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Mean strike rate. Gaps are randomized so strikes cluster and "
+              "lull like a real storm. 0 = no automatic strikes. The weather "
+              "presets drive this while active (thunderstorm 12, rainstorm "
+              "4) - manual edits will be overridden during a preset blend.");
+          RemixGui::DragFloat("Cloud Flash Brightness", &RtxOptions::lightningFlashIntensityObject(),
+                              1.0f, 0.0f, 1000.0f, "%.0f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Radiance of the glow inside the cloud deck. The flash competes "
+              "with direct sunlight - day storms need much more than night "
+              "ones.");
+          RemixGui::DragFloat("Scene Flash Brightness", &RtxOptions::lightningSceneLightIntensityObject(),
+                              10.0f, 0.0f, 100000.0f, "%.0f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Radiance of the transient light that flashes the ground / "
+              "scene, independent of the in-cloud glow. 0 = cloud-only "
+              "lightning.");
+          RemixGui::DragFloat("Max Strike Distance", &RtxOptions::lightningRangeKmObject(),
+                              0.1f, 1.5f, 30.0f, "%.1f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How far from the camera strikes may land. Distant strikes "
+              "read as horizon sheet-lightning; near ones light the ground "
+              "hard.");
+          RemixGui::ColorEdit3("Flash Color", &RtxOptions::lightningColorObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Flash tint for both the in-cloud glow and the scene flash. "
+              "Default is a cool blue-white.");
           ImGui::TreePop();
         }
 
