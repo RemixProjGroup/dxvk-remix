@@ -255,7 +255,13 @@ struct AtmosphereArgs {
 
   float cloudThickness;        // Cloud-slab vertical depth, km
   float cloudLayer2TypeSpread; // [0,1] cloud-type variation for layer 2 (independent of layer 1)
-  float pad_cloudSunsetWarmth; // was cloudSunsetWarmth (removed 2026-06-21 — no shader consumer)
+  float lightningHistoryFade;  // [0..1] lightning ghost-suppression signal (fork — 2026-07-14):
+                               // 1 while a flash is live, decaying over ~0.25 s after it ends.
+                               // evalSkyRadiance collapses the cloud temporal-history weight by
+                               // this factor so the flash never embeds into the ~1 s EMA (the
+                               // reprojected "old frame" ghost on camera move). Reuses the former
+                               // pad_cloudSunsetWarmth slot; CB layout unchanged. Zeroed in
+                               // normalizeForSkyLutCache (per-frame animated, never feeds a bake).
   uint cloudViewSamples;       // Ray-march steps through cloud slab
 
   // ----- Spatial variation fields (Nubis-style weather) -----

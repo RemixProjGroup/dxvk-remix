@@ -1022,7 +1022,18 @@ vec3 evalSkyRadiance(
         // a stable signal in ~30 frames at 60Hz (~0.5s) while still strongly
         // suppressing the per-frame jitter variance DLSS sees.
         const float kHistoryWeight = 0.92f;
-        vec4 blended = lerp(currentPremul, history, kHistoryWeight);
+        // Lightning ghost suppression (fork — 2026-07-14). A 100-300 ms flash
+        // embedded into this ~1 s EMA outlives itself 3-10x, and on camera
+        // move the reprojected history drags a bright "old frame" imprint of
+        // the lit deck across the sky (sharp-edged where reprojection leaves
+        // the old viewport). While a flash is live — plus a ~0.25 s trailing
+        // window (CPU-side lightningHistoryFade) — collapse the history
+        // weight so the flash tracks near-live and never embeds. The jitter
+        // noise the EMA normally hides is masked by the flash itself; weight
+        // returns to 0.92 as the fade expires. Inert at fade 0.
+        float historyWeight = kHistoryWeight
+                            * (1.0f - 0.8f * saturate(args.lightningHistoryFade));
+        vec4 blended = lerp(currentPremul, history, historyWeight);
         smoothedCloud = vec4(blended.rgb, blended.a);
       } else {
         smoothedCloud = currentPremul;

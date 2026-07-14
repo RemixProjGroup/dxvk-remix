@@ -368,6 +368,7 @@ namespace {
     args.lightningStrikePosKm        = vec3(0.0f, 0.0f, 0.0f);
     args.lightningFlashIntensity     = 0.0f;
     args.lightningEnvelope           = 0.0f;
+    args.lightningHistoryFade        = 0.0f;
   }
 
   // Quantize one direction-vector component to the granularity step.
@@ -681,6 +682,7 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.lightningEnvelope       = m_lightningEnvelope;
     args.lightningFlashIntensity = m_lightningEnvelope * std::max(RtxOptions::lightningFlashIntensity(), 0.0f);
     args.lightningColor          = RtxOptions::lightningColor();
+    args.lightningHistoryFade    = m_lightningHistoryFade;
   }
 
   // Cloud volumetric / appearance enhancements
@@ -1698,6 +1700,7 @@ void RtxAtmosphere::requestLightningStrike() {
 void RtxAtmosphere::advanceLightning(float dt) {
   if (!RtxOptions::lightningEnable()) {
     m_lightningEnvelope = 0.0f;
+    m_lightningHistoryFade = 0.0f;
     m_lightningPulsesLeft = 0;
     s_lightningStrikeRequested.store(false);  // don't bank a Test Strike while disabled
     return;
@@ -1765,6 +1768,21 @@ void RtxAtmosphere::advanceLightning(float dt) {
     m_lightningEnvelope = 0.7f + 0.3f * rand01();
     m_lightningPulsesLeft = static_cast<int>(rand01() * 3.0f);  // 0-2 restrikes
     m_lightningTimeToPulse = 0.04f + 0.11f * rand01();
+  }
+
+  // Ghost-suppression window (fork — 2026-07-14). Tracks the envelope but
+  // decays ~3.5x slower, so it covers the whole flicker PLUS the frames right
+  // after, while any flash residue could still be sitting in the cloud
+  // temporal history. evalSkyRadiance collapses its EMA history weight by
+  // this factor — without it a 100-300 ms flash embeds into the ~1 s history
+  // and a camera move drags a reprojected "old frame" imprint of the lit
+  // deck across the sky. Computed AFTER the fire block so a fresh strike
+  // raises it the same frame its envelope peaks.
+  constexpr float kHistoryFadeTau = 0.25f;
+  m_lightningHistoryFade = std::max(std::min(m_lightningEnvelope, 1.0f),
+                                    m_lightningHistoryFade * std::exp(-dt / kHistoryFadeTau));
+  if (m_lightningHistoryFade < 1e-3f) {
+    m_lightningHistoryFade = 0.0f;
   }
 }
 

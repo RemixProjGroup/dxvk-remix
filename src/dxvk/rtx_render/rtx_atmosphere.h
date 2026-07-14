@@ -443,6 +443,7 @@ private:
   // the envelope / restrike / inter-arrival model.
   Vector3  m_lightningStrikePosKm       { 0.0f, 0.0f, 0.0f };
   float    m_lightningEnvelope          { 0.0f };   // raw flicker envelope [0..~1.2]
+  float    m_lightningHistoryFade       { 0.0f };   // ghost-suppression window (outlasts the envelope)
   int      m_lightningPulsesLeft        { 0 };      // restrike pulses of the active flash
   float    m_lightningTimeToPulse       { 0.0f };   // seconds to the next restrike pulse
   uint32_t m_lightningRngState          { 0x9E3779B9u };  // xorshift32 state

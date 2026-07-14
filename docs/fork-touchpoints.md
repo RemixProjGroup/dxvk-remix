@@ -2408,3 +2408,16 @@ Look-check driven ("thunderstorm looks like a normal day — the sky is blue, th
   *Stale "neutral in every preset" gate comment updated in `writeBlendedToDerivedLayer`.*
 
 ---
+
+## Workstream — Lightning ghost suppression (fork — 2026-07-14)
+
+A lightning flash embedded into the cloud temporal smoother's ~1 s EMA (fixed 0.92 history weight in `evalSkyRadiance`) outlived itself 3–10x; on camera move the reprojected history dragged a sharp-edged "old frame" imprint of the flash-lit deck across the sky. The strike scheduler now tracks a ghost-suppression signal — 1 while a flash is live, decaying over ~0.25 s after — and the temporal blend collapses its history weight by `x(1 - 0.8 * fade)` (0.92 → ~0.18 at full fade, ~2-frame convergence), so the flash never embeds. The jitter the EMA normally hides is masked by the flash itself; inert at fade 0. Validated in-game.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Reclaims the `pad_cloudSunsetWarmth` slot as `lightningHistoryFade`; CB layout unchanged.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** — fork-owned change.
+  *`m_lightningHistoryFade` tracked at the end of `advanceLightning` (max of envelope and a tau-0.25 s decay); published by `getAtmosphereArgs`; zeroed in `normalizeForSkyLutCache`.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** — fork-owned change.
+  *Temporal-smoothing block scales `kHistoryWeight` by the fade before the history lerp.*
+
+---
