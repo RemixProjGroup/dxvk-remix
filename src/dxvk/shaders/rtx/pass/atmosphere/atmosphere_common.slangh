@@ -2709,10 +2709,30 @@ NubisCubedLighting evalNubisCubedSample(
   // was removed 2026-06-19.)
   float ambient_shape = pow(1.0f - dim_profile, 0.5f);
 
+  // Ambient sun-shadowing (fork — 2026-07-14, dramatic-shading pass). The
+  // sky-ambient fill was the one light term with NO response to D_sun, so it
+  // reflooded sun-shadowed bulk with bright daytime sky light and put a high
+  // flat floor under the shading — the "we lack dramatic shading" read. In a
+  // real cumulus the ambient IS multiply-scattered sunlight, so it dies off
+  // with the same optical depth that extinguishes the direct lobes. Beer term
+  // on D_sun with an internal diffusion-flavored sigma (well below the beam
+  // sigma — the ambient penetrates deeper than the direct beam), lerped in by
+  // the O(1) strength knob. Sunlit faces / silver linings sit at D_sun ~ 0 and
+  // keep full ambient; shaded cores plunge — the CoD4-style contrast axis.
+  // The dome fill below is exempt by design: it models open-sky light arriving
+  // from below/around the cloud (not through it), and it is the tunable floor
+  // that keeps midday undersides from going gloomy (cloudSkyAmbientFill).
+  float ambientShadow = 1.0f;
+  if (args.cloudAmbientShadowStrength > 0.0f) {
+    const float kAmbientShadowSigma = 0.6f;  // per km of D_sun optical depth
+    ambientShadow = mix(1.0f, exp(-kAmbientShadowSigma * D_sun),
+                        saturate(args.cloudAmbientShadowStrength));
+  }
+
   // Top-down ambient: skylight that filtered DOWN through the overlying cloud,
   // colored by the warm/cool sun-direction blend and attenuated by
   // verticalLight (the bottom-darkening light field). This is the legacy term.
-  vec3 topAmbient = ambient_shape * verticalLight * skyRadiance;
+  vec3 topAmbient = ambient_shape * verticalLight * skyRadiance * ambientShadow;
 
   // Sky-dome fill (fork — 2026-06-19, clouds-reflect-sky coupling). The
   // underside is ALSO lit by the open sky around and below the cloud, which the

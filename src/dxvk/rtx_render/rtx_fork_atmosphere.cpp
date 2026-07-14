@@ -1528,9 +1528,10 @@ namespace fork_hooks {
           RemixGui::DragFloat("Multi-Scatter", &RtxOptions::cloudMsScaleObject(),
                               0.05f, 0.0f, 2.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
-              "Strength of the milky brightness on the underside of cumulus "
-              "clouds. 1.0 = Nubis Cubed paper baseline; higher = brighter "
-              "cumulus bottoms, lower = flatter lighting.");
+              "Extinction scale on the multi-scatter body lobe. 1.0 = Nubis "
+              "Cubed paper baseline; HIGHER = darker sun-shadowed bulk (more "
+              "shading contrast), LOWER = brighter, flatter body fill. (Tooltip "
+              "direction fixed 2026-07-14.)");
           RemixGui::DragFloat("Ground Shadow", &RtxOptions::cloudShadowStrengthObject(),
                               0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
@@ -1546,6 +1547,18 @@ namespace fork_hooks {
               "overhead and fades out toward the horizon, where the low sun "
               "lights the bases directly (sunset glow). 0 = uniformly lit "
               "(paper baseline).");
+          // Dramatic-shading pass (fork — 2026-07-14): D_sun-keyed attenuation
+          // of the sky-ambient fill, the contrast axis the flat ambient lacked.
+          RemixGui::DragFloat("Ambient Shadowing", &RtxOptions::cloudAmbientShadowStrengthObject(),
+                              0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How much sun-shadow depth darkens the cloud's ambient fill. The "
+              "sky-ambient otherwise refloods shaded bulk with bright daytime "
+              "sky, flattening the cloud; with this, shadowed cores fall toward "
+              "dark grey while sunlit faces and silver linings keep their full "
+              "ambient - the dramatic high-contrast cumulus read. Sky Fill is "
+              "exempt (it is the underside floor). 0 = off (flat legacy "
+              "ambient).");
           RemixGui::DragFloat("Sky Fill", &RtxOptions::cloudSkyAmbientFillObject(),
                               0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(

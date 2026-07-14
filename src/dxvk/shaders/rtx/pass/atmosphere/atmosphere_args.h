@@ -275,7 +275,13 @@ struct AtmosphereArgs {
   float cloudAnvilBias;            // [0,1] cumulus top inflation strength (Nubis anvil pow trick).
   float cloudMsScale;              // Multi-scatter sigma_ms master multiplier (1.0 = paper baseline)
 
-  float pad_cloudMultiScatterStrength; // was cloudMultiScatterStrength (removed 2026-06-21 — no shader consumer; cloudMsScale is the live knob). Reclaimable pad.
+  float cloudAmbientShadowStrength; // [0..1] D_sun-keyed attenuation of the cloud AMBIENT term
+                                    // (fork — 2026-07-14, dramatic-shading pass): sun-shadowed
+                                    // bulk loses its sky-ambient fill (exp falloff on the same
+                                    // optical depth that drives the direct lobes), so shaded
+                                    // cores plunge dark while lit faces keep full ambient.
+                                    // 0 = off (legacy flat ambient floor). Reuses the former
+                                    // pad_cloudMultiScatterStrength slot; CB layout unchanged.
   uint  cloudMultiScatterOctaves;  // Number of Wrenninge octaves to sum (clamped 1..4 in shader).
   float cloudLayer2NoiseSeed;      // Seed offset added to layer 2's 2D coverage/type smoothNoise2D
                                    // calls so layer 2 generates a fully decorrelated noise pattern

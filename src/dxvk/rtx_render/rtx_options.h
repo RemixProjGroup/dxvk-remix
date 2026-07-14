@@ -1577,7 +1577,10 @@ namespace dxvk {
     // remain accessible via user.conf for power tuning.
     RTX_OPTION("rtx.atmosphere", float, cloudMsScale, 1.0f,
                "Multi-scatter strength multiplier on the Nubis Cubed sigma_ms term [0..2]. "
-               "1.0 = paper baseline; higher brightens cumulus bottoms, lower flattens.");
+               "1.0 = paper baseline. sigma_ms is an EXTINCTION on the body lobe "
+               "(exp(-sigma_ms * D_sun)), so higher = darker shadowed bulk / more "
+               "shading contrast, lower = brighter, flatter body fill. (Doc fixed "
+               "2026-07-14; the old text had the direction inverted.)");
 
     // Cloud spatial variation (Nubis-style — spec 2026-05-06)
     RTX_OPTION("rtx.atmosphere", float, cloudTypeMean, 0.5f,
@@ -1835,6 +1838,16 @@ namespace dxvk {
                "the actual sky color; naturally fades at sunset (the overhead "
                "sky is dim then). Higher = brighter, more sky-colored bases; "
                "0 = off (legacy, undersides ignore the open sky). Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, cloudAmbientShadowStrength, 0.6f,
+               "Dramatic shading [0..1]: how much the sky-ambient fill is "
+               "attenuated by sun-shadow depth inside the cloud. The ambient "
+               "term otherwise refloods sun-shadowed bulk with bright daytime "
+               "sky light, flattening the cloud; with this, shaded cores fall "
+               "toward dark grey while sunlit faces and silver linings keep "
+               "their full ambient - the high-contrast puffy-cumulus read. "
+               "The sky-dome underside fill (Sky Ambient Fill) is exempt so "
+               "midday bases keep their open-sky floor. 0 = off (legacy flat "
+               "ambient). Applies live.");
     RTX_OPTION("rtx.atmosphere", float, cloudSkyBleedStrength, 0.15f,
                "How strongly the clouds tint the surrounding sky [0..1+]. The "
                "sky picks up cloud-colored inscatter sampled from the (smooth) "

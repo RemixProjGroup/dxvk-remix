@@ -699,6 +699,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudCoverageNoiseScale = RtxOptions::cloudCoverageNoiseScale();
     args.cloudAnvilBias = RtxOptions::cloudAnvilBias();
     args.cloudMsScale = RtxOptions::cloudMsScale();
+    // Dramatic-shading pass (fork — 2026-07-14). Lives in the former
+    // pad_cloudMultiScatterStrength slot; CB layout unchanged.
+    args.cloudAmbientShadowStrength = RtxOptions::cloudAmbientShadowStrength();
     args.cloudMultiScatterOctaves = RtxOptions::cloudMultiScatterOctaves();
     args.cloudLayer2NoiseSeed = RtxOptions::cloudLayer2NoiseSeed();
     args.cloudNoiseTileKm = RtxOptions::cloudNoiseTileKm();

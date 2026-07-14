@@ -2376,6 +2376,24 @@ Attacks the "blobby clouds" read at its root: the edge-detail field previously o
 
 ---
 
+## Workstream — Cloud dramatic shading (fork — 2026-07-14)
+
+Adds the contrast axis the Nubis ambient lacked (reference: CoD4 iw3xo daynight cumulus). The sky-ambient fill (`topAmbient`) was the one light term with no response to `D_sun`, so it reflooded sun-shadowed bulk with bright daytime sky light and put a high flat floor under the shading — clouds read soft/flat however the direct lobes were tuned. `evalNubisCubedSample` now attenuates the top-down ambient by `exp(-0.6 * D_sun)` (internal diffusion-flavored sigma, well below the beam sigma), lerped in by the O(1) `cloudAmbientShadowStrength` knob: sunlit faces / silver linings (`D_sun ~ 0`) keep full ambient, shaded cores plunge dark. The sky-dome underside fill (`cloudSkyAmbientFill`) is deliberately exempt — it models open-sky light arriving from below/around (not through) the cloud, and stays the tunable underside floor. Echo deck inherits via its analytic `dSunProxy`; secondary-ray LUT re-bakes on slider change (field not zeroed in the cache-key normalizers). 0 = bit-identical legacy. Also fixes the INVERTED `cloudMsScale` doc/tooltip (higher = darker shadowed bulk, not brighter).
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** — fork-owned change.
+  *`evalNubisCubedSample`: ambientShadow block ahead of the ambient composite; multiplies `topAmbient` only.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** — fork-owned change.
+  *Reclaims `pad_cloudMultiScatterStrength` as `cloudAmbientShadowStrength`; CB layout unchanged.*
+- **`src/dxvk/rtx_render/rtx_options.h`** — fork-owned addition.
+  *`cloudAmbientShadowStrength` (default 0.6) after `cloudSkyAmbientFill`; `cloudMsScale` doc direction fixed.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** — fork-owned change.
+  *`getAtmosphereArgs` populates the field (next to `cloudMsScale`).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** — fork-owned change.
+  *"Ambient Shadowing" slider in the Lighting tree (between Bottom Darkening and Sky Fill); Multi-Scatter tooltip direction fixed.*
+- **`RtxOptions.md`** — REGEN PENDING (1 new option + `cloudMsScale` doc fix).
+
+---
+
 ## Workstream — Lightning (fork — 2026-07-14)
 
 In-cloud lightning flashes plus a synchronized transient scene light, driven by a CPU strike scheduler. Strikes fire via a per-frame Bernoulli draw at `lightningStrikesPerMinute` (memoryless Poisson — adapts instantly to the weather blender's continuous rate ramp), place themselves in a 1 km–`lightningRangeKm` annulus around the camera at cloud-base height, and run a ~70 ms-decay envelope with 0–2 restrike pulses. The in-cloud emissive scales with local density via the Beer-Lambert accumulation, so a strike where the column model placed no cloud lights nothing. The flash is compile-gated (`CLOUD_MARCH_LIGHTNING`) to the screen cloud pass only — the persistent secondary-ray cloud LUT must never bake a transient flash. `lightningEnable` (default TRUE) is a master mute; the rate (default 0) is the real switch, raised by storm weather presets (thunderstorm 12/min, rainstorm 4/min) via the new 53rd preset field `lightningStrikesPerMinute`.
