@@ -226,8 +226,12 @@ struct AtmosphereArgs {
                                           // tiled volume (periodicity destroyed at the source), 0 = legacy
                                           // single periodic tap. Reuses the former padCloudLook0 slot;
                                           // CB layout unchanged.
-  float padRetired1;                      // retired: legacy noise-bake frequency scale
-                                          // (removed with the 256^3 volume, 2026-07-16).
+  float nubis3FineDetailStrength;         // Fine-frequency band strength [0..2] (fork —
+                                          // detail round follow-up 2026-07-16): third
+                                          // incommensurate detail tap (~177..33 m) folded
+                                          // into erosion + interior within ~8 km. 0 = off.
+                                          // First reuse of the retired legacy pads (was
+                                          // padRetired1 / cloudNoiseBaseFreqScale).
   float cloudSkyBleedStrength;            // [0,1+] strength of cloud-color inscatter bled into the
                                           // visible sky (sky reflects clouds; sampled from the smooth
                                           // secondary dome LUT). 0 = off. Reuses the former

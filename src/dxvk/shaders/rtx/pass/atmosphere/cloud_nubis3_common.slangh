@@ -328,6 +328,39 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
   float profile = saturate(-sdfLive / max(args.nvdfProfileDepthKm, 1e-3f));
   profileOut = profile;
 
+  // 7a. FINE-frequency band (fork — detail round follow-up 2026-07-16; the
+  //     GT7 pp.228-230 third band, prompted by "you might need another
+  //     higher-frequency noise texture"). The detail volume's finest content
+  //     is ~87 m, but the sqrt-adaptive march resolves 25-30 m steps near
+  //     the camera — the TEXTURE is now the detail ceiling within a few km.
+  //     A third incommensurate tap of the same volume at 2.63x pushes
+  //     content to ~177..33 m and folds into the erosion composite (here)
+  //     and the interior texture (step 8) — the two consumers where fine
+  //     grain reads as crisp cauliflower rather than silhouette shimmer.
+  //     Distance-gated: full inside ~2 km, gone by 8 km (sub-pixel there,
+  //     it would only feed noise into the temporal EMA); the gate also
+  //     keeps the OD bakes camera-independent for free (bake taps pass
+  //     cameraDistKm = 1e6). All channels are mean-0.5 by the bake
+  //     normalization and the fold is a mean-matched lerp, so coverage is
+  //     unchanged. Erosion/interior only — no wobble term — so the step-5
+  //     early-out and the conservative step bound are untouched. Placed
+  //     after the step-7 gate so gated-out samples never pay the tap.
+  float fineMix = 0.0f;
+  float fineInteriorNoise = 0.5f;
+  if (args.nubis3FineDetailStrength > 0.0f && cameraDistKm < 8.0f) {
+    float fineFade = saturate(1.0f - (cameraDistKm - 2.0f) / 6.0f);
+    vec4 noiseFine = detailNoise.SampleLevel(cloudSampler,
+        frac(boilPos * (detailFreq * 2.63f) + vec3(0.17f, 0.83f, 0.47f)), 0);
+    float fineWispy     = lerp(noiseFine.r, noiseFine.g, 0.5f);
+    float fineBillowy   = lerp(noiseFine.b, noiseFine.a, 0.5f) * 0.3f;
+    float fineComposite = lerp(fineWispy, fineBillowy, typeShaped);
+    fineMix = saturate(args.nubis3FineDetailStrength * 0.35f) * fineFade;
+    noiseComposite = lerp(noiseComposite, fineComposite, fineMix);
+    fineInteriorNoise = lerp(lerp(noiseFine.r, noiseFine.g, 0.5f),
+                             lerp(noiseFine.b, noiseFine.a, 0.5f),
+                             typeShaped);
+  }
+
   float erosion = noiseComposite * max(args.nubis3ErosionStrength, 0.0f);
 
   // 7b. Edge wisp cut (fork — 2026-07-16, user feedback "erosion should cut
@@ -380,6 +413,10 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
     float interiorNoise = lerp(lerp(noise.r, noise.g, 0.5f),
                                lerp(noise.b, noise.a, 0.5f),
                                typeShaped);
+    // Fine-band fold (step 7a): near-to-mid range interiors pick up the
+    // ~33-177 m grain — small billows on lit faces. Mean-matched lerp
+    // (both signals are mean 0.5), so the factor stays density-neutral.
+    interiorNoise = lerp(interiorNoise, fineInteriorNoise, 0.5f * fineMix);
     density *= lerp(1.0f, 0.25f + 1.5f * interiorNoise,
                     saturate(args.nubis3InteriorTexture));
   }

@@ -1411,6 +1411,13 @@ namespace fork_hooks {
               "noise replaces a slice of the erosion composite within ~2 km "
               "of the camera — fly-through / close-approach crispness. "
               "1 = the paper's 10% max mix. Live.");
+          RemixGui::DragFloat("Fine Detail", &RtxOptions::nubis3FineDetailStrengthObject(),
+                              0.02f, 0.0f, 2.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Third noise band (GT7-style): fine ~33-177 m grain folded "
+              "into erosion + interior for clouds within ~8 km — the crisp "
+              "detail the adaptive march can resolve but the base texture "
+              "tops out above. 0 = off. Live.");
           RemixGui::DragFloat("SDF Step Scale", &RtxOptions::nvdfStepScaleObject(),
                               0.01f, 0.0f, 0.95f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(

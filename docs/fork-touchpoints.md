@@ -2849,3 +2849,33 @@ BINDING_ATMOSPHERE_MAX repointed to 215.
 - **`RtxOptions.md`** - REGEN PENDING (10 options removed + prior additions outstanding).
 
 ---
+
+## Workstream - Fine-frequency detail band (fork - 2026-07-16, detail round follow-up)
+
+External feedback on the GT7 low/mid comparison slides: "you might need
+another higher-frequency noise texture." Spectrum audit agreed - after the
+detail round the sqrt-adaptive march resolves 25-30 m near the camera but
+the detail volume's finest content is ~87 m, so the TEXTURE became the
+detail ceiling within a few km. GT7-style fix (reuse, zero new memory): a
+THIRD incommensurate tap of the same 128^3 volume at 2.63x (content
+~177..33 m), folded into the erosion composite and the interior-texture
+signal via mean-matched lerps (all channels are mean-0.5 by the bake
+normalization, so coverage is unchanged). Distance-gated full-inside-2km ->
+gone-by-8km: sub-pixel at range (would only feed the temporal EMA noise)
+and keeps the OD bakes camera-independent for free (bake taps pass
+cameraDistKm = 1e6). No wobble term - the step-5 early-out and conservative
+step bound are untouched. Placed after the step-7 profile gate so gated-out
+samples never pay the tap.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nubis3_common.slangh`** - fork-owned change.
+  *Sampler step 7a (fine tap + erosion fold) + step-8 interior fold.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** - fork-touchpoint inline tweak.
+  *padRetired1 -> nubis3FineDetailStrength (first reuse of the retired legacy pads).*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** - fork-owned change (args fill, clamp [0..2]).
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-touchpoint inline tweak.
+  *Adds `rtx.atmosphere.nubis3FineDetailStrength` (1.0; 0 = two-band spectrum).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned addition.
+  *"Fine Detail" slider after HF Detail (Near).*
+- **`RtxOptions.md`** - REGEN PENDING.
+
+---
