@@ -2941,3 +2941,23 @@ dSunOverride short-circuits the new block).
 - **`RtxOptions.md`** - REGEN PENDING.
 
 ---
+
+## Workstream - Nubis3 shipping defaults from the FNV reference tuning (fork - 2026-07-17)
+
+The maintainer's in-game-validated FNV look becomes the shipping defaults:
+27 `rtx.atmosphere` option defaults re-pinned to the reference rtx.conf.
+Highlights of the new look: the shaped mechanisms carry the detail (shape
+variety 1.11 km, edge wisp cut 2.28, body erosion 1.5, near-field sun
+occlusion 3 km) while the uniform ones are off (erosion 0.42, interior
+texture 0, fine detail 0, silhouette wobble 0); denser water (cloudDensity
+4), broken coverage (mean 0.29, spread 0), full-strength ambient shadow +
+cloud ground shadow, full-res cloud RT (resolution scale 1), echo deck off
+by default, nvdfNominalCoverage pinned at 0.65 (bodies bake fat, the live
+level-set offset at 0.2 km/unit separates them - replaces auto-track as
+the default). `sunElevation` deliberately NOT pinned (live scene state
+driven by game wrappers).
+
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-touchpoint inline tweak (default values only, no signature/description changes).
+- **`RtxOptions.md`** - REGEN PENDING (defaults column).
+
+---

@@ -1490,7 +1490,7 @@ namespace dxvk {
 
     // Cloud parameters (procedural FBM cloud layer)
     RTX_OPTION("rtx.atmosphere", bool, cloudEnabled, true, "Enable procedural cloud rendering.");
-    RTX_OPTION("rtx.atmosphere", float, cloudDensity, 1.8f, "Cloud opacity/density multiplier.");
+    RTX_OPTION("rtx.atmosphere", float, cloudDensity, 4.0f, "Cloud opacity/density multiplier.");
     RTX_OPTION("rtx.atmosphere", float, cloudAltitude, 1.3f, "Cloud layer altitude in kilometers.");
     RTX_OPTION("rtx.atmosphere", Vector3, cloudColor, Vector3(0.89f, 0.92f, 1.0f), "Base cloud color (albedo).");
     RTX_OPTION("rtx.atmosphere", float, cloudWindSpeed, 0.02f, "Cloud drift speed in km/s. Clouds scroll with this velocity.");
@@ -1510,7 +1510,7 @@ namespace dxvk {
                "(Y) axis [0..1]. Higher = more in-place morphing (clouds form/dissolve); lower = "
                "more lateral sliding. The remainder is split into a fixed diagonal X/Z drift for "
                "decorrelation.");
-    RTX_OPTION("rtx.atmosphere", float, cloudShadowStrength, 0.5f,
+    RTX_OPTION("rtx.atmosphere", float, cloudShadowStrength, 1.0f,
                "How strongly overcast clouds dim ground and atmosphere lighting [0..1]. "
                "1.0 = full physical voxel-grid shadow contribution from cloudVoxelShadowsEnable; "
                "0 = shadows fully muted (voxel grid still runs but its output is mixed away).");
@@ -1583,19 +1583,19 @@ namespace dxvk {
                "2026-07-14; the old text had the direction inverted.)");
 
     // Cloud spatial variation (Nubis-style — spec 2026-05-06)
-    RTX_OPTION("rtx.atmosphere", float, cloudTypeMean, 0.5f,
+    RTX_OPTION("rtx.atmosphere", float, cloudTypeMean, 1.0f,
                "Mean cloud type across the sky [0,1]: 0=stratus, 0.5=stratocumulus, 1=cumulus.");
-    RTX_OPTION("rtx.atmosphere", float, cloudTypeSpread, 0.2f,
+    RTX_OPTION("rtx.atmosphere", float, cloudTypeSpread, 0.54f,
                "Spatial variation amplitude for cloud type [0,1]. 0=uniform, 1=full range across the sky.");
     RTX_OPTION("rtx.atmosphere", float, cloudTypeNoiseScale, 0.0034f,
                "Region size frequency for type noise. Numerically smaller = larger spatial features. "
                "Capped at 0.0034 in the UI because faster variation puts visible 2D-noise cell "
                "structure at sub-cumulus scales (regular grid of cumulus blobs).");
-    RTX_OPTION("rtx.atmosphere", float, cloudCoverageMean, 0.64f,
+    RTX_OPTION("rtx.atmosphere", float, cloudCoverageMean, 0.29f,
                "Mean cloud coverage across the sky [0,1]: 0=clear, 1=overcast.");
-    RTX_OPTION("rtx.atmosphere", float, cloudCoverageSpread, 0.16f,
+    RTX_OPTION("rtx.atmosphere", float, cloudCoverageSpread, 0.0f,
                "Spatial variation amplitude for coverage [0,1]. 0=uniform, 1=full range.");
-    RTX_OPTION("rtx.atmosphere", float, cloudCoverageNoiseScale, 0.0033f,
+    RTX_OPTION("rtx.atmosphere", float, cloudCoverageNoiseScale, 0.00257732f,
                "Region size frequency for coverage noise. Independent from type noise scale.");
     RTX_OPTION("rtx.atmosphere", float, cloudNoiseTileKm, 12.0f,
                "World-space tile period (km) for the prebaked 3D cloud noise texture. "
@@ -1653,25 +1653,25 @@ namespace dxvk {
     // column model) is voxelized and distance-transformed into a real SDF
     // (the NVDF) — the foundation for Nubis3's profile-from-SDF density
     // model and sphere-traced marching in later phases.
-    RTX_OPTION("rtx.atmosphere", float, nvdfNominalCoverage, 0.0f,
+    RTX_OPTION("rtx.atmosphere", float, nvdfNominalCoverage, 0.65f,
                "Coverage the cloud-body SDF (NVDF) bakes at [0 or 0.25..1]. "
                "0 = auto: track the live weather coverage quantized to 0.25 "
                "steps (recommended — keeps the sample-time coverage "
                "level-set offset small; re-bakes amortized only when the "
                "drift crosses a step). Nonzero pins the bake nominal for "
                "debugging or look-tuning.");
-    RTX_OPTION("rtx.atmosphere", float, nvdfProfileDepthKm, 1.0f,
+    RTX_OPTION("rtx.atmosphere", float, nvdfProfileDepthKm, 0.6f,
                "Nubis3: depth into the cloud body (km) over which the "
                "dimensional profile ramps 0 -> 1 [0.1..3]. Small = dense "
                "hard-shelled clouds; large = soft translucent-edged bodies. "
                "Applies live.");
-    RTX_OPTION("rtx.atmosphere", float, nvdfCoverageOffsetKm, 1.5f,
+    RTX_OPTION("rtx.atmosphere", float, nvdfCoverageOffsetKm, 0.2f,
                "Nubis3: km of iso-surface (level-set) shift per unit of "
                "coverage delta from the baked nominal [0..4]. Higher = "
                "coverage changes grow/shrink clouds more aggressively "
                "(bodies merge sooner at high coverage). Applies live with "
                "zero rebakes.");
-    RTX_OPTION("rtx.atmosphere", float, nubis3ErosionStrength, 1.0f,
+    RTX_OPTION("rtx.atmosphere", float, nubis3ErosionStrength, 0.42f,
                "Nubis3: scale on the wispy/billowy noise composite that "
                "erodes the dimensional profile [0..2]. 0 = smooth un-eroded "
                "bodies (pure SDF blobs); 1 = paper-faithful erosion; higher "
@@ -1681,20 +1681,20 @@ namespace dxvk {
                "[0..1], which lifts low densities to bring out definition "
                "in wisps and edges. 0 = off (raw erosion output). Applies "
                "live.");
-    RTX_OPTION("rtx.atmosphere", float, nvdfBodyErosionStrength, 0.6f,
+    RTX_OPTION("rtx.atmosphere", float, nvdfBodyErosionStrength, 1.5f,
                "Nubis3: strength of the 3D noise carve applied to the cloud "
                "BODIES in the NVDF occupancy bake [0..1.5]. The carve shifts "
                "the placement waterline per voxel, baking concavity "
                "(overhangs, notches, lumps) into the otherwise-convex column "
                "bodies — the anti-blobby body lever. 0 = smooth convex "
                "bodies. Changing it re-bakes the SDF (amortized, ~6 frames).");
-    RTX_OPTION("rtx.atmosphere", float, nubis3HFDetailStrength, 1.0f,
+    RTX_OPTION("rtx.atmosphere", float, nubis3HFDetailStrength, 0.62f,
                "Nubis3: near-camera high-frequency detail mix (Nubis Cubed "
                "p.125 'inHFDetails') [0..3]. Blends twice-folded "
                "high-frequency noise into the erosion composite close to the "
                "camera for fly-through crispness. 1 = the paper's 10% max "
                "mix at the nearest range; 0 = off. Applies live.");
-    RTX_OPTION("rtx.atmosphere", float, nubis3ShapeVarietyKm, 0.5f,
+    RTX_OPTION("rtx.atmosphere", float, nubis3ShapeVarietyKm, 1.11f,
                "Nubis3: mid-frequency SHAPE displacement amplitude in km "
                "[0..1.5] (the GT7 mid-band role). Pushes/pulls the body "
                "iso-surface by up to half this at ~2.4 km wavelengths — "
@@ -1702,7 +1702,7 @@ namespace dxvk {
                "blobs into varied cloud clusters. Whole-body reshaping, "
                "not edge detail; coverage-neutral on average. 0 = off. "
                "Applies live, no rebake.");
-    RTX_OPTION("rtx.atmosphere", float, nubis3SunNearFieldKm, 1.2f,
+    RTX_OPTION("rtx.atmosphere", float, nubis3SunNearFieldKm, 3.0f,
                "Nubis3: near-field live sun-shadow range in km [0..3] "
                "(Nubis Cubed p.129 'first light samples live'). Within this "
                "range of each lit march sample the sun occlusion is measured "
@@ -1713,7 +1713,7 @@ namespace dxvk {
                "crevices — the directional cue that makes clouds read as 3D "
                "volumes instead of reshaped blobs. 0 = grid only (cheaper, "
                "softer). Applies live.");
-    RTX_OPTION("rtx.atmosphere", float, nubis3FineDetailStrength, 1.0f,
+    RTX_OPTION("rtx.atmosphere", float, nubis3FineDetailStrength, 0.0f,
                "Nubis3: fine-frequency detail band [0..2] (GT7-style third "
                "noise band). A third tap of the detail volume at 2.11x "
                "(content ~220..41 m) feeds the micro-AO relief shading and "
@@ -1721,13 +1721,13 @@ namespace dxvk {
                "granulation on lit faces and scalloped wisp edges, the grain "
                "the sqrt-adaptive march can resolve but the base texture "
                "tops out above. 0 = off. Applies live.");
-    RTX_OPTION("rtx.atmosphere", float, nubis3EdgeErosion, 1.0f,
+    RTX_OPTION("rtx.atmosphere", float, nubis3EdgeErosion, 2.28f,
                "Nubis3: edge wisp cut [0..3]. Extra erosion shaped by the "
                "wispy noise channel, concentrated at the silhouette and "
                "fading by mid-shell — cuts trailing wisp shapes out of cloud "
                "edges while billowy cores keep rounded cauliflower edges. "
                "0 = uniform erosion only. Applies live.");
-    RTX_OPTION("rtx.atmosphere", float, nubis3InteriorTexture, 0.7f,
+    RTX_OPTION("rtx.atmosphere", float, nubis3InteriorTexture, 0.0f,
                "Nubis3: interior density texture strength [0..1]. Modulates "
                "the density INSIDE the body by the raw detail noise (the "
                "stand-in for Nubis3's authored per-voxel Density Scale NVDF "
@@ -1735,7 +1735,7 @@ namespace dxvk {
                "show billow-scale light variation instead of saturating to "
                "a flat white mass. 0 = flat interiors (old behavior). "
                "Applies live.");
-    RTX_OPTION("rtx.atmosphere", float, nvdfStepScale, 0.8f,
+    RTX_OPTION("rtx.atmosphere", float, nvdfStepScale, 0.95f,
                "Nubis3 Phase C: safety factor on the SDF empty-space skip in "
                "the cloud march [0..0.95]. In empty air the march jumps "
                "ahead by (min SDF tap) x this factor instead of stepping "
@@ -1775,7 +1775,7 @@ namespace dxvk {
                "default spacing out to ~6 km of cloud span; lower costs "
                "less but lets some banding back in at the far horizon. "
                "32 = legacy cost ceiling. Applies live.");
-    RTX_OPTION("rtx.atmosphere", float, cloudUndersideLightSigma, 0.12f,
+    RTX_OPTION("rtx.atmosphere", float, cloudUndersideLightSigma, 0.2f,
                "Extinction of the light filtering down through each cloud, "
                "per km of overlying water [0..0.5]. Drives the analytic "
                "per-column underside light field: brightness varies "
@@ -1791,7 +1791,7 @@ namespace dxvk {
     // the prebaked noise volume grows billows OUTWARD from the density field
     // where it is weak (silhouettes), leaving saturated cores untouched.
     // Nubis detail remap, bias mirrored across the field mean for growth.
-    RTX_OPTION("rtx.atmosphere", float, cloudDetailStrength, 0.6f,
+    RTX_OPTION("rtx.atmosphere", float, cloudDetailStrength, 0.0f,
                "Edge detail strength [0..1]. Grows high-frequency "
                "cauliflower billows OUTWARD from cloud EDGES while leaving dense "
                "cores solid. 0 = off (smooth legacy silhouettes). Note: the "
@@ -1859,7 +1859,7 @@ namespace dxvk {
                "SCENE at the strike position (independent of the in-cloud "
                "glow's intensity). 0 = cloud-only lightning (no ground "
                "flash).");
-    RTX_OPTION("rtx.atmosphere", float, lightningRangeKm, 10.0f,
+    RTX_OPTION("rtx.atmosphere", float, lightningRangeKm, 15.0f,
                "Maximum strike distance from the camera in km [1.5..30]. "
                "Strikes distribute uniformly by area between 1 km and this "
                "range.");
@@ -1902,7 +1902,7 @@ namespace dxvk {
                "with the sun overhead and fades out toward the horizon, where "
                "the low sun rakes under the deck and lights the bases (sunset "
                "glow). 0 = off (uniformly lit undersides).");
-    RTX_OPTION("rtx.atmosphere", float, cloudSkyAmbientFill, 0.5f,
+    RTX_OPTION("rtx.atmosphere", float, cloudSkyAmbientFill, 0.52f,
                "How strongly cloud undersides pick up the open sky around them "
                "[0..1]. Adds a sky-dome fill - the overhead sky color, "
                "bypassing the bottom-darkening since that skylight reaches the "
@@ -1911,7 +1911,7 @@ namespace dxvk {
                "the actual sky color; naturally fades at sunset (the overhead "
                "sky is dim then). Higher = brighter, more sky-colored bases; "
                "0 = off (legacy, undersides ignore the open sky). Applies live.");
-    RTX_OPTION("rtx.atmosphere", float, cloudAmbientShadowStrength, 0.6f,
+    RTX_OPTION("rtx.atmosphere", float, cloudAmbientShadowStrength, 1.0f,
                "Dramatic shading [0..1]: how much the sky-ambient fill is "
                "attenuated by sun-shadow depth inside the cloud. The ambient "
                "term otherwise refloods sun-shadowed bulk with bright daytime "
@@ -2014,12 +2014,12 @@ namespace dxvk {
     // by ~1/scale^2 with little visible difference. The temporal smoothing
     // path runs AFTER the upsample, at full downscale resolution, so its
     // stabilization is unaffected.
-    RTX_OPTION("rtx.atmosphere", float, cloudRenderResolutionScale, 0.5f,
+    RTX_OPTION("rtx.atmosphere", float, cloudRenderResolutionScale, 1.0f,
                "Resolution scale of the cloud render target relative to the "
                "internal (DLSS-input) resolution [0.25..1]. 0.5 = quarter the "
                "pixels (~4x cheaper cloud march); 1.0 = native (legacy, "
                "bit-exact). Applies on the next frame; live-tunable.");
-    RTX_OPTION("rtx.atmosphere", float, cloudHistoryWeight, 0.92f,
+    RTX_OPTION("rtx.atmosphere", float, cloudHistoryWeight, 0.85f,
                "EMA history weight of the cloud temporal smoother [0..0.98]. "
                "Higher = smoother/softer clouds that respond slowly; lower = "
                "crisper, faster-responding clouds with more visible per-frame "
@@ -2205,7 +2205,7 @@ namespace dxvk {
     // by default) on top of the existing cumulus layer. cloud_render marches
     // the lower slab first and composites layer 2 onto residual transmittance.
     // Default off so today's look is preserved bit-for-bit.
-    RTX_OPTION("rtx.atmosphere", bool, cloudLayer2Enable, true,
+    RTX_OPTION("rtx.atmosphere", bool, cloudLayer2Enable, false,
                "When true, cloud_render.comp.slang marches a second 'echo' "
                "cloud deck above the primary slab — the same cloud-slab density "
                "model at a higher, gapped altitude, marched cheaply (low step "
