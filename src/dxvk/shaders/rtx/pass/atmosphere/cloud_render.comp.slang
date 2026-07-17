@@ -56,18 +56,10 @@
 // helpers in atmosphere_common.slangh resolve to texture lookups (rather
 // than the binding-free fallback stubs used by the LUT bakers). The
 // global names the helpers reach for (AtmosphereCloudDSun, AtmosphereCloudDAmbient,
-// AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler, AtmosphereFastNoise)
+// AtmosphereCloudNoise3DSampler, AtmosphereFastNoise)
 // are declared at our local slots BELOW so they're in scope before the
 // include's helper bodies are parsed.
 #define ATMOSPHERE_AVAILABLE
-
-// Likewise enable the LUT-backed cloudHeightProfile() in atmosphere_common.slangh
-// for this TU. The AtmosphereCloudHeightLut + AtmosphereCloudHeightLutSampler
-// globals the helper reaches for are declared at slots 10 / 11 below.
-// Voxel grid bakers, the cloud-noise baker, and the height LUT baker itself
-// do NOT define this — they get the procedural cloudTypeProfile fallback via
-// atmosphere_common.slangh's #else branch.
-#define ATMOSPHERE_CLOUD_HEIGHT_LUT_AVAILABLE
 
 // Bring in shader_types (for vec3/uint/etc.) and AtmosphereArgs ahead of the
 // global texture declarations so AtmosphereArgs is defined before slot 0's CB.
@@ -77,15 +69,9 @@
 layout(binding = 0)
 ConstantBuffer<AtmosphereArgs> atmosphereArgs;
 
-// Cloud 3D Perlin FBM noise volume — same resource that sampleCloudDensityTextured
-// consumes elsewhere. Linear/REPEAT sampler matches the frac()-tile-wrap
-// convention. NOTE: the binding *name* `AtmosphereCloudNoise3D` matches the
-// global declared in common_bindings.slangh; we re-declare it here at our own
-// binding slot since this compute pass owns its descriptor set independently
-// from the COMMON_RAYTRACING_BINDINGS macro.
-layout(binding = 1)
-Texture3D<float> AtmosphereCloudNoise3D;
-
+// Linear/REPEAT sampler for the Nubis3 volume taps (matches the
+// frac()-tile-wrap convention). Slot 1 held the legacy 256^3 noise volume —
+// retired with the legacy model, 2026-07-16.
 layout(binding = 2)
 SamplerState AtmosphereCloudNoise3DSampler;
 
@@ -120,31 +106,6 @@ Texture2D<float> AtmosphereCloudSkyTransmittanceLut;
 layout(binding = 9)
 SamplerState AtmosphereSkyViewSampler;
 
-// Cloud height LUT (slide 3 lift — RDR2 SIGGRAPH 2019). 64x128 RG8 baked
-// once at startup, keyed by (typeSlice, heightFrac).
-//   R = per-altitude density envelope multiplier (gentle altitude-shape effect)
-//   G = per-altitude coverage threshold scale (widens silhouette horizontally —
-//       this is the lever with visible bite, encoding the anvil-cap effect)
-// Consumed by atmosphere_common.slangh's cloudHeightProfileFull() when
-// ATMOSPHERE_CLOUD_HEIGHT_LUT_AVAILABLE is defined. Linear/CLAMP sampler —
-// the LUT is parameterized on a bounded domain, REPEAT would alias the
-// cumulonimbus anvil column back into stratus territory.
-// RGBA8 since column-shaping rev 3 (B = cumulative envelope integral for
-// the analytic downwelling light field; see cloud_height_lut_baker).
-layout(binding = 10)
-Texture2D<float4> AtmosphereCloudHeightLut;
-
-layout(binding = 11)
-SamplerState AtmosphereCloudHeightLutSampler;
-
-// Cloud placement map (fork — 2026-06-11, column-shaping rework). 512x512
-// RGBA8 baked by cloud_placement_map_baker.comp.slang, tiled at
-// cloudNoiseTileKm: R = cluster field, G = top-height jitter, B = base
-// lift. Drives the per-column cloud model in sampleCloudDensityTextured.
-// Sampled with the cloud-noise sampler (linear/REPEAT, slot 2).
-layout(binding = 12)
-Texture2D<float4> AtmosphereCloudPlacementMap;
-
 // Nubis3 NVDF/SDF model inputs (fork — Nubis3 conversion Phase B). The cloud
 // body signed distance field (front buffer; raw km, negative inside, texture
 // y = VERTICAL — see cloud_nvdf.h) and the 128^3 RGBA8 wispy/billowy detail
@@ -160,7 +121,7 @@ Texture3D<float4> AtmosphereCloudDetailNoise3D;
 
 // Include the helper library AFTER the texture globals are declared so the
 // ATMOSPHERE_AVAILABLE-gated helper bodies (sampleDSun / sampleDAmbient /
-// fastJitter / cloudHeightProfile / etc.) resolve to our local declarations.
+// fastJitter / etc.) resolve to our local declarations.
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
 
 // Shared slab-march + shade-context library (fork — 2026-06-10). Hosts
@@ -236,7 +197,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
   CloudShadeContext ctx = buildCloudShadeContext(args);
 
   // ===== View-ray raymarch, both layers (cloud_march_common.slangh) =====
-  // evalNubisCubedSample inside marchCloudSlab uses sigma = args.cloudDensity
+  // evalNubisCubedSampleCore inside marchCloudSlab uses sigma = args.cloudDensity
   // (no doubling — Nubis Cubed equations take raw cloudDensity as extinction).
   // marchCloudLayers sequences layer 1 (cumulus) then the optional layer-2
   // cirrus deck front-to-back, zeroing the moon coefficients for layer 2.

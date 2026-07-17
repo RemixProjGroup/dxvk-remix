@@ -425,27 +425,20 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
 // ===========================================================================
 // D_sun / D_ambient bake integrals (moved from atmosphere_common.slangh,
 // Phase B — their only callers are cloud_sun_density_grid.comp.slang and
-// cloud_ambient_density_grid.comp.slang). The integrand branches on
-// args.nubis3ModelEnable so the baked grids always describe the same
-// iso-surface the view march renders — the terrain cloud-shadow NEE fold
-// reads these grids and tracks the model switch with zero integrator changes.
+// cloud_ambient_density_grid.comp.slang). The integrand samples the same
+// Nubis3 field the view march renders — the terrain cloud-shadow NEE fold
+// reads these grids with zero integrator changes.
 // ===========================================================================
 
 // Shared integrand tap.
 float sampleCloudBakeDensity(vec3 samplePos, float hf,
                              float typeLocal, float coverageLocal,
                              AtmosphereArgs args,
-                             Texture3D<float> cloudNoise3D,
                              SamplerState cloudSampler,
-                             Texture2D<float4> placementMap,
                              Texture3D<float> nvdfSdf,
                              Texture3D<float4> detailNoise) {
-  if (args.nubis3ModelEnable != 0u) {
-    return sampleCloudDensityNubis3(samplePos, hf, typeLocal, coverageLocal,
-                                    1.0f, args, nvdfSdf, detailNoise, cloudSampler);
-  }
-  return sampleCloudDensityForShadow(samplePos, hf, typeLocal, coverageLocal,
-                                     args, cloudNoise3D, cloudSampler, placementMap);
+  return sampleCloudDensityNubis3(samplePos, hf, typeLocal, coverageLocal,
+                                  1.0f, args, nvdfSdf, detailNoise, cloudSampler);
 }
 
 // Sun-direction optical-depth integral for the D_sun voxel grid bake.
@@ -460,9 +453,7 @@ float sampleCloudBakeDensity(vec3 samplePos, float hf,
 // of at the player.
 float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
                                          AtmosphereArgs args,
-                                         Texture3D<float> cloudNoise3D,
                                          SamplerState cloudSampler,
-                                         Texture2D<float4> placementMap,
                                          Texture3D<float> nvdfSdf,
                                          Texture3D<float4> detailNoise) {
   float opticalDepth = 0.0f;
@@ -542,8 +533,7 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
     vec3 samplePos = worldPosYUpKm + (float(i) + tapJitter) * stepLen * sunDirYUp;
     float hf = computeCloudHeightFraction(samplePos, args);
     float density = sampleCloudBakeDensity(samplePos, hf, typeLocal, coverageLocal,
-                                           args, cloudNoise3D, cloudSampler, placementMap,
-                                           nvdfSdf, detailNoise);
+                                           args, cloudSampler, nvdfSdf, detailNoise);
     opticalDepth += density * stepLen;
   }
 
@@ -564,8 +554,7 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
                      + (kMaxSunPathKm + (float(i) + tapJitter) * farStep) * sunDirYUp;
       float hf = computeCloudHeightFraction(samplePos, args);
       float density = sampleCloudBakeDensity(samplePos, hf, typeLocal, coverageLocal,
-                                             args, cloudNoise3D, cloudSampler, placementMap,
-                                             nvdfSdf, detailNoise);
+                                             args, cloudSampler, nvdfSdf, detailNoise);
       farOD += density * farStep;
     }
     opticalDepth += farOD;
@@ -598,9 +587,7 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
 // Returns raw integral; consumers exponentiate with their chosen sigma.
 float sampleCloudAmbientOpticalDepthAtWorld(vec3 worldPosYUpKm,
                                              AtmosphereArgs args,
-                                             Texture3D<float> cloudNoise3D,
                                              SamplerState cloudSampler,
-                                             Texture2D<float4> placementMap,
                                              Texture3D<float> nvdfSdf,
                                              Texture3D<float4> detailNoise) {
   const int kSamples = 6;
@@ -627,8 +614,7 @@ float sampleCloudAmbientOpticalDepthAtWorld(vec3 worldPosYUpKm,
     vec3 samplePos = worldPosYUpKm + vec3(0.0f, (float(i) + 0.5f) * stepLen, 0.0f);
     float hf = computeCloudHeightFraction(samplePos, args);
     float density = sampleCloudBakeDensity(samplePos, hf, typeLocal, coverageLocal,
-                                           args, cloudNoise3D, cloudSampler, placementMap,
-                                           nvdfSdf, detailNoise);
+                                           args, cloudSampler, nvdfSdf, detailNoise);
     opticalDepth += density * stepLen;
   }
 

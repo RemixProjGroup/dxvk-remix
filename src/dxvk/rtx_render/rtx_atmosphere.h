@@ -83,11 +83,6 @@ public:
   Resources::Resource getSkyViewLut() const { return m_skyViewLut; }
 
   /**
-   * \brief Get cloud noise 3D texture resource (Stage C)
-   */
-  Resources::Resource getCloudNoise3D() const { return m_cloudNoise3D; }  // Stage C
-
-  /**
    * \brief Get the cloud-occluded sky-ambient transmittance LUT (fork).
    *
    * 2D R16F texture keyed by (azimuth, elevation). Baked per frame from camera
@@ -137,19 +132,6 @@ public:
    * view; will feed the sky-miss composite (C5 of the 2026-05-12 workstream).
    */
   const Resources::Resource& getCloudRenderRT() const { return m_cloudRenderRT; }
-
-  /**
-   * \brief Get the cloud height LUT (slide 3 lift — RDR2 SIGGRAPH 2019,
-   * fork — 2026-05-15).
-   *
-   * 64x128 R8 baked once at startup by cloud_height_lut_baker.comp.slang.
-   * Indexed (typeSlice, heightFrac) -> per-altitude density modulator. Consumed
-   * by cloud_render.comp.slang's cloudHeightProfile() helper to replace the
-   * procedural cloudTypeProfile trapezoid with a richer per-type altitude
-   * shape family (anvil lift for cumulus, room to retune cirrus end without
-   * shader rebuilds).
-   */
-  const Resources::Resource& getCloudHeightLut() const { return m_cloudHeightLut; }
 
   /**
    * \brief Get the secondary-ray cloud LUT (fork — 2026-06-10, perf).
@@ -311,10 +293,6 @@ private:
   void dispatchTransmittanceLut(Rc<DxvkContext> ctx);
   void dispatchMultiscatteringLut(Rc<DxvkContext> ctx);
   void dispatchSkyViewLut(Rc<DxvkContext> ctx);
-  void dispatchCloudNoise3DBake(Rc<DxvkContext> ctx);  // Stage C: baked at init + on bake-input change
-  bool needsCloudNoiseRebake() const;                  // true when a bake input (tile / worley*) changed
-  void cacheCloudNoiseBakeInputs();                    // snapshot the current bake inputs after a bake
-  void dispatchCloudHeightLutBake(Rc<DxvkContext> ctx);  // Fork: baked once at init (slide 3 lift)
   // Cloud placement map bake (fork — 2026-06-11, column-shaping rework).
   // At init + on bake-input change (cloudCellSizeKm / cloudNoiseTileKm).
   void dispatchCloudPlacementMapBake(Rc<DxvkContext> ctx);
@@ -357,7 +335,6 @@ private:
   static constexpr uint32_t kMultiscatteringLutSize = 32;
   static constexpr uint32_t kSkyViewLutWidth = 512;   // Increased from 192 to eliminate aliasing artifacts
   static constexpr uint32_t kSkyViewLutHeight = 256;  // Increased from 108 to eliminate aliasing artifacts
-  static constexpr uint32_t kCloudNoise3DSize = 256;  // 3D R8, 16 MB VRAM (Stage C)
   // Cloud-occluded sky-ambient transmittance LUT (fork). Small 2D R16F texture
   // keyed by (azimuth, elevation). 32x16 chosen because cumulus features at the
   // bake scale are low-frequency relative to a 360x90 sweep — 32 azimuthal
@@ -412,14 +389,6 @@ private:
   // cloud_detail_noise_baker.comp.slang.
   static constexpr uint32_t kCloudDetailNoise3DSize = 128;
 
-  // Cloud height LUT (slide 3 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
-  // 64 type slices x 128 altitude entries x R8 = 8 KB VRAM. One-shot bake at
-  // startup. Keep in lockstep with the dispatch dimensions inside
-  // cloud_height_lut_baker.comp.slang and the LUT sample call in
-  // atmosphere_common.slangh's cloudHeightProfile.
-  static constexpr uint32_t kCloudHeightLutWidth  = 64;
-  static constexpr uint32_t kCloudHeightLutHeight = 128;
-
   // Secondary-ray cloud LUT (fork — 2026-06-10, perf). 256 azimuth x 128
   // elevation RGBA16F = 256 KB VRAM. Elevation rows concentrate near the
   // horizon (elevation = (pi/2)*v^2 — see cloudDomeUvToDir). Sized for
@@ -442,7 +411,6 @@ private:
   Resources::Resource m_transmittanceLut;
   Resources::Resource m_multiscatteringLut;
   Resources::Resource m_skyViewLut;
-  Resources::Resource m_cloudNoise3D;  // Stage C: prebaked 3D Perlin FBM
   Resources::Resource m_cloudSkyTransmittanceLut;  // Fork: per-frame cloud occlusion of sky-ambient hemisphere
   // Cloud voxel grids (Nubis Cubed 2023, fork — 2026-05-12). Round-robin baked
   // every 8 frames by dispatchCloudSunDensityGrid / dispatchCloudAmbientDensityGrid.
@@ -470,10 +438,6 @@ private:
   // fork — 2026-06-11). Published to shaders via
   // args.cloudRenderFullDimX/Y for the bilinear upsample at sky-miss.
   VkExtent2D          m_cloudRenderFullExtent = { 0u, 0u };
-
-  // Cloud height LUT (slide 3 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
-  // 64x128 R8, baked once at startup.
-  Resources::Resource m_cloudHeightLut;
 
   // Secondary-ray cloud LUT (fork — 2026-06-10, perf). 256x128 RGBA16F,
   // baked every frame by dispatchCloudSecondaryLut.
@@ -562,18 +526,6 @@ private:
   // cloud-noise re-bake path also zeroes it to force same-frame refresh.
   AtmosphereArgs m_cachedVoxelGridKey = {};
   // Cloud noise 3D re-bake gate (fork). The 256^3 noise volume bakes its
-  // periodic structure from cloudNoiseTileKm + the cloudWorley* inputs, while
-  // the runtime sampler divides world position by the *live* cloudNoiseTileKm.
-  // The bake originally ran only once at init, so changing a bake input at
-  // runtime (e.g. the ImGui tile slider) desynced the runtime divisor from the
-  // baked structure — rescaling cloud feature size and banding the horizon.
-  // These snapshot the last-baked inputs; needsCloudNoiseRebake() compares them
-  // against the live RtxOptions so the volume re-bakes only on an actual change.
-  float    m_cachedNoiseTileKm         = 0.0f;
-  float    m_cachedWorleyFrequency     = 0.0f;
-  uint32_t m_cachedWorleyOctaves       = 0u;
-  float    m_cachedWorleyCarveStrength = 0.0f;
-  float    m_cachedBaseFreqScale       = 0.0f;
   // Cloud placement map re-bake gate (fork — 2026-06-11, column-shaping
   // rework). Same pattern as the noise gate above: snapshot the last-baked
   // inputs, re-bake only on actual change.

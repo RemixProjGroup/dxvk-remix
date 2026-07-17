@@ -24,7 +24,7 @@
  * Cloud NVDF occupancy voxelize (fork — Nubis3 conversion Phase A).
  *
  * Rasterizes the procedural cloud BODY — the placement map + per-column
- * model that sampleCloudDensityTextured gates on — into a tile-periodic
+ * model (formerly the legacy view sampler's gate) — into a tile-periodic
  * 256x64x256 R8 occupancy grid. This is the "Frankencloudscape" input the
  * JFA distance transform runs over; the resulting SDF gives Nubis3's
  * dimensional profile ("gradient from outside to inside") and, later,
@@ -79,7 +79,7 @@ void main(uint3 threadId : SV_DispatchThreadID) {
   AtmosphereArgs args = atmosphereArgs;
 
   // Placement tap at the voxel-center tile UV — the hexOn=false path of
-  // sampleCloudPlacement (a single linear tap; the map tiles at
+  // the retired sampleCloudPlacement helper (a single linear tap; the map tiles at
   // cloudNoiseTileKm, same period as this grid's horizontal domain).
   vec2 tileUV = cloudNvdfVoxelToTileUV(threadId);
   vec4 placement = cloudPlacementMapSrv.SampleLevel(placementSamplerState, tileUV, 0);
@@ -112,7 +112,7 @@ void main(uint3 threadId : SV_DispatchThreadID) {
   // the same helper the density samplers call — one body definition.
   CloudColumn col = computeCloudColumn(placement, saturate(args.nvdfNominalCoverage), args);
 
-  // Same gates as sampleCloudDensityTextured's column early-outs: presence
+  // Same gates as the legacy sampler's column early-outs: presence
   // epsilon, then the sample's height fraction against the column's own
   // [base, top] band.
   bool occupied = (col.presence > 0.001f)

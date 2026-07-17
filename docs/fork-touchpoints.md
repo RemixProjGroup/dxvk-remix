@@ -2793,3 +2793,59 @@ character consumer (erosion composite, HF fold, wobble + mid, interior).
 - **`RtxOptions.md`** - REGEN PENDING (11 options now outstanding across the Nubis3 workstreams).
 
 ---
+
+## Workstream - Legacy cloud model retirement (fork - 2026-07-16)
+
+With the Nubis3 detail round user-validated, the pre-Nubis3 density model is
+DELETED end to end - the A/B toggle, the legacy noise-threshold view sampler
+and its whole helper web, the 256^3 Perlin/Worley noise volume + baker, the
+64x128 cloud height LUT + baker, four legacy-only look knobs, and their ImGui
+sliders ("they're making it very hard to tune"). The ECHO DECK (layer 2) was
+the last legacy consumer - it is CONVERTED to the Nubis3 sampler: the deck
+now samples the same NVDF/detail model as layer 1 with the density-FIELD
+position offset by a seed-keyed XZ shift (a decorrelated-but-related copy of
+the layer-1 bodies at the deck altitude - the original Phase E design), lit
+by the evaluator core with the analytic dSunProxy and downTau=0. The COLUMN
+MODEL and placement map SURVIVE - they author the NVDF occupancy bodies -
+but their view-pass bindings are gone (the placement map is now purely a
+bake input). Weather-preset ABI: unaffected (audited - no preset field
+mapped to a deleted option).
+
+DELETED shader files: `rtx_cloud_noise_baker.comp.slang`,
+`cloud_height_lut_baker.comp.slang`.
+DELETED functions (atmosphere_common.slangh): sampleCloudDensityTextured x3,
+sampleCloudDensityForShadow x2, sampleCloudPlacement, sampleCloudNoiseHexBlend,
+sampleTricubicBSpline, cloudHeightProfileFull x2, sampleCloudHeightLUT,
+cloudHeightProfile, cloudHeightProfileDownIntegral x2, cloudTypeProfile,
+cloudTypeProfileIntegralFromTop; (cloud_march_common.slangh): sampleDimProfile,
+sampleCloudSdf, evalNubisCubedSample legacy wrapper.
+DELETED options: cloudAnvilBias, cloudVerticalStretch, cloudEdgeSoftness,
+cloudDetailHeightCharacter, cloudWorleyCarveStrength, cloudWorleyFrequency,
+cloudWorleyOctaves, cloudNoiseBaseFreqScale, cloudHeightLutEnable,
+nubis3ModelEnable (their CB fields became padRetired0-9 - zero-filled
+reserve, free for Phase D).
+RETIRED binding indices: 203 (cloud noise 3D), 216 (view-pass placement map)
+- annotated do-not-reuse in common_binding_indices.h;
+BINDING_ATMOSPHERE_MAX repointed to 215.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** - fork-owned change.
+  *marchEchoDeck + sampleCloudSunOpticalDepth_localSlab converted to the Nubis3 sampler (fieldOffsetKm seed shift; SDF index-skip added to the deck loop); integrateCloudSample + sampleCloudSunOpticalDepth_local unbranched; adaptive/skip gates drop the model term.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nubis3_common.slangh`** - fork-owned change.
+  *sampleCloudBakeDensity unbranched; bake-integral signatures drop the legacy noise/placement params (grid bakers updated).*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** - fork-owned change (deletions above).
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang` / `cloud_secondary_lut.comp.slang`** - fork-owned change.
+  *Bindings 1/10/11/12 (noise, height LUT + sampler, placement) removed; ATMOSPHERE_CLOUD_HEIGHT_LUT_AVAILABLE gone.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_sun_density_grid.comp.slang` / `cloud_ambient_density_grid.comp.slang`** - fork-owned change.
+  *Bindings 2/4 removed.*
+- **`src/dxvk/shaders/rtx/pass/common_bindings.slangh` / `common_binding_indices.h` / `atmosphere/atmosphere_bindings.slangh`** - fork-touchpoint inline tweak.
+  *Noise/placement decls + layout-macro rows removed; retired indices annotated.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** - fork-touchpoint inline tweak.
+  *10 fields -> padRetired0-9 (layout unchanged).*
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** - fork-owned change.
+  *m_cloudNoise3D + m_cloudHeightLut resources, bakers, dispatch fns, re-bake gate, cached inputs, binds/tracks: all removed; retired pads zero-filled in getAtmosphereArgs.*
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-touchpoint inline tweak (10 options removed).
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned change.
+  *Nubis3 enable checkbox + Anvil Spread / Noise Frequency / Base Wispiness / Edge Softness sliders removed; common-bind of noise/placement removed.*
+- **`RtxOptions.md`** - REGEN PENDING (10 options removed + prior additions outstanding).
+
+---

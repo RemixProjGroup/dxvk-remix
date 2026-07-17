@@ -1597,8 +1597,6 @@ namespace dxvk {
                "Spatial variation amplitude for coverage [0,1]. 0=uniform, 1=full range.");
     RTX_OPTION("rtx.atmosphere", float, cloudCoverageNoiseScale, 0.0033f,
                "Region size frequency for coverage noise. Independent from type noise scale.");
-    RTX_OPTION("rtx.atmosphere", float, cloudAnvilBias, 0.3f,
-               "Cumulus top inflation strength [0,1]. 0=flat tops, 1=fully spread mushroom-cap anvils.");
     RTX_OPTION("rtx.atmosphere", float, cloudNoiseTileKm, 12.0f,
                "World-space tile period (km) for the prebaked 3D cloud noise texture. "
                "Smaller = more visible repetition; larger = lower-frequency cloud detail. "
@@ -1615,11 +1613,6 @@ namespace dxvk {
                "show, with statistics-preserving blending (the cloud look "
                "is unchanged). Disable for the legacy periodic field "
                "(visible repetition at the tile period).");
-    RTX_OPTION("rtx.atmosphere", float, cloudNoiseBaseFreqScale, 1.0f,
-               "Multiplier on the cloud noise bake's base + detail FBM "
-               "frequencies [0.25..4]. 1.0 = legacy bake. Raise for "
-               "smaller/busier cloud features, lower for larger ones. "
-               "Re-bakes the noise volume live on change.");
 
     // Per-column cloud model (fork — 2026-06-11, column-shaping rework; the
     // legacy global-slab alternative was removed 2026-06-19 and the column
@@ -1667,13 +1660,6 @@ namespace dxvk {
                "level-set offset small; re-bakes amortized only when the "
                "drift crosses a step). Nonzero pins the bake nominal for "
                "debugging or look-tuning.");
-    RTX_OPTION("rtx.atmosphere", bool, nubis3ModelEnable, false,
-               "Nubis3 (SIGGRAPH 2023) SDF density model: cloud shape = "
-               "dimensional profile remapped from the baked body SDF, live "
-               "coverage as a level-set offset, wispy/billowy value-erosion "
-               "detail. Off = the legacy noise-threshold model (A/B "
-               "comparison). Applies live; the D_sun/D_ambient shadow "
-               "grids re-bake to the selected model automatically.");
     RTX_OPTION("rtx.atmosphere", float, nvdfProfileDepthKm, 1.0f,
                "Nubis3: depth into the cloud body (km) over which the "
                "dimensional profile ramps 0 -> 1 [0.1..3]. Small = dense "
@@ -1812,12 +1798,6 @@ namespace dxvk {
                "the sun is behind the viewer - the classic crisp-cumulus cue. "
                "Fades off looking toward the sun so silver linings survive. "
                "0 = off.");
-    RTX_OPTION("rtx.atmosphere", float, cloudDetailHeightCharacter, 0.7f,
-               "Height-keyed erosion character [0..1]: flips the edge-detail "
-               "lean over the bottom quarter of each cloud so bases read "
-               "ragged/wispy while tops keep round cauliflower billows (Nubis "
-               "wispy-base / billowy-top trick). 0 = uniform character at all "
-               "heights (legacy).");
     RTX_OPTION("rtx.atmosphere", float, cloudDetailBaseShearKm, 0.2f,
                "Horizontal shear of the edge-detail field at each cloud's "
                "base (km), fading to zero at its top - streaks base-level "
@@ -1860,18 +1840,9 @@ namespace dxvk {
                "Lightning flash color (linear RGB), shared by the in-cloud "
                "glow and the scene flash. Default is a cool blue-white.");
 
-    // Cloud-edge / halo tuning (fork — 2026-06-13). Two live knobs for the soft
-    // fringe around cloud silhouettes: cloudEdgeSoftness sets how wide the
-    // coverage-gate transition band is (the EXTENT of the skirt), and
-    // cloudEdgeAmbientFade fades the horizon-tinted ambient on thin samples (the
-    // discolored COLOR of the skirt). Both apply live, no re-bake.
-    RTX_OPTION("rtx.atmosphere", float, cloudEdgeSoftness, 0.15f,
-               "Cloud silhouette softness [0.02..0.4] — width of the view-path "
-               "coverage-gate transition band. Lower = crisper edges and a "
-               "tighter silhouette; higher = softer edges but a broader faint "
-               "skirt of sub-threshold cloud that can read as a halo. The "
-               "shadow/optical-depth gate is held at 0.25 so self-shadow bakes "
-               "are unaffected. Applies live.");
+    // Cloud-edge / halo tuning (fork — 2026-06-13). cloudEdgeAmbientFade fades
+    // the horizon-tinted ambient on thin samples (the discolored COLOR of the
+    // soft skirt around silhouettes). Applies live, no re-bake.
     RTX_OPTION("rtx.atmosphere", float, cloudEdgeAmbientFade, 0.15f,
                "Thin-edge ambient fade [0..0.5]. Sub-threshold skirt samples are "
                "ambient-dominated, and the ambient is sampled at the horizon (a "
@@ -1889,13 +1860,6 @@ namespace dxvk {
     // higher values — neither look shipped. Default 1.0 = bit-exact
     // identity (feature inert) until the towering-cumulus problem is
     // solved properly, likely at the sky-system level.
-    RTX_OPTION("rtx.atmosphere", float, cloudVerticalStretch, 1.0f,
-               "EXPERIMENTAL vertical connectedness of cloud bodies [1..3]. "
-               "1 = fully 3D noise (default; feature inert); higher anchors "
-               "clouds to a stable vertical footprint so cumulus reads as "
-               "connected towers — but currently smears vertically at high "
-               "values. Applies live; also reshapes the baked self-shadow "
-               "grids so lighting tracks the shapes.");
 
     // Underside darkening strength (fork — 2026-06-10; reworked 2026-06-19 to
     // scale the realistic analytic underside light field instead of a constant
@@ -1946,21 +1910,6 @@ namespace dxvk {
     // Changing any of them (or cloudNoiseTileKm) re-bakes the 256^3 noise volume
     // live via RtxAtmosphere::needsCloudNoiseRebake — no relaunch needed, though
     // dragging a slider re-bakes each frame the value changes and may hitch.
-    RTX_OPTION("rtx.atmosphere", float, cloudWorleyCarveStrength, 0.6f,
-               "Schneider15 cauliflower carve strength. The Worley FBM is "
-               "subtracted from the Perlin base in the cloud noise bake to "
-               "produce chunky 3D cell silhouettes. 0 = pure Perlin (smooth "
-               "blobs, flat pancake look); 1.0 = aggressive carve (crushed "
-               "base shape). 0.6 default. Re-bakes the cloud noise volume live on change.");
-    RTX_OPTION("rtx.atmosphere", float, cloudWorleyFrequency, 1.0f,
-               "Worley feature-point density, cycles per km. Smaller = larger "
-               "cumulus cells (boulder-sized chunks); larger = smaller cells "
-               "(cauliflower bumps). Default 1.0 targets cumulus-cell scale. "
-               "Re-bakes the cloud noise volume live on change.");
-    RTX_OPTION("rtx.atmosphere", uint32_t, cloudWorleyOctaves, 3,
-               "Worley FBM octave count (clamped 1..4 in the bake shader). "
-               "Higher = more sub-scale detail on cell boundaries. Default 3. "
-               "Re-bakes the cloud noise volume live on change.");
 
     // Cloud aerial perspective (fork — 2026-05-16). Distant cloud samples
     // attenuate exponentially with march distance, mimicking real atmospheric
@@ -2223,20 +2172,6 @@ namespace dxvk {
     // legitimate outdoor whole-mesh-ambient dimming under a cumulus is preserved
     // through evalSkyRadiance; no replacement knob is needed.
 
-    // Cloud Height LUT (slide 3 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
-    // 64x128 R8 lookup table indexed by (cloud type slice, height fraction).
-    // Replaces the 3-keypoint procedural trapezoid in cloudTypeProfile() with a
-    // baked curve family — stratus / stratocumulus / cumulus stay close to the
-    // procedural shape so default-on doesn't regress the shipped Nubis Cubed
-    // look, but the high-type end gains an anvil lift and the low-type end can
-    // be re-tuned per weather without rebuilding shaders.
-    RTX_OPTION("rtx.atmosphere", bool, cloudHeightLutEnable, true,
-               "When true, cloud_render.comp.slang samples a 64x128 baked "
-               "height LUT to determine the per-altitude shape modulator "
-               "instead of the procedural cloudTypeProfile trapezoid. The LUT "
-               "is baked once at startup and keyed by (typeSlice, heightFrac). "
-               "The voxel grid bakers still use the procedural curve, so this "
-               "flag affects only the cloud render and secondary-LUT passes.");
 
     // Two-layer cloud map (slide 1 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
     // Adds an independent second cloud slab at a higher altitude (cirrus deck

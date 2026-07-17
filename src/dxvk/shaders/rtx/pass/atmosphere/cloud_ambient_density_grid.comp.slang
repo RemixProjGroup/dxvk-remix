@@ -41,24 +41,14 @@ ConstantBuffer<AtmosphereArgs> atmosphereArgs;
 layout(binding = 1, r16f)
 RWTexture3D<float> cloudDAmbientGridOutput;
 
-// 2D Texture3D + linear/REPEAT sampler for the prebaked Perlin FBM cloud
-// noise volume. Same resource as sampleCloudDensityTextured consumes
-// elsewhere; horizontal REPEAT matches the tile-wrap of the voxel grid.
-layout(binding = 2)
-Texture3D<float> cloudNoise3DSrv;
-
+// Linear/REPEAT sampler for the Nubis3 volume taps; horizontal REPEAT
+// matches the tile-wrap of the voxel grid. (Bindings 2/4 held the legacy
+// 256^3 noise volume + placement map — retired with the legacy model.)
 layout(binding = 3)
 SamplerState cloudNoise3DSamplerState;
 
-// Cloud placement map (fork — 2026-06-11, column-shaping rework). Same
-// resource the view march samples; the column model inside
-// sampleCloudDensityForShadow reads it so the baked ambient occlusion
-// matches the per-column cloud shapes overhead.
-layout(binding = 4)
-Texture2D<float4> cloudPlacementMapSrv;
-
 // Nubis3 NVDF SDF + detail volume (fork — Nubis3 conversion Phase B). Same
-// model-branch rationale as cloud_sun_density_grid.comp.slang.
+// integrand as cloud_sun_density_grid.comp.slang.
 layout(binding = 5)
 Texture3D<float> cloudNvdfSdfSrv;
 
@@ -88,8 +78,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
 
   // Zenith integral up to the slab top.
   float opticalDepth = sampleCloudAmbientOpticalDepthAtWorld(
-      worldPosYUp, args, cloudNoise3DSrv, cloudNoise3DSamplerState,
-      cloudPlacementMapSrv, cloudNvdfSdfSrv, cloudDetailNoiseSrv);
+      worldPosYUp, args, cloudNoise3DSamplerState,
+      cloudNvdfSdfSrv, cloudDetailNoiseSrv);
 
   cloudDAmbientGridOutput[dispatchId] = opticalDepth;
 }

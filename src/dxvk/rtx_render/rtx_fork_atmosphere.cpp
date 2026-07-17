@@ -441,14 +441,12 @@ namespace fork_hooks {
     auto transmittanceLut         = ctx.m_atmosphere->getTransmittanceLut();
     auto multiscatteringLut       = ctx.m_atmosphere->getMultiscatteringLut();
     auto skyViewLut               = ctx.m_atmosphere->getSkyViewLut();
-    auto cloudNoise3D             = ctx.m_atmosphere->getCloudNoise3D();  // Stage C
     auto fastNoiseView            = ctx.m_atmosphere->getFastNoiseView();  // EA importance-sampled FAST noise
     auto cloudSkyTransmittanceLut = ctx.m_atmosphere->getCloudSkyTransmittanceLut();  // Fork: per-frame cloud occlusion of sky-ambient
     auto cloudDSun                = ctx.m_atmosphere->getCloudDSun();      // Fork: Nubis Cubed sun-direction optical depth grid
     auto cloudDAmbient            = ctx.m_atmosphere->getCloudDAmbient();  // Fork: Nubis Cubed zenith optical depth grid
     auto cloudRenderRT            = ctx.m_atmosphere->getCloudRenderRT();  // Fork: Nubis Cubed screen-space cloud render (C4)
     auto cloudSecondaryLut        = ctx.m_atmosphere->getCloudSecondaryLut();  // Fork: secondary-ray cloud dome LUT (perf, 2026-06-10)
-    auto cloudPlacementMap        = ctx.m_atmosphere->getCloudPlacementMap();  // Fork: per-column cloud placement map (2026-06-11)
 
     // Always bind the LUTs (they're declared in shaders unconditionally)
     if (transmittanceLut.isValid()) {
@@ -459,9 +457,6 @@ namespace fork_hooks {
     }
     if (skyViewLut.isValid()) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_SKY_VIEW_LUT, skyViewLut.view, nullptr);
-    }
-    if (cloudNoise3D.isValid()) {
-      ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_NOISE_3D, cloudNoise3D.view, nullptr);
     }
     if (fastNoiseView != nullptr) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_FAST_NOISE, fastNoiseView, nullptr);
@@ -480,9 +475,6 @@ namespace fork_hooks {
     }
     if (cloudSecondaryLut.isValid()) {
       ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_SECONDARY_LUT, cloudSecondaryLut.view, nullptr);
-    }
-    if (cloudPlacementMap.isValid()) {
-      ctx.bindResourceView(BINDING_ATMOSPHERE_CLOUD_PLACEMENT_MAP, cloudPlacementMap.view, nullptr);
     }
 
     // Cloud history (fork). Allocate at the current downscaled render extent
@@ -521,9 +513,9 @@ namespace fork_hooks {
       }
     }
 
-    // Bind a linear/REPEAT sampler for the cloud noise volume.
-    // REPEAT matches the tilable wraparound logic in sampleCloudDensityTextured
-    // (frac-based texcoord) so the hardware sampler and the shader math agree.
+    // Bind a linear/REPEAT sampler for the Nubis3 volume taps.
+    // REPEAT matches the frac-based tilable wraparound texcoord logic
+    // so the hardware sampler and the shader math agree.
     // Created per-bind (cheap — DxvkDevice caches identical samplers).
     {
       DxvkSamplerCreateInfo samplerInfo = {};
@@ -1369,12 +1361,6 @@ namespace fork_hooks {
 
         // Nubis3 SDF density model (fork — Nubis3 conversion Phase B).
         if (ImGui::TreeNode("Nubis3 Model (SDF)")) {
-          RemixGui::Checkbox("Enable Nubis3 Model", &RtxOptions::nubis3ModelEnableObject());
-          RemixGui::SetTooltipToLastWidgetOnHover(
-              "A/B toggle: ON = the Nubis3 (SIGGRAPH 2023) SDF density model "
-              "(profile-from-SDF body + wispy/billowy value erosion; coverage "
-              "morphs clouds live with zero rebakes), OFF = the legacy "
-              "noise-threshold model. Shadow grids follow automatically.");
           RemixGui::DragFloat("Profile Depth", &RtxOptions::nvdfProfileDepthKmObject(),
                               0.02f, 0.1f, 3.0f, "%.2f km", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
@@ -1476,11 +1462,6 @@ namespace fork_hooks {
                 "Floored at ~294 km because faster variation puts visible 2D "
                 "cell structure at sub-cumulus scales. Independent of Coverage "
                 "Patch Size. (Stored as spatial frequency 1/km in the conf.)");
-            RemixGui::DragFloat("Anvil Spread", &RtxOptions::cloudAnvilBiasObject(),
-                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-            RemixGui::SetTooltipToLastWidgetOnHover(
-                "Cumulus top inflation. 0 = flat tops, 1 = mushroom-cap anvils. "
-                "Most visible on tall cumulus / thunderstorm scenes.");
             ImGui::TreePop();
           }
 
@@ -1496,13 +1477,6 @@ namespace fork_hooks {
                 "Randomizes the cloud noise tiling on a triangle lattice so the "
                 "texture repeat can never show, while preserving the cloud look. "
                 "Uncheck for the legacy periodic field. Applies live.");
-            RemixGui::DragFloat("Noise Frequency", &RtxOptions::cloudNoiseBaseFreqScaleObject(),
-                                0.01f, 0.25f, 4.0f, "%.2f", sliderFlags);
-            RemixGui::SetTooltipToLastWidgetOnHover(
-                "Multiplier on the baked cloud noise frequency. 1.0 = current "
-                "look. Raise for smaller/busier cloud features, lower for "
-                "larger ones. Re-bakes the noise volume live as you drag "
-                "(brief hitch per change).");
             RemixGui::DragFloat("Edge Detail", &RtxOptions::cloudDetailStrengthObject(),
                                 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
             RemixGui::SetTooltipToLastWidgetOnHover(
@@ -1526,26 +1500,12 @@ namespace fork_hooks {
                 "clouds (the classic crisp-cumulus powder cue). Strongest with the "
                 "sun behind you; fades off toward the sun so silver linings "
                 "survive. 0 = off.");
-            RemixGui::DragFloat("Base Wispiness", &RtxOptions::cloudDetailHeightCharacterObject(),
-                                0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
-            RemixGui::SetTooltipToLastWidgetOnHover(
-                "Splits the edge-detail character by height: cloud BASES read "
-                "ragged and eaten-away while TOPS keep round cauliflower billows. "
-                "0 = same detail character at all heights (legacy).");
             RemixGui::DragFloat("Base Wisp Shear", &RtxOptions::cloudDetailBaseShearKmObject(),
                                 0.01f, 0.0f, 1.0f, "%.2f km", sliderFlags);
             RemixGui::SetTooltipToLastWidgetOnHover(
                 "Slants the edge-detail field sideways at each cloud's base, fading "
                 "to none at its top - base wisps streak like wind-sheared scud "
                 "while tops stay round. 0 = no shear.");
-            RemixGui::DragFloat("Edge Softness", &RtxOptions::cloudEdgeSoftnessObject(),
-                                0.005f, 0.02f, 0.4f, "%.3f", sliderFlags);
-            RemixGui::SetTooltipToLastWidgetOnHover(
-                "Width of the coverage-gate transition band - how soft the "
-                "cloud silhouette is. Lower = crisper edges, tighter silhouette; "
-                "higher = softer edges but a broader faint skirt that can read as a "
-                "halo. Affects the view only; self-shadowing is held at the legacy "
-                "softness so this won't shift cloud lighting.");
             RemixGui::DragFloat("Edge Haze Fade", &RtxOptions::cloudEdgeAmbientFadeObject(),
                                 0.005f, 0.0f, 0.5f, "%.3f", sliderFlags);
             RemixGui::SetTooltipToLastWidgetOnHover(

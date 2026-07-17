@@ -30,7 +30,7 @@
 //
 // Cloud and atmosphere helpers used by both the sky path and the ground
 // shadow term (intersectSphere, cloudPlanetRadius, computeCloudHeightFraction,
-// sampleCloudDensityTextured, intersectCloudLayer, evalCloudGroundShadow,
+// intersectCloudLayer, evalCloudGroundShadow,
 // getTransmittanceToSun, evalAtmosphereRadiance, hash31, fbmNoise2D, etc.)
 // stay in atmosphere_common.slangh and are pulled in via the include below.
 
