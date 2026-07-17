@@ -1403,6 +1403,13 @@ namespace fork_hooks {
               "lobes, notches and full splits that break round singular "
               "blobs into varied cloud clusters (the GT7 mid-band role). "
               "Live, no rebake. Higher costs some empty-space-skip perf.");
+          RemixGui::DragFloat("Sun Shadow (Near)", &RtxOptions::nubis3SunNearFieldKmObject(),
+                              0.02f, 0.0f, 3.0f, "%.2f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Range where sun occlusion is measured LIVE from the displaced "
+              "density field instead of the baked D_sun grid (Nubis p.129). "
+              "Gives each mid-band lobe its own sunlit face and shadowed "
+              "crevice — the 3D-volume read. 0 = grid only (cheaper, softer).");
           RemixGui::DragFloat("Body Erosion", &RtxOptions::nvdfBodyErosionStrengthObject(),
                               0.02f, 0.0f, 1.5f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(

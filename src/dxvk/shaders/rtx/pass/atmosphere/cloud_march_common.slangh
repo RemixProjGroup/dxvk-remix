@@ -712,11 +712,47 @@ bool integrateCloudSample(float tSampleKm,
   // cirrus is too thin to need precomputed shadow data of its own.
   float cloudSdfM = clamp(nubisSdfKm * 1000.0f, -args.cloudMsSdfDepth * 4.0f, 0.0f);
   float downTau   = sampleDAmbient(samplePos, args, /*isZUp=*/false) * args.cloudDensity;
+
+  // Near-field live sun occlusion (fork — 2026-07-17; Nubis p.129 "first
+  // light samples live, grid for the far field"). The D_sun grid bake
+  // integrates with ~0.6 km jittered taps and bilinear grid filtering
+  // smooths what survives, so lobe-scale (1-2.5 km) self-shadowing is
+  // low-passed away — mid-band lobes read only where they cross the
+  // silhouette ("same blob, different outline"). Two live taps of the SAME
+  // displaced density field over the first nubis3SunNearFieldKm give every
+  // lobe its own sunlit face and shadowed crevice — the directional cue
+  // that makes toward/away-camera structure read as volume. The grid tap
+  // moves to the range end so it contributes only the FAR field (no double
+  // count); every D_sun consumer downstream (T_primary, body lobe,
+  // ambientShadow, warm/cool blend) sharpens together. The density gate
+  // mirrors the moon block's 0.05 skip: thin skirt samples keep the smooth
+  // grid, and their own transparency masks the seam. densityScale = 1
+  // matches the bake integrand's convention (grid OD is unit-density km).
+  float dSunOverride = -1.0f;
+  if (args.nubis3SunNearFieldKm > 1e-3f
+      && ctx.sunDirYUp.y > 0.001f
+      && density >= 0.05f) {
+    const int kSunNearTaps = 2;
+    float nearStep = args.nubis3SunNearFieldKm / float(kSunNearTaps);
+    float liveOD = 0.0f;
+    for (int nt = 0; nt < kSunNearTaps; ++nt) {
+      vec3 p = samplePos + ctx.sunDirYUp * ((float(nt) + 0.5f) * nearStep);
+      float phf = computeCloudHeightFraction(p, args, slabAltitudeKm, slabThicknessKm);
+      float pd = sampleCloudDensityNubis3(p, phf, typeLocal, coverageLocal, 1.0f, args,
+                                          AtmosphereCloudNvdfSdf, AtmosphereCloudDetailNoise3D,
+                                          AtmosphereCloudNoise3DSampler);
+      liveOD += pd * nearStep;
+    }
+    dSunOverride = liveOD
+                 + sampleDSun(samplePos + ctx.sunDirYUp * args.nubis3SunNearFieldKm,
+                              args, /*isZUp=*/false);
+  }
+
   NubisCubedLighting lighting = evalNubisCubedSampleCore(
       samplePos, density, nubisProfile, cloudSdfM, downTau, detailSigned,
       viewDirYUp, ctx.sunDirYUp, ctx.sunRadiance,
       ctx.skyRadianceWarm, ctx.skyRadianceCool, ctx.skyRadianceZenith,
-      args, /*isZUp=*/false, /*dSunOverride=*/-1.0f);
+      args, /*isZUp=*/false, dSunOverride);
 
   // ===== Per-sample moon direct light =====
   // Same Beer-Lambert single-octave moon shadow march as before. The if-gate

@@ -295,7 +295,15 @@ struct AtmosphereArgs {
 
   float cloudCoverageSpread;       // [0,1] amplitude of coverage variation around mean.
   float cloudCoverageNoiseScale;   // Region size frequency for coverage noise (independent of type).
-  float padRetired3;               // retired: legacy anvil pow trick.
+  float nubis3SunNearFieldKm;      // Near-field live sun-occlusion range in km
+                                   // (fork — 2026-07-17, Nubis p.129 "first
+                                   // light samples live"): per lit march sample,
+                                   // 2 live density taps over this range replace
+                                   // the D_sun grid's near field (the grid tap
+                                   // moves to the range end for the far field) —
+                                   // directional lobe self-shadowing the grid's
+                                   // ~0.6 km bake taps low-pass away. 0 = grid
+                                   // only. (Third reuse of the retired pads.)
   float cloudMsScale;              // Multi-scatter sigma_ms master multiplier (1.0 = paper baseline)
 
   float cloudAmbientShadowStrength; // [0..1] D_sun-keyed attenuation of the cloud AMBIENT term

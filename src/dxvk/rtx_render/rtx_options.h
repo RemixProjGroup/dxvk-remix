@@ -1702,6 +1702,17 @@ namespace dxvk {
                "blobs into varied cloud clusters. Whole-body reshaping, "
                "not edge detail; coverage-neutral on average. 0 = off. "
                "Applies live, no rebake.");
+    RTX_OPTION("rtx.atmosphere", float, nubis3SunNearFieldKm, 1.2f,
+               "Nubis3: near-field live sun-shadow range in km [0..3] "
+               "(Nubis Cubed p.129 'first light samples live'). Within this "
+               "range of each lit march sample the sun occlusion is measured "
+               "with live density taps instead of the pre-baked D_sun grid, "
+               "whose ~0.6 km bake taps blur away lobe-scale self-shadowing; "
+               "the grid still supplies the far field beyond the range. "
+               "Gives mid-band lobes their own sunlit faces and shadowed "
+               "crevices — the directional cue that makes clouds read as 3D "
+               "volumes instead of reshaped blobs. 0 = grid only (cheaper, "
+               "softer). Applies live.");
     RTX_OPTION("rtx.atmosphere", float, nubis3FineDetailStrength, 1.0f,
                "Nubis3: fine-frequency detail band [0..2] (GT7-style third "
                "noise band). A third tap of the detail volume at 2.11x "

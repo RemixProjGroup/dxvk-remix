@@ -2879,3 +2879,65 @@ samples never pay the tap.
 - **`RtxOptions.md`** - REGEN PENDING.
 
 ---
+
+## Workstream - Mid-band shape variety (fork - 2026-07-17)
+
+User reframing of the GT7 low-vs-mid comparison: the mid band belongs in the
+SHAPE system, not edges/shading - "actually change the SHAPE of all of the
+clouds ... more varied cloud shapes instead of nice round singular blobs."
+The existing 2.4 km mid tap gets a DEDICATED level-set displacement on top of
+the wobble mix: +-0.5 x nubis3ShapeVarietyKm of iso-surface push/pull, deep
+enough to lobe and fully split km-scale bodies. Zero-mean signal ->
+coverage-neutral on average; step-5 early-out + conservative step bound
+budget the extra excursion. Live, no rebake. (Entry backfilled - shipped in
+`c3ba707d`.)
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nubis3_common.slangh`** - fork-owned change.
+  *Sampler step 6e (level-set displacement) + widened step-5 excursion bound.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** - fork-touchpoint inline tweak.
+  *padRetired2 -> nubis3ShapeVarietyKm (second reuse of the retired pads).*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** - fork-owned change (args fill, clamp [0..1.5]).
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-touchpoint inline tweak.
+  *Adds `rtx.atmosphere.nubis3ShapeVarietyKm`.*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned addition.
+  *"Shape Variety" slider above Body Erosion.*
+- **`RtxOptions.md`** - REGEN PENDING.
+
+---
+
+## Workstream - Near-field live sun occlusion + mid interior fold (fork - 2026-07-17)
+
+Shape-variety look check: mid-band lobes still read as silhouette recutting
+("cloud is a giant blob that's just a slightly different shape now") - no
+toward/away-camera depth. Root cause: both mid mechanisms move only the
+SURFACE, and every lighting input is smooth at lobe scale - the D_sun grid
+bake integrates with ~0.6 km jittered taps + bilinear filtering (lobe-scale
+self-shadowing is low-passed away) and micro-AO is a nondirectional
+local-value emboss. Fix = the Nubis Cubed p.129 split ("first light samples
+live, grid for the far field"), the top open item on the porting-gap list:
+per lit march sample (density >= 0.05, sun up), 2 live density taps of the
+displaced field over nubis3SunNearFieldKm + a D_sun grid tap at the range-end
+offset for the far field (no double count), plumbed through the existing
+dSunOverride evaluator param - every D_sun consumer (T_primary, body lobe,
+ambient shadow, warm/cool blend) sharpens together, so each lobe gets its own
+sunlit face and shadowed crevice. Companion: the step-6d mid tap now also
+folds into the interior-texture factor (0.35 x saturate(shapeVarietyKm x 2),
+mean-matched = density-neutral) so lobes differ in optical thickness too -
+2.4 km structure is well above the ~0.56 km mean free path, so unlike the
+fine band it survives to transmittance. Echo deck untouched (its analytic
+dSunOverride short-circuits the new block).
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** - fork-owned change.
+  *integrateCloudSample: near-field live-tap block ahead of the evaluator call.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nubis3_common.slangh`** - fork-owned change.
+  *Step-8 mid-band interior fold.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** - fork-touchpoint inline tweak.
+  *padRetired3 -> nubis3SunNearFieldKm (third reuse of the retired pads).*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** - fork-owned change (args fill, clamp [0..3]; padRetired3 zero-fill dropped).
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-touchpoint inline tweak.
+  *Adds `rtx.atmosphere.nubis3SunNearFieldKm` (1.2 km; 0 = grid only).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned addition.
+  *"Sun Shadow (Near)" slider after Shape Variety.*
+- **`RtxOptions.md`** - REGEN PENDING.
+
+---

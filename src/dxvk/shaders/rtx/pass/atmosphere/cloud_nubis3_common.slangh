@@ -466,6 +466,20 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
     float interiorNoise = lerp(lerp(noise.r, noise.g, 0.5f),
                                lerp(noise.b, noise.a, 0.5f),
                                typeShaped);
+    // Mid-band fold (fork — 2026-07-17, GT7 mid-frequency follow-up): the
+    // step-6d 2.4 km tap also modulates INTERIOR density, so shape-variety
+    // lobes differ in optical thickness — brighter thin lobes against
+    // denser neighbors — instead of only in outline. Unlike the fine band
+    // (below the ~0.56 km mean free path, where zero-mean density
+    // modulation averages out along the ray — the rev-3 lesson), 2.4 km
+    // structure survives to transmittance. Keyed to the Shape Variety knob
+    // so ONE lever owns the whole mid band; mean-matched lerp of mean-0.5
+    // channels keeps the factor density-neutral. Shared sampler → the
+    // D_sun/D_ambient bakes and the near-field live sun taps track it.
+    float midMix = 0.35f * saturate(args.nubis3ShapeVarietyKm * 2.0f);
+    interiorNoise = lerp(interiorNoise,
+                         lerp(noiseMid.r, noiseMid.b, typeShaped),
+                         midMix);
     // Fine-band fold (step 7a): near-to-mid range interiors pick up the
     // ~33-177 m grain — small billows on lit faces. Mean-matched lerp
     // (both signals are mean 0.5), so the factor stays density-neutral.

@@ -811,6 +811,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // Mid-band shape-variety displacement (fork — 2026-07-17). Live; shared
     // sampler, so the OD bakes and grids track the reshaped bodies.
     args.nubis3ShapeVarietyKm     = std::min(std::max(RtxOptions::nubis3ShapeVarietyKm(), 0.0f), 1.5f);
+    // Near-field live sun taps (fork — 2026-07-17). Live; view march + secondary
+    // cloud LUT only (the voxel grids keep their full-path bake).
+    args.nubis3SunNearFieldKm     = std::min(std::max(RtxOptions::nubis3SunNearFieldKm(), 0.0f), 3.0f);
     // √-adaptive march step floor (fork — detail round 2026-07-16). Live;
     // affects the view march + secondary cloud LUT, so it stays in the LUT
     // cache keys (same class as nvdfStepScale / cloudViewStepKm).
@@ -969,7 +972,6 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // Retired legacy-model CB slots (fork — legacy retirement 2026-07-16):
   // zero-filled reserve pads, free for Phase D growth.
   args.padRetired0 = 0u;
-  args.padRetired3 = 0.0f;
   args.padRetired4 = 0u;
   args.padRetired5 = 0.0f;
   args.padRetired6 = 0.0f;
