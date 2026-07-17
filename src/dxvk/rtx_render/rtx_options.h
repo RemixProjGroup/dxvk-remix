@@ -1656,6 +1656,88 @@ namespace dxvk {
                "Coverage-remap feather band at cloud-cluster edges "
                "[0.05..1]. Narrow = crisp solid-cored clouds; wide = soft "
                "wispy transitions. Applies live.");
+    // Nubis3 conversion (fork — Phase A). The cloud body (placement map +
+    // column model) is voxelized and distance-transformed into a real SDF
+    // (the NVDF) — the foundation for Nubis3's profile-from-SDF density
+    // model and sphere-traced marching in later phases.
+    RTX_OPTION("rtx.atmosphere", float, nvdfNominalCoverage, 0.0f,
+               "Coverage the cloud-body SDF (NVDF) bakes at [0 or 0.25..1]. "
+               "0 = auto: track the live weather coverage quantized to 0.25 "
+               "steps (recommended — keeps the sample-time coverage "
+               "level-set offset small; re-bakes amortized only when the "
+               "drift crosses a step). Nonzero pins the bake nominal for "
+               "debugging or look-tuning.");
+    RTX_OPTION("rtx.atmosphere", bool, nubis3ModelEnable, false,
+               "Nubis3 (SIGGRAPH 2023) SDF density model: cloud shape = "
+               "dimensional profile remapped from the baked body SDF, live "
+               "coverage as a level-set offset, wispy/billowy value-erosion "
+               "detail. Off = the legacy noise-threshold model (A/B "
+               "comparison). Applies live; the D_sun/D_ambient shadow "
+               "grids re-bake to the selected model automatically.");
+    RTX_OPTION("rtx.atmosphere", float, nvdfProfileDepthKm, 1.0f,
+               "Nubis3: depth into the cloud body (km) over which the "
+               "dimensional profile ramps 0 -> 1 [0.1..3]. Small = dense "
+               "hard-shelled clouds; large = soft translucent-edged bodies. "
+               "Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, nvdfCoverageOffsetKm, 1.5f,
+               "Nubis3: km of iso-surface (level-set) shift per unit of "
+               "coverage delta from the baked nominal [0..4]. Higher = "
+               "coverage changes grow/shrink clouds more aggressively "
+               "(bodies merge sooner at high coverage). Applies live with "
+               "zero rebakes.");
+    RTX_OPTION("rtx.atmosphere", float, nubis3ErosionStrength, 1.0f,
+               "Nubis3: scale on the wispy/billowy noise composite that "
+               "erodes the dimensional profile [0..2]. 0 = smooth un-eroded "
+               "bodies (pure SDF blobs); 1 = paper-faithful erosion; higher "
+               "= ragged heavily-carved clouds. Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, nubis3SharpenStrength, 1.0f,
+               "Nubis3: blend toward the paper's pow() density sharpen "
+               "[0..1], which lifts low densities to bring out definition "
+               "in wisps and edges. 0 = off (raw erosion output). Applies "
+               "live.");
+    RTX_OPTION("rtx.atmosphere", float, nvdfBodyErosionStrength, 0.6f,
+               "Nubis3: strength of the 3D noise carve applied to the cloud "
+               "BODIES in the NVDF occupancy bake [0..1.5]. The carve shifts "
+               "the placement waterline per voxel, baking concavity "
+               "(overhangs, notches, lumps) into the otherwise-convex column "
+               "bodies — the anti-blobby body lever. 0 = smooth convex "
+               "bodies. Changing it re-bakes the SDF (amortized, ~6 frames).");
+    RTX_OPTION("rtx.atmosphere", float, nubis3HFDetailStrength, 1.0f,
+               "Nubis3: near-camera high-frequency detail mix (Nubis Cubed "
+               "p.125 'inHFDetails') [0..3]. Blends twice-folded "
+               "high-frequency noise into the erosion composite close to the "
+               "camera for fly-through crispness. 1 = the paper's 10% max "
+               "mix at the nearest range; 0 = off. Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, nubis3EdgeErosion, 1.0f,
+               "Nubis3: edge wisp cut [0..3]. Extra erosion shaped by the "
+               "wispy noise channel, concentrated at the silhouette and "
+               "fading by mid-shell — cuts trailing wisp shapes out of cloud "
+               "edges while billowy cores keep rounded cauliflower edges. "
+               "0 = uniform erosion only. Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, nubis3InteriorTexture, 0.7f,
+               "Nubis3: interior density texture strength [0..1]. Modulates "
+               "the density INSIDE the body by the raw detail noise (the "
+               "stand-in for Nubis3's authored per-voxel Density Scale NVDF "
+               "and iw3xo's multiplicative self-gate), so lit cloud faces "
+               "show billow-scale light variation instead of saturating to "
+               "a flat white mass. 0 = flat interiors (old behavior). "
+               "Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, nvdfStepScale, 0.8f,
+               "Nubis3 Phase C: safety factor on the SDF empty-space skip in "
+               "the cloud march [0..0.95]. In empty air the march jumps "
+               "ahead by (min SDF tap) x this factor instead of stepping "
+               "uniformly — a large perf win at the horizon. 0 disables "
+               "(uniform legacy stepping). Lower it if silhouettes show "
+               "onion-shell banding.");
+    RTX_OPTION("rtx.atmosphere", float, nubis3AdaptiveStepKm, 0.025f,
+               "Nubis3: sqrt-adaptive march step FLOOR in km [0..0.2] (Nubis "
+               "Cubed p.172/174 hybrid stepping). When nonzero, the view "
+               "march steps max(SDF x SDF Step Scale, cloudViewStepKm x "
+               "sqrt(dist / 12 km)) clamped no smaller than this — fine "
+               "steps near the camera resolve the sub-100 m detail the "
+               "fixed lattice could never sample, growing with distance as "
+               "the pixel footprint grows. 0 = the legacy fixed-length "
+               "lattice march. Applies live.");
     // Adaptive march sampling (fork — 2026-06-12). A fixed step COUNT
     // across a slab span that varies ~4 km (zenith) to 50+ km (horizon
     // through the curved shell) undersamples horizon rays — ~1.6 km steps
@@ -1961,6 +2043,12 @@ namespace dxvk {
                "internal (DLSS-input) resolution [0.25..1]. 0.5 = quarter the "
                "pixels (~4x cheaper cloud march); 1.0 = native (legacy, "
                "bit-exact). Applies on the next frame; live-tunable.");
+    RTX_OPTION("rtx.atmosphere", float, cloudHistoryWeight, 0.92f,
+               "EMA history weight of the cloud temporal smoother [0..0.98]. "
+               "Higher = smoother/softer clouds that respond slowly; lower = "
+               "crisper, faster-responding clouds with more visible per-frame "
+               "jitter. 0 disables the temporal blend entirely (raw jittered "
+               "march). 0.92 = the previous hardcoded value. Applies live.");
 
     // Secondary-ray cloud LUT (fork — 2026-06-10, perf). Every indirect /
     // PSR / reflection ray that reaches sky-miss would otherwise run a full

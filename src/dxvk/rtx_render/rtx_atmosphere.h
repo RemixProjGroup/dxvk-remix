@@ -117,6 +117,17 @@ public:
   const Resources::Resource& getCloudDAmbient() const { return m_cloudDAmbient; }
 
   /**
+   * \brief Get the published cloud NVDF SDF (fork — Nubis3 conversion Phase A).
+   *
+   * 256x64x256 R16F tile-periodic signed distance field of the cloud BODY
+   * (placement map + column model at the baked nominal coverage), in raw km,
+   * negative inside. Double-buffered; this returns the FRONT buffer — the last
+   * fully-published bake. Consumed by the enum 879 debug slice view (Phase A)
+   * and, from Phase B, by the Nubis3 density sampler + sphere-traced stepping.
+   */
+  const Resources::Resource& getCloudNvdfSdf() const { return m_cloudNvdfSdf[m_cloudNvdfSdfFront]; }
+
+  /**
    * \brief Get the cloud render RT (Nubis Cubed 2023, fork — 2026-05-12, C4).
    *
    * Screen-space RGBA16F at the downscale render extent containing per-pixel
@@ -310,6 +321,23 @@ private:
   bool needsCloudPlacementRebake() const;
   void cacheCloudPlacementBakeInputs();
   void dispatchCloudSkyTransmittanceLut(Rc<DxvkContext> ctx);  // Fork: per-frame
+  // Cloud NVDF SDF bake chain (fork — Nubis3 conversion Phase A):
+  // occupancy voxelize -> JFA seed init -> 9 jump passes -> signed resolve
+  // into the back SDF buffer, then publish-swap. Full synchronous chain at
+  // init (runCloudNvdfBakeFull); at runtime stepCloudNvdfBake advances the
+  // state machine a couple of JFA passes per frame so weather-drift re-bakes
+  // never spike a frame. Dirty gate mirrors the placement-map pattern.
+  void dispatchCloudNvdfOccupancy(Rc<DxvkContext> ctx);
+  void dispatchCloudNvdfJfaPass(Rc<DxvkContext> ctx, uint32_t mode, uint32_t jumpSizeVoxels,
+                                uint32_t srcIdx, uint32_t dstIdx);
+  void dispatchCloudNvdfResolve(Rc<DxvkContext> ctx, uint32_t seedsIdx);
+  void runCloudNvdfBakeFull(Rc<DxvkContext> ctx);
+  void stepCloudNvdfBake(Rc<DxvkContext> ctx);
+  bool needsCloudNvdfRebake() const;
+  void cacheCloudNvdfBakeInputs();
+  // Nubis3 wispy/billowy detail volume bake (fork — Nubis3 conversion
+  // Phase B). Fixed pattern: baked once at init, no live inputs.
+  void dispatchCloudDetailNoiseBake(Rc<DxvkContext> ctx);
   // Cloud voxel grid bakes (Nubis Cubed 2023, fork — 2026-05-12). Round-robin
   // every 8 frames. Driven from computeLuts based on the device frame ID.
   void dispatchCloudSunDensityGrid(Rc<DxvkContext> ctx);
@@ -346,9 +374,43 @@ private:
   // an 8x8x4 dispatch covering 256x256x32 voxels (~0.1-0.2 ms target).
   // Keep in lockstep with kGridX/Y/Z constants in
   // cloud_sun_density_grid.comp.slang / cloud_ambient_density_grid.comp.slang.
+  //
+  // AXIS FIX (fork — 2026-07-16, found in the GT7 cross-audit): the UVW
+  // mapping routes uvw.y = VERTICAL and uvw.z = world Z
+  // (cloudVoxelUVWToWorld), but the allocation had Y=256 / Z=32 — so the
+  // vertical axis burned 256 texels on a ~3 km slab (~12 m) while world-Z
+  // shadow texels were 375 m wide. Those fat Z-texels were the blocky
+  // "squares" cast into the deck (worst at sunset, both density models).
+  // Design intent (Nubis: 256x256x32 with 32 VERTICAL) restored: world
+  // X/Z get 256 (47 m at the 12 km tile), vertical gets 32 (~95 m).
   static constexpr uint32_t kCloudVoxelGridX = 256;
-  static constexpr uint32_t kCloudVoxelGridY = 256;
-  static constexpr uint32_t kCloudVoxelGridZ = 32;
+  static constexpr uint32_t kCloudVoxelGridY = 32;
+  static constexpr uint32_t kCloudVoxelGridZ = 256;
+
+  // Cloud NVDF (fork — Nubis3 conversion Phase A). 256x64x256 tile-periodic
+  // body grid: occupancy R8 (~4 MB), two R32_UINT JFA seed ping-pongs
+  // (~17 MB each), two R16F SDF buffers (~8 MB each, front/back publish
+  // pair) — ~54 MB total. Axis convention: texture y = VERTICAL (explicit —
+  // see cloud_nvdf.h; the D_sun grids' axis comments disagree with their own
+  // mapping, do not pattern-match them). ~47 m voxels at the 12 km / 3 km
+  // defaults. Keep in lockstep with CLOUD_NVDF_SIZE_XZ / CLOUD_NVDF_SIZE_Y
+  // in cloud_nvdf.h.
+  static constexpr uint32_t kCloudNvdfSizeXZ = 256;
+  static constexpr uint32_t kCloudNvdfSizeY  = 64;
+  // JFA jump schedule: standard halving from half the wrapped XZ extent,
+  // plus one extra 1-refinement pass (JFA+1).
+  static constexpr uint32_t kCloudNvdfJumpSchedule[] = { 128, 64, 32, 16, 8, 4, 2, 1, 1 };
+  static constexpr uint32_t kCloudNvdfJumpPassCount =
+      sizeof(kCloudNvdfJumpSchedule) / sizeof(kCloudNvdfJumpSchedule[0]);
+  // Runtime re-bake budget: JFA passes advanced per frame while a re-bake is
+  // in flight (~0.2-0.5 ms each; the full chain completes in ~5 frames).
+  static constexpr uint32_t kCloudNvdfJumpPassesPerFrame = 2;
+
+  // Nubis3 detail volume (fork — Nubis3 conversion Phase B). 128^3 RGBA8
+  // (~8 MB): R/G = low/high-frequency wispy, B/A = low/high-frequency
+  // billowy. Baked once at init. Keep in lockstep with kDetailVolumeSize in
+  // cloud_detail_noise_baker.comp.slang.
+  static constexpr uint32_t kCloudDetailNoise3DSize = 128;
 
   // Cloud height LUT (slide 3 lift — RDR2 SIGGRAPH 2019, fork — 2026-05-15).
   // 64 type slices x 128 altitude entries x R8 = 8 KB VRAM. One-shot bake at
@@ -386,6 +448,17 @@ private:
   // every 8 frames by dispatchCloudSunDensityGrid / dispatchCloudAmbientDensityGrid.
   Resources::Resource m_cloudDSun;
   Resources::Resource m_cloudDAmbient;
+  // Cloud NVDF bake chain resources (fork — Nubis3 conversion Phase A).
+  // Occupancy + JFA ping-pong are bake scratch; the SDF pair is the
+  // published product (front = last complete bake, back = in-flight bake;
+  // stepCloudNvdfBake swaps after the resolve pass so consumers never read
+  // a half-baked field).
+  Resources::Resource m_cloudNvdfOccupancy;
+  Resources::Resource m_cloudNvdfJfa[2];
+  Resources::Resource m_cloudNvdfSdf[2];
+  uint32_t            m_cloudNvdfSdfFront = 0;
+  // Nubis3 wispy/billowy detail volume (fork — Nubis3 conversion Phase B).
+  Resources::Resource m_cloudDetailNoise3D;
   // Cloud render RT (Nubis Cubed 2023, fork — 2026-05-12, C4). Screen-space
   // RGBA16F at downscale extent; produced each frame by dispatchCloudRender.
   // m_cloudRenderExtent tracks the current allocation so resize triggers a
@@ -506,6 +579,31 @@ private:
   // inputs, re-bake only on actual change.
   float    m_cachedPlacementCellSizeKm = 0.0f;
   float    m_cachedPlacementTileKm     = 0.0f;
+  // Cloud NVDF re-bake gate + state machine (fork — Nubis3 Phase A). Same
+  // snapshot pattern as the placement gate above. Deliberately NOT keys:
+  // live weather coverage (sample-time level-set offset — but see the
+  // quantized nominal below, which re-centers the bake when live coverage
+  // drifts > half a quantization step from it), wind / evolution / boil
+  // (sample-time translations of the erosion field), type / density / sun
+  // (never shape the body). cloudThickness quantizes to 0.25 km so the slow
+  // weather-drift blend can't rebake-storm.
+  struct CloudNvdfBakeKey {
+    float cellSizeKm       = 0.0f;
+    float tileKm           = 0.0f;
+    float columnFeather    = 0.0f;
+    float columnTopShape   = 0.0f;
+    float columnTopVar     = 0.0f;
+    float columnBaseVar    = 0.0f;
+    float nominalCoverage  = 0.0f;
+    float thicknessQ       = 0.0f;  // cloudThickness quantized to 0.25 km
+    float bodyErosion      = 0.0f;  // nvdfBodyErosionStrength (bake-time carve)
+  };
+  CloudNvdfBakeKey m_cachedNvdfKey = {};
+  // In-flight runtime re-bake: index into kCloudNvdfJumpSchedule of the next
+  // jump pass to run. Inactive when m_nvdfBakeActive is false. The full-chain
+  // init path never touches these.
+  bool     m_nvdfBakeActive = false;
+  uint32_t m_nvdfJumpIdx    = 0;
   bool m_initialized = false;
   bool m_lutsNeedRecompute = true;
 };

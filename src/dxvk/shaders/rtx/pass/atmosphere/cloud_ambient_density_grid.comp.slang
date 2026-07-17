@@ -31,6 +31,9 @@
 // at offset 0). Driven from RtxAtmosphere::computeLuts.
 
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
+// Nubis3 density model + the bake integrals themselves (moved there,
+// fork — Nubis3 conversion Phase B).
+#include "rtx/pass/atmosphere/cloud_nubis3_common.slangh"
 
 layout(binding = 0)
 ConstantBuffer<AtmosphereArgs> atmosphereArgs;
@@ -54,10 +57,20 @@ SamplerState cloudNoise3DSamplerState;
 layout(binding = 4)
 Texture2D<float4> cloudPlacementMapSrv;
 
+// Nubis3 NVDF SDF + detail volume (fork — Nubis3 conversion Phase B). Same
+// model-branch rationale as cloud_sun_density_grid.comp.slang.
+layout(binding = 5)
+Texture3D<float> cloudNvdfSdfSrv;
+
+layout(binding = 6)
+Texture3D<float4> cloudDetailNoiseSrv;
+
 // Grid dimensions kept in lockstep with RtxAtmosphere::kCloudVoxelGridX/Y/Z.
+// Axis fix 2026-07-16: uvw.y = VERTICAL gets the 32-texel axis, uvw.z =
+// world Z gets 256 (see cloud_sun_density_grid.comp.slang).
 static const uint kGridX = 256u;
-static const uint kGridY = 256u;
-static const uint kGridZ = 32u;
+static const uint kGridY = 32u;
+static const uint kGridZ = 256u;
 
 [shader("compute")]
 [numthreads(8, 8, 4)]
@@ -76,7 +89,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
   // Zenith integral up to the slab top.
   float opticalDepth = sampleCloudAmbientOpticalDepthAtWorld(
       worldPosYUp, args, cloudNoise3DSrv, cloudNoise3DSamplerState,
-      cloudPlacementMapSrv);
+      cloudPlacementMapSrv, cloudNvdfSdfSrv, cloudDetailNoiseSrv);
 
   cloudDAmbientGridOutput[dispatchId] = opticalDepth;
 }

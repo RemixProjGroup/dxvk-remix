@@ -60,6 +60,13 @@
 #define CLOUD_MARCH_LIGHTNING 0
 #endif
 
+// Nubis3 NVDF/SDF density model (fork — Nubis3 conversion Phase B). Brings in
+// sampleCloudDensityNubis3 + valueErosion; the march loops below branch on
+// args.nubis3ModelEnable between it and the legacy noise-threshold sampler.
+// (Includes atmosphere_common.slangh itself — a no-op here since consumers
+// include that first; pragma-once guarded.)
+#include "rtx/pass/atmosphere/cloud_nubis3_common.slangh"
+
 // =============================================================================
 // Moon-shadow optical-depth tap.
 //
@@ -83,10 +90,20 @@ float sampleCloudSunOpticalDepth_local(vec3 cloudHitPos, vec3 sunDir,
 
   for (int i = 0; i < kTaps; ++i) {
     vec3 p = cloudHitPos + sunDir * (kStepKm * float(i + 1));
-    float d = sampleCloudDensityTextured(p, computeCloudHeightFraction(p, args),
-                                          typeLocal, coverageLocal, args,
-                                          AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler,
-                                          AtmosphereCloudPlacementMap);
+    float hf = computeCloudHeightFraction(p, args);
+    // Density-model branch (fork — Nubis3 conversion Phase B): the moon
+    // shadow must march the same field the view renders or backlit deck
+    // edges self-shadow against phantom legacy clouds.
+    float d;
+    if (args.nubis3ModelEnable != 0u) {
+      d = sampleCloudDensityNubis3(p, hf, typeLocal, coverageLocal, 1.0f, args,
+                                   AtmosphereCloudNvdfSdf, AtmosphereCloudDetailNoise3D,
+                                   AtmosphereCloudNoise3DSampler);
+    } else {
+      d = sampleCloudDensityTextured(p, hf, typeLocal, coverageLocal, args,
+                                     AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler,
+                                     AtmosphereCloudPlacementMap);
+    }
     opticalDepth += d;
   }
 
@@ -121,6 +138,249 @@ float sampleCloudSunOpticalDepth_localSlab(vec3 cloudHitPos, vec3 sunDir,
   }
 
   return opticalDepth * kStepKm;
+}
+
+// ===========================================================================
+// Nubis Cubed 2023 lighting evaluator
+// (fork — 2026-05-12, C4; MOVED here from atmosphere_common.slangh and split
+// into core + legacy wrapper for the Nubis3 conversion, Phase B. This header
+// is compiled only by cloud_render + cloud_secondary_lut, so lighting tweaks
+// no longer recompile the path tracer.)
+//
+// Per-sample lighting equations from the Nubis Cubed 2023 paper (pages 137
+// and 142). evalNubisCubedSampleCore takes the modeling inputs
+// (dim_profile / cloud_sdf / downTau) as PARAMETERS: the Nubis3 path feeds
+// the real NVDF profile + live SDF, the legacy wrapper below computes the
+// original proxies bit-for-bit.
+//
+// Spec: docs/superpowers/specs/2026-05-12-cloud-lighting-nubis-cubed-design.md
+// ===========================================================================
+
+// Procedural dim_profile proxy (LEGACY model only). Decima authors a
+// per-cloud dim_profile in Houdini as a soft NVDF mask that's high in the
+// cumulus interior and low near edges. We approximate with the existing
+// cumulus vertical density profile, which has the same "high interior, low
+// edges" shape along the slab vertical axis.
+float sampleDimProfile(vec3 samplePos, float heightFraction, AtmosphereArgs args) {
+  return saturate(cloudTypeProfile(heightFraction, args.cloudTypeMean));
+}
+
+// Procedural cloud_sdf_distance proxy (LEGACY model only). The Section-2
+// sigma_ms remap only uses the SDF in [-cloudMsSdfDepth, 0] as a soft
+// modulator, so a cheap proxy sufficed pre-NVDF. Returns negative inside
+// cloud (in meters), clamped to [-cloudMsSdfDepth*4, 0]. Combines vertical
+// distance to the slab boundary with a density-weighted depth proxy.
+float sampleCloudSdf(vec3 samplePos, float heightFraction, float density,
+                     AtmosphereArgs args) {
+  float halfThicknessM = args.cloudThickness * 500.0f;
+  float distToSlabCenterM = abs(heightFraction - 0.5f) * args.cloudThickness * 1000.0f;
+  float slabDistM = halfThicknessM - distToSlabCenterM;  // positive inside slab
+
+  float densityNorm = saturate(density / max(args.cloudDensity, 1e-3f));
+  float densityDepthM = densityNorm * args.cloudMsSdfDepth;
+
+  float combinedM = -(slabDistM + densityDepthM) * 0.5f;
+  return clamp(combinedM, -args.cloudMsSdfDepth * 4.0f, 0.0f);
+}
+
+// Henyey-Greenstein phase function — Nubis Cubed flavor (max(denom, 1e-5)
+// guard chosen to match the paper's evaluator). The hgPhase() helper in
+// atmosphere_common.slangh is a slightly different formulation (it clamps g
+// rather than the denominator) — keep both so non-Nubis call sites are
+// unperturbed.
+float hgPhaseNubis(float cosTheta, float g) {
+  float g2 = g * g;
+  float denom = 1.0f + g2 - 2.0f * g * cosTheta;
+  return (1.0f - g2) / (4.0f * kPi * pow(max(denom, 1e-5f), 1.5f));
+}
+
+// Per-sample Nubis Cubed lighting result. `direct` is the sun in-scatter
+// radiance per unit density × stepLen; caller multiplies during integration.
+// `ambient` is the page-142 ambient term, same scaling convention.
+struct NubisCubedLighting {
+  vec3 direct;
+  vec3 ambient;
+};
+
+// Nubis Cubed 2023 per-sample lighting evaluator CORE (pages 137, 142).
+// Modeling inputs are parameters:
+//   dim_profile — [0,1] outside->inside gradient. Legacy: the vertical-
+//     profile proxy; Nubis3: the real NVDF dimensional profile.
+//   cloud_sdf   — signed distance in METERS, negative inside, expected
+//     within [-cloudMsSdfDepth*4, 0]. Legacy: the slab/density proxy;
+//     Nubis3: the live (coverage-offset) NVDF distance.
+//   downTau     — macroscopic optical depth of the water OVERHEAD (km·sigma
+//     units), for the underside light field. Legacy: height-LUT down-integral
+//     × columnSpan × thickness × density; Nubis3: D_ambient grid tap × sigma.
+//
+// `dSunOverride` (fork — 2026-06-21, layer-2 echo-deck rework): >= 0 is used
+// verbatim for the sun-direction optical depth (the deck passes an analytic
+// proxy because the D_sun grid covers layer 1 only); negative samples the
+// D_sun voxel grid — the production path.
+NubisCubedLighting evalNubisCubedSampleCore(
+    vec3 samplePos, float density,
+    float dim_profile, float cloud_sdf, float downTau,
+    float detailSigned,
+    vec3 viewDir, vec3 sunDir,
+    vec3 sunRadiance, vec3 skyRadianceWarm, vec3 skyRadianceCool,
+    vec3 skyRadianceZenith,
+    AtmosphereArgs args, bool isZUp, float dSunOverride) {
+
+  float D_sun    = (dSunOverride >= 0.0f) ? dSunOverride
+                                          : sampleDSun(samplePos, args, isZUp);
+  float cosTheta = dot(viewDir, sunDir);
+
+  // === Direct scattering (paper p. 29 + p. 137) ===
+  float sigma = args.cloudDensity;  // shared extinction coefficient
+  float T_primary = exp(-sigma * D_sun);
+
+  // sigma_ms remap (page 137 magic constants — exposed as RTX_OPTIONs).
+  // sdfFrac: 0 when deep inside cloud, 1 at cloud surface.
+  float sdfFrac = saturate((cloud_sdf + args.cloudMsSdfDepth) / max(args.cloudMsSdfDepth, 1e-4f));
+  float sigma_ms_inner = lerp(args.cloudMsSigmaDeep, args.cloudMsSigmaShallow, sdfFrac);
+  float sunFrac = saturate(cosTheta / max(args.cloudMsSunDotMax, 1e-4f));
+  float sigma_ms = lerp(args.cloudMsSigmaShallow, sigma_ms_inner, sunFrac) * args.cloudMsScale;
+
+  // === Billow micro-AO + powder (fork — 2026-07-14, detail-shading pass) ===
+  //
+  // Micro-AO: every other input here is km-scale smooth, so billows grown by
+  // the erosion field were lit identically to the smooth cloud around them.
+  // detailSigned is that same erosion field (zero-mean, positive = surface
+  // grew outward here), reused as a local relief proxy: grown knuckles catch
+  // more sky (brighten), carved crevices see less of it (darken). Gated by
+  // sdfFrac so deep-core samples keep clean smooth shading. Applied to the
+  // multi-scatter body lobe and the ambient terms; the primary forward lobe A
+  // is exempt so backlit silver linings keep their pure Beer-Lambert read.
+  float microAo = 1.0f;
+  if (args.cloudMicroAoStrength > 0.0f) {
+    const float kMicroAoGain = 1.5f;  // detailSigned excursion (~±0.3 typical) -> shading units
+    microAo = clamp(1.0f + kMicroAoGain * args.cloudMicroAoStrength * sdfFrac * detailSigned,
+                    0.15f, 1.25f);
+  }
+
+  // Powder (Schneider 2015): a low-density region viewed with the sun at the
+  // viewer's back has few scatterers to redirect light back toward the eye,
+  // so wisps and crevice walls go DARK against the bright dense body behind
+  // them. 1 - exp(-k*density) saturates to ~1 inside the body, so the
+  // darkening self-localizes to edges / crevices. Faded by view geometry so
+  // forward-scatter silver linings are untouched.
+  float powder = 1.0f;
+  if (args.cloudPowderStrength > 0.0f) {
+    const float kPowderSharpness = 4.0f;
+    float powderTerm = 1.0f - exp(-kPowderSharpness * density);
+    float litFaceFacing = 1.0f - smoothstep(-0.3f, 0.5f, cosTheta);
+    powder = lerp(1.0f, powderTerm,
+                  saturate(args.cloudPowderStrength) * litFaceFacing);
+  }
+
+  // Underside light field (fork — realistic rework 2026-06-19). The diffuse
+  // light reaching a point on the cloud's underside is the sky-dome light
+  // that filtered DOWN through the water above it — downTau (param) is that
+  // water's macroscopic optical depth. A Beer-Lambert term with a tunable
+  // diffusion-flavored sigma (cloudUndersideLightSigma — downwelling flux is
+  // multiply-scattered, so its effective extinction is far below the beam
+  // sigma) turns it into a light factor: dark under thick cores, bright under
+  // thin spots. The darkening strength fades as the sun nears the horizon so
+  // low-sun light can rake UNDER the deck and produce lit sunset bases;
+  // T_primary is exempt so backlit silver linings survive.
+  float skyDown = exp(-args.cloudUndersideLightSigma * downTau);
+  float sunElev = saturate(isZUp ? sunDir.z : sunDir.y);
+  const float kUndersideSunFadeElev = 0.35f;
+  float darkenStrength = saturate(args.cloudBottomDarkening)
+                       * smoothstep(0.0f, kUndersideSunFadeElev, sunElev);
+  float verticalLight = mix(1.0f, skyDown, darkenStrength);
+
+  float M = dim_profile * exp(-sigma_ms * D_sun) * verticalLight;
+  float HG1 = hgPhaseNubis(cosTheta, args.cloudPhaseG1);
+  float HG2 = hgPhaseNubis(cosTheta, args.cloudPhaseG2);
+
+  // Energy-conserving dual-lobe blend (fork — 2026-06-19). Convex blend of
+  // the single-scatter forward lobe A (silver lining) and the multi-scatter
+  // body fill B, so the in-scatter phase integrates to exactly 1 and the
+  // silver lining can't out-brighten the physical sky LUT it composites
+  // against. cloudMsLobeWeight = w sets the forward/body balance;
+  // cloudEnergyConserve = s lerps from the legacy additive sum (s=0,
+  // byte-identical old look for an in-game A/B) to the conserving blend.
+  float A = T_primary * HG1;
+  // Micro-AO on the multi-scatter body lobe only: the body fill is the
+  // diffuse-ish term where local relief shading reads as detail; the forward
+  // lobe A stays pure so silver linings are unaffected.
+  float B = M * HG2 * microAo;
+  float msLobeS = saturate(args.cloudEnergyConserve);
+  float msLobeW = saturate(args.cloudMsLobeWeight);
+  float L_direct = (A * (1.0f - msLobeS * msLobeW)
+                  + B * (1.0f - msLobeS * (1.0f - msLobeW)))
+                 * powder;
+
+  // === Ambient scattering (paper p. 142) ===
+  // Per-sample warm/cool ambient blend (fork — 2026-05-21). Warm color is
+  // sky-view LUT sampled toward the sun; cool is the anti-sun horizon. The
+  // blend signal shapes D_sun as 1 - exp(-D_sun * reach); the effect ramps
+  // off above cloudSunsetAmbientRampHighSun so midday clouds are unchanged.
+  float coolReachCurve = 1.0f - exp(-D_sun * args.cloudSunsetAmbientReachInvKm);
+  float sunsetFactor   = 1.0f - smoothstep(0.0f, args.cloudSunsetAmbientRampHighSun, sunDir.y);
+  float coolMix        = saturate(coolReachCurve * sunsetFactor * args.cloudSunsetAmbientStrength);
+  vec3  skyRadiance    = lerp(skyRadianceWarm, skyRadianceCool, coolMix);
+
+  // Ambient occlusion estimate: the analytic verticalLight REPLACES the
+  // page-142 exp(-D_ambient) tap for the ambient shape (multiplying both
+  // would double-count the same occlusion — see the 2026-06-19 rework note).
+  float ambient_shape = pow(1.0f - dim_profile, 0.5f);
+
+  // Ambient sun-shadowing (fork — 2026-07-14, dramatic-shading pass). The
+  // sky-ambient fill dies off with the same optical depth that extinguishes
+  // the direct lobes (Beer on D_sun with an internal diffusion-flavored
+  // sigma), lerped in by the O(1) strength knob. Sunlit faces sit at
+  // D_sun ~ 0 and keep full ambient; shaded cores plunge — the CoD4-style
+  // contrast axis. The dome fill below is exempt by design (open-sky light
+  // arriving from below/around the cloud, not through it).
+  float ambientShadow = 1.0f;
+  if (args.cloudAmbientShadowStrength > 0.0f) {
+    const float kAmbientShadowSigma = 0.6f;  // per km of D_sun optical depth
+    ambientShadow = mix(1.0f, exp(-kAmbientShadowSigma * D_sun),
+                        saturate(args.cloudAmbientShadowStrength));
+  }
+
+  // Top-down ambient: skylight that filtered DOWN through the overlying
+  // cloud, colored by the warm/cool blend and attenuated by verticalLight.
+  vec3 topAmbient = ambient_shape * verticalLight * skyRadiance * ambientShadow;
+
+  // Sky-dome fill (fork — 2026-06-19, clouds-reflect-sky coupling). The
+  // underside is ALSO lit by the open sky around and below the cloud, which
+  // the water OVERHEAD does not block — deliberately bypasses verticalLight.
+  // Reads the zenith sky color: bright daytime dome lifts undersides, dim
+  // sunset zenith fades it naturally. cloudSkyAmbientFill scales; 0 = legacy.
+  vec3 domeFill = ambient_shape * args.cloudSkyAmbientFill * skyRadianceZenith;
+
+  NubisCubedLighting result;
+  result.direct  = L_direct * sunRadiance;
+  // Micro-AO on the ambient: sky light is the dominant fill on non-sun-facing
+  // billows, so this is where the knuckle/crevice relief carries in most views.
+  result.ambient = (topAmbient + domeFill) * microAo;
+  return result;
+}
+
+// LEGACY wrapper — the pre-Nubis3 evaluator signature and behavior,
+// bit-for-bit: computes the procedural dim_profile / cloud_sdf proxies and
+// the height-LUT/columnSpan underside optical depth, then calls the core.
+// `columnSpan` is the sample's column vertical extent as a slab fraction
+// (from the legacy density sampler's out param; 1.0 in legacy no-column mode).
+NubisCubedLighting evalNubisCubedSample(
+    vec3 samplePos, float heightFraction, float density,
+    float columnSpan, float detailSigned,
+    vec3 viewDir, vec3 sunDir,
+    vec3 sunRadiance, vec3 skyRadianceWarm, vec3 skyRadianceCool,
+    vec3 skyRadianceZenith,
+    AtmosphereArgs args, bool isZUp, float dSunOverride) {
+  float dim_profile = sampleDimProfile(samplePos, heightFraction, args);
+  float cloud_sdf   = sampleCloudSdf(samplePos, heightFraction, density, args);
+  float downInteg = cloudHeightProfileDownIntegral(heightFraction, args.cloudTypeMean, args);
+  float downTau = downInteg * saturate(columnSpan)
+                * args.cloudThickness * args.cloudDensity;
+  return evalNubisCubedSampleCore(samplePos, density, dim_profile, cloud_sdf, downTau,
+                                  detailSigned, viewDir, sunDir, sunRadiance,
+                                  skyRadianceWarm, skyRadianceCool, skyRadianceZenith,
+                                  args, isZUp, dSunOverride);
 }
 
 // =============================================================================
@@ -417,8 +677,220 @@ vec3 evalLightningFlash(vec3 samplePos, AtmosphereArgs args) {
 #endif
 
 // =============================================================================
+// Per-sample shading + Beer-Lambert accumulation shared by the fixed-step and
+// √-adaptive march loops of marchCloudSlab (fork — detail round 2026-07-16).
+// Verbatim extraction of the original loop body: evaluates the density model
+// at camera distance tSampleKm along viewDirYUp, shades the sample (Nubis
+// Cubed lighting + moon + optional lightning), and folds a Beer-Lambert
+// segment of length segLenKm into accumColor / viewTransmittance. rayFrac
+// positions the sample for the caller's hoisted entry/exit control-field
+// lerp. Returns false when the sample was empty (density < 0.001 — nothing
+// accumulated); sdfStepKmOut is the sampler's conservative empty-space radius
+// in km (0 when the legacy sampler ran — it reports no SDF), valid either
+// way, so callers can sphere-trace past provably-empty air.
+bool integrateCloudSample(float tSampleKm,
+                          float segLenKm,
+                          float rayFrac,
+                          vec3  viewDirYUp,
+                          float slabAltitudeKm,
+                          float slabThicknessKm,
+                          float slabTypeMean,
+                          float slabCoverageMean,
+                          float slabDensityScale,
+                          float typeNoiseEntry,
+                          float typeNoiseExit,
+                          float coverageNoiseEntry,
+                          float coverageNoiseExit,
+                          CloudShadeContext ctx,
+                          AtmosphereArgs args,
+                          inout vec3  accumColor,
+                          inout float viewTransmittance,
+                          out float sdfStepKmOut) {
+  sdfStepKmOut = 0.0f;
+
+  // Wrenninge phase-octave constants (referenced by the moon block below).
+  const float kMsA = 0.5f;
+  const float kMsC = 0.5f;
+
+  // World-anchored sample position (Y-up km). The slab intersection in the
+  // caller runs with ray origin = vec3(0) and planet center = (0, -cloudR, 0),
+  // so tSampleKm is measured along the view ray from the camera. Adding
+  // cameraWorldPosYUpKm anchors the sample's WORLD position to the player's
+  // km-scale Y-up coordinates — the noise/coverage/type fields then translate
+  // with the world rather than with the camera, giving the parallax depth cue
+  // that was missing (clouds were reading as cardboard cutouts moving rigidly
+  // with the player). Height-fraction math and slab geometry stay correct
+  // because cameraWorldPosYUpKm magnitudes are small at FNV scale (~tens
+  // of meters Y, sub-km XZ at sceneScale=2) compared to cloudThickness
+  // (~3 km) and planet radius (~952 km curvature-adjusted), so the
+  // length()-based altitude reading shifts negligibly. Voxel grids
+  // (D_sun / D_ambient) are world-anchored on the bake side, so this also
+  // brings the runtime lookup into alignment with the bake's convention.
+  vec3 samplePos = args.cameraWorldPosYUpKm + viewDirYUp * tSampleKm;
+
+  // Spatial coverage / type fields: per-sample lerp between the slab entry
+  // and exit evaluations hoisted out of the march loop by the caller.
+  // Variation amplitude (spread) comes from args — kept shared across layers
+  // for v1 so layer 2 doesn't need its own spread knobs. Mean values are
+  // per-slab so layer 2 can pick a different baseline (cirrus typeMean
+  // ~= 0.05 vs cumulus 0.5).
+  float typeNoise     = mix(typeNoiseEntry,     typeNoiseExit,     rayFrac);
+  float coverageNoise = mix(coverageNoiseEntry, coverageNoiseExit, rayFrac);
+  float typeLocal     = saturate(slabTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
+  float coverageLocal = saturate(slabCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
+
+  float hf = computeCloudHeightFraction(samplePos, args, slabAltitudeKm, slabThicknessKm);
+  // shapeHf (fork — 2026-06-11, column-shaping rework): per-cloud height
+  // fraction from the density sampler — re-normalized to this column's own
+  // [base, top] when column shaping is on, identical to hf when off.
+  // columnSpan (rev 2): the column's vertical extent as a slab fraction,
+  // for the per-column underside-brightness modulation in the lighting.
+  float shapeHf;
+  float columnSpan;
+  float detailSigned;
+  float density;
+  // Nubis3 model outputs (fork — Nubis3 conversion Phase B): the real NVDF
+  // dimensional profile and the LIVE (coverage-offset) signed distance.
+  // tSampleKm doubles as the camera distance for the near-camera HF detail
+  // blend (the slab intersection runs with ray origin = the camera).
+  float nubisProfile   = 0.0f;
+  float nubisSdfKm     = 0.0f;
+  if (args.nubis3ModelEnable != 0u) {
+    density = sampleCloudDensityNubis3(samplePos, hf, typeLocal, coverageLocal,
+                                       slabDensityScale, tSampleKm, args,
+                                       AtmosphereCloudNvdfSdf, AtmosphereCloudDetailNoise3D,
+                                       AtmosphereCloudNoise3DSampler,
+                                       nubisProfile, detailSigned, nubisSdfKm,
+                                       sdfStepKmOut);
+    shapeHf    = hf;
+    columnSpan = 1.0f;
+  } else {
+    density = sampleCloudDensityTextured(samplePos, hf, typeLocal, coverageLocal,
+                                         slabAltitudeKm, slabThicknessKm, slabDensityScale,
+                                         args, AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler,
+                                         AtmosphereCloudPlacementMap, shapeHf, columnSpan,
+                                         detailSigned);
+  }
+  if (density < 0.001f) {
+    return false;
+  }
+
+  // Nubis Cubed lighting at this sample. samplePos is already Y-up, so
+  // isZUp = false for the D_sun / D_ambient lookups.
+  //
+  // Nubis3 path: the evaluator core gets the REAL modeling inputs — the
+  // NVDF dimensional profile (replacing the vertical-profile proxy), the
+  // live SDF in meters (replacing the slab/density proxy that fed the
+  // sigma_ms remap + micro-AO gate), and a D_ambient grid tap × sigma as
+  // the water-overhead optical depth for the underside light field
+  // (replacing the height-LUT down-integral × columnSpan chain).
+  //
+  // Legacy path: the wrapper reproduces the old proxies bit-for-bit,
+  // keyed on shapeHf (per-cloud height) so the dim profile and bottom
+  // darkening track each cloud's own base/top.
+  //
+  // NOTE: the D_sun / D_ambient voxel grids are baked over the primary
+  // (layer 1) slab only — layer 2 samples will read whichever residual
+  // density the bake covered. For cirrus this is acceptable; the grids
+  // contribute attenuation toward zenith and sun direction at most, and
+  // cirrus is too thin to need precomputed shadow data of its own.
+  NubisCubedLighting lighting;
+  if (args.nubis3ModelEnable != 0u) {
+    float cloudSdfM = clamp(nubisSdfKm * 1000.0f, -args.cloudMsSdfDepth * 4.0f, 0.0f);
+    float downTau   = sampleDAmbient(samplePos, args, /*isZUp=*/false) * args.cloudDensity;
+    lighting = evalNubisCubedSampleCore(
+        samplePos, density, nubisProfile, cloudSdfM, downTau, detailSigned,
+        viewDirYUp, ctx.sunDirYUp, ctx.sunRadiance,
+        ctx.skyRadianceWarm, ctx.skyRadianceCool, ctx.skyRadianceZenith,
+        args, /*isZUp=*/false, /*dSunOverride=*/-1.0f);
+  } else {
+    lighting = evalNubisCubedSample(
+        samplePos, shapeHf, density, columnSpan, detailSigned,
+        viewDirYUp, ctx.sunDirYUp, ctx.sunRadiance,
+        ctx.skyRadianceWarm, ctx.skyRadianceCool, ctx.skyRadianceZenith,
+        args, /*isZUp=*/false, /*dSunOverride=*/-1.0f);
+  }
+
+  // ===== Per-sample moon direct light =====
+  // Same Beer-Lambert single-octave moon shadow march as before. The if-gate
+  // automatically skips the entire block when combinedMoonDiffuseCoeff +
+  // combinedMoonPhaseAmt are zero — which is exactly how the caller suppresses
+  // the moon path for layer 2 (cirrus) without an extra flag parameter.
+  const float kMoonShadowSkipDensity = 0.05f;
+  vec3 moonDirectLight = vec3(0.0f);
+  if (any((ctx.combinedMoonDiffuseCoeff + ctx.combinedMoonPhaseAmt) > vec3(0.001f))) {
+    float moonOpticalDepth = 0.0f;
+    if (density >= kMoonShadowSkipDensity) {
+      moonOpticalDepth = sampleCloudSunOpticalDepth_local(
+          samplePos, ctx.combinedMoonDir, typeLocal, coverageLocal, args);
+    }
+    float moonShadow = exp(-moonOpticalDepth * ctx.moonBaseSigma);
+    float moonCosTheta = dot(viewDirYUp, ctx.combinedMoonDir);
+    float msMoonAniso  = 0.0f;
+    float octEnergyM   = 1.0f;
+    float octPhaseGM   = args.moonCloudAnisotropy;
+    for (uint oct = 0u; oct < ctx.msOctaveCount; ++oct) {
+      msMoonAniso += octEnergyM * hgPhase(moonCosTheta, octPhaseGM);
+      octEnergyM  *= kMsA;
+      octPhaseGM  *= kMsC;
+    }
+    moonDirectLight = (ctx.combinedMoonDiffuseCoeff
+                     + ctx.combinedMoonPhaseAmt * msMoonAniso) * moonShadow;
+  }
+
+  // Composite: cloudColor multiplies all surface-scatter terms; nightLight
+  // is added uncolored, identical to the legacy single-layer march.
+  //
+  // Thin-sample ambient fade (fork — 2026-06-13). The coverage gate leaves a
+  // soft sub-threshold skirt around every silhouette; those thin samples are
+  // ambient-dominated, and the ambient is sampled at the horizon (a dirty
+  // grey-brown), so the skirt reads as a discolored haze halo against clear
+  // sky. Weight the ambient by the sample's own (gated) density so the
+  // faintest edge samples fall toward transparent instead of horizon-tinted.
+  // Direct / moon / night terms are untouched, so backlit edges keep their glow.
+  // Driven live by cloudEdgeAmbientFade; 0 disables the fade (full ambient).
+  float ambientThinFade = args.cloudEdgeAmbientFade > 1e-5f
+                        ? smoothstep(0.0f, args.cloudEdgeAmbientFade, density)
+                        : 1.0f;
+  vec3 sampleColor = args.cloudColor
+                   * (lighting.direct + lighting.ambient * ambientThinFade + moonDirectLight)
+                   + ctx.nightLight;
+
+#if CLOUD_MARCH_LIGHTNING
+  // Lightning flash glow (fork — 2026-07-14): view pass only, inert unless a
+  // strike envelope is live this frame.
+  if (args.lightningFlashIntensity > 0.0f) {
+    sampleColor += evalLightningFlash(samplePos, args);
+  }
+#endif
+
+  // Beer-Lambert step accumulation.
+  float effectiveDensity = density * args.cloudDensity;
+  float stepTransmittance = exp(-effectiveDensity * segLenKm);
+  vec3 stepRadiance = sampleColor * (1.0f - stepTransmittance);
+
+  // Aerial perspective split into two independent effects so cloud
+  // appearance close to camera can be tuned separately from horizon
+  // wall prevention:
+  //   - aerialT_haze: dims cloud RADIANCE with distance (visual softness)
+  //   - aerialT_fade: softens cloud EXTINCTION accumulation with distance
+  //                   so horizon-grazing rays don't pile up into a wall
+  // At default 0.05/0.05 both effects are mild; setting either to 0
+  // disables that half of the aerial perspective independently.
+  // tSampleKm is true camera distance in EVERY consumer of this helper (all
+  // keep the camera-at-origin convention), so haze/fade behave identically
+  // across passes.
+  float aerialT_haze = exp(-args.cloudAerialHazePerKm * tSampleKm);
+  float aerialT_fade = exp(-args.cloudAerialFadePerKm * tSampleKm);
+  accumColor += stepRadiance * viewTransmittance * aerialT_haze;
+  viewTransmittance *= mix(1.0f, stepTransmittance, aerialT_fade);
+  return true;
+}
+
+// =============================================================================
 void marchCloudSlab(vec3   viewDirYUp,
                     float  pixelJitter,
+                    float  pixelJitterStatic,
                     float  slabAltitudeKm,
                     float  slabThicknessKm,
                     float  slabTypeMean,
@@ -474,10 +946,6 @@ void marchCloudSlab(vec3   viewDirYUp,
 
   float stepLen = (tExit - tEntry) / float(effSampleCount);
 
-  // Wrenninge phase-octave constants (also referenced by the moon block below).
-  const float kMsA = 0.5f;
-  const float kMsC = 0.5f;
-
   // Coverage / type control fields hoisted out of the march loop (fork —
   // 2026-06-10, perf). The fields vary at ~300 km wavelength
   // (cloudCoverage/TypeNoiseScale ~ 0.0033 cycles/km) while a slab ray
@@ -497,149 +965,110 @@ void marchCloudSlab(vec3   viewDirYUp,
   float coverageNoiseEntry = cloudControlField2D(entryXZ * args.cloudCoverageNoiseScale, 250.0f + slabNoiseSeedOffset);
   float coverageNoiseExit  = cloudControlField2D(exitXZ  * args.cloudCoverageNoiseScale, 250.0f + slabNoiseSeedOffset);
 
-  for (uint i = 0u; i < effSampleCount; ++i) {
-    if (viewTransmittance < 0.01f) break;  // early-exit (free perf win)
+  // Nubis3 √-adaptive hybrid march gate (fork — detail round 2026-07-16).
+  // Active only for the Nubis3 model, with a nonzero adaptive step floor
+  // (the knob is the off-switch) and a step-length target to key growth off.
+  bool adaptiveMarch = args.nubis3ModelEnable != 0u
+                    && args.nubis3AdaptiveStepKm > 1e-4f
+                    && args.cloudViewStepKm > 0.001f;
 
-    float t = tEntry + stepLen * (float(i) + pixelJitter);
-    // World-anchored sample position (Y-up km). Slab intersection above runs
-    // with ray origin = vec3(0) and planet center = (0, -cloudR, 0), so t is
-    // measured along the view ray from the camera. Adding cameraWorldPosYUpKm
-    // anchors the sample's WORLD position to the player's km-scale Y-up
-    // coordinates — the noise/coverage/type fields then translate with the
-    // world rather than with the camera, giving the parallax depth cue that
-    // was missing (clouds were reading as cardboard cutouts moving rigidly
-    // with the player). Height-fraction math and slab geometry stay correct
-    // because cameraWorldPosYUpKm magnitudes are small at FNV scale (~tens
-    // of meters Y, sub-km XZ at sceneScale=2) compared to cloudThickness
-    // (~3 km) and planet radius (~952 km curvature-adjusted), so the
-    // length()-based altitude reading shifts negligibly. Voxel grids
-    // (D_sun / D_ambient) are world-anchored on the bake side, so this also
-    // brings the runtime lookup into alignment with the bake's convention.
-    vec3 samplePos = args.cameraWorldPosYUpKm + viewDirYUp * t;
+  if (!adaptiveMarch) {
+    // ---- Fixed-length lattice march (legacy stepping, bit-identical) ----
+    for (uint i = 0u; i < effSampleCount; ++i) {
+      if (viewTransmittance < 0.01f) break;  // early-exit (free perf win)
 
-    // Spatial coverage / type fields: per-step lerp between the slab entry
-    // and exit evaluations hoisted above the loop. Variation amplitude
-    // (spread) comes from args — kept shared across layers for v1 so layer 2
-    // doesn't need its own spread knobs. Mean values are per-slab so layer 2
-    // can pick a different baseline (cirrus typeMean ~= 0.05 vs cumulus 0.5).
-    float rayFrac = (float(i) + pixelJitter) / float(effSampleCount);
-    float typeNoise     = mix(typeNoiseEntry,     typeNoiseExit,     rayFrac);
-    float coverageNoise = mix(coverageNoiseEntry, coverageNoiseExit, rayFrac);
-    float typeLocal     = saturate(slabTypeMean     + (typeNoise     - 0.5f) * args.cloudTypeSpread);
-    float coverageLocal = saturate(slabCoverageMean + (coverageNoise - 0.5f) * args.cloudCoverageSpread);
-
-    float hf = computeCloudHeightFraction(samplePos, args, slabAltitudeKm, slabThicknessKm);
-    // shapeHf (fork — 2026-06-11, column-shaping rework): per-cloud height
-    // fraction from the density sampler — re-normalized to this column's own
-    // [base, top] when column shaping is on, identical to hf when off.
-    // columnSpan (rev 2): the column's vertical extent as a slab fraction,
-    // for the per-column underside-brightness modulation in the lighting.
-    float shapeHf;
-    float columnSpan;
-    float detailSigned;
-    float density = sampleCloudDensityTextured(samplePos, hf, typeLocal, coverageLocal,
-                                                slabAltitudeKm, slabThicknessKm, slabDensityScale,
-                                                args, AtmosphereCloudNoise3D, AtmosphereCloudNoise3DSampler,
-                                                AtmosphereCloudPlacementMap, shapeHf, columnSpan,
-                                                detailSigned);
-    if (density < 0.001f) continue;
-
-    // Nubis Cubed lighting at this sample. samplePos is already Y-up, so
-    // isZUp = false for the D_sun / D_ambient lookups.
-    //
-    // The lighting evaluator receives shapeHf (per-cloud height), not the
-    // slab hf: the dim profile, SDF proxy and bottom darkening then track
-    // each cloud's own base/top instead of painting horizontal lighting
-    // bands across the whole sky at fixed altitudes — those global bands
-    // were half of the "stacked separated layers" read. detailSigned is the
-    // sampler's edge-detail relief signal, consumed by the billow micro-AO
-    // (fork — 2026-07-14, detail-shading pass).
-    //
-    // NOTE: the D_sun / D_ambient voxel grids are baked over the primary
-    // (layer 1) slab only — layer 2 samples will read whichever residual
-    // density the bake covered. For cirrus this is acceptable; the grids
-    // contribute attenuation toward zenith and sun direction at most, and
-    // cirrus is too thin to need precomputed shadow data of its own.
-    NubisCubedLighting lighting = evalNubisCubedSample(
-        samplePos, shapeHf, density, columnSpan, detailSigned,
-        viewDirYUp, ctx.sunDirYUp, ctx.sunRadiance,
-        ctx.skyRadianceWarm, ctx.skyRadianceCool, ctx.skyRadianceZenith,
-        args, /*isZUp=*/false, /*dSunOverride=*/-1.0f);
-
-    // ===== Per-sample moon direct light =====
-    // Same Beer-Lambert single-octave moon shadow march as before. The if-gate
-    // automatically skips the entire block when combinedMoonDiffuseCoeff +
-    // combinedMoonPhaseAmt are zero — which is exactly how the caller suppresses
-    // the moon path for layer 2 (cirrus) without an extra flag parameter.
-    const float kMoonShadowSkipDensity = 0.05f;
-    vec3 moonDirectLight = vec3(0.0f);
-    if (any((ctx.combinedMoonDiffuseCoeff + ctx.combinedMoonPhaseAmt) > vec3(0.001f))) {
-      float moonOpticalDepth = 0.0f;
-      if (density >= kMoonShadowSkipDensity) {
-        moonOpticalDepth = sampleCloudSunOpticalDepth_local(
-            samplePos, ctx.combinedMoonDir, typeLocal, coverageLocal, args);
+      float t = tEntry + stepLen * (float(i) + pixelJitter);
+      float rayFrac = (float(i) + pixelJitter) / float(effSampleCount);
+      float sdfStepKm;
+      bool sampled = integrateCloudSample(t, stepLen, rayFrac, viewDirYUp,
+                                          slabAltitudeKm, slabThicknessKm,
+                                          slabTypeMean, slabCoverageMean,
+                                          slabDensityScale,
+                                          typeNoiseEntry, typeNoiseExit,
+                                          coverageNoiseEntry, coverageNoiseExit,
+                                          ctx, args, accumColor, viewTransmittance,
+                                          sdfStepKm);
+      // SDF empty-space skip (fork — Nubis3 conversion Phase C). The sampler
+      // reported a guaranteed-empty radius around this sample (min hex tap,
+      // coverage- and wobble-conservative); jump the loop index so the next
+      // sample lands just inside that radius. Advancing by whole indices
+      // keeps every sample on the jittered stratified lattice — temporal
+      // behavior and banding characteristics are unchanged, rays just stop
+      // paying for steps that provably hit nothing. nvdfStepScale is the
+      // safety factor on top (0 disables the skip entirely); the uint cap is
+      // the usual CB-driven-loop hard-cap discipline.
+      if (!sampled && args.nubis3ModelEnable != 0u && args.nvdfStepScale > 0.0f) {
+        float skipKm = sdfStepKm * args.nvdfStepScale;
+        if (skipKm > stepLen) {
+          uint advance = uint(min(floor(skipKm / stepLen), 4096.0f));
+          i += advance - 1u;  // the loop's ++i completes the advance
+        }
       }
-      float moonShadow = exp(-moonOpticalDepth * ctx.moonBaseSigma);
-      float moonCosTheta = dot(viewDirYUp, ctx.combinedMoonDir);
-      float msMoonAniso  = 0.0f;
-      float octEnergyM   = 1.0f;
-      float octPhaseGM   = args.moonCloudAnisotropy;
-      for (uint oct = 0u; oct < ctx.msOctaveCount; ++oct) {
-        msMoonAniso += octEnergyM * hgPhase(moonCosTheta, octPhaseGM);
-        octEnergyM  *= kMsA;
-        octPhaseGM  *= kMsC;
-      }
-      moonDirectLight = (ctx.combinedMoonDiffuseCoeff
-                       + ctx.combinedMoonPhaseAmt * msMoonAniso) * moonShadow;
     }
-
-    // Composite: cloudColor multiplies all surface-scatter terms; nightLight
-    // is added uncolored, identical to the legacy single-layer march.
-    //
-    // Thin-sample ambient fade (fork — 2026-06-13). The coverage gate leaves a
-    // soft sub-threshold skirt around every silhouette; those thin samples are
-    // ambient-dominated, and the ambient is sampled at the horizon (a dirty
-    // grey-brown), so the skirt reads as a discolored haze halo against clear
-    // sky. Weight the ambient by the sample's own (gated) density so the
-    // faintest edge samples fall toward transparent instead of horizon-tinted.
-    // Direct / moon / night terms are untouched, so backlit edges keep their glow.
-    // Driven live by cloudEdgeAmbientFade; 0 disables the fade (full ambient).
-    float ambientThinFade = args.cloudEdgeAmbientFade > 1e-5f
-                          ? smoothstep(0.0f, args.cloudEdgeAmbientFade, density)
-                          : 1.0f;
-    vec3 sampleColor = args.cloudColor
-                     * (lighting.direct + lighting.ambient * ambientThinFade + moonDirectLight)
-                     + ctx.nightLight;
-
-#if CLOUD_MARCH_LIGHTNING
-    // Lightning flash glow (fork — 2026-07-14): view pass only, inert unless a
-    // strike envelope is live this frame.
-    if (args.lightningFlashIntensity > 0.0f) {
-      sampleColor += evalLightningFlash(samplePos, args);
-    }
-#endif
-
-    // Beer-Lambert step accumulation.
-    float effectiveDensity = density * args.cloudDensity;
-    float stepTransmittance = exp(-effectiveDensity * stepLen);
-    vec3 stepRadiance = sampleColor * (1.0f - stepTransmittance);
-
-    // Aerial perspective split into two independent effects so cloud
-    // appearance close to camera can be tuned separately from horizon
-    // wall prevention:
-    //   - aerialT_haze: dims cloud RADIANCE with distance (visual softness)
-    //   - aerialT_fade: softens cloud EXTINCTION accumulation with distance
-    //                   so horizon-grazing rays don't pile up into a wall
-    // At default 0.05/0.05 both effects are mild; setting either to 0
-    // disables that half of the aerial perspective independently.
-    // t is true camera distance in EVERY consumer of this helper (all keep
-    // the camera-at-origin convention), so haze/fade behave identically
-    // across passes.
-    float aerialT_haze = exp(-args.cloudAerialHazePerKm * t);
-    float aerialT_fade = exp(-args.cloudAerialFadePerKm * t);
-    accumColor += stepRadiance * viewTransmittance * aerialT_haze;
-    viewTransmittance *= mix(1.0f, stepTransmittance, aerialT_fade);
+    return;
   }
+
+  // ---- √-adaptive hybrid march (fork — detail round 2026-07-16; Nubis
+  // p.172/174). A FIXED step length is the detail CEILING: 100 m steps
+  // cannot resolve the sub-200 m content the detail volume now carries, no
+  // matter how good the texture gets. The reference marches
+  //   step = max(SDF distance, adaptive),  adaptive = sqrt(dist) · k
+  // — sphere-tracing past empty air (the SDF half, subsuming the Phase C
+  // index-skip above) and sampling finely near the camera, coarsening with
+  // distance as the pixel footprint grows. Our mapping keeps the existing
+  // knob's meaning at the noise-tile distance:
+  //   adaptive(t) = clamp(cloudViewStepKm · sqrt(t / 12 km),
+  //                       nubis3AdaptiveStepKm, 4 · cloudViewStepKm)
+  // → 100 m at 12 km (unchanged by default), ~30 m at the 1.3 km deck base,
+  // the floor (default 25 m) for fly-through, growing to ~400 m at the far
+  // horizon (the coarser far lattice is dithered by jitter + the temporal
+  // EMA, and the fewer far samples partly pay for the near refinement).
+  //
+  // Jitter policy (p.172): the sample offsets by hash·step INSIDE its cell
+  // (stratified, like the fixed lattice); the hash is the animated per-frame
+  // one near the camera (temporal dither, resolved by the EMA/DLSS) and the
+  // static per-pixel one beyond 250 m (no distant shimmer). The cursor t
+  // stays unjittered (p.174: jitter offsets the sample position, not the
+  // accumulated distance).
+  //
+  // Iterations are hard-capped by cloudViewSamplesMax (CB-driven-loop
+  // discipline). A ray that exhausts the budget before tExit drops whatever
+  // remains; only broken-cloud horizon-grazing rays approach the cap, with
+  // viewTransmittance already low — raise Max Cloud Samples if far horizon
+  // clouds visibly thin.
+  const float kAdaptiveRefDistKm = 12.0f;  // adaptive == cloudViewStepKm here
+  const float kJitterAnimateKm   = 0.25f;  // Nubis: animated hash < 250 m
+  float adaptiveCeilKm = max(4.0f * args.cloudViewStepKm, args.nubis3AdaptiveStepKm);
+  uint  iterCap = max(uint(args.cloudViewSamplesMax), sampleCount);
+  float t = tEntry;
+  float sdfStepKm = 0.0f;  // previous sample's conservative empty radius
+  for (uint iter = 0u; iter < iterCap && t < tExit; ++iter) {
+    if (viewTransmittance < 0.01f) break;  // transmittance-limit exit (p.174)
+
+    float stepKm = clamp(args.cloudViewStepKm * sqrt(t * (1.0f / kAdaptiveRefDistKm)),
+                         args.nubis3AdaptiveStepKm, adaptiveCeilKm);
+    if (args.nvdfStepScale > 0.0f) {
+      // Inside cloud the conservative empty radius goes <= 0 and max() hands
+      // control to the adaptive step — exactly the reference's hybrid.
+      stepKm = max(stepKm, sdfStepKm * args.nvdfStepScale);
+    }
+    stepKm = min(stepKm, tExit - t);  // final-segment Beer length stays exact
+    if (stepKm <= 1e-5f) break;       // FP guard: t += denormal would stall
+
+    float hash    = t < kJitterAnimateKm ? pixelJitter : pixelJitterStatic;
+    float tSample = t + hash * stepKm;
+    float rayFrac = saturate((tSample - tEntry) / (tExit - tEntry));
+    integrateCloudSample(tSample, stepKm, rayFrac, viewDirYUp,
+                         slabAltitudeKm, slabThicknessKm,
+                         slabTypeMean, slabCoverageMean,
+                         slabDensityScale,
+                         typeNoiseEntry, typeNoiseExit,
+                         coverageNoiseEntry, coverageNoiseExit,
+                         ctx, args, accumColor, viewTransmittance,
+                         sdfStepKm);
+    t += stepKm;
+  }
+
 }
 
 // =============================================================================
@@ -854,6 +1283,7 @@ void marchEchoDeck(vec3   viewDirYUp,
 // =============================================================================
 void marchCloudLayers(vec3  viewDirYUp,
                       float pixelJitter,
+                      float pixelJitterStatic,
                       float tMinClamp,
                       float tMaxClamp,
                       uint  sampleCount,
@@ -861,7 +1291,7 @@ void marchCloudLayers(vec3  viewDirYUp,
                       AtmosphereArgs args,
                       inout vec3  accumColor,
                       inout float viewTransmittance) {
-  marchCloudSlab(viewDirYUp, pixelJitter,
+  marchCloudSlab(viewDirYUp, pixelJitter, pixelJitterStatic,
                  args.cloudAltitude, args.cloudThickness,
                  args.cloudTypeMean, args.cloudCoverageMean,
                  /*slabDensityScale=*/1.0f,

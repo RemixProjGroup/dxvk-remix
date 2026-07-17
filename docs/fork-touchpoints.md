@@ -2439,3 +2439,357 @@ A lightning flash embedded into the cloud temporal smoother's ~1 s EMA (fixed 0.
   *Temporal-smoothing block scales `kHistoryWeight` by the fade before the history lerp.*
 
 ---
+
+## Workstream - Nubis3 conversion Phase A: cloud NVDF SDF bake (fork - 2026-07-16)
+
+Foundation for converting the Numos cloud MODELING to the Nubis3 (SIGGRAPH
+2023) voxel/SDF architecture. The procedural cloud BODY (placement map +
+column model - our "Frankencloudscape") is voxelized into a tile-periodic
+256x64x256 occupancy grid and distance-transformed by a wrap-aware jump-
+flooding (JFA) chain into a REAL signed distance field (R16F, raw km,
+negative inside; texture y = VERTICAL - see cloud_nvdf.h). Double-buffered
+publish-swap; full synchronous chain at init, amortized 2-JFA-passes-per-
+frame state machine for runtime re-bakes (dirty keys: cell/tile size, column
+shape knobs, quantized thickness, quantized nominal coverage). Detail noise
+never enters the SDF (sample-time erosion per Nubis3). Phase A ships the bake
+infra + a debug slice view only - no visual change; the density-model swap
+(profile-from-SDF behind `rtx.atmosphere.nubis3ModelEnable`) is Phase B and
+SDF sphere-trace stepping is Phase C.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nvdf.h`** - NEW fork-owned file.
+  *Shared CPU/GPU dims (256x64x256), pass-local binding maps for the three NVDF passes, `CloudNvdfJfaArgs` push-constant struct.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nvdf_common.slangh`** - NEW fork-owned file.
+  *Seed pack/unpack (R32_UINT, 0xFFFFFFFF invalid), wrap-aware anisotropic voxel-center distance in km, voxel -> tile-UV / height-fraction mapping.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nvdf_occupancy.comp.slang`** - NEW fork-owned file.
+  *Voxelizes `computeCloudColumn` at the baked NOMINAL coverage (hexOn=false, no noise taps) into R8 occupancy.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nvdf_jfa.comp.slang`** - NEW fork-owned file.
+  *Push-constant mode 0 = boundary seed init (occupied voxel with an empty 6-neighbor; Y out-of-slab counts empty), mode 1 = 3^3 jump pass at jumpSizeVoxels comparing wrapped physical-km distances.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nvdf_resolve.comp.slang`** - NEW fork-owned file.
+  *Distance to closest boundary seed, sign from occupancy, +100 km when no seeds exist; writes the BACK SDF buffer.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** - fork-owned change.
+  *Resources (occupancy, JFA ping-pong x2, SDF front/back x2, ~54 MB), jump schedule {128..1,1}, dirty-key struct + amortized state machine (`stepCloudNvdfBake` in `computeLuts` after the placement-rebake block; placement rebake clears the NVDF key), full init chain in `initialize()`, three dispatch fns + 4 ManagedShader classes, `getCloudNvdfSdf()` front-buffer getter, `args.nvdfNominalCoverage` fill (auto = live coverage quantized to 0.25 steps, option pins).*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** - fork-owned change.
+  *Batched pad consumption (CB layout unchanged, one edit for the whole phase): `pad3`->`nubis3SharpenStrength`, `padMilkyWay0`->`nvdfStepScale`, `pad_sunShadowMaxSamples`->`nubis3ModelEnable`, `pad_moonShadowMaxSamples`->`nvdfNominalCoverage`, `pad_cloudLayer2Step0/1`->`nvdfProfileDepthKm`/`nvdfCoverageOffsetKm`, `pad_cloudLayer2Color0`->`nubis3ErosionStrength`. Only `nvdfNominalCoverage` is consumed in Phase A; the rest are zero-filled until their phase.*
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-touchpoint inline tweak.
+  *Adds `rtx.atmosphere.nvdfNominalCoverage` (0 = auto-track quantized weather coverage).*
+- **`src/dxvk/rtx_render/rtx_context.h`** - fork-touchpoint inline tweak.
+  *`fork_hooks::getCloudNvdfSdf` forward declaration + friend line (mirrors getCloudDSun).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned addition.
+  *`getCloudNvdfSdf` lazy-init accessor.*
+- **`src/dxvk/shaders/rtx/utility/debug_view_indices.h`** - index-only, fork.
+  *Adds `DEBUG_VIEW_CLOUD_NVDF_SDF = 879`.*
+- **`src/dxvk/shaders/rtx/pass/debug_view/debug_view_binding_indices.h`** - index-only, fork.
+  *Adds `DEBUG_VIEW_BINDING_CLOUD_NVDF_SDF_INPUT = 43` (extends the fork cloud-debug block to 39-43).*
+- **`src/dxvk/shaders/rtx/pass/debug_view/debug_view.comp.slang`** - fork-owned addition.
+  *`Texture3D<float> DebugViewCloudNvdfSdf` + case 879: horizontal slice at height fraction 0.25, warm-inside / cool-outside ramps, green zero-crossing band.*
+- **`src/dxvk/rtx_render/rtx_debug_view.cpp`** - fork-owned addition.
+  *`TEXTURE3D(43)` parameter entry, bind via `fork_hooks::getCloudNvdfSdf`, selector entry with validation gates (smooth blobby cells, clean iso-line, seamless tile wrap, live re-bake on cell-size drag).*
+- **`RtxOptions.md`** - REGEN PENDING (`nvdfNominalCoverage`).
+
+---
+
+## Workstream - Nubis3 conversion Phase B: SDF density model + evaluator move (fork - 2026-07-16)
+
+The density-model swap, behind `rtx.atmosphere.nubis3ModelEnable` (default
+OFF - legacy path bit-identical for in-game A/B). Cloud shape becomes the
+Nubis3 recipe: dimensional profile = sample-time remap of the (Phase A)
+body SDF with live coverage as a level-set offset (zero-rebake coverage
+dynamics), eroded by a new wispy/billowy detail volume via the Schneider
+ValueErosion remap + page-123 pow sharpen. ONE sampler serves the view march
+AND the shadow/OD bakes (iso parity by construction; also erases the legacy
+view-0.15 vs shadow-0.25 gate-softness parity gap). The Nubis Cubed lighting
+evaluator MOVED out of atmosphere_common.slangh into cloud_march_common.slangh
+(its only callers) and split into a parameterized core (real profile / live
+SDF meters / D_ambient-derived downTau) + a bit-identical legacy wrapper -
+lighting edits no longer recompile the path tracer. Echo deck stays on the
+legacy sampler (deferred to Phase E).
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_detail_noise_baker.comp.slang`** - NEW fork-owned file.
+  *128^3 RGBA8 volume: R/G = low/high-freq wispy (Perlin FBM), B/A = low/high-freq billowy (inverted Worley), integer cycles-per-volume periods; baked once at init (fixed pattern).*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nubis3_common.slangh`** - NEW fork-owned file.
+  *`valueErosion`, `sampleCloudDensityNubis3` (hex-de-tiled SDF tap -> coverage offset -> profile gate/early-out -> animated wispy/billowy erosion -> sharpen; outs profile/detailSigned/live-sdf-km), plus the MOVED D_sun/D_ambient bake integrals with a model-branched integrand.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_common.slangh`** - fork-owned change (the phase's one batched edit).
+  *REMOVES the moved blocks: the two OD bake integrals and the whole Nubis lighting evaluator block (sampleDimProfile / sampleCloudSdf / hgPhaseNubis / NubisCubedLighting / evalNubisCubedSample); short pointers left in place. sampleDSun/sampleDAmbient + ground-shadow helpers stay (integrators need them).*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** - fork-owned change.
+  *Receives the evaluator as `evalNubisCubedSampleCore(dim_profile, cloud_sdf_m, downTau, ...)` + legacy wrapper; includes cloud_nubis3_common; marchCloudSlab branches density (Nubis3 sampler vs legacy) and lighting (core with real SDF into the sigma_ms remap + `sampleDAmbient x cloudDensity` as downTau vs wrapper); layer-1 moon OD tap branches likewise. marchEchoDeck untouched (legacy).*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang` / `cloud_secondary_lut.comp.slang`** - fork-owned change.
+  *Pass-local bindings 13 = `AtmosphereCloudNvdfSdf` (front buffer), 14 = `AtmosphereCloudDetailNoise3D`; sampled with the existing linear/REPEAT cloud sampler (slot 2).*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_sun_density_grid.comp.slang` / `cloud_ambient_density_grid.comp.slang`** - fork-owned change.
+  *Pass-local bindings 5 = NVDF SDF, 6 = detail volume; call the moved integrals with the extended signature. Terrain cloud shadows track the model switch with zero integrator changes.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** - fork-owned change.
+  *`m_cloudDetailNoise3D` (128^3 RGBA8, ~8 MB) + one-shot init bake + `CloudDetailNoiseBakerShader`; grid/render/secondary shader classes grow TEXTURE3D slots (5/6 and 13/14) with binds + read-tracking at all four dispatch sites (front SDF + detail); getAtmosphereArgs fills the five Nubis3 CB fields (pads consumed in Phase A).*
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-touchpoint inline tweak.
+  *Adds `rtx.atmosphere.nubis3ModelEnable` (false), `nvdfProfileDepthKm` (1.0), `nvdfCoverageOffsetKm` (1.5), `nubis3ErosionStrength` (1.0), `nubis3SharpenStrength` (1.0).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned addition.
+  *ImGui Clouds -> "Nubis3 Model (SDF)" block: enable toggle + profile depth / coverage reach / erosion / sharpen / bake-nominal sliders.*
+- **`RtxOptions.md`** - REGEN PENDING (5 new options + Phase A's nvdfNominalCoverage).
+
+---
+
+## Workstream - Nubis3 anti-blobby pass + Phase C SDF stepping (fork - 2026-07-16)
+
+Phase B validated ("more natural") but read as convex blobs. Root causes and
+fixes, each on its own runtime lever for in-game bisection: (1) the BODIES
+were convex by construction (placement blob x column band) - a tile-periodic
+3D FBM now shifts the placement waterline per voxel in the occupancy bake, so
+columns bake in overhangs/notches/lumps (`nvdfBodyErosionStrength`, an NVDF
+re-bake dirty key; zero-mean so nominal-coverage semantics stay centered);
+(2) the detail volume's erosion/wobble content was far too coarse vs Nubis's
+own (~sub-100 m; ours was 700/350 m) - baker channels move to 6/16
+cycles-per-volume with 4/3 octaves, and the silhouette wobble keys on a fixed
+half-mix of the high-freq channels instead of the profile-blend (which
+collapsed to pure low-freq exactly at the silhouette); (3) ported the Nubis
+p.125 near-camera HF detail (twice-folded high-freq channels replace a slice
+of the erosion composite near the camera; range scaled 0.2->2 km for our
+coarser cycles-per-km; `nubis3HFDetailStrength`, 1 = the paper's 10% max mix).
+Phase C: the sampler additionally returns a CONSERVATIVE step bound (MIN of
+the hex taps - a blended distance is not metric - minus coverage offset and
+max outward wobble), and marchCloudSlab jumps whole loop indices through
+provably-empty air (`nvdfStepScale` safety factor, 0 = off; index-quantized so
+samples stay on the jittered stratified lattice - no temporal/banding change).
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nvdf_occupancy.comp.slang`** - fork-owned change.
+  *Body-erosion carve: tile-periodic `fbmNoise3DPeriodic` (6 XZ cycles, thickness-proportional Y cycles, 4 octaves) shifts `placement.r` before `computeCloudColumn`.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_detail_noise_baker.comp.slang`** - fork-owned change.
+  *Channel frequencies 4/8 -> 6/16 cycles-per-volume, octaves 3 -> 4/3 (finest octaves pinned at the 128-texel Nyquist).*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nubis3_common.slangh`** - fork-owned change.
+  *Full-overload signature grows `cameraDistKm` in + `sdfStepKmOut` out; min-of-taps tracking; p.125 HF detail block; wobble signal rev 2 (fixed high-freq half-mix). Convenience overload (bakes/OD taps) unchanged externally - passes 1e6 dist (HF detail must not make bakes camera-dependent).*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** - fork-owned change.
+  *marchCloudSlab passes ray `t` as camera distance and, on empty samples, advances the loop index by `floor(sdfStep x nvdfStepScale / stepLen)` (4096 hard cap).*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** - fork-touchpoint inline tweak.
+  *`padMilkyWay1` -> `nvdfBodyErosionStrength`, `padMilkyWay2` -> `nubis3HFDetailStrength`; CB layout unchanged. (All former reserve pads are now consumed - Phase D growth needs a new 16-byte block.)*
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` / `rtx_atmosphere.cpp`** - fork-owned change.
+  *`CloudNvdfBakeKey.bodyErosion` dirty key + cache; getAtmosphereArgs fills the two new pads + `nvdfStepScale` (CB field existed since Phase A, zero-filled until now).*
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-touchpoint inline tweak.
+  *Adds `rtx.atmosphere.nvdfBodyErosionStrength` (0.6), `nubis3HFDetailStrength` (1.0), `nvdfStepScale` (0.8).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned addition.
+  *"Nubis3 Model (SDF)" block grows Body Erosion / HF Detail (Near) / SDF Step Scale sliders.*
+- **`RtxOptions.md`** - REGEN PENDING (3 more options; 9 total outstanding for the Nubis3 workstreams).
+
+---
+
+## Workstream - Cloud crispness: temporal-smoother weight knob (fork - 2026-07-16)
+
+Follow-up to the anti-blobby pass: with the SHAPE fixed, the remaining "bad"
+read was smear - the cloud RT runs at 0.5x the DLSS-internal resolution and
+the temporal smoother blended with a HARDCODED 0.92 EMA weight (~0.5 s
+settle), so edges arrived pre-blurred and doubly upscaled. Render scale was
+already a live option; this makes the EMA weight one too. Consumes the first
+scalar of a NEW 16-byte CB block appended at the AtmosphereArgs tail (all
+former reserve pads were spent by the Nubis3 workstreams; 3 reserve pads
+remain for Phase D dynamics).
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** - fork-touchpoint inline tweak.
+  *NEW tail block: `cloudHistoryWeight` + `padReserve0/1/2` (16-byte aligned growth per the CB discipline).*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** - fork-owned change.
+  *evalSkyRadiance temporal blend reads `args.cloudHistoryWeight` (saturated) instead of the hardcoded `kHistoryWeight = 0.92`; lightning ghost-suppression modulation unchanged on top.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** - fork-owned change.
+  *getAtmosphereArgs fills the new block (weight clamped [0..0.98], reserve pads zeroed); normalizeForSkyLutCache zeroes the weight (composite-only - slider drags must not invalidate the sky-LUT cache key).*
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-touchpoint inline tweak.
+  *Adds `rtx.atmosphere.cloudHistoryWeight` (0.92 = previous hardcoded behavior; 0 = raw jittered march).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned addition.
+  *"Temporal Smoothing" slider next to Cloud Render Scale.*
+- **`RtxOptions.md`** - REGEN PENDING (10 options now outstanding across the Nubis3 + crispness workstreams).
+
+---
+
+## Workstream - Nubis3 interior texture + alligator noise (fork - 2026-07-16)
+
+User verdict on the anti-blobby knobs: "barking up the wrong tree - the
+implementation is missing a core feature." Re-reading both references
+(Nubis Cubed pp.89-99; iw3xo `ps_3_0_iw3xo_daynight.hlsl`) confirmed it:
+(1) OUR DENSITY SATURATED TO A CONSTANT 1.0 inside the body (ValueErosion at
+profile 1 is 1 regardless of noise), so every face beyond the thin silhouette
+skirt rendered as a flat white mass. Both references keep density
+proportional to the noise EVERYWHERE inside: iw3xo multiplies its razor gate
+by the raw FBM (`dens *= smoothstep(cov, cov+0.05, dens)`), Nubis3 multiplies
+by its authored per-voxel Density Scale NVDF (`uprezzed_density *=
+powered_density_scale`). New sampler step 8 modulates the post-sharpen
+density by the type-blended raw detail channels (`nubis3InteriorTexture`,
+default 0.7, rides padReserve0; shared sampler, so the D_sun/D_ambient bakes
+track automatically). (2) The detail volume used the EXACT noises the talk
+rejects (p.98: inverted Worley = "packed spheres", Perlin "not wispy
+enough") - the baker now approximates their replacements: `alligator3DPeriodic`
+(sparse-bump, strongest-minus-runner-up = amplitude-layered lumps with
+creases) for billows, curl-warped inverted alligator ("Curly-Alligator",
+periodic curl of three Perlin FBM potentials) for wisps.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_detail_noise_baker.comp.slang`** - fork-owned change.
+  *NEW `alligator3DPeriodic` / `alligatorFbm3DPeriodic` / `curlNoise3DPeriodic` helpers (local to the baker - one-shot init cost); channels rebuilt: R/G = curly-alligator wisps (pow-2 to recenter mean ~0.5 for the zero-mean wobble), B/A = alligator billows.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nubis3_common.slangh`** - fork-owned change.
+  *Sampler step 8: interior density modulation, range [0.25, 1.75] around a roughly density-neutral mean, applied post-sharpen pre-saturate.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** - fork-touchpoint inline tweak.
+  *`padReserve0` -> `nubis3InteriorTexture`; CB layout unchanged (2 reserve pads left).*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** - fork-owned change.
+  *getAtmosphereArgs fills it (clamped [0..1]).*
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-touchpoint inline tweak.
+  *Adds `rtx.atmosphere.nubis3InteriorTexture` (0.7).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned addition.
+  *"Interior Texture" slider at the top of the Nubis3 block.*
+- **`RtxOptions.md`** - REGEN PENDING (11 options outstanding).
+
+---
+
+## Workstream - Nubis3 edge wisp cut (fork - 2026-07-16)
+
+User feedback after validating the interior-texture round ("helped a lot"):
+"the erosion should cut out wisps and stuff." Root cause: the base erosion
+signal tops out ~0.4 at liked settings (type-blended composite mean ~0.35 x
+strength 0.6), so ValueErosion only nibbles the outer ~40% of the profile -
+it can never cut THROUGH the shell and detach a wisp shape. Fix: (1) sampler
+step 7b adds erosion shaped by the WISPY channel alone, weighted
+(1-profile)^2 - strand-shaped cuts reach full depth at the silhouette and
+fade by mid-shell, so billowy cores keep rounded edges at any type
+(`nubis3EdgeErosion`, default 1.0, rides padReserve1 - ONE reserve pad
+left); (2) the baker's wispy channels are now anisotropic (2x vertical cycle
+count = features twice as wide as tall; integer per-axis periods keep exact
+tiling), so the cuts read as sheared trailing streaks instead of round webs.
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nubis3_common.slangh`** - fork-owned change.
+  *Step 7b edge-wisp erosion added into the ValueErosion input.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_detail_noise_baker.comp.slang`** - fork-owned change.
+  *kWispSqueeze (1,2,1) anisotropy on the wispy channels' sample coords, curl field, and periods.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** - fork-touchpoint inline tweak.
+  *`padReserve1` -> `nubis3EdgeErosion`; CB layout unchanged.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** - fork-owned change.
+  *getAtmosphereArgs fills it (clamped [0..3]).*
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-touchpoint inline tweak.
+  *Adds `rtx.atmosphere.nubis3EdgeErosion` (1.0).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned addition.
+  *"Edge Wisp Cut" slider after Erosion Strength.*
+- **`RtxOptions.md`** - REGEN PENDING (12 options outstanding).
+
+Same-day follow-up (user look checks: "alligator noise is really intense
+/ looks fake", "especially looking straight up"):
+
+- **`cloud_detail_noise_baker.comp.slang`** - alligator tempering: kernel
+  exponent 2.0 -> 1.6 (softer shoulders), amplitude range widened
+  0.35..1 -> 0.25..1 (lump-size variety), contrast gain 1.8 -> 1.25 (the
+  hard gain saturated lumps into plateaus with razor creases).
+- **`cloud_nubis3_common.slangh`** - (1) TWO-SCALE DE-TILE on the detail
+  tap: the volume repeat (~2.8 km) was NOT hex-de-tiled and reads as a
+  grid when a face is seen flat-on (worst at the zenith); a second tap at
+  0.531x scale blended 40/60 makes the pattern effectively non-repeating,
+  variance re-expanded 1.35x around channel means. (2) Nubis p.125
+  NEAR-CAMERA DENSITY SOFTEN ported (pow 0.5->1.0, gain 0.666->1.0 over
+  the HF range) — the HF fold without its companion soften read harsh in
+  fly-through. (3) D_SUN SUNSET BANDING FIX in
+  sampleCloudSunOpticalDepthAtWorld (user report: "squares"/"bands" cast
+  into clouds at sunset, both models — the grid predates Nubis3): the
+  fixed 8 taps spread over an uncapped near-horizontal 20-50 km sun path
+  landed kilometers apart, so neighbor voxels integrated random cloud
+  subsets (squares = grid texels) and tap-distance quantization made
+  onion shells perpendicular to the sun (arcs). Fix: path capped at
+  12 km (integral saturated beyond), adaptive 8..24 taps (~0.6 km step),
+  deterministic world-anchored per-voxel tap-phase jitter (residual
+  error becomes bilinear-absorbed noise, stable across frames).
+
+## Workstream - GT7 cross-audit bug fixes (fork - 2026-07-16)
+
+A Fable-subagent audit of our sky/cloud shaders against the GDC23 GT7 talk
+(report: `Fable_5_testing/gt7-applicability-report.md`) surfaced three
+verified BUGS, landed here. (Its LUT verdict: our sky-view LUT does NOT have
+GT7's misaligned-horizon arc failure — per-0.1-degree re-bake + v^2 horizon
+pin — so the in-cloud sunset artifacts trace to the D_sun grid instead.)
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_sky.slangh`** - fork-owned change.
+  *PREMULTIPLY DOUBLE-APPLY: both cloud sources store premultiplied rgb, but
+  the temporal-smoother input did `rgb * a` again and the no-smoothing path
+  composited with `mix(radiance, rgb, a)` (another x a). Opaque cores hid
+  it; THIN cloud radiance scaled quadratically with alpha — wisps and edge
+  skirts everywhere rendered darker than intended. Fixed to the plain
+  premultiplied over in both paths.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.h` + `cloud_sun_density_grid.comp.slang` / `cloud_ambient_density_grid.comp.slang`** - fork-owned change.
+  *D_SUN/D_AMBIENT GRID AXIS SWAP: the UVW mapping puts VERTICAL on uvw.y
+  and world Z on uvw.z, but allocation was Y=256/Z=32 — world-Z shadow
+  texels were 375 m wide (the blocky "squares" cast into the deck) while
+  vertical wasted 256 texels on ~12 m. Now X=256, Y(vertical)=32, Z=256;
+  dispatch math derives from the constants, samplers use normalized uvw —
+  constants-only change.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** - fork-owned change.
+  *NIGHT RE-BAKE STORM: normalizeForSkyViewLutKey's comment claimed the
+  star / Milky Way fields were zeroed out of the cache key; no zeroing
+  existed anywhere, so the game-driven per-frame starRotation re-baked the
+  transmittance -> multiscatter -> sky-view cascade AND the voxel grids
+  every frame at night. Zeroing added to normalizeForSkyLutCache (base) so
+  all derived keys inherit.*
+
+---
+
+REV 2 (same day, after the user's sunset test — three regressions/misses):
+
+- **`cloud_nubis3_common.slangh`** - (a) HF fold + soften range 0.2-2 km
+  -> 0.1-0.6 km: the deck base sits ~1.3 km overhead, so the 2 km range
+  repainted the whole zenith view with folded HF noise + flattened
+  contrast ("noise directly above is bad", part of the shadow-wash read).
+  (b) EDGE WISP CUT rev 2: rev 1 never produced cutouts — its
+  (1-profile)^2 band decayed before the erosion could EXCEED the profile
+  (the requirement for ValueErosion to return a hard 0 that pow-sharpen
+  cannot lift back); now pow(wispy,2) x linear band x 1.5 gain — strand
+  cores cut through at profile ~0.4 where the optical edge lives.
+  (c) D_sun rev 2: the 12 km cap had REMOVED real sunset occlusion
+  ("internal shadow casting gone") — added a 4-tap coarse jittered far
+  tail over [12..40 km]; and the intersect-fail path + a ~1.5-deg grazing
+  ramp now return/blend to fully-occluded OD 60 instead of flipping the
+  whole grid to 0 at sun elevation 0 (the "flashes bright orange then
+  vanishes" discontinuity). Tap jitter hash scale 37.1 -> 173.3
+  (hash31 int-truncates; neighbor voxels now always decorrelate).
+
+---
+
+## Workstream - Nubis3 detail round: sqrt-adaptive march + spectrum/mean fixes (fork - 2026-07-16)
+
+"How do the papers get cloud detail" round — three pillars from the two
+reference decks, in priority order. (1) SQRT-ADAPTIVE HYBRID MARCH (Nubis
+p.172/174): the fixed 100 m step length was the detail CEILING — the detail
+volume carries sub-200 m content the lattice could never resolve.
+marchCloudSlab's per-sample body is extracted into `integrateCloudSample`
+(the fixed-step loop is preserved bit-identical for legacy / knob-off), and
+a new variable-step loop marches step = max(SDF x nvdfStepScale,
+clamp(cloudViewStepKm x sqrt(t / 12 km), floor, 4 x cloudViewStepKm)) — the
+existing knob keeps its meaning at the tile distance (100 m at 12 km),
+~30 m near the deck base, floor (default 25 m) for fly-through. The SDF
+fold subsumes the Phase C index-skip in this mode. Nubis jitter policy:
+animated hash < 250 m, static per-pixel hash (FAST-noise frame slice 0)
+beyond — no distant shimmer; the cursor stays unjittered (p.174).
+Iterations hard-capped by cloudViewSamplesMax. (2) ZERO-MEAN BAKER
+NORMALIZATION (GT7 p.228): the detail channels' raw means were MEASURED
+(numpy Monte-Carlo port of the alligator kernel; curl warp skipped =
+measure-preserving): wispy 0.7224/0.7267, billowy 0.1555/0.1542 — NOT the
+~0.5 / 0.3 the sampler consumers assumed. The baker now recenters every
+channel to mean 0.5 (pure bias + saturate), making the "zero-mean" wobble
+actually zero-mean (was pushing wispy silhouettes OUT ~+0.22 x amplitude,
+billowy IN ~-0.10) and the interior-texture factor exactly density-neutral
+(was hiding up to ~52% density cut on billowy cores). kChannelMean in the
+two-scale de-tile collapses to vec4(0.5). (3) MID-OCTAVE SILHOUETTE LOBES
+(GT7 pp.229-230): the silhouette spectrum was 87-875 m against km-scale
+smooth bodies — the empty 1-2.5 km octave is GT7's "reads synthetic" gap.
+A third tap of the same volume at 0.193x base frequency (low channels only,
+~2.4 km lobes) folds into the wobble at 60/40; the combined signal stays in
+[-0.5, 0.5] so the step-5 early-out and conservative step bound hold.
+(4) ALTITUDE OCTAVE WEIGHTS (GT7 pp.236-237 approx): `typeShaped` shifts
+the wispy<->billowy blend by +-0.25 across the slab height band
+(smoothstep 0.1..0.8) — wispy bases, billowy tops — and feeds every
+character consumer (erosion composite, HF fold, wobble + mid, interior).
+
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_march_common.slangh`** - fork-owned change.
+  *Per-sample shading extracted to `integrateCloudSample` (verbatim; returns sampled?/sdfStepKm); marchCloudSlab + marchCloudLayers grow `pixelJitterStatic`; new adaptive loop gated on `nubis3AdaptiveStepKm > 0` (FP stall guard at stepKm <= 1e-5).*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_render.comp.slang`** - fork-owned change.
+  *Passes `fastJitter(pixelCoord, 0)` as the static far-field hash.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_secondary_lut.comp.slang`** - fork-owned change.
+  *Passes its frame-constant jitter for both hashes.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_detail_noise_baker.comp.slang`** - fork-owned change.
+  *`kRawChannelMean = vec4(0.7224, 0.7267, 0.1555, 0.1542)` bias-recenter to 0.5 (measured via scratchpad measure_channel_means.py — RE-MEASURE if kernel gain/exponent/amp/octaves/transforms change).*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/cloud_nubis3_common.slangh`** - fork-owned change.
+  *kChannelMean -> vec4(0.5); step 6d mid-octave wobble tap (0.193x, 60/40); `typeShaped` altitude keying replaces `saturate(typeLocal)` at all four character consumers.*
+- **`src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h`** - fork-touchpoint inline tweak.
+  *`padReserve2` -> `nubis3AdaptiveStepKm`. THE LAST reserve pad is now consumed — any further CB growth needs a new full 16-byte row.*
+- **`src/dxvk/rtx_render/rtx_atmosphere.cpp`** - fork-owned change.
+  *getAtmosphereArgs fills `nubis3AdaptiveStepKm` (clamped [0..0.2]; stays in the LUT cache keys — same class as nvdfStepScale).*
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-touchpoint inline tweak.
+  *Adds `rtx.atmosphere.nubis3AdaptiveStepKm` (0.025; 0 = legacy fixed-length stepping).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned addition.
+  *"Adaptive Step Floor" slider next to SDF Step Scale.*
+- **`RtxOptions.md`** - REGEN PENDING (11 options now outstanding across the Nubis3 workstreams).
+
+---

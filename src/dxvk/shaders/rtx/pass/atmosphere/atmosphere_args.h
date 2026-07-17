@@ -99,7 +99,10 @@ struct AtmosphereArgs {
   float starRotation;       // Sidereal angle, degrees [0, 360]
   float starAxisElevation;  // Celestial pole elevation from horizon, degrees
   float starAxisRotation;   // Celestial pole azimuth, degrees
-  float pad3;               // 16-byte alignment
+  // Nubis3 up-rez result sharpen (fork — Nubis3 conversion; Phase B consumer).
+  // Exponent-blend strength of the page-123 pow() sharpen on the eroded
+  // density. Rides the former pad3 slot; CB layout unchanged. 0 until Phase B.
+  float nubis3SharpenStrength;
 
   // ----- Star anti-aliasing + cloud interaction (fork) -----
   //
@@ -152,7 +155,11 @@ struct AtmosphereArgs {
   float milkyWayEnabled;                // 1.0 = render galactic-band effects, 0.0 = uniform star field
   float milkyWayDensityBoost;           // Threshold reduction inside the band (default 0.05; was hardcoded 0.15)
   float milkyWayBackgroundBrightness;   // Diffuse band-glow brightness multiplier (default 0.3)
-  float padMilkyWay0;
+  // Nubis3 sphere-trace step scale (fork — Nubis3 conversion Phase C).
+  // Safety factor on the SDF empty-space skip in marchCloudSlab; 0 disables
+  // the skip (uniform stepping). Rides the former padMilkyWay0 slot; CB
+  // layout unchanged.
+  float nvdfStepScale;
 
   // Diffuse glow color zones. Real Milky Way photos show three distinct
   // colors: a warm yellow-cream galactic center, dark red-brown dust lanes
@@ -164,10 +171,20 @@ struct AtmosphereArgs {
   float milkyWayDustAmount;             // How strongly dust lanes darken the glow (default 0.6)
 
   vec3 milkyWayCoreColor;               // BRIGHT core tint (default warm cream 1.0/0.85/0.55)
-  float padMilkyWay1;
+  // Nubis3 body erosion (fork — Nubis3 conversion, anti-blobby pass). Strength
+  // of the 3D FBM carve applied to the placement waterline in the NVDF
+  // occupancy bake — bakes concavity (overhangs / notches) into the otherwise
+  // convex column bodies. Consumed at BAKE time only (NVDF rebake dirty key).
+  // Rides the former padMilkyWay1 slot; CB layout unchanged.
+  float nvdfBodyErosionStrength;
 
   vec3 milkyWayDustColor;               // DARK dust-lane tint (default red-brown 0.15/0.08/0.05)
-  float padMilkyWay2;
+  // Nubis3 near-camera HF detail (fork — Nubis Cubed p.125 `inHFDetails`).
+  // Mix strength of the twice-folded high-frequency noise into the erosion
+  // composite near the camera (fly-through crispness). 0 = off; 1 = the
+  // paper's 10% max mix. Rides the former padMilkyWay2 slot; CB layout
+  // unchanged.
+  float nubis3HFDetailStrength;
 
   // ----- Per-moon parameters (fork) -----
   MoonParams moons[MAX_MOONS];
@@ -179,11 +196,17 @@ struct AtmosphereArgs {
   float cloudMoonBrightness;             // Per-path stylistic multiplier on cloud-moon directional + ambient airglow (Phase 3)
 
   float haloMoonBrightness;               // Per-path stylistic multiplier on disk halo Gaussian glow (Phase 3)
-  // Reclaimable pads — were sunShadowMaxSamples / moonShadowMaxSamples (the
-  // bespoke sun/moon NEE soft-shadow ray caps), removed 2026-06-21 with that NEE
-  // path. Kept in the former padMoonNee0/1 slots so the CB layout is unchanged.
-  uint  pad_sunShadowMaxSamples;
-  uint  pad_moonShadowMaxSamples;
+  // Nubis3 conversion (fork). Ride the former pad_sunShadowMaxSamples /
+  // pad_moonShadowMaxSamples slots (themselves former padMoonNee0/1); CB
+  // layout unchanged.
+  //   nubis3ModelEnable — Phase B master toggle: 1 = the Nubis3 NVDF/SDF
+  //     density model, 0 = legacy noise-threshold model (A/B). 0 until Phase B.
+  //   nvdfNominalCoverage — the coverage the NVDF body SDF was baked at
+  //     (quantized live weather coverage in auto mode, or a pinned value).
+  //     Consumed by cloud_nvdf_occupancy at bake time and, from Phase B, by
+  //     the sampler's coverage level-set offset.
+  uint  nubis3ModelEnable;
+  float nvdfNominalCoverage;
   // Perf-bisect shader toggle (fork — 2026-06-11, diagnostic). Rides the former
   // padMoonNee2 slot; only bit 1 remains in use:
   //   bit 1: flat sky miss — evalSkyRadiance returns a constant grey immediately,
@@ -549,15 +572,25 @@ struct AtmosphereArgs {
   // first (reuse-the-pad-slot discipline) before growing the struct again.
   uint cloudLayer2StepFloor;     // Min march steps through the echo deck (near-zenith floor)
   uint cloudLayer2StepMax;       // Hard cap on echo-deck steps per ray (perf governor)
-  uint pad_cloudLayer2Step0;     // reserve — keeps the block vec4-aligned
-  uint pad_cloudLayer2Step1;     // reserve — keeps the block vec4-aligned
+  // Nubis3 profile controls (fork — Nubis3 conversion; Phase B consumers).
+  // Ride the former pad_cloudLayer2Step0/1 reserve slots; CB layout unchanged.
+  //   nvdfProfileDepthKm — depth into the body over which the dimensional
+  //     profile ramps 0 -> 1 (profile = remap of the offset SDF).
+  //   nvdfCoverageOffsetKm — km of level-set shift per unit of coverage
+  //     delta from the baked nominal (coverage grows/shrinks bodies live).
+  float nvdfProfileDepthKm;
+  float nvdfCoverageOffsetKm;
 
   // Layer-2 echo-deck color (fork — 2026-06-21). Independent albedo for the
   // deck (the one look knob split out from layer 1). vec3 + 1 pad word = one
   // vec4 row, so the CB stays 16-byte aligned (see the step block above —
   // appending a bare vec3 would straddle the row boundary and corrupt the CB).
   vec3  cloudLayer2Color;        // Deck base color; defaults to cloudColor's near-white
-  float pad_cloudLayer2Color0;   // reserve — completes the vec4 row
+  // Nubis3 value-erosion strength (fork — Nubis3 conversion; Phase B
+  // consumer). Scales the wispy/billowy noise composite before the
+  // ValueErosion remap of the dimensional profile. Rides the former
+  // pad_cloudLayer2Color0 reserve slot; CB layout unchanged. 0 until Phase B.
+  float nubis3ErosionStrength;
 
   // Lightning (fork — 2026-07-14). Two whole vec4 rows (CB alignment rule
   // above). The CPU-side strike scheduler (RtxAtmosphere::advanceLightning)
@@ -580,4 +613,40 @@ struct AtmosphereArgs {
                                   // intensity scaling — the scene-light sync scales
                                   // this by lightningSceneLightIntensity so the two
                                   // consumers calibrate independently.
+
+  // ----- Cloud temporal-smoothing weight + reserve pads (fork — 2026-07-16,
+  // anti-blobby crispness pass). NEW 16-byte block appended at the struct
+  // tail (all former reserve pads are consumed); grow this struct ONLY in
+  // full vec4 rows (see the CB-alignment discipline note at the top).
+  float cloudHistoryWeight;  // EMA history weight of the cloud temporal
+                             // smoother in evalSkyRadiance [0..0.98]. Was the
+                             // hardcoded 0.92; lower = crisper/faster response
+                             // but more visible per-frame jitter for DLSS to
+                             // chew on. Zeroed in normalizeForSkyLutCache
+                             // (composite-only — never feeds a bake).
+  float nubis3InteriorTexture;  // [0..1] strength of the interior density
+                                // modulation by the raw detail channels
+                                // (Nubis3 Density-Scale-NVDF / iw3xo
+                                // self-gate stand-in — see the sampler's
+                                // step 8). 0 = flat saturated interiors
+                                // (pre-2026-07-16 behavior). Rides the
+                                // former padReserve0 slot.
+  float nubis3EdgeErosion;      // [0..3] edge wisp cut: additional erosion
+                                // shaped by the WISPY channel, concentrated
+                                // in the outer shell (x(1-profile)^2) — deep
+                                // strand-shaped cuts that shred silhouettes
+                                // into trailing wisps while billowy cores
+                                // keep rounded edges. 0 = uniform erosion
+                                // only. Rides the former padReserve1 slot.
+  float nubis3AdaptiveStepKm;   // √-adaptive hybrid march step FLOOR in km
+                                // (fork — detail round 2026-07-16, Nubis
+                                // p.172/174). Nubis3 view march only: step =
+                                // max(SDF · nvdfStepScale, clamp(
+                                // cloudViewStepKm · sqrt(t/12 km), THIS,
+                                // 4·cloudViewStepKm)). 0 = off (fixed-length
+                                // lattice stepping). Rides the former
+                                // padReserve2 slot — THE LAST reserve pad;
+                                // any further growth needs a new full
+                                // 16-byte row (see the CB-alignment
+                                // discipline note at the top).
 };

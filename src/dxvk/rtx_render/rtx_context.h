@@ -80,6 +80,11 @@ namespace dxvk {
     // debug views to bind the 3D textures into their pass-local descriptor sets.
     Resources::Resource getCloudDSun(RtxContext& ctx);
     Resources::Resource getCloudDAmbient(RtxContext& ctx);
+    // Returns the published cloud NVDF SDF (fork — Nubis3 conversion Phase A):
+    // the tile-periodic signed distance field of the cloud body, raw km,
+    // negative inside. Lazy-initialized on demand like the voxel grids. Used
+    // by the NVDF SDF slice debug view (enum 879).
+    Resources::Resource getCloudNvdfSdf(RtxContext& ctx);
     // Returns the per-frame Nubis Cubed cloud render RT (fork — 2026-05-12,
     // C4). Lazy-initialized on demand; the resource becomes valid once
     // ensureCloudRenderRT has run during updateAtmosphereConstants. Used by
@@ -363,6 +368,7 @@ namespace dxvk {
     friend Resources::Resource fork_hooks::getCloudSkyTransmittanceLut(RtxContext& ctx);
     friend Resources::Resource fork_hooks::getCloudDSun(RtxContext& ctx);
     friend Resources::Resource fork_hooks::getCloudDAmbient(RtxContext& ctx);
+    friend Resources::Resource fork_hooks::getCloudNvdfSdf(RtxContext& ctx);
     friend Resources::Resource fork_hooks::getCloudRenderRT(RtxContext& ctx);
   };
 } // namespace dxvk

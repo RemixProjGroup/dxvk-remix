@@ -37,6 +37,11 @@
 #include <rtx_shaders/cloud_secondary_lut.h>
 #include <rtx_shaders/cloud_height_lut_baker.h>
 #include <rtx_shaders/cloud_placement_map_baker.h>
+#include <rtx_shaders/cloud_nvdf_occupancy.h>
+#include <rtx_shaders/cloud_nvdf_jfa.h>
+#include <rtx_shaders/cloud_nvdf_resolve.h>
+#include <rtx_shaders/cloud_detail_noise_baker.h>
+#include "rtx/pass/atmosphere/cloud_nvdf.h"
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -107,6 +112,10 @@ namespace dxvk {
     // voxel grids. 256x256x32 R16F precomputed optical depth along the sun
     // direction (D_sun) and zenith (D_ambient). The Nubis Cubed cloud-lighting
     // path reads these at shade time via sampleDSun / sampleDAmbient.
+    // Slots 5/6 (fork — Nubis3 conversion Phase B): NVDF SDF front buffer +
+    // detail volume — the bake integrand branches on the density model so the
+    // grids track the rendered iso-surface. Keep in lockstep with the
+    // layout(binding) declarations in the two .comp.slang files.
     class CloudSunDensityGridShader : public ManagedShader {
       SHADER_SOURCE(CloudSunDensityGridShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_sun_density_grid)
 
@@ -116,6 +125,8 @@ namespace dxvk {
         TEXTURE3D(2)
         SAMPLER(3)
         TEXTURE2D(4)
+        TEXTURE3D(5)
+        TEXTURE3D(6)
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(CloudSunDensityGridShader);
@@ -129,6 +140,8 @@ namespace dxvk {
         TEXTURE3D(2)
         SAMPLER(3)
         TEXTURE2D(4)
+        TEXTURE3D(5)
+        TEXTURE3D(6)
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(CloudAmbientDensityGridShader);
@@ -149,6 +162,8 @@ namespace dxvk {
     //   9: SamplerState          (linear/CLAMP — sky-view LUT)
     //  10: Texture2D<float>      (AtmosphereCloudHeightLut, slide 3 lift — fork 2026-05-15)
     //  11: SamplerState          (linear/CLAMP — height LUT)
+    //  13: Texture3D<float>     (AtmosphereCloudNvdfSdf — fork, Nubis3 Phase B)
+    //  14: Texture3D<float4>    (AtmosphereCloudDetailNoise3D — fork, Nubis3 Phase B)
     class CloudRenderShader : public ManagedShader {
       SHADER_SOURCE(CloudRenderShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_render)
 
@@ -166,6 +181,8 @@ namespace dxvk {
         TEXTURE2D(10)
         SAMPLER(11)
         TEXTURE2D(12)
+        TEXTURE3D(13)
+        TEXTURE3D(14)
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(CloudRenderShader);
@@ -193,6 +210,8 @@ namespace dxvk {
         TEXTURE2D(10)
         SAMPLER(11)
         TEXTURE2D(12)
+        TEXTURE3D(13)
+        TEXTURE3D(14)
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(CloudSecondaryLutShader);
@@ -224,6 +243,77 @@ namespace dxvk {
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(CloudPlacementMapBakerShader);
+
+    // Fork (Nubis3 conversion Phase A): cloud NVDF SDF bake chain. Slot maps
+    // kept in lockstep with cloud_nvdf.h's CLOUD_NVDF_*_BINDING_* defines and
+    // the shaders' layout(binding) declarations — pass-local slots, nothing in
+    // the common atmosphere range.
+    //
+    // Occupancy voxelize:
+    //   0: ConstantBuffer<AtmosphereArgs>
+    //   1: RWTexture3D<float>   occupancy out (r8)
+    //   2: Texture2D<float4>    cloud placement map
+    //   3: SamplerState         linear/REPEAT
+    class CloudNvdfOccupancyShader : public ManagedShader {
+      SHADER_SOURCE(CloudNvdfOccupancyShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_nvdf_occupancy)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        RW_TEXTURE3D(1)
+        TEXTURE2D(2)
+        SAMPLER(3)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudNvdfOccupancyShader);
+
+    // JFA seed-init / jump pass (mode + jump size via push constants):
+    //   0: ConstantBuffer<AtmosphereArgs>
+    //   1: Texture3D<float>     occupancy (read in mode 0)
+    //   2: Texture3D<uint>      seeds in  (read in mode 1)
+    //   3: RWTexture3D<uint>    seeds out (r32ui)
+    class CloudNvdfJfaShader : public ManagedShader {
+      SHADER_SOURCE(CloudNvdfJfaShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_nvdf_jfa)
+
+      PUSH_CONSTANTS(CloudNvdfJfaArgs)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        TEXTURE3D(1)
+        TEXTURE3D(2)
+        RW_TEXTURE3D(3)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudNvdfJfaShader);
+
+    // Signed resolve:
+    //   0: ConstantBuffer<AtmosphereArgs>
+    //   1: Texture3D<float>     occupancy (sign source)
+    //   2: Texture3D<uint>      final seeds
+    //   3: RWTexture3D<float>   SDF out (r16f, signed km)
+    class CloudNvdfResolveShader : public ManagedShader {
+      SHADER_SOURCE(CloudNvdfResolveShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_nvdf_resolve)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        TEXTURE3D(1)
+        TEXTURE3D(2)
+        RW_TEXTURE3D(3)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudNvdfResolveShader);
+
+    // Fork (Nubis3 conversion Phase B): one-shot bake of the 128^3 RGBA8
+    // wispy/billowy detail volume the Nubis3 up-rez composites into its
+    // value-erosion field. Fixed pattern — no live bake inputs.
+    class CloudDetailNoiseBakerShader : public ManagedShader {
+      SHADER_SOURCE(CloudDetailNoiseBakerShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_detail_noise_baker)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        RW_TEXTURE3D(1)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(CloudDetailNoiseBakerShader);
   }
 
 RtxAtmosphere::RtxAtmosphere(DxvkDevice* device)
@@ -251,6 +341,16 @@ void RtxAtmosphere::initialize(Rc<DxvkContext> ctx) {
   dispatchCloudPlacementMapBake(ctx);
   cacheCloudPlacementBakeInputs();
   dispatchCloudHeightLutBake(ctx);
+  // Nubis3 Phase B: one-shot wispy/billowy detail volume (fixed pattern).
+  dispatchCloudDetailNoiseBake(ctx);
+  // Nubis3 Phase A: full synchronous NVDF SDF bake (occupancy -> JFA chain ->
+  // resolve -> publish). Runs after the placement bake above — the occupancy
+  // pass voxelizes the placement-driven column model; runCloudNvdfBakeFull
+  // opens with its own write->read barrier to order that dependency. A few ms
+  // once at init, matching the noise-volume pattern; runtime re-bakes go
+  // through the amortized state machine in computeLuts instead.
+  runCloudNvdfBakeFull(ctx);
+  cacheCloudNvdfBakeInputs();
   m_initialized = true;
   m_lutsNeedRecompute = true;
 }
@@ -369,6 +469,34 @@ namespace {
     args.lightningFlashIntensity     = 0.0f;
     args.lightningEnvelope           = 0.0f;
     args.lightningHistoryFade        = 0.0f;
+    // Temporal-smoother weight (fork — crispness pass): composite-only, so a
+    // slider drag must not invalidate the sky-LUT cache key.
+    args.cloudHistoryWeight          = 0.0f;
+    // Star / Milky Way fields feed ONLY runtime miss shading (evalNightSky /
+    // evalStarField) — never any LUT bake. BUG FIX (fork — 2026-07-16, GT7
+    // cross-audit): normalizeForSkyViewLutKey's comment always claimed these
+    // were zeroed, but no zeroing existed ANYWHERE — the game-driven
+    // per-frame starRotation flipped every memcmp gate downstream each frame
+    // at night, re-baking the transmittance -> multiscatter -> sky-view
+    // cascade AND (via normalizeForVoxelGridKey) the D_sun / D_ambient
+    // grids, every frame, for nothing. Zeroed here in the BASE normalize so
+    // every derived key inherits it.
+    args.starBrightness              = 0.0f;
+    args.starDensity                 = 0.0f;
+    args.starTwinkleSpeed            = 0.0f;
+    args.starRotation                = 0.0f;
+    args.starAxisElevation           = 0.0f;
+    args.starAxisRotation            = 0.0f;
+    args.starPsfSharpness            = 0.0f;
+    args.starCloudExtinctionPower    = 0.0f;
+    args.starAmbientCouplingStrength = 0.0f;
+    args.milkyWayEnabled             = 0.0f;
+    args.milkyWayDensityBoost        = 0.0f;
+    args.milkyWayBackgroundBrightness = 0.0f;
+    args.milkyWayBackgroundColor     = vec3(0.0f, 0.0f, 0.0f);
+    args.milkyWayDustAmount          = 0.0f;
+    args.milkyWayCoreColor           = vec3(0.0f, 0.0f, 0.0f);
+    args.milkyWayDustColor           = vec3(0.0f, 0.0f, 0.0f);
   }
 
   // Quantize one direction-vector component to the granularity step.
@@ -381,12 +509,10 @@ namespace {
   }
 
   // Split cache key for the sky-view LUT bake (fork — 2026-06-11, perf).
-  // Extends normalizeForSkyLutCache by zeroing the star / Milky Way fields:
-  // they feed only the runtime miss shading (evalNightSky / evalStarField),
-  // never any LUT bake. starRotation in particular is game-driven per frame
-  // (sidereal animation — see atmosphere_args.h), which made the monolithic
-  // memcmp gate fire every frame at night and re-bake the entire
-  // transmittance → multiscatter → sky-view cascade for nothing.
+  // NOTE (2026-07-16): the star / Milky Way zeroing this comment used to
+  // describe now lives in normalizeForSkyLutCache (the base normalize) —
+  // it was in fact MISSING entirely until then, which re-baked the LUT
+  // cascade every frame at night off the game-driven starRotation.
   //
   // Sky-view re-bake granularity (fork — 2026-06-11, perf): when
   // skyViewRebakeGranularityDeg > 0, the sun and moon directions are
@@ -589,7 +715,8 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.starRotation      = RtxOptions::starRotation();
   args.starAxisElevation = RtxOptions::starAxisElevation();
   args.starAxisRotation  = RtxOptions::starAxisRotation();
-  args.pad3              = 0.0f;
+  // (nubis3SharpenStrength — the former pad3 slot — is filled in the cloud
+  // block below alongside the other Nubis3 fields.)
 
   args.starPsfSharpness            = RtxOptions::starPsfSharpness();
   args.starCloudExtinctionPower    = RtxOptions::starCloudExtinctionPower();
@@ -601,13 +728,12 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.milkyWayEnabled               = RtxOptions::milkyWayEnabled() ? 1.0f : 0.0f;
   args.milkyWayDensityBoost          = RtxOptions::milkyWayDensityBoost();
   args.milkyWayBackgroundBrightness  = RtxOptions::milkyWayBackgroundBrightness();
-  args.padMilkyWay0                  = 0.0f;
   args.milkyWayBackgroundColor       = RtxOptions::milkyWayBackgroundColor();
   args.milkyWayDustAmount            = RtxOptions::milkyWayDustAmount();
   args.milkyWayCoreColor             = RtxOptions::milkyWayCoreColor();
-  args.padMilkyWay1                  = 0.0f;
   args.milkyWayDustColor             = RtxOptions::milkyWayDustColor();
-  args.padMilkyWay2                  = 0.0f;
+  // The former padMilkyWay0/1/2 slots (nvdfStepScale / nvdfBodyErosionStrength
+  // / nubis3HFDetailStrength) are filled in the Nubis3 block below.
 
   // ----- Per-moon parameters (fork) -----
   for (uint32_t i = 0; i < MAX_MOONS; ++i) {
@@ -697,6 +823,40 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudCoverageMean = RtxOptions::cloudCoverageMean();
     args.cloudCoverageSpread = RtxOptions::cloudCoverageSpread();
     args.cloudCoverageNoiseScale = RtxOptions::cloudCoverageNoiseScale();
+    // Nubis3 Phase A: nominal coverage the NVDF body SDF bakes at. Auto mode
+    // (option 0) tracks the live weather coverage quantized to 0.25 steps —
+    // the sample-time coverage level-set offset then stays small, and the
+    // NVDF dirty key fires an amortized re-bake only when the drift crosses a
+    // step. A nonzero option pins the bake nominal (debug / look-tuning).
+    {
+      const float pinned = RtxOptions::nvdfNominalCoverage();
+      const float autoNominal =
+          std::min(std::max(std::round(args.cloudCoverageMean / 0.25f) * 0.25f, 0.25f), 1.0f);
+      args.nvdfNominalCoverage = pinned > 0.0f ? pinned : autoNominal;
+    }
+    // Nubis3 density model (fork — Nubis3 conversion Phase B).
+    args.nubis3ModelEnable     = RtxOptions::nubis3ModelEnable() ? 1u : 0u;
+    args.nvdfProfileDepthKm    = std::max(RtxOptions::nvdfProfileDepthKm(), 0.05f);
+    args.nvdfCoverageOffsetKm  = std::max(RtxOptions::nvdfCoverageOffsetKm(), 0.0f);
+    args.nubis3ErosionStrength = std::max(RtxOptions::nubis3ErosionStrength(), 0.0f);
+    args.nubis3SharpenStrength = std::min(std::max(RtxOptions::nubis3SharpenStrength(), 0.0f), 1.0f);
+    // Nubis3 anti-blobby pass + Phase C stepping (fork). Body erosion is a
+    // BAKE-time input (NVDF dirty key); HF detail and step scale are live.
+    args.nvdfBodyErosionStrength = std::min(std::max(RtxOptions::nvdfBodyErosionStrength(), 0.0f), 1.5f);
+    args.nubis3HFDetailStrength  = std::min(std::max(RtxOptions::nubis3HFDetailStrength(), 0.0f), 3.0f);
+    args.nvdfStepScale           = std::min(std::max(RtxOptions::nvdfStepScale(), 0.0f), 0.95f);
+    // Cloud temporal-smoother EMA weight (fork — crispness pass). Composite-
+    // only; zeroed in normalizeForSkyLutCache so slider drags never re-bake.
+    args.cloudHistoryWeight      = std::min(std::max(RtxOptions::cloudHistoryWeight(), 0.0f), 0.98f);
+    // Interior density texture + edge wisp cut (fork — 2026-07-16). Live;
+    // both feed the shared sampler, so the D_sun/D_ambient bakes track them
+    // automatically.
+    args.nubis3InteriorTexture   = std::min(std::max(RtxOptions::nubis3InteriorTexture(), 0.0f), 1.0f);
+    args.nubis3EdgeErosion       = std::min(std::max(RtxOptions::nubis3EdgeErosion(), 0.0f), 3.0f);
+    // √-adaptive march step floor (fork — detail round 2026-07-16). Live;
+    // affects the view march + secondary cloud LUT, so it stays in the LUT
+    // cache keys (same class as nvdfStepScale / cloudViewStepKm).
+    args.nubis3AdaptiveStepKm    = std::min(std::max(RtxOptions::nubis3AdaptiveStepKm(), 0.0f), 0.2f);
     args.cloudAnvilBias = RtxOptions::cloudAnvilBias();
     args.cloudMsScale = RtxOptions::cloudMsScale();
     // Dramatic-shading pass (fork — 2026-07-14). Lives in the former
@@ -1035,6 +1195,76 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
     1 // mipLevels
   );
 
+  // Fork (Nubis3 conversion Phase A): cloud NVDF SDF bake chain resources.
+  // 256x64x256, texture y = VERTICAL (see cloud_nvdf.h — explicit, unlike the
+  // D_sun grids above). Occupancy + JFA ping-pong are bake scratch; the two
+  // R16F SDF buffers are the published front/back pair. No clear-value
+  // trickery: initialize() runs the full synchronous bake chain before any
+  // consumer can sample, so cold reads cannot happen (comment retained as the
+  // ordering contract — do not move consumers ahead of the init bake).
+  VkExtent3D cloudNvdfExtent = { kCloudNvdfSizeXZ, kCloudNvdfSizeY, kCloudNvdfSizeXZ };
+  m_cloudNvdfOccupancy = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud NVDF Occupancy",
+    cloudNvdfExtent,
+    VK_FORMAT_R8_UNORM,
+    1, // numLayers
+    VK_IMAGE_TYPE_3D,
+    VK_IMAGE_VIEW_TYPE_3D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
+  for (uint32_t i = 0; i < 2; ++i) {
+    m_cloudNvdfJfa[i] = Resources::createImageResource(
+      ctx,
+      i == 0 ? "Atmosphere Cloud NVDF JFA Seeds 0" : "Atmosphere Cloud NVDF JFA Seeds 1",
+      cloudNvdfExtent,
+      VK_FORMAT_R32_UINT,
+      1, // numLayers
+      VK_IMAGE_TYPE_3D,
+      VK_IMAGE_VIEW_TYPE_3D,
+      0, // imageCreateFlags
+      VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
+      VkClearColorValue{}, // clearValue
+      1 // mipLevels
+    );
+    m_cloudNvdfSdf[i] = Resources::createImageResource(
+      ctx,
+      i == 0 ? "Atmosphere Cloud NVDF SDF 0" : "Atmosphere Cloud NVDF SDF 1",
+      cloudNvdfExtent,
+      VK_FORMAT_R16_SFLOAT,
+      1, // numLayers
+      VK_IMAGE_TYPE_3D,
+      VK_IMAGE_VIEW_TYPE_3D,
+      0, // imageCreateFlags
+      VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
+      VkClearColorValue{}, // clearValue
+      1 // mipLevels
+    );
+  }
+
+  // Fork (Nubis3 conversion Phase B): 128^3 RGBA8 wispy/billowy detail volume
+  // (~8 MB). Baked once at init by dispatchCloudDetailNoiseBake; consumed by
+  // sampleCloudDensityNubis3's value-erosion composite.
+  VkExtent3D cloudDetailNoiseExtent = {
+    kCloudDetailNoise3DSize, kCloudDetailNoise3DSize, kCloudDetailNoise3DSize
+  };
+  m_cloudDetailNoise3D = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud Detail Noise 3D",
+    cloudDetailNoiseExtent,
+    VK_FORMAT_R8G8B8A8_UNORM,
+    1, // numLayers
+    VK_IMAGE_TYPE_3D,
+    VK_IMAGE_VIEW_TYPE_3D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
+
   // EA Importance-Sampled FAST noise (128x128x32 RG8 Texture2DArray) used for
   // cloud ray-march jitter. One-shot upload of the embedded byte data; no-op on
   // subsequent calls.
@@ -1156,8 +1386,20 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_ACCESS_SHADER_READ_BIT);
       memset(&m_cachedVoxelGridKey, 0, sizeof(m_cachedVoxelGridKey));
+      // The NVDF voxelizes the placement-driven column model — a fresh
+      // placement map (or tile change) invalidates the SDF too. Clearing the
+      // key makes the state machine below start a re-bake this frame.
+      m_cachedNvdfKey = {};
     }
   }
+
+  // Nubis3 Phase A: amortized NVDF SDF re-bake state machine. Starts when a
+  // bake input changes (column shape knobs, cell/tile size, quantized
+  // thickness, nominal coverage), then advances kCloudNvdfJumpPassesPerFrame
+  // JFA passes per frame into the BACK SDF buffer and publish-swaps on
+  // completion — consumers keep reading the last complete bake throughout,
+  // so weather-drift re-bakes never pop a half-baked field or spike a frame.
+  stepCloudNvdfBake(ctx);
 
   // Sky LUTs (transmittance / multiscattering / sky-view) only rebake when
   // their inputs actually change. Animated fields that feed only cloud and
@@ -1536,9 +1778,14 @@ void RtxAtmosphere::dispatchCloudSunDensityGrid(Rc<DxvkContext> ctx) {
   Rc<DxvkSampler> cloudSampler = m_device->createSampler(samplerInfo);
   ctx->bindResourceSampler(3, cloudSampler);
   ctx->bindResourceView(4, m_cloudPlacementMap.view, nullptr);
+  // Nubis3 model inputs (fork — Phase B): front SDF + detail volume at 5/6.
+  ctx->bindResourceView(5, m_cloudNvdfSdf[m_cloudNvdfSdfFront].view, nullptr);
+  ctx->bindResourceView(6, m_cloudDetailNoise3D.view, nullptr);
 
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNoise3D.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudPlacementMap.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNvdfSdf[m_cloudNvdfSdfFront].image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDetailNoise3D.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudDSun.image);
 
   ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudSunDensityGridShader::getShader());
@@ -1571,9 +1818,14 @@ void RtxAtmosphere::dispatchCloudAmbientDensityGrid(Rc<DxvkContext> ctx) {
   Rc<DxvkSampler> cloudSampler = m_device->createSampler(samplerInfo);
   ctx->bindResourceSampler(3, cloudSampler);
   ctx->bindResourceView(4, m_cloudPlacementMap.view, nullptr);
+  // Nubis3 model inputs (fork — Phase B): front SDF + detail volume at 5/6.
+  ctx->bindResourceView(5, m_cloudNvdfSdf[m_cloudNvdfSdfFront].view, nullptr);
+  ctx->bindResourceView(6, m_cloudDetailNoise3D.view, nullptr);
 
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNoise3D.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudPlacementMap.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNvdfSdf[m_cloudNvdfSdfFront].image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDetailNoise3D.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudDAmbient.image);
 
   ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudAmbientDensityGridShader::getShader());
@@ -1582,6 +1834,219 @@ void RtxAtmosphere::dispatchCloudAmbientDensityGrid(Rc<DxvkContext> ctx) {
   const uint32_t groupsY = (kCloudVoxelGridY + 7u) / 8u;
   const uint32_t groupsZ = (kCloudVoxelGridZ + 3u) / 4u;
   ctx->dispatch(groupsX, groupsY, groupsZ);
+}
+
+// ---------------------------------------------------------------------------
+// Cloud NVDF SDF bake chain (fork — Nubis3 conversion Phase A).
+//
+// occupancy voxelize -> JFA seed init -> 9 jump passes -> signed resolve into
+// the back SDF buffer -> publish swap. All dispatches share the 256x64x256
+// domain ([numthreads(8, 4, 8)] in the shaders -> (32, 16, 32) groups).
+// ---------------------------------------------------------------------------
+namespace {
+  // Shared group counts for every NVDF pass ([numthreads(8, 4, 8)] shaders).
+  // Uses the shared-header dims (the class constants are private).
+  constexpr uint32_t kNvdfGroupsX = (CLOUD_NVDF_SIZE_XZ + 7u) / 8u;
+  constexpr uint32_t kNvdfGroupsY = (CLOUD_NVDF_SIZE_Y + 3u) / 4u;
+  constexpr uint32_t kNvdfGroupsZ = (CLOUD_NVDF_SIZE_XZ + 7u) / 8u;
+
+  // Compute-to-compute write->read barrier used between chained NVDF passes.
+  void nvdfBarrier(const Rc<DxvkContext>& ctx) {
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_READ_BIT);
+  }
+}
+
+void RtxAtmosphere::dispatchCloudDetailNoiseBake(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud Detail Noise Bake");
+
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudDetailNoise3D.view, nullptr);
+
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudDetailNoise3D.image);
+
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudDetailNoiseBakerShader::getShader());
+
+  // Shader declares [numthreads(8, 8, 8)].
+  const uint32_t groups = (kCloudDetailNoise3DSize + 7u) / 8u;
+  ctx->dispatch(groups, groups, groups);
+}
+
+void RtxAtmosphere::dispatchCloudNvdfOccupancy(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud NVDF Occupancy");
+
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudNvdfOccupancy.view, nullptr);
+  ctx->bindResourceView(2, m_cloudPlacementMap.view, nullptr);
+
+  // Linear/REPEAT sampler — the placement map tiles at cloudNoiseTileKm and
+  // the NVDF's horizontal domain is one tile period, so REPEAT keeps the
+  // voxel-center taps filter-continuous across the wrap seam.
+  DxvkSamplerCreateInfo samplerInfo = {};
+  samplerInfo.magFilter    = VK_FILTER_LINEAR;
+  samplerInfo.minFilter    = VK_FILTER_LINEAR;
+  samplerInfo.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  Rc<DxvkSampler> placementSampler = m_device->createSampler(samplerInfo);
+  ctx->bindResourceSampler(3, placementSampler);
+
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudPlacementMap.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudNvdfOccupancy.image);
+
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudNvdfOccupancyShader::getShader());
+  ctx->dispatch(kNvdfGroupsX, kNvdfGroupsY, kNvdfGroupsZ);
+}
+
+void RtxAtmosphere::dispatchCloudNvdfJfaPass(Rc<DxvkContext> ctx, uint32_t mode,
+                                             uint32_t jumpSizeVoxels,
+                                             uint32_t srcIdx, uint32_t dstIdx) {
+  ScopedGpuProfileZone(ctx, mode == 0u ? "Atmosphere Cloud NVDF JFA Seed" : "Atmosphere Cloud NVDF JFA Jump");
+
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  ctx->setPushConstantBank(DxvkPushConstantBank::RTX);
+  CloudNvdfJfaArgs pushArgs = {};
+  pushArgs.mode           = mode;
+  pushArgs.jumpSizeVoxels = jumpSizeVoxels;
+  ctx->pushConstants(0, sizeof(pushArgs), &pushArgs);
+
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudNvdfOccupancy.view, nullptr);
+  ctx->bindResourceView(2, m_cloudNvdfJfa[srcIdx].view, nullptr);
+  ctx->bindResourceView(3, m_cloudNvdfJfa[dstIdx].view, nullptr);
+
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNvdfOccupancy.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNvdfJfa[srcIdx].image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudNvdfJfa[dstIdx].image);
+
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudNvdfJfaShader::getShader());
+  ctx->dispatch(kNvdfGroupsX, kNvdfGroupsY, kNvdfGroupsZ);
+}
+
+void RtxAtmosphere::dispatchCloudNvdfResolve(Rc<DxvkContext> ctx, uint32_t seedsIdx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Cloud NVDF Resolve");
+
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  const uint32_t backIdx = 1u - m_cloudNvdfSdfFront;
+
+  ctx->bindResourceBuffer(0, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(1, m_cloudNvdfOccupancy.view, nullptr);
+  ctx->bindResourceView(2, m_cloudNvdfJfa[seedsIdx].view, nullptr);
+  ctx->bindResourceView(3, m_cloudNvdfSdf[backIdx].view, nullptr);
+
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNvdfOccupancy.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNvdfJfa[seedsIdx].image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudNvdfSdf[backIdx].image);
+
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CloudNvdfResolveShader::getShader());
+  ctx->dispatch(kNvdfGroupsX, kNvdfGroupsY, kNvdfGroupsZ);
+}
+
+void RtxAtmosphere::runCloudNvdfBakeFull(Rc<DxvkContext> ctx) {
+  // Order the placement-map write (queued earlier this command list at init)
+  // ahead of the occupancy pass's placement read.
+  nvdfBarrier(ctx);
+
+  dispatchCloudNvdfOccupancy(ctx);
+  nvdfBarrier(ctx);
+
+  // Seed init writes ping-pong buffer 0; jump pass i reads (i % 2) and
+  // writes ((i + 1) % 2), so the final seeds land in (passCount % 2).
+  dispatchCloudNvdfJfaPass(ctx, 0u, 0u, 1u, 0u);
+  nvdfBarrier(ctx);
+  for (uint32_t i = 0; i < kCloudNvdfJumpPassCount; ++i) {
+    dispatchCloudNvdfJfaPass(ctx, 1u, kCloudNvdfJumpSchedule[i], i % 2u, (i + 1u) % 2u);
+    nvdfBarrier(ctx);
+  }
+
+  dispatchCloudNvdfResolve(ctx, kCloudNvdfJumpPassCount % 2u);
+  nvdfBarrier(ctx);
+  m_cloudNvdfSdfFront = 1u - m_cloudNvdfSdfFront;
+
+  // Any interrupted amortized re-bake is superseded by this full chain.
+  m_nvdfBakeActive = false;
+  m_nvdfJumpIdx    = 0;
+}
+
+void RtxAtmosphere::stepCloudNvdfBake(Rc<DxvkContext> ctx) {
+  if (!m_nvdfBakeActive) {
+    if (!needsCloudNvdfRebake()) {
+      return;
+    }
+    // Start a re-bake: occupancy + seed init this frame, jump passes spread
+    // over the following frames. Snapshot the key at START — if an input
+    // changes again mid-bake, this bake completes with the field it started
+    // from and the stale key immediately starts a follow-up bake.
+    cacheCloudNvdfBakeInputs();
+    dispatchCloudNvdfOccupancy(ctx);
+    nvdfBarrier(ctx);
+    dispatchCloudNvdfJfaPass(ctx, 0u, 0u, 1u, 0u);
+    nvdfBarrier(ctx);
+    m_nvdfBakeActive = true;
+    m_nvdfJumpIdx    = 0;
+    return;
+  }
+
+  // Advance the jump chain a bounded number of passes per frame.
+  for (uint32_t n = 0; n < kCloudNvdfJumpPassesPerFrame && m_nvdfJumpIdx < kCloudNvdfJumpPassCount; ++n) {
+    dispatchCloudNvdfJfaPass(ctx, 1u, kCloudNvdfJumpSchedule[m_nvdfJumpIdx],
+                             m_nvdfJumpIdx % 2u, (m_nvdfJumpIdx + 1u) % 2u);
+    nvdfBarrier(ctx);
+    ++m_nvdfJumpIdx;
+  }
+
+  if (m_nvdfJumpIdx >= kCloudNvdfJumpPassCount) {
+    dispatchCloudNvdfResolve(ctx, kCloudNvdfJumpPassCount % 2u);
+    nvdfBarrier(ctx);
+    m_cloudNvdfSdfFront = 1u - m_cloudNvdfSdfFront;
+    m_nvdfBakeActive = false;
+    m_nvdfJumpIdx    = 0;
+  }
+}
+
+bool RtxAtmosphere::needsCloudNvdfRebake() const {
+  AtmosphereArgs args = getAtmosphereArgs();
+  const float thicknessQ = std::round(args.cloudThickness / 0.25f) * 0.25f;
+  return m_cachedNvdfKey.cellSizeKm      != RtxOptions::cloudCellSizeKm()
+      || m_cachedNvdfKey.tileKm          != RtxOptions::cloudNoiseTileKm()
+      || m_cachedNvdfKey.columnFeather   != RtxOptions::cloudColumnFeather()
+      || m_cachedNvdfKey.columnTopShape  != RtxOptions::cloudColumnTopShape()
+      || m_cachedNvdfKey.columnTopVar    != RtxOptions::cloudColumnTopVariation()
+      || m_cachedNvdfKey.columnBaseVar   != RtxOptions::cloudColumnBaseVariation()
+      || m_cachedNvdfKey.nominalCoverage != args.nvdfNominalCoverage
+      || m_cachedNvdfKey.thicknessQ      != thicknessQ
+      || m_cachedNvdfKey.bodyErosion     != args.nvdfBodyErosionStrength;
+}
+
+void RtxAtmosphere::cacheCloudNvdfBakeInputs() {
+  AtmosphereArgs args = getAtmosphereArgs();
+  m_cachedNvdfKey.cellSizeKm      = RtxOptions::cloudCellSizeKm();
+  m_cachedNvdfKey.tileKm          = RtxOptions::cloudNoiseTileKm();
+  m_cachedNvdfKey.columnFeather   = RtxOptions::cloudColumnFeather();
+  m_cachedNvdfKey.columnTopShape  = RtxOptions::cloudColumnTopShape();
+  m_cachedNvdfKey.columnTopVar    = RtxOptions::cloudColumnTopVariation();
+  m_cachedNvdfKey.columnBaseVar   = RtxOptions::cloudColumnBaseVariation();
+  m_cachedNvdfKey.nominalCoverage = args.nvdfNominalCoverage;
+  m_cachedNvdfKey.thicknessQ      = std::round(args.cloudThickness / 0.25f) * 0.25f;
+  m_cachedNvdfKey.bodyErosion     = args.nvdfBodyErosionStrength;
 }
 
 void RtxAtmosphere::ensureCloudRenderRT(Rc<DxvkContext> ctx,
@@ -1844,11 +2309,16 @@ void RtxAtmosphere::dispatchCloudRender(Rc<DxvkContext> ctx) {
   ctx->bindResourceView(10, m_cloudHeightLut.isValid() ? m_cloudHeightLut.view : nullptr, nullptr);
   ctx->bindResourceSampler(11, heightLutSampler);
   ctx->bindResourceView(12, m_cloudPlacementMap.view, nullptr);
+  // Nubis3 model inputs (fork — Phase B): front SDF + detail volume at 13/14.
+  ctx->bindResourceView(13, m_cloudNvdfSdf[m_cloudNvdfSdfFront].view, nullptr);
+  ctx->bindResourceView(14, m_cloudDetailNoise3D.view, nullptr);
 
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNoise3D.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDSun.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDAmbient.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudPlacementMap.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNvdfSdf[m_cloudNvdfSdfFront].image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDetailNoise3D.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudRenderRT.image);
   if (m_skyViewLut.isValid()) {
     ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_skyViewLut.image);
@@ -1915,11 +2385,16 @@ void RtxAtmosphere::dispatchCloudSecondaryLut(Rc<DxvkContext> ctx) {
   ctx->bindResourceView(10, m_cloudHeightLut.isValid() ? m_cloudHeightLut.view : nullptr, nullptr);
   ctx->bindResourceSampler(11, heightLutSampler);
   ctx->bindResourceView(12, m_cloudPlacementMap.view, nullptr);
+  // Nubis3 model inputs (fork — Phase B): front SDF + detail volume at 13/14.
+  ctx->bindResourceView(13, m_cloudNvdfSdf[m_cloudNvdfSdfFront].view, nullptr);
+  ctx->bindResourceView(14, m_cloudDetailNoise3D.view, nullptr);
 
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNoise3D.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDSun.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDAmbient.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudPlacementMap.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNvdfSdf[m_cloudNvdfSdfFront].image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDetailNoise3D.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudSecondaryLut.image);
   if (m_skyViewLut.isValid()) {
     ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_skyViewLut.image);

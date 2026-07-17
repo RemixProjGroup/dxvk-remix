@@ -613,6 +613,18 @@ namespace fork_hooks {
     return ctx.m_atmosphere->getCloudDAmbient();
   }
 
+  // Published cloud NVDF SDF (fork — Nubis3 conversion Phase A). Same
+  // lazy-init pattern as the voxel-grid accessors above; the init path runs
+  // the full synchronous NVDF bake chain, so the returned front buffer is
+  // always a complete field.
+  Resources::Resource getCloudNvdfSdf(RtxContext& ctx) {
+    if (!ctx.m_atmosphere) {
+      ctx.m_atmosphere = std::make_unique<RtxAtmosphere>(ctx.m_device.ptr());
+    }
+    ctx.m_atmosphere->initialize(&ctx);
+    return ctx.m_atmosphere->getCloudNvdfSdf();
+  }
+
   // ---------------------------------------------------------------------------
   // getCloudRenderRT
   //
@@ -1355,6 +1367,88 @@ namespace fork_hooks {
           ImGui::TreePop();
         }
 
+        // Nubis3 SDF density model (fork — Nubis3 conversion Phase B).
+        if (ImGui::TreeNode("Nubis3 Model (SDF)")) {
+          RemixGui::Checkbox("Enable Nubis3 Model", &RtxOptions::nubis3ModelEnableObject());
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "A/B toggle: ON = the Nubis3 (SIGGRAPH 2023) SDF density model "
+              "(profile-from-SDF body + wispy/billowy value erosion; coverage "
+              "morphs clouds live with zero rebakes), OFF = the legacy "
+              "noise-threshold model. Shadow grids follow automatically.");
+          RemixGui::DragFloat("Profile Depth", &RtxOptions::nvdfProfileDepthKmObject(),
+                              0.02f, 0.1f, 3.0f, "%.2f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Depth into the body over which the dimensional profile ramps "
+              "0 -> 1. Small = hard-shelled dense clouds; large = soft "
+              "translucent edges.");
+          RemixGui::DragFloat("Coverage Reach", &RtxOptions::nvdfCoverageOffsetKmObject(),
+                              0.05f, 0.0f, 4.0f, "%.2f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Iso-surface shift per unit of coverage delta from the baked "
+              "nominal. Higher = the Coverage slider grows/shrinks/merges "
+              "clouds more aggressively (live, no rebake).");
+          RemixGui::DragFloat("Erosion Strength", &RtxOptions::nubis3ErosionStrengthObject(),
+                              0.02f, 0.0f, 2.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Wispy/billowy erosion of the body profile. 0 = smooth SDF "
+              "blobs; 1 = paper-faithful; higher = ragged carved clouds.");
+          RemixGui::DragFloat("Edge Wisp Cut", &RtxOptions::nubis3EdgeErosionObject(),
+                              0.02f, 0.0f, 3.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Extra erosion shaped by the wispy noise, concentrated at the "
+              "silhouette — cuts trailing wisp shapes out of cloud edges. "
+              "Billowy cores keep rounded edges. 0 = off.");
+          RemixGui::DragFloat("Sharpen", &RtxOptions::nubis3SharpenStrengthObject(),
+                              0.02f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Blend toward the paper's density sharpen (lifts low densities "
+              "to bring out wisp/edge definition).");
+          RemixGui::DragFloat("Interior Texture", &RtxOptions::nubis3InteriorTextureObject(),
+                              0.02f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Density variation INSIDE the body from the raw detail noise "
+              "(Nubis3 Density-Scale / iw3xo self-gate stand-in). Makes lit "
+              "faces read as cauliflower instead of a flat white mass. "
+              "0 = flat saturated interiors.");
+          RemixGui::DragFloat("Body Erosion", &RtxOptions::nvdfBodyErosionStrengthObject(),
+                              0.02f, 0.0f, 1.5f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "3D noise carve baked into the cloud BODIES (the anti-blobby "
+              "body lever): shifts the placement waterline per voxel so "
+              "columns bake in overhangs, notches and lumps instead of "
+              "convex blobs. 0 = smooth bodies. Re-bakes the SDF on change "
+              "(amortized, ~6 frames).");
+          RemixGui::DragFloat("HF Detail (Near)", &RtxOptions::nubis3HFDetailStrengthObject(),
+                              0.02f, 0.0f, 3.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Near-camera high-frequency detail (Nubis p.125): twice-folded "
+              "noise replaces a slice of the erosion composite within ~2 km "
+              "of the camera — fly-through / close-approach crispness. "
+              "1 = the paper's 10% max mix. Live.");
+          RemixGui::DragFloat("SDF Step Scale", &RtxOptions::nvdfStepScaleObject(),
+                              0.01f, 0.0f, 0.95f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Phase C empty-space skip: in clear air the march jumps ahead "
+              "by (min SDF tap) x this factor — big perf win at the horizon. "
+              "0 = uniform stepping. Lower it if silhouettes show banding.");
+          RemixGui::DragFloat("Adaptive Step Floor", &RtxOptions::nubis3AdaptiveStepKmObject(),
+                              0.001f, 0.0f, 0.2f, "%.3f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Nubis p.172 sqrt-adaptive march: step grows as sqrt(distance) "
+              "(= Step Length at 12 km) but never below this floor — fine "
+              "near steps resolve sub-100 m detail the fixed lattice "
+              "couldn't. 0 = legacy fixed-length stepping. If perf drops, "
+              "raise the floor; if near clouds still look soft, lower it.");
+          RemixGui::DragFloat("Bake Nominal Coverage", &RtxOptions::nvdfNominalCoverageObject(),
+                              0.05f, 0.0f, 1.0f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Coverage the body SDF bakes at. 0 = auto (track the live "
+              "coverage quantized to 0.25 steps — recommended). Nonzero pins "
+              "it; the SDF re-bakes amortized (~6 frames) on change. "
+              "Inspect via debug view 879 (Cloud NVDF SDF Slice).");
+          ImGui::TreePop();
+        }
+
         if (ImGui::TreeNode("Shaping")) {
           if (ImGui::TreeNode("Variation")) {
             RemixGui::DragFloat("Coverage Spread", &RtxOptions::cloudCoverageSpreadObject(),
@@ -1749,6 +1843,14 @@ namespace fork_hooks {
               "Resolution of the cloud render relative to the internal render "
               "resolution. 0.5 = quarter the pixels (~4x cheaper clouds, "
               "slightly softer); 1.0 = native (legacy). Applies live.");
+          RemixGui::DragFloat("Temporal Smoothing", &RtxOptions::cloudHistoryWeightObject(),
+                              0.005f, 0.0f, 0.98f, "%.2f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "EMA history weight of the cloud temporal smoother. Higher = "
+              "smoother but softer/smearier clouds that respond slowly; "
+              "lower = crisper detail with more visible per-frame jitter. "
+              "0 = raw jittered march (no temporal blend). 0.92 = previous "
+              "hardcoded behavior. Applies live.");
           RemixGui::DragFloat("Cloud Sample Spacing", &RtxOptions::cloudViewStepKmObject(),
                               0.01f, 0.0f, 1.0f, "%.2f km", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(

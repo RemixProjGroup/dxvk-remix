@@ -145,6 +145,19 @@ SamplerState AtmosphereCloudHeightLutSampler;
 layout(binding = 12)
 Texture2D<float4> AtmosphereCloudPlacementMap;
 
+// Nubis3 NVDF/SDF model inputs (fork — Nubis3 conversion Phase B). The cloud
+// body signed distance field (front buffer; raw km, negative inside, texture
+// y = VERTICAL — see cloud_nvdf.h) and the 128^3 RGBA8 wispy/billowy detail
+// volume. Consumed by sampleCloudDensityNubis3 via cloud_march_common's
+// density-model branch; sampled with the linear/REPEAT cloud sampler (slot 2)
+// — the SDF's vertical coordinate is half-texel clamped in the sampler code
+// so REPEAT never wraps slab bottom into slab top.
+layout(binding = 13)
+Texture3D<float> AtmosphereCloudNvdfSdf;
+
+layout(binding = 14)
+Texture3D<float4> AtmosphereCloudDetailNoise3D;
+
 // Include the helper library AFTER the texture globals are declared so the
 // ATMOSPHERE_AVAILABLE-gated helper bodies (sampleDSun / sampleDAmbient /
 // fastJitter / cloudHeightProfile / etc.) resolve to our local declarations.
@@ -211,6 +224,10 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
   // Slab intersection + stepLen now live inside marchCloudSlab so both layer
   // marches can reuse them with their own slab params.
   float jitter = fastJitter(pixelCoord, args.cloudRenderFrameIdx).x;
+  // Static per-pixel hash for the adaptive march's far-field jitter (Nubis
+  // p.172: animated hash < 250 m, static beyond — no distant shimmer). Frame
+  // slice 0 of the same FAST noise = a frame-constant blue-noise value.
+  float jitterStatic = fastJitter(pixelCoord, 0u).x;
 
   // ===== Static-per-frame shading context (cloud_march_common.slangh) =====
   // Sun/sky radiances, the full per-moon precompute, combined-moon shadow
@@ -228,7 +245,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
   vec3 accumColor = vec3(0.0f);
   float viewTransmittance = 1.0f;
 
-  marchCloudLayers(viewDirYUp, jitter,
+  marchCloudLayers(viewDirYUp, jitter, jitterStatic,
                    /*tMinClamp=*/0.0f,
                    /*tMaxClamp=*/0.0f,
                    args.cloudViewSamples, ctx, args,

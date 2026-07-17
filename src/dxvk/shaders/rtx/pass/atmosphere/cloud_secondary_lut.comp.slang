@@ -99,6 +99,15 @@ SamplerState AtmosphereCloudHeightLutSampler;
 layout(binding = 12)
 Texture2D<float4> AtmosphereCloudPlacementMap;
 
+// Nubis3 NVDF/SDF model inputs (fork — Nubis3 conversion Phase B). Same
+// resources + slots as cloud_render.comp.slang so the dome LUT march sees
+// the identical Nubis3 field when the model toggle is on.
+layout(binding = 13)
+Texture3D<float> AtmosphereCloudNvdfSdf;
+
+layout(binding = 14)
+Texture3D<float4> AtmosphereCloudDetailNoise3D;
+
 #include "rtx/pass/atmosphere/atmosphere_common.slangh"
 #include "rtx/pass/atmosphere/cloud_march_common.slangh"
 
@@ -138,7 +147,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
 
   vec3 accumColor = vec3(0.0f);
   float viewTransmittance = 1.0f;
-  marchCloudLayers(viewDirYUp, jitter,
+  // The LUT bake's jitter is already frame-constant, so the adaptive march's
+  // near (animated) and far (static) hashes are the same value here.
+  marchCloudLayers(viewDirYUp, jitter, jitter,
                    /*tMinClamp=*/0.0f,
                    /*tMaxClamp=*/0.0f,
                    args.cloudViewSamples, ctx, args,
