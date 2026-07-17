@@ -345,17 +345,52 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
   //     unchanged. Erosion/interior only — no wobble term — so the step-5
   //     early-out and the conservative step bound are untouched. Placed
   //     after the step-7 gate so gated-out samples never pay the tap.
+  // Rev 3 (same night, Fable-audit findings — "the fine detail slider isn't
+  // doing anything"): rev 1 routed the band through DENSITY-side consumers,
+  // which the audit showed is structurally muted twice over: (a) the
+  // erosion composite multiplies by nubis3ErosionStrength (validated conf
+  // runs 0.04 → ≤ ±1.4% density peak), and (b) zero-mean density
+  // modulation BELOW the mean free path (1/cloudDensity ≈ 556 m at conf)
+  // averages out along the view ray before it changes transmittance —
+  // 33-177 m features cannot read as density no matter the amplitude. What
+  // IS visible in this renderer at fine scales is the micro-AO relief
+  // shading (detailSigned → ±27-45% swing on the body lobe + ambient at
+  // defaults). Rev 3 therefore routes the band into:
+  //   1. detailSigned (the micro-AO relief signal) at 0.6·fineMix — fine
+  //      cauliflower granulation on lit/ambient faces, ~±12% shading at
+  //      slider 1. Lighting-only: no coverage, silhouette, step-bound, or
+  //      bake change (bake taps still pass cameraDistKm = 1e6). Slider 0
+  //      is an exact no-op.
+  //   2. The step-7b edge wisp cut's wispy signal (the conf's active edge
+  //      lever) — ±25-57 m fine scalloping of the wisp cutout boundary.
+  //   3. The erosion composite + interior fold stay for configs that run
+  //      real erosion strengths.
+  // Gate rev 3: tap ratio 2.63 → 2.11 (content ~220..41 m — the march's
+  // sqrt-adaptive step resolves ≥82 m past 2 km, so more of the injected
+  // spectrum is genuinely resolvable) and fade full < 3 km → zero at 9 km,
+  // matching the 177-220 m Nyquist horizon (~9.4 km) and keeping full
+  // strength on the 2.6-6 km slant range where the deck is actually viewed.
   float fineMix = 0.0f;
   float fineInteriorNoise = 0.5f;
-  if (args.nubis3FineDetailStrength > 0.0f && cameraDistKm < 8.0f) {
-    float fineFade = saturate(1.0f - (cameraDistKm - 2.0f) / 6.0f);
+  if (args.nubis3FineDetailStrength > 0.0f && cameraDistKm < 9.0f) {
+    float fineFade = saturate(1.0f - (cameraDistKm - 3.0f) / 6.0f);
     vec4 noiseFine = detailNoise.SampleLevel(cloudSampler,
-        frac(boilPos * (detailFreq * 2.63f) + vec3(0.17f, 0.83f, 0.47f)), 0);
+        frac(boilPos * (detailFreq * 2.11f) + vec3(0.17f, 0.83f, 0.47f)), 0);
     float fineWispy     = lerp(noiseFine.r, noiseFine.g, 0.5f);
     float fineBillowy   = lerp(noiseFine.b, noiseFine.a, 0.5f) * 0.3f;
     float fineComposite = lerp(fineWispy, fineBillowy, typeShaped);
     fineMix = saturate(args.nubis3FineDetailStrength * 0.35f) * fineFade;
     noiseComposite = lerp(noiseComposite, fineComposite, fineMix);
+    // Feeds ONLY the step-7b edge wisp cut below (noiseComposite already
+    // carries its own fold; wispyNoise's step-6 use happened above).
+    wispyNoise = lerp(wispyNoise, fineWispy, fineMix);
+    // Micro-AO relief fold — the rev-3 visibility fix. Same per-channel
+    // zero-mean centering as the wobble (wispy −0.5, billowy −0.15 after
+    // its 0.3 scale); substitution keeps the relief signal's range, so the
+    // AO clamp math is unchanged and silver linings stay exempt (lobe A
+    // never sees detailSigned).
+    float fineSigned = lerp(fineWispy - 0.5f, fineBillowy - 0.15f, typeShaped);
+    detailSigned = lerp(detailSigned, fineSigned, saturate(0.6f * fineMix));
     fineInteriorNoise = lerp(lerp(noiseFine.r, noiseFine.g, 0.5f),
                              lerp(noiseFine.b, noiseFine.a, 0.5f),
                              typeShaped);

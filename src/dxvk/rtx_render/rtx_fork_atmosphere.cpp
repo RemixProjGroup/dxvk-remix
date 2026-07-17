@@ -1414,10 +1414,10 @@ namespace fork_hooks {
           RemixGui::DragFloat("Fine Detail", &RtxOptions::nubis3FineDetailStrengthObject(),
                               0.02f, 0.0f, 2.0f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
-              "Third noise band (GT7-style): fine ~33-177 m grain folded "
-              "into erosion + interior for clouds within ~8 km — the crisp "
-              "detail the adaptive march can resolve but the base texture "
-              "tops out above. 0 = off. Live.");
+              "Third noise band (GT7-style): fine ~41-220 m grain fed into "
+              "the micro-AO relief shading + edge wisp cut within ~9 km — "
+              "small-billow granulation on lit faces, scalloped wisp edges. "
+              "Needs Micro AO > 0 to show on faces. 0 = off. Live.");
           RemixGui::DragFloat("SDF Step Scale", &RtxOptions::nvdfStepScaleObject(),
                               0.01f, 0.0f, 0.95f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(

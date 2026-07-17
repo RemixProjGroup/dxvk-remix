@@ -1696,11 +1696,12 @@ namespace dxvk {
                "mix at the nearest range; 0 = off. Applies live.");
     RTX_OPTION("rtx.atmosphere", float, nubis3FineDetailStrength, 1.0f,
                "Nubis3: fine-frequency detail band [0..2] (GT7-style third "
-               "noise band). A third tap of the detail volume at 2.63x "
-               "pushes erosion/interior content down to ~33 m for clouds "
-               "within ~8 km of the camera — the crisp fine grain the "
-               "sqrt-adaptive march can resolve but the base texture tops "
-               "out above. 0 = off (two-band spectrum). Applies live.");
+               "noise band). A third tap of the detail volume at 2.11x "
+               "(content ~220..41 m) feeds the micro-AO relief shading and "
+               "the edge wisp cut for clouds within ~9 km — fine cauliflower "
+               "granulation on lit faces and scalloped wisp edges, the grain "
+               "the sqrt-adaptive march can resolve but the base texture "
+               "tops out above. 0 = off. Applies live.");
     RTX_OPTION("rtx.atmosphere", float, nubis3EdgeErosion, 1.0f,
                "Nubis3: edge wisp cut [0..3]. Extra erosion shaped by the "
                "wispy noise channel, concentrated at the silhouette and "
