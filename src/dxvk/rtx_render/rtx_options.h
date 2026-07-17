@@ -1694,6 +1694,14 @@ namespace dxvk {
                "high-frequency noise into the erosion composite close to the "
                "camera for fly-through crispness. 1 = the paper's 10% max "
                "mix at the nearest range; 0 = off. Applies live.");
+    RTX_OPTION("rtx.atmosphere", float, nubis3ShapeVarietyKm, 0.5f,
+               "Nubis3: mid-frequency SHAPE displacement amplitude in km "
+               "[0..1.5] (the GT7 mid-band role). Pushes/pulls the body "
+               "iso-surface by up to half this at ~2.4 km wavelengths — "
+               "lobes, notches and full splits that turn round singular "
+               "blobs into varied cloud clusters. Whole-body reshaping, "
+               "not edge detail; coverage-neutral on average. 0 = off. "
+               "Applies live, no rebake.");
     RTX_OPTION("rtx.atmosphere", float, nubis3FineDetailStrength, 1.0f,
                "Nubis3: fine-frequency detail band [0..2] (GT7-style third "
                "noise band). A third tap of the detail volume at 2.11x "

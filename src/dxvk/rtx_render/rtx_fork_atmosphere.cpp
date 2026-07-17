@@ -1396,6 +1396,13 @@ namespace fork_hooks {
               "(Nubis3 Density-Scale / iw3xo self-gate stand-in). Makes lit "
               "faces read as cauliflower instead of a flat white mass. "
               "0 = flat saturated interiors.");
+          RemixGui::DragFloat("Shape Variety", &RtxOptions::nubis3ShapeVarietyKmObject(),
+                              0.01f, 0.0f, 1.5f, "%.2f km", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Mid-frequency (~2.4 km) push/pull of the whole body surface — "
+              "lobes, notches and full splits that break round singular "
+              "blobs into varied cloud clusters (the GT7 mid-band role). "
+              "Live, no rebake. Higher costs some empty-space-skip perf.");
           RemixGui::DragFloat("Body Erosion", &RtxOptions::nvdfBodyErosionStrengthObject(),
                               0.02f, 0.0f, 1.5f, "%.2f", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(

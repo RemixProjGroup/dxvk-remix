@@ -177,12 +177,15 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
   float wobbleKm = max(args.cloudDetailStrength, 0.0f) * kWobbleKmPerDetailStrength;
 
   // Phase C stepping bound: guaranteed-empty radius around this sample =
-  // min-tap distance, minus the live coverage offset, minus the wobble's
-  // maximum outward pull (+0.5 signal x amplitude). Valid on every return
-  // path — the early-out below is exactly where the march wants to skip.
-  sdfStepKmOut = sdfMinKm - offsetKm - 0.5f * wobbleKm;
+  // min-tap distance, minus the live coverage offset, minus the maximum
+  // outward pull of BOTH level-set displacements (+0.5 signal x amplitude
+  // each: the silhouette wobble and the step-6e shape-variety band). Valid
+  // on every return path — the early-out below is exactly where the march
+  // wants to skip.
+  float maxOutwardKm = 0.5f * (wobbleKm + args.nubis3ShapeVarietyKm);
+  sdfStepKmOut = sdfMinKm - offsetKm - maxOutwardKm;
 
-  if (sdfLive >= 0.5f * wobbleKm) {
+  if (sdfLive >= maxOutwardKm) {
     return 0.0f;
   }
 
@@ -316,8 +319,23 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
                          typeShaped);
   wobbleSignal = wobbleSignal * 0.6f + wobbleMid * 0.4f;
 
+  // 6e. SHAPE VARIETY (fork — 2026-07-17, user direction from the GT7
+  //     low-vs-mid comparison: "we want it to actually change the SHAPE of
+  //     all of the clouds ... instead of nice round singular blobs with
+  //     edge detail"). The mid band gets its OWN level-set displacement
+  //     with structural amplitude, on top of the (edge-scaled) wobble mix:
+  //     ±0.5·nubis3ShapeVarietyKm of iso-surface push/pull at the 2.4 km
+  //     (+octaves 1.2/0.6 km) wavelengths. At the default 0.5 km that is
+  //     deep enough to carve lobes into — and fully split — km-scale
+  //     bodies where the field dips, turning round singles into varied
+  //     clusters (GT7's mid-frequency role). Level-set displacement moves
+  //     the WHOLE body surface (all depths), not just the silhouette
+  //     skirt; zero-mean signal → coverage-neutral on average; the step-5
+  //     bound and early-out already budget the extra excursion. Live knob,
+  //     no rebake; world-anchored (evolution/boil offsets animate it with
+  //     the rest of the detail field).
   detailSigned = wobbleSignal;
-  sdfLive -= wobbleSignal * wobbleKm;
+  sdfLive -= wobbleSignal * wobbleKm + wobbleMid * args.nubis3ShapeVarietyKm;
   sdfKmOut = sdfLive;
 
   // 7. The Nubis profile gate on the WOBBLED surface: outside it there is

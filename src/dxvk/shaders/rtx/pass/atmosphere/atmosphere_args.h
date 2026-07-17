@@ -266,8 +266,12 @@ struct AtmosphereArgs {
   float cloudPowderStrength;        // [0..1] Schneider powder darkening of low-density
                                     // sun-facing samples (crevice / edge darkening when the
                                     // sun is behind the viewer). 0 = off.
-  float padRetired2;                // retired: legacy height-keyed erosion flip
-                                    // (Nubis3 has typeShaped altitude keying instead).
+  float nubis3ShapeVarietyKm;       // Mid-band SHAPE displacement amplitude in km
+                                    // (fork — 2026-07-17): dedicated level-set
+                                    // push/pull by the 2.4 km mid tap (±0.5·this),
+                                    // deep enough to lobe/split bodies — varied
+                                    // clusters instead of round singles. 0 = off.
+                                    // (Second reuse of the retired legacy pads.)
   float cloudDetailBaseShearKm;     // Horizontal displacement of the detail tap at the cloud
                                     // base (km), fading to 0 at the top — sheared/streaked
                                     // base wisps. 0 = no shear (legacy).

@@ -808,6 +808,9 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // Fine-frequency detail band (fork — detail round follow-up 2026-07-16).
     // Live; distance-gated in-shader, so bakes stay camera-independent.
     args.nubis3FineDetailStrength = std::min(std::max(RtxOptions::nubis3FineDetailStrength(), 0.0f), 2.0f);
+    // Mid-band shape-variety displacement (fork — 2026-07-17). Live; shared
+    // sampler, so the OD bakes and grids track the reshaped bodies.
+    args.nubis3ShapeVarietyKm     = std::min(std::max(RtxOptions::nubis3ShapeVarietyKm(), 0.0f), 1.5f);
     // √-adaptive march step floor (fork — detail round 2026-07-16). Live;
     // affects the view march + secondary cloud LUT, so it stays in the LUT
     // cache keys (same class as nvdfStepScale / cloudViewStepKm).
@@ -966,7 +969,6 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // Retired legacy-model CB slots (fork — legacy retirement 2026-07-16):
   // zero-filled reserve pads, free for Phase D growth.
   args.padRetired0 = 0u;
-  args.padRetired2 = 0.0f;
   args.padRetired3 = 0.0f;
   args.padRetired4 = 0u;
   args.padRetired5 = 0.0f;
