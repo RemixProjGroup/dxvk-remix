@@ -502,11 +502,24 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
   // and that long-path extinction WAS the deep internal shadowing ("shadow
   // casting gone or majorly reduced"). Dense taps keep the first 12 km
   // accurate; a coarse jittered far tail (below) recovers the remaining
-  // mean extinction out to 40 km without the old per-voxel garbage. And a
-  // grazing ramp (end of function) fades to fully-occluded through the last
-  // ~1.5 deg of sun elevation — the slab-intersect guard otherwise flips
-  // the whole grid to OD 0 exactly at the horizon, which read as the deck
-  // flashing bright orange at sun position 0.
+  // mean extinction out to 40 km without the old per-voxel garbage.
+  // Rev 3 (2026-07-16, "sunset light looks inverted"): rev 2 also added a
+  // UNIFORM grazing ramp that forced OD 60 on every voxel below ~1.5 deg of
+  // sun elevation. That blanket kill hit exactly the prime sunset window:
+  // with D_sun saturated everywhere, T_primary and the body lobe die on
+  // SUN-FACING faces too, ambientShadow crushes the fill, and the
+  // sunset-ambient coolReachCurve = 1-exp(-60*reach) ~ 1 flips even lit
+  // faces to the ANTI-sun horizon color — the deck read as illuminated
+  // from the opposite side. Replaced by per-voxel physics: the far tail
+  // already measures this voxel's mean far-field density, so the UNRESOLVED
+  // path beyond the 40 km march is extrapolated with that measured mean
+  // (capped at a curved-shell escape length — the flat-slab intersect has
+  // no curvature, so its exit distance diverges at grazing angles while a
+  // real curved shell releases the ray). Cloud-top voxels whose rays hug
+  // thin/absent cover keep their rim light through sunset (farMean ~ 0);
+  // in-deck voxels under real cover go fully dark honestly. Only a tight
+  // ~0.15 deg micro-ramp remains, purely to bridge the intersect guard's
+  // hard fail at sunDir.y <= 0.001.
   const float kMaxSunPathKm = 12.0f;
   const int   kSamplesMax   = 24;
   float tExitFull = tExit;
@@ -534,14 +547,18 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
     opticalDepth += density * stepLen;
   }
 
-  // Coarse far tail: 4 jittered taps over [12 km .. min(exit, 40 km)] —
+  // Coarse far tail: 8 jittered taps over [12 km .. min(exit, 40 km)] —
   // the mean long-path extinction that makes sunset light rake through a
   // broken deck instead of ignoring everything past the cap. Jitter +
-  // bilinear grid filtering keep its variance smooth (no squares).
+  // bilinear grid filtering keep its variance smooth (no squares). Tap
+  // count 4 -> 8 (rev 3): the mean now also drives the grazing
+  // extrapolation below, so the single-tap OD lottery (one hit used to add
+  // a full 7 km x density) needed halving; bake-side amortized cost only.
   if (tExitFull > kMaxSunPathKm) {
-    const int kFarTaps = 4;
+    const int kFarTaps = 8;
     float farEnd  = min(tExitFull, 40.0f);
     float farStep = (farEnd - kMaxSunPathKm) / float(kFarTaps);
+    float farOD   = 0.0f;
     for (int i = 0; i < kFarTaps; ++i) {
       vec3 samplePos = worldPosYUpKm
                      + (kMaxSunPathKm + (float(i) + tapJitter) * farStep) * sunDirYUp;
@@ -549,16 +566,29 @@ float sampleCloudSunOpticalDepthAtWorld(vec3 worldPosYUpKm, vec3 sunDirYUp,
       float density = sampleCloudBakeDensity(samplePos, hf, typeLocal, coverageLocal,
                                              args, cloudNoise3D, cloudSampler, placementMap,
                                              nvdfSdf, detailNoise);
-      opticalDepth += density * farStep;
+      farOD += density * farStep;
+    }
+    opticalDepth += farOD;
+
+    // Grazing extrapolation (rev 3 — replaces the rev-2 uniform elevation
+    // ramp; see the header note). Extend this voxel's own measured far-field
+    // mean density over the path the march did not resolve, up to a curved-
+    // shell escape length (the flat-slab tExit diverges at grazing angles;
+    // a real curved shell at our ~952 km cloud-planet radius releases a
+    // near-horizontal ray after roughly sqrt(2*R*h) ~ 60 km).
+    const float kCurvedEscapeKm = 60.0f;
+    if (tExitFull > farEnd) {
+      float farMeanDensity = farOD / max(farEnd - kMaxSunPathKm, 1e-3f);
+      opticalDepth += farMeanDensity * (min(tExitFull, kCurvedEscapeKm) - farEnd);
     }
   }
 
-  // Grazing-sun occlusion ramp (see the rev-2 note above): below ~1.5 deg
-  // of sun elevation, fade smoothly to fully occluded. Physically the
-  // near-horizontal path's extinction diverges as elevation -> 0; the ramp
-  // replaces the guard's hard OD-to-zero flip (the "flash").
-  const float kGrazingSinElev = 0.026f;  // sin(~1.5 deg)
-  const float kOccludedOD     = 60.0f;   // exp(-sigma*60) ~ 0 for any deck sigma
+  // Guard-bridging micro-ramp (rev 3): the flat-slab intersect hard-fails to
+  // fully-occluded at sunDir.y <= 0.001; bridge that final flip over the
+  // last ~0.15 deg only. The sunset window above it keeps honest per-voxel
+  // directionality from the integral + extrapolation.
+  const float kGrazingSinElev = 0.0026f;  // sin(~0.15 deg)
+  const float kOccludedOD     = 60.0f;    // exp(-sigma*60) ~ 0 for any deck sigma
   float grazing = saturate(sunDirYUp.y / kGrazingSinElev);
   return lerp(kOccludedOD, opticalDepth, grazing);
 }
