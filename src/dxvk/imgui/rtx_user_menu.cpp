@@ -31,6 +31,8 @@
 #include "rtx_render/rtx_reflex.h"
 #include "rtx_render/rtx_ray_reconstruction.h"
 #include "rtx_render/rtx_xess.h"
+#include "rtx_render/rtx_fsr.h"
+#include "rtx_render/rtx_fsr_framegen.h"
 #include "rtx_render/rtx_postFx.h"
 #include "rtx_render/rtx_rtxdi_rayquery.h"
 #include "rtx_render/rtx_restir_gi_rayquery.h"
@@ -50,6 +52,7 @@ namespace dxvk {
   // Combo boxes shared with dxvk_imgui.cpp
   extern RemixGui::ComboWithKey<DLSSProfile> dlssProfileCombo;
   extern RemixGui::ComboWithKey<XeSSPreset> xessPresetCombo;
+  extern RemixGui::ComboWithKey<FSRPreset> fsrPresetCombo;
 
   // Combo boxes used only by the user menu
   static RemixGui::ComboWithKey<DlssPreset> dlssPresetCombo{
@@ -451,10 +454,27 @@ namespace dxvk {
 
           break;
         }
+        case UpscalerType::FSR: {
+          fsrPresetCombo.getKey(&DxvkFSR::FSROptions::presetObject());
+
+          // Display FSR internal resolution
+          auto& fsr = ctx->getCommonObjects()->metaFSR();
+
+          uint32_t inputWidth;
+          uint32_t inputHeight;
+          fsr.getInputSize(inputWidth, inputHeight);
+          ImGui::TextWrapped(str::format("Render Resolution: ", inputWidth, "x", inputHeight).c_str());
+
+          break;
+        }
         case UpscalerType::None: {
           // No custom UI here.
           break;
         }
+      }
+
+      if (RtxOptions::upscalerType() != UpscalerType::None) {
+        RemixGui::SliderFloat("Sharpness", &DxvkFSR::FSROptions::sharpnessObject(), 0.0f, 1.0f, "%.2f");
       }
 
       ImGui::Unindent(static_cast<float>(subItemIndent));
@@ -463,11 +483,13 @@ namespace dxvk {
       ImGui::EndDisabled();
     }
 
-    // Latency Reduction Settings
-    if (dlfgSupported) {
+    // Frame Generation Settings — show if any FG technology is supported (DLSS FG or FSR FG)
+    const bool fsrfgSupported = DxvkFSRFrameGen::supportsFSRFrameGen();
+    const bool anyFrameGenSupported = dlfgSupported || fsrfgSupported;
+    if (anyFrameGenSupported) {
       ImGui::Dummy(ImVec2(0.0f, 3.0f));
       ImGui::TextSeparator("Frame Generation Settings");
-      showDLFGOptions(ctx);
+      showDLFGOptions(ctx, dlfgSupported);
     }
 
     if (reflexInitialized) {
