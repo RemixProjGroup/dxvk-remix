@@ -44,6 +44,11 @@ static const uint8_t surfaceMaterialTypeMask = uint8_t(0x3u);
 #define OPAQUE_SURFACE_MATERIAL_FLAG_IGNORE_ALPHA_CHANNEL (1 << COMMON_MATERIAL_FLAG_TYPE_OFFSET(2))
 #define OPAQUE_SURFACE_MATERIAL_FLAG_IS_RAYTRACED_RENDER_TARGET (1 << COMMON_MATERIAL_FLAG_TYPE_OFFSET(3))
 #define OPAQUE_SURFACE_MATERIAL_FLAG_HAS_DISPLACEMENT (1 << COMMON_MATERIAL_FLAG_TYPE_OFFSET(4))
+// Set when the albedo/emissive source texture uses an sRGB VkFormat, so the sampler hardware already
+// linearized it on read. The shader skips its own gammaToLinear() for that channel to avoid double
+// linearization (constants remain gamma-encoded and are always converted). See opaque_surface_material_interaction.slangh.
+#define OPAQUE_SURFACE_MATERIAL_FLAG_ALBEDO_TEXTURE_IS_SRGB (1 << COMMON_MATERIAL_FLAG_TYPE_OFFSET(5))
+#define OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_TEXTURE_IS_SRGB (1 << COMMON_MATERIAL_FLAG_TYPE_OFFSET(6))
 
 
 #define OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_HAS_HEIGHT_TEXTURE (1 << 0)

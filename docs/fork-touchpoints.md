@@ -2961,3 +2961,34 @@ driven by game wrappers).
 - **`RtxOptions.md`** - REGEN PENDING (defaults column).
 
 ---
+
+## Workstream - sRGB texture linearization fix (fork - 2026-07-21)
+
+FO4 albedo/emissive were double-linearized: the game's diffuse/glow maps
+arrive in sRGB formats (the sampler decodes them on read) AND the opaque
+surface shader applied its own gammaToLinear (pow 2.2), so the value was
+gamma-corrected twice -> washed-out albedo. Fix is a per-material
+"source texture is sRGB" flag: the shader skips its software gamma
+correction for a channel whose source texture uses an sRGB VkFormat (the
+sampler already linearized it), while constants and UNORM textures still
+get the software conversion. Detection reads the resolved albedo/emissive
+image-view format in createSurfaceMaterial and self-heals across async
+texture loads because the material cache key already folds isImageEmpty().
+Gated by rtx.linearizeSrgbTextures (default on), folded into
+preCreationHash so toggling the menu checkbox rebuilds cached materials
+live. Separately, gammaToLinear now uses the exact sRGB piecewise EOTF
+instead of x^2.2, so software-linearized inputs (notably albedo the FO4
+plugin submits as UNORM) match the hardware sampler's sRGB decode;
+linearToGamma (output encode) is deliberately left as x^(1/2.2).
+
+- **`src/dxvk/shaders/rtx/utility/shared_constants.h`** - fork-touchpoint inline tweak. *Adds OPAQUE_SURFACE_MATERIAL_FLAG_ALBEDO/EMISSIVE_TEXTURE_IS_SRGB at TYPE_OFFSET(5/6).*
+- **`src/dxvk/rtx_render/rtx_texture.h`** - fork-touchpoint inline tweak. *Adds TextureUtils::isSRGB(VkFormat).*
+- **`src/dxvk/shaders/rtx/concept/surface_material/opaque_surface_material_interaction.slangh`** - fork-owned change. *Skips gammaToLinear for albedo/emissive when the loaded source texture is sRGB.*
+- **`src/dxvk/rtx_render/rtx_materials.h`** - fork-owned change. *RtOpaqueSurfaceMaterial carries albedoTextureIsSrgb/emissiveTextureIsSrgb (ctor/members/hash/writeGPUData flags); hash static_assert 120 -> 128.*
+- **`src/dxvk/rtx_render/rtx_scene_manager.cpp`** - fork-owned change. *createSurfaceMaterial detects the sRGB image-view format and folds rtx.linearizeSrgbTextures into preCreationHash for live A/B.*
+- **`src/dxvk/rtx_render/rtx_options.h`** - fork-touchpoint inline tweak. *Adds rtx.linearizeSrgbTextures (default true).*
+- **`src/dxvk/imgui/dxvk_imgui.cpp`** - fork-owned addition. *"Linearize sRGB Textures" checkbox under Material Filtering.*
+- **`src/dxvk/shaders/rtx/utility/color.slangh`** - fork-owned change. *gammaToLinear -> exact sRGB piecewise EOTF (linearToGamma unchanged).*
+- **`RtxOptions.md`** - REGEN PENDING (new rtx.linearizeSrgbTextures option).
+
+---
