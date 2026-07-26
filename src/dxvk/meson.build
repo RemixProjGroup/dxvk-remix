@@ -232,10 +232,17 @@ dxvk_src = files([
   'rtx_render/rtx_fork_api_entry.cpp',
   'rtx_render/rtx_fork_atmosphere.cpp',
   'rtx_render/rtx_fork_capture.cpp',
+  'rtx_render/rtx_fork_fsr.cpp',
+  'rtx_render/rtx_fork_fsr.h',
+  'rtx_render/rtx_fork_fsr_framegen.cpp',
+  'rtx_render/rtx_fork_fsr_framegen.h',
   'rtx_render/rtx_fork_hooks.h',
   'rtx_render/rtx_fork_light.cpp',
   'rtx_render/rtx_fork_overlay.cpp',
+  'rtx_render/rtx_fork_rcas.cpp',
+  'rtx_render/rtx_fork_rcas.h',
   'rtx_render/rtx_fork_submit.cpp',
+  'rtx_render/rtx_fork_upscaler_ui.cpp',
   'rtx_render/rtx_fork_tonemap.cpp',
   'rtx_render/rtx_fork_weather.cpp',
   'rtx_render/rtx_fork_weather.h',
@@ -357,14 +364,6 @@ dxvk_src = files([
   'rtx_render/rtx_utils.h',
   'rtx_render/rtx_xess.cpp',
   'rtx_render/rtx_xess.h',
-  'rtx_render/rtx_fsr.cpp',
-  'rtx_render/rtx_fsr.h',
-  'rtx_render/rtx_fsr_framegen.cpp',
-  'rtx_render/rtx_fsr_framegen.h',
-  'rtx_render/rtx_rcas.cpp',
-  'rtx_render/rtx_rcas.h',
-
-  # NOTE: FSR 3.1 links against the prebuilt amd_fidelityfx_vk.dll via import library
 
   'rtx_render/rtx_system_info.cpp',
   'rtx_render/rtx_system_info.h',
@@ -485,7 +484,7 @@ xess_dep = declare_dependency(
 )
 
 # FSR3 (FidelityFX SDK) dependency
-# Link against the prebuilt import library for the signed DLL
+# Link against the prebuilt import library for the signed DLL.
 fsr3_lib_path = join_paths(global_src_root_norm, 'submodules/FidelityFX-SDK/PrebuiltSignedDLL')
 fsr3_include_dir = include_directories(
   '../../submodules/FidelityFX-SDK/ffx-api/include'
@@ -496,8 +495,12 @@ fsr3_dep = declare_dependency(
   include_directories : fsr3_include_dir
 )
 
-# FidelityFX API dependency
-ffx_api_dep = fsr3_dep
+# amd_fidelityfx_vk.dll is delay-loaded rather than statically imported: without
+# this, a missing/blocked FidelityFX DLL makes the whole of d3d9.dll fail to
+# load and the game will not start at all. Delay-loading downgrades that to
+# "FSR reports unsupported", which is what fork_hooks::fsrRuntimeAvailable()
+# probes for before any FFX entry point is called.
+fsr3_delay_load_args = [ '/DELAYLOAD:amd_fidelityfx_vk.dll' ]
 
 nrc_dll_path = join_paths(meson.global_source_root(), 'submodules/nrc/bin/')
 nrc_lib_path = join_paths(meson.global_source_root(), 'submodules/nrc/lib/')
@@ -557,7 +560,14 @@ dxvk_embedded_data_files = files([
 
 dxvk_generated_embedded_files = embedding_compiler.process(dxvk_embedded_data_files)
 
-dxvk_deps = [ thread_dep, vkcommon_dep, dxvk_extradep, usd_dep, lssUsd_dep, nrc_dep, nrd_dep, dlss_dep, submodules_dep, xess_dep, fsr3_dep, ffx_api_dep, tracy_dep, tracy_dep_dynamic, aftermath_dep, nvapi_dep, reflex_dep, usd_plugin_deps ]
+dxvk_deps = [ thread_dep, vkcommon_dep, dxvk_extradep, usd_dep, lssUsd_dep, nrc_dep, nrd_dep, dlss_dep, submodules_dep, xess_dep, tracy_dep, tracy_dep_dynamic, aftermath_dep, nvapi_dep, reflex_dep, usd_plugin_deps ]
+
+# NV-DXVK start: FSR 3.1
+# Appended on its own line rather than inlined into the dxvk_deps literal above:
+# upstream rewrites that literal (e.g. moving xess_dep under a Windows-on-ARM
+# guard), and an inlined entry turns every such edit into a merge conflict.
+dxvk_deps += [ fsr3_dep ]
+# NV-DXVK end
 
 if enable_rtxio
   dxvk_deps += rtxio_dep

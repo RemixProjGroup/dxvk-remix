@@ -36,7 +36,6 @@
 #include "rtx_texture_manager.h"
 #include "rtx_texture.h"
 #include "rtx_xess.h"
-#include "rtx_fsr.h"
 
 #include <assert.h>
 
@@ -223,15 +222,7 @@ namespace dxvk {
           totalUpscaleMipBias += xessMipBias;
         }
       } else if (RtxOptions::isFSREnabled()) {
-        // FSR uses the FSR developer guide formula
-        totalUpscaleMipBias = -log2(resourceManager.getUpscaleRatio());
-        
-        // Add FSR-specific mip bias when FSR is active
-        DxvkFSR& fsr = m_device->getCommon()->metaFSR();
-        if (fsr.isActive()) {
-          float fsrMipBias = fsr.calcRecommendedMipBias();
-          totalUpscaleMipBias += fsrMipBias;
-        }
+        totalUpscaleMipBias = fork_hooks::fsrUpscalingMipBias(m_device);
       } else {
         // Restore original behavior for DLSS, TAA, and other upscalers
         totalUpscaleMipBias = log2(resourceManager.getUpscaleRatio()) + RtxOptions::upscalingMipBias();

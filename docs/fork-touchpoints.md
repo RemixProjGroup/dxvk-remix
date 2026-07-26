@@ -2961,49 +2961,109 @@ driven by game wrappers).
 - **`RtxOptions.md`** - REGEN PENDING (defaults column).
 ## Workstream — FSR 3.1 upscaler + frame generation (fork — 2026-07-21)
 
-Cherry-picked AMD FSR 3.1 as a new upscaler backend (`UpscalerType::FSR`) and a new Frame Generation backend (`FrameGenerationType::FSR`, alongside the existing DLSS path), plus a standalone RCAS sharpening compute pass. Links against the prebuilt signed `amd_fidelityfx_vk.dll` via the new `submodules/FidelityFX-SDK` pin (import lib + `ffx-api` headers only — no source build). FSR Frame Generation needs its own swapchain presenter (`DxvkFSRFGPresenter`, fork-owned, alongside the existing `DxvkDLFGPresenter`), which required exposing surface-transfer plumbing on the base Vulkan presenter so switching presenter types at runtime doesn't re-create (and potentially fail to re-acquire) the native window surface.
+Adds AMD FSR 3.1 as a new upscaler backend (`UpscalerType::FSR`), a new frame
+generation backend (`FrameGenerationType::FSR`, alongside the existing DLSS-G
+path), and a standalone RCAS sharpening pass shared by the upscalers that have
+no sharpener of their own. Links against the prebuilt signed
+`amd_fidelityfx_vk.dll` via the `submodules/FidelityFX-SDK` pin (tag `v1.1.4`;
+import lib + `ffx-api` headers only, no source build).
+
+**The FidelityFX DLL is delay-loaded, not statically imported.** Every FFX entry
+point sits behind `fork_hooks::fsrRuntimeAvailable()`, a latched
+`LoadLibrary("amd_fidelityfx_vk.dll")` probe. Without this, an install that
+ships `d3d9.dll` but not the 9.3 MB FidelityFX DLL would fail to load `d3d9.dll`
+at all and the game would not start; with it, FSR simply reports unsupported.
+The same probe gates the two Vulkan extensions and the two extra device queues
+the FFX backend needs, so an install without the DLL gets upstream's instance,
+device and queue set byte-for-byte.
+
+FSR Frame Generation needs its own swapchain presenter (`DxvkFSRFGPresenter`,
+fork-owned, alongside `DxvkDLFGPresenter`), which required exposing
+surface-transfer plumbing on the base Vulkan presenter so that switching
+presenter types at runtime does not destroy and re-create the native window
+surface.
+
+### Fork-owned files (not upstream touches)
+
+- `src/dxvk/rtx_render/rtx_fork_fsr.cpp/.h` — `DxvkFSR` upscaler backend, plus
+  the `fsrRuntimeAvailable` / `isFsrUpscalerActive` / `setFsrDownscaleExtent` /
+  `dispatchFsrUpscale` / `fsrUpscalingMipBias` / `fsrJitterSequenceLength` hooks.
+- `src/dxvk/rtx_render/rtx_fork_fsr_framegen.cpp/.h` — `DxvkFSRFrameGen` backend
+  and `DxvkFSRFGPresenter`, plus the `isFsrFrameGenEnabled` /
+  `dispatchFsrFrameGeneration` hooks.
+- `src/dxvk/rtx_render/rtx_fork_rcas.cpp/.h` — standalone RCAS sharpening pass
+  and the `dispatchRcasSharpening` hook. Owns the shared sharpening option at
+  `rtx.sharpening.sharpness` (deliberately *not* under `rtx.fsr`: it drives the
+  RCAS pass for DLSS / DLSS-RR / XeSS / TAA-U as well as FSR's internal
+  sharpener, and an FSR-namespaced key silently owning four non-FSR paths would
+  be a trap for anyone later reworking FSR).
+- `src/dxvk/rtx_render/rtx_fork_upscaler_ui.cpp` — the FSR upscaler panel, the
+  shared sharpness slider, and the frame-generation backend selector. Kept out
+  of `dxvk_imgui.cpp` so that `ImGUI::showDLFGOptions` stays byte-identical to
+  upstream: the selector decides *whether* the upstream DLSS-G panel is drawn
+  rather than that panel being rewritten to host a second backend.
+- `src/dxvk/shaders/rtx/pass/post_fx/fork_rcas.comp.slang` / `fork_rcas.h` —
+  the RCAS compute pass. `fork_`-prefixed because `post_fx/` is an upstream
+  directory; an unprefixed `rcas.*` there would collide if NVIDIA ever ships its
+  own RCAS pass (same convention as `tonemap/fork_tonemap_operators.slangh`).
+
+### Upstream files touched
 
 - **`.gitmodules`** — inline tweak.
-  *Adds the `submodules/FidelityFX-SDK` submodule pointing at `GPUOpen-LibrariesAndSDKs/FidelityFX-SDK`.*
-- **`meson.build`** (root) — inline tweak.
-  *Adds `fsr3_dll_path` and an `install_data` rule to deploy the prebuilt `amd_fidelityfx_vk.dll` next to the other upscaler DLLs (NIS/XeSS/DLSS).*
-- **`src/d3d9/meson.build`** — inline tweak.
-  *Adds a `copy_fsr3_dll` custom target that copies `amd_fidelityfx_vk.dll` into the `d3d9` output directory so it's discoverable at runtime load time next to `d3d9.dll`.*
-- **`src/dxvk/meson.build`** — inline tweak.
-  *Registers `rtx_fsr.cpp/.h`, `rtx_fsr_framegen.cpp/.h`, `rtx_rcas.cpp/.h` in `dxvk_src`; adds an `fsr3_dep` (import-library) and `ffx_api_dep` (include-only) declared dependency pair and appends both to `dxvk_deps`.*
-- **`src/dxvk/dxvk_adapter.cpp` / `dxvk_adapter.h`** — inline tweak.
-  *Adds `imageAcquire` and `fsrPresent` queue-family/queue-info fields alongside the existing DLFG `present` queue, plus the family-selection logic in `findQueues` (prefers a transfer-capable family for image acquire; prefers a non-graphics-family present queue for FSR FG) and enables `VK_KHR_GET_MEMORY_REQUIREMENTS_2` (required by the FFX SDK's internal allocator).*
-- **`src/dxvk/dxvk_context.cpp` / `dxvk_context.h`** — inline tweak.
-  *Adds `DxvkContext::isFSRFGEnabled()` (checks `FrameGenerationType::FSR` + `DxvkFSRFrameGen::enable()` + device support), the DXVK-side mirror of the existing `isDLFGEnabled()`-style check, consumed by `d3d9_swapchain.cpp` to decide which presenter to (re)create.*
-- **`src/dxvk/dxvk_device.cpp` / `dxvk_device.h`** — inline tweak.
-  *Adds `imageAcquire` / `fsrPresent` device queues (mirroring the adapter-level additions); constructs `m_fsr`, `m_fsrFrameGen`, `m_rcas` `Active<>` members alongside the existing upscaler members and tears down `m_fsrFrameGen` in `onDestroy`.*
-- **`src/dxvk/dxvk_instance.cpp`** — inline tweak.
-  *Enables `VK_EXT_DEBUG_UTILS_EXTENSION_NAME` at the instance level (used by the FFX SDK's internal Vulkan backend for object naming/validation).*
-- **`src/dxvk/dxvk_objects.h`** — inline tweak.
-  *Adds `DxvkFSR` / `DxvkFSRFrameGen` forward declarations and `metaFSR()` / `metaFSRFrameGen()` / `metaRCAS()` accessors + backing `Active<>` members, following the existing `metaXeSS()`-style pattern.*
-- **`src/dxvk/imgui/dxvk_imgui.cpp`** — inline tweak (~254 LOC across several blocks).
-  *Adds `FSRPreset`/`fsrPresetCombo`, a `FrameGenerationType` combo pair (`frameGenTypeCombo` / `frameGenTypeComboNoDLSS`, the latter shown when the GPU lacks DLSS-FG support), an `FSR` entry in the upscaler-type combos and `RtxFramePassStage` name map, and an `FSR` case in `showRenderingSettings()`'s upscaler switch (preset combo + render-resolution readout + shared RCAS sharpness slider). `showDLFGOptions()` signature gained an `isDLSSFGSupported` parameter and now branches internally on `RtxOptions::frameGenerationType()` to render either the DLSS-FG or FSR-FG sub-panel (mutually exclusive — enabling one disables the other in the UI and via `setDeferred`). `showVsyncOptions()`'s FG-disables-vsync guard now also triggers on `DxvkFSRFrameGen::enable()`.*
-- **`src/dxvk/imgui/dxvk_imgui.h`** — inline tweak.
-  *Adds the `m_userGraphicsSettingChanged` tracking bool (accumulated via `|=` across the dev-menu settings widgets touched by this change) and updates the `showDLFGOptions` declaration to match the new `isDLSSFGSupported` parameter.*
-- **`src/dxvk/imgui/rtx_user_menu.cpp`** — inline tweak.
-  *Adds `extern` references to `fsrPresetCombo`; wires an `UpscalerType::FSR` case (preset combo + render-resolution readout) into the basic/user menu's upscaler section, a shared RCAS sharpness slider shown for any active upscaler, and widens the "Frame Generation Settings" section's gating condition from DLSS-FG-only to `(DLSS FG supported || FSR FG supported)` so FSR FG is reachable from the user menu on non-DLSS GPUs. See the two follow-up fix commits folded into this squash (regression: an unrelated duplicate-block removal briefly deleted these additions; restored and build-verified).*
-- **`src/dxvk/rtx_render/rtx_camera.cpp`** — inline tweak.
-  *`calcPixelJitter` now also jitters when FSR is active, using the FSR3-matching jitter-sequence-length formula (`8 * upscaleFactor²`, mirroring `ffxFsr3UpscalerGetJitterPhaseCount`) instead of the DLSS/XeSS-only Halton sequence length.*
-- **`src/dxvk/rtx_render/rtx_context.cpp` / `rtx_context.h`** — inline tweak.
-  *Adds `InternalUpscaler::FSR`, `shouldUseFSR()`, `dispatchFSR()` / `dispatchFSRFrameGen()` / `dispatchRCAS()` following the existing per-upscaler dispatch pattern; `setDownscaleExtent` gained an FSR branch that calls `DxvkFSR::setSetting()` for the render-resolution query; RCAS is dispatched unconditionally after the main upscale pass (no-ops unless `sharpness > 0` and the active upscaler is DLSS/XeSS/TAA-U — FSR has its own internal RCAS pass); `dispatchFSRFrameGen()` is called from the same call site as the existing `dispatchDLFG()`, forces V-Sync off while active (FG + vsync isn't supported), and feeds FFX's `prepareFrameGeneration` from the existing motion-vector/depth G-buffer views.*
-- **`src/dxvk/rtx_render/rtx_options.h`** — inline tweak.
-  *Adds `UpscalerType::FSR`, the new `FrameGenerationType` enum (`None`/`DLSS`/`FSR`) + its `RTX_OPTION` (`rtx.frameGenerationType`, env `DXVK_FRAMEGEN_TYPE`), and `RtxOptions::isFSREnabled()` alongside the existing `isXeSSEnabled()`-style helpers.*
-- **`src/dxvk/rtx_render/rtx_resources.cpp`** — inline tweak.
-  *`calculateMipBias`-equivalent sampler helper gains an FSR branch using the FSR developer-guide mip-bias formula (`-log2(upscaleRatio)`), plus `DxvkFSR::calcRecommendedMipBias()` when active — mirrors the existing XeSS mip-bias branch.*
-- **`src/dxvk/rtx_render/rtx_scene_manager.cpp`** — inline tweak.
-  *`getTotalMipBias()` / `getCalculatedUpscalingMipBias()` gain FSR branches (same mip-bias formula as `rtx_resources.cpp`) alongside the existing DLSS/XeSS/TAA branches.*
-- **`src/dxvk/rtx_render/rtx_types.h`** — inline tweak.
-  *Adds `RtxFramePassStage::FSR` to the frame-pass-stage enum (consumed by the profiler stage-name map in `dxvk_imgui.cpp`).*
-- **`src/vulkan/vulkan_presenter.cpp` / `vulkan_presenter.h`** — inline tweak.
-  *Adds a protected `Presenter(..., VkSurfaceKHR existingSurface)` constructor overload plus `takeSurfaceFrom()` / `getSurface()` / `releaseSurface()` / `getSwapChain()` accessors, so `DxvkFSRFGPresenter` (fork-owned, alongside `DxvkDLFGPresenter`) can be constructed from an already-live surface — avoiding a `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR` crash when the swapchain switches from/to the FSR-FG presenter at runtime.*
-- **`src/d3d9/d3d9_swapchain.cpp` / `d3d9_swapchain.h`** — inline tweak.
-  *`m_fsrfgPresenter` (a third, mutually-exclusive presenter slot alongside `m_presenter` / `m_dlfgPresenter`) is created/torn down in `CreatePresenter()` based on `isFSRFGEnabled()` + `DxvkFSRFrameGen::supportsFSRFrameGen()`; `NeedRecreatePresenter()` and `GetPresenter()` are extended to consider all three slots. Surface ownership is explicitly transferred between old/new presenter instances via the new `releaseSurface()`/`takeSurfaceFrom()` pair (see the `vulkan_presenter.*` entry above) to avoid destroying and re-creating the native surface on every presenter-type switch.*
+  *Adds the `submodules/FidelityFX-SDK` submodule (`GPUOpen-LibrariesAndSDKs/FidelityFX-SDK`, pinned to tag `v1.1.4`). Note this adds ~411 MB to a `git clone --recursive`.*
 
-New fork-owned files added by this workstream (not upstream touches, listed for completeness): `src/dxvk/rtx_render/rtx_fsr.cpp/.h` (`DxvkFSR` upscaler backend), `rtx_fsr_framegen.cpp/.h` (`DxvkFSRFrameGen` backend + `DxvkFSRFGPresenter`), `rtx_rcas.cpp/.h` (RCAS sharpening pass) and `src/dxvk/shaders/rtx/pass/post_fx/rcas.comp.slang` / `rcas.h`. These do not follow the `rtx_fork_*` naming convention (carried over as-is from the upstream cherry-pick source); a future rename to `rtx_fork_fsr*` would be a pure-rename cleanup, not attempted here.
+- **`meson.build`** (root) — inline tweak.
+  *Adds `fsr3_dll_path` and an `install_data` rule deploying the prebuilt `amd_fidelityfx_vk.dll` next to the other upscaler DLLs (NIS/XeSS/DLSS).*
+
+- **`src/dxvk/meson.build`** — inline tweak.
+  *Registers the `rtx_fork_fsr*` / `rtx_fork_rcas*` / `rtx_fork_upscaler_ui.cpp` sources inside the existing contiguous `rtx_fork_*` block; declares `fsr3_dep` (import library + `ffx-api` includes) and `fsr3_delay_load_args`. `fsr3_dep` is appended to `dxvk_deps` on its own `dxvk_deps += [ fsr3_dep ]` line rather than inlined into the `dxvk_deps` array literal — upstream rewrites that literal (it is currently moving `xess_dep` under a Windows-on-ARM guard), and an inlined entry turns every such edit into a merge conflict.*
+
+- **`src/d3d9/meson.build`** — inline tweak.
+  *Adds a `copy_fsr3_dll` custom target placing `amd_fidelityfx_vk.dll` next to `d3d9.dll`, and adds `fsr3_delay_load_args` to the d3d9 link args so the DLL is delay-loaded.*
+
+- **`src/dxvk/dxvk_adapter.cpp` / `dxvk_adapter.h`** — inline tweak.
+  *Adds `imageAcquire` and `fsrPresent` queue-family/queue-info fields alongside the existing DLFG `present` queue. The family-selection logic in `findQueues` and the `VK_KHR_GET_MEMORY_REQUIREMENTS_2` request are both gated on `fork_hooks::fsrRuntimeAvailable()`, so a build/install without the FidelityFX DLL allocates exactly upstream's queue set and asks for exactly upstream's extensions.*
+
+- **`src/dxvk/dxvk_instance.cpp`** — inline tweak.
+  *Requests `VK_EXT_DEBUG_UTILS` (used by the FFX Vulkan backend for object naming), gated on `fork_hooks::fsrRuntimeAvailable()`.*
+
+- **`src/dxvk/dxvk_context.cpp` / `dxvk_context.h`** — **hook**.
+  *`DxvkContext::isFSRFGEnabled()` — the DXVK-side mirror of `isDLFGEnabled()`, consumed by `d3d9_swapchain.cpp` to decide which presenter to create — is a one-line delegation to `fork_hooks::isFsrFrameGenEnabled(m_device.ptr())`. The predicate folds in device support, so callers never need a separate "supported" check.*
+
+- **`src/dxvk/dxvk_device.cpp` / `dxvk_device.h`** — inline tweak.
+  *Adds the `imageAcquire` / `fsrPresent` device queues mirroring the adapter-level fields; constructs the `m_fsr`, `m_fsrFrameGen`, `m_rcas` `Active<>` members alongside the existing upscaler members and tears down `m_fsrFrameGen` in `onDestroy`.*
+
+- **`src/dxvk/dxvk_objects.h`** — inline tweak.
+  *Adds `DxvkFSR` / `DxvkFSRFrameGen` / `DxvkRCAS` forward declarations and `metaFSR()` / `metaFSRFrameGen()` / `metaRCAS()` accessors + backing `Active<>` members, following the existing `metaXeSS()` pattern. Forward declarations only — no FFX headers are pulled in here, so the macro-heavy `ffx_api` chain does not reach every translation unit that includes `dxvk_objects.h`.*
+
+- **`src/dxvk/imgui/dxvk_imgui.cpp`** — **hook** (+23 / -3 LOC).
+  *An `FSR` entry in the two upscaler-type combos and in the `RtxFramePassStage` name map (one line each); the V-Sync guard's `DxvkDLFG::enable()` test replaced by `fork_hooks::anyFrameGenerationEnabled()` so it covers both backends; the upscaler switch gains an `FSR` case that calls `fork_hooks::showFsrUpscalerSettings(ctx)`; `fork_hooks::showSharedSharpnessSlider()` after the switch; and the frame-generation section calls `fork_hooks::showFrameGenerationTypeSelector` then draws either the unmodified upstream `showDLFGOptions(ctx)` or `fork_hooks::showFsrFrameGenerationOptions(ctx)`. `ImGUI::showDLFGOptions` and `dxvk_imgui.h` are unchanged from upstream.*
+
+- **`src/dxvk/imgui/rtx_user_menu.cpp`** — **hook** (+15 / -2 LOC).
+  *Same shape as the dev menu: an `UpscalerType::FSR` case delegating to `fork_hooks::showFsrUpscalerSettings`, `fork_hooks::showSharedSharpnessSlider()`, and the "Frame Generation Settings" section gated on `fork_hooks::anyFrameGenerationSupported(ctx, dlfgSupported)` so it appears on non-DLSS GPUs that can still do FSR FG.*
+
+- **`src/dxvk/rtx_render/rtx_camera.cpp`** — **hook**.
+  *`calcPixelJitter` also jitters when FSR is active, and takes its sequence length from `fork_hooks::fsrJitterSequenceLength()` (which returns 0 — "keep your own" — unless FSR is the active upscaler). The formula itself, `8 * upscaleFactor²` matching `ffxFsr3UpscalerGetJitterPhaseCount`, lives in the fork file.*
+
+- **`src/dxvk/rtx_render/rtx_context.cpp` / `rtx_context.h`** — **hook** (+11 LOC in the .cpp).
+  *Adds `InternalUpscaler::FSR` and four one-line dispatches: `fork_hooks::setFsrDownscaleExtent`, `isFsrUpscalerActive`, `dispatchFsrUpscale`, `dispatchRcasSharpening` (called unconditionally after the main upscale; no-ops unless sharpening is non-zero and the active upscaler has no internal sharpener) and `dispatchFsrFrameGeneration` (called from the same site as `dispatchDLFG`). The header adds the four matching `friend` declarations to the existing fork-hook friend block. No FSR type or FFX header reaches `rtx_context.cpp`.*
+
+- **`src/dxvk/rtx_render/rtx_options.h`** — inline tweak.
+  *Adds `UpscalerType::FSR`, the `FrameGenerationType` enum (`None`/`DLSS`/`FSR`) + its `RTX_OPTION` (`rtx.frameGenerationType`, env `DXVK_FRAMEGEN_TYPE`), and `RtxOptions::isFSREnabled()` alongside the existing `isXeSSEnabled()`-style helpers.*
+
+- **`src/dxvk/rtx_render/rtx_resources.cpp`** — **hook**.
+  *The sampler mip-bias helper adds `fork_hooks::fsrUpscalingMipBias(m_device)`, which returns 0 unless FSR is the active upscaler.*
+
+- **`src/dxvk/rtx_render/rtx_scene_manager.cpp`** — **hook**.
+  *`getTotalMipBias()` / `getCalculatedUpscalingMipBias()` gain an FSR branch delegating to the same `fork_hooks::fsrUpscalingMipBias` helper.*
+
+- **`src/dxvk/rtx_render/rtx_types.h`** — inline tweak.
+  *Adds `RtxFramePassStage::FSR` to the frame-pass-stage enum.*
+
+- **`src/vulkan/vulkan_presenter.cpp` / `vulkan_presenter.h`** — inline tweak.
+  *Adds a protected `Presenter(..., VkSurfaceKHR existingSurface)` constructor overload plus a `releaseSurface()` accessor, so `DxvkFSRFGPresenter` can be constructed from an already-live surface — avoiding `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR` when the swapchain switches presenter type at runtime. Deliberately minimal: this is the deepest layer the fork touches (`src/vulkan/` is base DXVK, not NVIDIA-remix code), and there is no way to express a protected-constructor overload as a one-line hook, so every member added here is permanent hand-merge surface. `takeSurfaceFrom()`, `getSurface()` and `getSwapChain()` were part of the original cherry-pick and are not kept: nothing called them.*
+
+- **`src/d3d9/d3d9_swapchain.cpp` / `d3d9_swapchain.h`** — inline tweak.
+  *`m_fsrfgPresenter` (a third, mutually-exclusive presenter slot alongside `m_presenter` / `m_dlfgPresenter`) is created/torn down in `CreatePresenter()` based on `isFSRFGEnabled()`; `NeedRecreatePresenter()` and `GetPresenter()` consider all three slots. Surface ownership transfers to the new presenter via `releaseSurface()` plus the protected `Presenter` constructor (see the `vulkan_presenter.*` entry); the single destroy-the-old-surface path sits above the presenter if/else rather than being duplicated in two of its three branches. Adds `GetActivePresenterOrNull()`, a null-tolerant sibling of `GetPresenter()`, because `CreatePresenter()` legitimately runs before any presenter exists and `GetPresenter()` asserts on null — calling it there tripped that assert on startup in `debug` and `debugoptimized` builds.*
 
 ---

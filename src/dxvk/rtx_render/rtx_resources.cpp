@@ -38,7 +38,7 @@
 #include "rtx_texture_manager.h"
 #include "rtx_debug_view.h"
 #include "rtx_xess.h"
-#include "rtx_fsr.h"
+#include "rtx_fork_hooks.h"
 #include "../util/util_global_time.h"
 
 namespace dxvk {
@@ -709,23 +709,10 @@ namespace dxvk {
       }
     }
     
-    // Add upscaling mip bias when FSR is active
-    if (RtxOptions::isFSREnabled()) {
-      // Use FSR developer guide formula: -log2(upscale_factor)
-      Resources& resourceManager = m_device->getCommon()->getResources();
-      calculatedUpscalingBias = -log2(resourceManager.getUpscaleRatio());
-      totalMipBias += calculatedUpscalingBias;
-      
-      // Add FSR-specific mip bias (if calcRecommendedMipBias is available)
-      DxvkFSR& fsr = m_device->getCommon()->metaFSR();
-      if (fsr.isActive()) {
-        // FSR may provide additional mip bias recommendations
-        // This will be called if the method is implemented in DxvkFSR
-        float fsrMipBias = fsr.calcRecommendedMipBias();
-        totalMipBias += fsrMipBias;
-      }
-    }
-    
+    // NV-DXVK start: FSR mip bias (returns 0 unless FSR is the active upscaler)
+    totalMipBias += fork_hooks::fsrUpscalingMipBias(m_device);
+    // NV-DXVK end
+
     return getSampler(filter, mipFilter, addressModeU, addressModeV, addressModeW, borderColor, totalMipBias, useAnisotropy);
   }
 

@@ -30,7 +30,11 @@
 #include "rtx_context.h"
 #include "rtx_options.h"
 #include "dxvk_device.h"
-#include "rtx_fsr.h"
+#include "rtx_fork_fsr.h"
+#include "rtx_fork_rcas.h"
+#include "rtx_fork_hooks.h"
+#include "rtx_scene_manager.h"
+#include "../util/util_global_time.h"
 #include "rtx_camera.h"
 #include "dxvk_scoped_annotation.h"
 #include "rtx_render/rtx_shader_manager.h"
@@ -40,7 +44,7 @@
 #include "../util/util_string.h"
 #include "../util/log/log.h"
 
-// FFX loader is already included via rtx_fsr.h
+// FFX loader is already included via rtx_fork_fsr.h
 
 namespace dxvk {
 
@@ -128,7 +132,10 @@ namespace dxvk {
   }
 
   bool DxvkFSR::isEnabled() const {
-    return RtxOptions::isFSREnabled();
+    // The FidelityFX DLL is delay-loaded: activating this pass without it would
+    // raise a delay-load exception at the first FFX call in dispatch(), so the
+    // probe has to gate activation, not just the frame-generation path.
+    return RtxOptions::isFSREnabled() && fork_hooks::fsrRuntimeAvailable();
   }
 
   bool DxvkFSR::onActivation(Rc<DxvkContext>& ctx) {
@@ -475,8 +482,11 @@ namespace dxvk {
     dispatchDesc.renderSize.height = renderHeight;
     dispatchDesc.upscaleSize.width = displayWidth;
     dispatchDesc.upscaleSize.height = displayHeight;
-    dispatchDesc.enableSharpening = FSROptions::sharpness() > 0.0f;
-    dispatchDesc.sharpness = FSROptions::sharpness();
+    // Sharpening amount is shared with the standalone RCAS pass used by the other
+    // upscalers; FSR runs its own RCAS stage internally instead.
+    const float sharpness = DxvkRCAS::Options::sharpness();
+    dispatchDesc.enableSharpening = sharpness > 0.0f;
+    dispatchDesc.sharpness = sharpness;
     dispatchDesc.frameTimeDelta = deltaTimeMs;
     dispatchDesc.preExposure = 1.0f;
     dispatchDesc.reset = resetHistory;
@@ -509,9 +519,87 @@ namespace dxvk {
     }
   }
 
-  void DxvkFSR::showImguiSettings() {
-    RemixGui::SliderFloat("Sharpening", &FSROptions::sharpnessObject(), 0.0f, 1.0f, "%.2f");
-    RemixGui::SetTooltipToLastWidgetOnHover("RCAS sharpening strength. 0.0 = off, 1.0 = maximum.");
-  }
+  // ---------------------------------------------------------------------------
+  // fork_hooks entry points
+  //
+  // Everything below is what upstream files call into, so that their fork
+  // footprint stays a one-line dispatch. See docs/fork-touchpoints.md.
+  // ---------------------------------------------------------------------------
+  namespace fork_hooks {
+
+    bool fsrRuntimeAvailable() {
+      // amd_fidelityfx_vk.dll is delay-loaded (see the /DELAYLOAD link arg in
+      // src/dxvk/meson.build). Probing it here — and keeping the handle for the
+      // process lifetime — means a missing DLL surfaces as "FSR unsupported"
+      // instead of a delay-load exception the first time an FFX entry point is
+      // touched, and cannot make d3d9.dll itself fail to load.
+      static const bool available = [] {
+        if (::LoadLibraryA("amd_fidelityfx_vk.dll") == nullptr) {
+          Logger::warn("FSR: amd_fidelityfx_vk.dll could not be loaded; "
+                       "FSR upscaling and FSR Frame Generation are unavailable. "
+                       "Ship it alongside d3d9.dll to enable them.");
+          return false;
+        }
+        Logger::info("FSR: amd_fidelityfx_vk.dll loaded.");
+        return true;
+      }();
+      return available;
+    }
+
+    bool isFsrUpscalerActive(RtxContext& ctx) {
+      return RtxOptions::isFSREnabled() && ctx.m_common->metaFSR().isActive();
+    }
+
+    void setFsrDownscaleExtent(RtxContext& ctx, const VkExtent3D& upscaleExtent, VkExtent3D& downscaleExtent) {
+      DxvkFSR& fsr = ctx.m_common->metaFSR();
+
+      const uint32_t displaySize[2] = { upscaleExtent.width, upscaleExtent.height };
+      uint32_t renderSize[2] = { upscaleExtent.width, upscaleExtent.height };
+      fsr.setSetting(displaySize, DxvkFSR::FSROptions::preset(), renderSize);
+
+      downscaleExtent.width = renderSize[0];
+      downscaleExtent.height = renderSize[1];
+      downscaleExtent.depth = 1;
+    }
+
+    void dispatchFsrUpscale(RtxContext& ctx, const Resources::RaytracingOutput& rtOutput) {
+      ScopedGpuProfileZone(&ctx, "FSR");
+      ctx.setFramePassStage(RtxFramePassStage::FSR);
+
+      DxvkFSR& fsr = ctx.m_common->metaFSR();
+      RtCamera& mainCamera = ctx.getSceneManager().getCamera();
+      fsr.dispatch(&ctx, ctx.m_execBarriers, rtOutput, mainCamera, ctx.m_resetHistory,
+                   GlobalTime::get().deltaTimeMs());
+    }
+
+    float fsrUpscalingMipBias(DxvkDevice* device) {
+      if (!RtxOptions::isFSREnabled() || device == nullptr) {
+        return 0.0f;
+      }
+
+      // FSR developer guide formula: -log2(upscale_factor).
+      Resources& resourceManager = device->getCommon()->getResources();
+      float mipBias = -std::log2(resourceManager.getUpscaleRatio());
+
+      DxvkFSR& fsr = device->getCommon()->metaFSR();
+      if (fsr.isActive()) {
+        mipBias += fsr.calcRecommendedMipBias();
+      }
+
+      return mipBias;
+    }
+
+    uint32_t fsrJitterSequenceLength(uint32_t finalWidth, uint32_t renderWidth) {
+      if (!RtxOptions::isFSREnabled() || renderWidth == 0) {
+        return 0;
+      }
+
+      // Matches ffxFsr3UpscalerGetJitterPhaseCount: 8 * (display / render)^2.
+      const float upscaleFactor = static_cast<float>(finalWidth) / static_cast<float>(renderWidth);
+      const uint32_t length = static_cast<uint32_t>(8.0f * upscaleFactor * upscaleFactor);
+      return std::max(length, 1u);
+    }
+
+  } // namespace fork_hooks
 
 }

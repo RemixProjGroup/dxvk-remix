@@ -20,17 +20,19 @@
 * DEALINGS IN THE SOFTWARE.
 */
 #include "rtx_context.h"
-#include "rtx_rcas.h"
+#include "rtx_fork_rcas.h"
+#include "rtx_fork_hooks.h"
 #include "dxvk_device.h"
+#include "dxvk_scoped_annotation.h"
 #include "rtx_render/rtx_shader_manager.h"
-#include "rtx/pass/post_fx/rcas.h"
+#include "rtx/pass/post_fx/fork_rcas.h"
 
-#include <rtx_shaders/rcas.h>
+#include <rtx_shaders/fork_rcas.h>
 
 namespace dxvk {
   namespace {
     class RcasShader : public ManagedShader {
-      SHADER_SOURCE(RcasShader, VK_SHADER_STAGE_COMPUTE_BIT, rcas)
+      SHADER_SOURCE(RcasShader, VK_SHADER_STAGE_COMPUTE_BIT, fork_rcas)
 
       PUSH_CONSTANTS(RcasArgs)
 
@@ -76,4 +78,47 @@ namespace dxvk {
       VkExtent3D { RCAS_TILE_SIZE, RCAS_TILE_SIZE, 1 });
     ctx->dispatch(workgroups.width, workgroups.height, 1);
   }
+
+  namespace fork_hooks {
+
+    void dispatchRcasSharpening(RtxContext& ctx, const Resources::RaytracingOutput& rtOutput) {
+      // FSR runs RCAS inside its own upscale dispatch, and NIS has its own
+      // sharpening stage, so the standalone pass is only for the upscalers that
+      // do not sharpen at all.
+      const bool upscalerNeedsSharpening =
+        ctx.m_currentUpscaler == RtxContext::InternalUpscaler::DLSS ||
+        ctx.m_currentUpscaler == RtxContext::InternalUpscaler::DLSS_RR ||
+        ctx.m_currentUpscaler == RtxContext::InternalUpscaler::XeSS ||
+        ctx.m_currentUpscaler == RtxContext::InternalUpscaler::TAAU;
+
+      if (!upscalerNeedsSharpening) {
+        return;
+      }
+
+      const float sharpness = DxvkRCAS::Options::sharpness();
+      if (sharpness <= 0.0f) {
+        return;
+      }
+
+      ScopedGpuProfileZone(&ctx, "RCAS");
+
+      ctx.getCommonObjects()->metaRCAS().dispatch(
+        &ctx,
+        rtOutput.m_finalOutput.resource(Resources::AccessType::Read),
+        rtOutput.m_postFxIntermediateTexture,
+        ctx.getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
+        sharpness);
+
+      ctx.copyImage(
+        rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image,
+        { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        { 0, 0, 0 },
+        rtOutput.m_postFxIntermediateTexture.image,
+        { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        { 0, 0, 0 },
+        rtOutput.m_finalOutputExtent);
+    }
+
+  } // namespace fork_hooks
+
 }

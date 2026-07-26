@@ -65,7 +65,12 @@ namespace dxvk {
     explicit DxvkFSRFrameGen(DxvkDevice* device);
     virtual void onDestroy();
 
-    static bool supportsFSRFrameGen();
+    // True when this device can actually run FSR frame generation: the
+    // FidelityFX runtime is loadable, and the adapter gave us the separate
+    // present / image-acquire queues the FFX interpolation path requires.
+    // Instance method (not static) so it can inspect the device, mirroring
+    // DxvkDLFG::supportsDLFG.
+    bool supportsFSRFrameGen() const;
     
     void setDisplaySize(uint2 displaySize);
 

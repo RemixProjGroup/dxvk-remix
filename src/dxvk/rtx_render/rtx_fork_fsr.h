@@ -81,7 +81,8 @@ namespace dxvk {
       friend class ImGUI;
 
       RTX_OPTION("rtx.fsr", FSRPreset, preset, FSRPreset::Balanced, "Adjusts FSR scaling factor, trades quality for performance.");
-      RTX_OPTION("rtx.fsr", float, sharpness, 0.0f, "Sharpening amount. 0.0 = off, 1.0 = maximum sharpening.");
+      // Note: sharpening amount is shared with the standalone RCAS pass and lives
+      // at `rtx.sharpening.sharpness` (see DxvkRCAS::Options).
       RTX_OPTION("rtx.fsr", bool, useAutoExposure, false, "Use automatic exposure for FSR3.");
       RTX_OPTION("rtx.fsr", bool, enableHDR, false, "Enable HDR mode for FSR3 input/output.");
     };
@@ -111,9 +112,6 @@ namespace dxvk {
     // FSR3 public helper methods
     float calcRecommendedMipBias() const;
     uint32_t calcRecommendedJitterSequenceLength() const;
-
-    // ImGui settings display
-    void showImguiSettings();
 
   protected:
 

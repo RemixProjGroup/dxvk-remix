@@ -43,8 +43,6 @@
 #include "rtx_render/rtx_ngx_wrapper.h"
 #include "rtx_render/rtx_dlfg.h"
 #include "rtx_render/rtx_dlss.h"
-#include "rtx_render/rtx_fsr_framegen.h"
-#include "rtx_render/rtx_rcas.h"
 #include "rtx_render/rtx_nis.h"
 #include "rtx_render/rtx_taa.h"
 #include "rtx_render/rtx_auto_exposure.h"
@@ -88,6 +86,7 @@ namespace dxvk {
   class SparseRendering;
   class DxvkFSR;
   class DxvkFSRFrameGen;
+  class DxvkRCAS;
 
   class NGXContext;
 

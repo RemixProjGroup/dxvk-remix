@@ -153,6 +153,8 @@ namespace dxvk {
 
     // NV-DXVK begin: FSR FG integration
     Rc <DxvkFSRFGPresenter>   m_fsrfgPresenter;
+    // Null-tolerant sibling of GetPresenter; see d3d9_swapchain.cpp.
+    vk::Presenter* GetActivePresenterOrNull() const;
     // NV-DXVK end
 
     Rc<hud::Hud>              m_hud;

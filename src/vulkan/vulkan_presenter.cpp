@@ -73,16 +73,6 @@ namespace dxvk::vk {
     // Note: derived class is responsible for calling recreateSwapChain
     // since the FFX swapchain proxy needs to be created first
   }
-
-  void Presenter::takeSurfaceFrom(Presenter* other) {
-    if (other && other->m_surface != VK_NULL_HANDLE) {
-      // Take ownership of the surface
-      m_surface = other->m_surface;
-      m_window = other->m_window;
-      // Clear the other presenter's surface so it doesn't destroy it
-      other->m_surface = VK_NULL_HANDLE;
-    }
-  }
   // NV-DXVK end
 
 

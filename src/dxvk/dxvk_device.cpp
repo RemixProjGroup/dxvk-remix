@@ -31,7 +31,9 @@
 #include "rtx_render/rtx_composite.h"
 #include "rtx_render/rtx_debug_view.h"
 #include "rtx_render/rtx_xess.h"
-#include "rtx_render/rtx_fsr.h"
+#include "rtx_render/rtx_fork_fsr.h"
+#include "rtx_render/rtx_fork_fsr_framegen.h"
+#include "rtx_render/rtx_fork_rcas.h"
 
 #include "rtx_render/rtx_sparse_rendering.h"
 

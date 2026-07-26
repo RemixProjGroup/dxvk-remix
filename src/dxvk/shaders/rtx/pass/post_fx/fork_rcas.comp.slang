@@ -19,7 +19,7 @@
 * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 * DEALINGS IN THE SOFTWARE.
 */
-#include "rtx/pass/post_fx/rcas.h"
+#include "rtx/pass/post_fx/fork_rcas.h"
 
 layout(binding = RCAS_INPUT)
 Sampler2D<float4> InColorSampler;

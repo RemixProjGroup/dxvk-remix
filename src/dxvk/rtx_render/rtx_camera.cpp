@@ -31,6 +31,7 @@
 #include "rtx_matrix_helpers.h"
 #include "rtx_imgui.h"
 #include "rtx_xess.h"
+#include "rtx_fork_hooks.h"
 
 /*
 *             Free/Debug Camera
@@ -815,15 +816,12 @@ namespace dxvk
       jitterSequenceLength = xessLength;
     }
     
-    // FSR3 uses: int32_t(8.0f * pow(displayWidth / renderWidth, 2.0f))
-    // This matches ffxFsr3UpscalerGetJitterPhaseCount exactly
-    if (RtxOptions::isFSREnabled()) {
-      float upscaleFactor = static_cast<float>(m_finalResolution[0]) / static_cast<float>(m_renderResolution[0]);
-      jitterSequenceLength = static_cast<uint32_t>(8.0f * upscaleFactor * upscaleFactor);
-      // Ensure at least 1 to avoid division by zero
-      jitterSequenceLength = std::max(jitterSequenceLength, 1u);
+    // NV-DXVK start: FSR needs its own jitter sequence length (returns 0 unless FSR is active)
+    if (const uint32_t fsrLength = fork_hooks::fsrJitterSequenceLength(m_finalResolution[0], m_renderResolution[0])) {
+      jitterSequenceLength = fsrLength;
     }
-    
+    // NV-DXVK end
+
     return calculateHaltonJitter(jitterFrameIdx, jitterSequenceLength);
 #else
     return m_halton.next();

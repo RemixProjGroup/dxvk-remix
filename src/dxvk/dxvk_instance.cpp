@@ -63,6 +63,11 @@
 // NV-DXVK start: Provide error code on exception
 #include <remix/remix_c.h>
 // NV-DXVK end
+
+// NV-DXVK start: FSR 3.1 runtime probe
+#include "rtx_render/rtx_fork_hooks.h"
+// NV-DXVK end
+
 namespace dxvk {
 
   // NV-DXVK start: debug callback context (stack trace + duplicate filtering)
@@ -611,8 +616,10 @@ namespace dxvk {
     extensionsAvailable.enableExtensions(dlfgExtList.size(), dlfgExtList.data(), extensionsEnabled);
     // NV-DXVK end
 
-    // NV-DXVK start: Add debug utils extension for Remix
-    if (extensionsAvailable.supports(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
+    // NV-DXVK start: FSR 3.1 — the FidelityFX Vulkan backend uses debug-utils
+    // object naming. Only requested when the FidelityFX runtime is actually
+    // present, so installs without it are byte-identical to upstream.
+    if (fork_hooks::fsrRuntimeAvailable() && extensionsAvailable.supports(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
       extensionsEnabled.add(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     // NV-DXVK end
 

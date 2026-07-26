@@ -519,9 +519,9 @@ namespace dxvk {
     RTX_OPTION_ARGS("rtx", UpscalerType, upscalerType, UpscalerType::DLSS, "Upscaling boosts performance with varying degrees of image quality tradeoff depending on the type of upscaler and the quality mode/preset.",
                     args.environment = "DXVK_UPSCALER_TYPE",
                     args.flags = RtxOptionFlags::UserSetting);
-  RTX_OPTION_ARGS("rtx", FrameGenerationType, frameGenerationType, FrameGenerationType::None, "Frame Generation technology to use. None = disabled, DLSS = NVIDIA DLSS Frame Generation, FSR = AMD FSR 3 Frame Generation.",
-          args.environment = "DXVK_FRAMEGEN_TYPE",
-          args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx", FrameGenerationType, frameGenerationType, FrameGenerationType::None, "Frame Generation technology to use. None = disabled, DLSS = NVIDIA DLSS Frame Generation, FSR = AMD FSR 3 Frame Generation.",
+                    args.environment = "DXVK_FRAMEGEN_TYPE",
+                    args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION_ARGS("rtx", bool, enableRayReconstruction, true, "Enables DLSS ray reconstruction, an AI-based denoiser designed for real time ray tracing.",
                     args.environment = "DXVK_RAY_RECONSTRUCTION",
                     args.flags = RtxOptionFlags::UserSetting);

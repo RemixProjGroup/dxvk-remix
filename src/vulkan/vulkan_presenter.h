@@ -136,26 +136,7 @@ namespace dxvk::vk {
       // NV-DXVK end
     ~Presenter();
 
-    // NV-DXVK start: FSR FG support - Expose surface transfer for presenter switching
-    /**
-     * \brief Transfers surface from another presenter
-     * 
-     * Takes ownership of the surface from another presenter
-     * to allow switching presenter types without recreating
-     * the surface. The source presenter's surface will be
-     * set to VK_NULL_HANDLE.
-     * \param [in] other The presenter to take the surface from
-     */
-    void takeSurfaceFrom(Presenter* other);
-
-    /**
-     * \brief Gets the current surface handle
-     * \returns The VkSurfaceKHR handle
-     */
-    VkSurfaceKHR getSurface() const {
-      return m_surface;
-    }
-
+    // NV-DXVK start: FSR FG support - surface handover across presenter switches
     /**
      * \brief Releases ownership of the surface
      * 
@@ -295,16 +276,6 @@ namespace dxvk::vk {
      * \returns \c true if the presenter has a swap chain.
      */
     bool hasSwapChain() const {
-      return m_swapchain;
-    }
-
-    /**
-     * \brief Gets the Vulkan swap chain handle
-     *
-     * Used by FSR Frame Generation to wrap the swapchain.
-     * \returns The VkSwapchainKHR handle.
-     */
-    VkSwapchainKHR getSwapChain() const {
       return m_swapchain;
     }
 

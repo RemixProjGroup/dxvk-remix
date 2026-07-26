@@ -20,8 +20,13 @@
 * DEALINGS IN THE SOFTWARE.
 */
 
-#include "rtx_fsr_framegen.h"
+#include "rtx_fork_fsr_framegen.h"
+#include "rtx_fork_hooks.h"
+#include "rtx_context.h"
+#include "rtx_scene_manager.h"
 #include "rtx_camera.h"
+#include "../util/util_once.h"
+#include "../util/util_global_time.h"
 #include "../dxvk_device.h"
 #include "../dxvk_context.h"
 #include "../dxvk_cmdlist.h"
@@ -199,14 +204,27 @@ namespace dxvk {
     }
   }
 
-  bool DxvkFSRFrameGen::supportsFSRFrameGen() {
-    // FSR 3 Frame Generation requires:
-    // 1. Vulkan 1.1+ with VK_KHR_swapchain
-    // 2. AMD or other GPU with compute capability
-    // 3. FFX SDK libraries available
-    
-    // For now, return true and let runtime initialization fail gracefully
-    // if requirements aren't met
+  bool DxvkFSRFrameGen::supportsFSRFrameGen() const {
+    // The FidelityFX DLL is delay-loaded, so this probe must come first:
+    // without it, every FFX entry point below would raise a delay-load
+    // exception rather than returning an error code.
+    if (!fork_hooks::fsrRuntimeAvailable()) {
+      return false;
+    }
+
+    // FFX frame interpolation presents from a queue that is not the graphics
+    // queue and acquires swapchain images on a separate one. DxvkAdapter only
+    // populates these when the physical device actually exposes suitable
+    // families (see findQueues), so a null handle here means this GPU/driver
+    // combination cannot drive the interpolated present path.
+    const DxvkDeviceQueueSet& queues = m_device->queues();
+    if (queues.fsrPresent.queueHandle == VK_NULL_HANDLE ||
+        queues.imageAcquire.queueHandle == VK_NULL_HANDLE) {
+      ONCE(Logger::info("FSR FG: no dedicated present/image-acquire queue available on this device; "
+                        "FSR Frame Generation is unsupported."));
+      return false;
+    }
+
     return true;
   }
 
@@ -1248,5 +1266,59 @@ namespace dxvk {
     m_recreatingSwapchain = false;
     return result;
   }
+
+  namespace fork_hooks {
+
+    bool isFsrFrameGenEnabled(DxvkDevice* device) {
+      if (device == nullptr || RtxOptions::frameGenerationType() != FrameGenerationType::FSR) {
+        return false;
+      }
+      if (!DxvkFSRFrameGen::enable()) {
+        return false;
+      }
+      return device->getCommon()->metaFSRFrameGen().supportsFSRFrameGen();
+    }
+
+    void dispatchFsrFrameGeneration(RtxContext& ctx, const Rc<DxvkImage>& hudLessBackBuffer) {
+      DxvkDevice* device = ctx.getDevice().ptr();
+      if (!isFsrFrameGenEnabled(device)) {
+        return;
+      }
+
+      DxvkFSRFrameGen& fsrFrameGen = device->getCommon()->metaFSRFrameGen();
+
+      // Frame generation and V-Sync are not supported together; latch V-Sync off
+      // once rather than every frame.
+      if (RtxOptions::enableVsyncState != EnableVsync::Off) {
+        RtxOptions::enableVsync.setDeferred(EnableVsync::Off);
+        RtxOptions::enableVsyncState = EnableVsync::Off;
+      }
+
+      Resources::RaytracingOutput& rtOutput = ctx.getResourceManager().getRaytracingOutput();
+      RtCamera& camera = ctx.getSceneManager().getCamera();
+      const bool viewModelActive = ctx.getSceneManager().getCameraManager().isCameraValid(CameraType::ViewModel);
+
+      // Note: display size is set by the presenter during swapchain
+      // creation/recreation. It must not be derived from the composite output
+      // size here, since the two differ while upscaling.
+      fsrFrameGen.setFrameGenerationPresentColorSource(hudLessBackBuffer);
+
+      // prepareFrameGeneration() calls configureFrameGeneration() internally;
+      // AMD's docs require configure before the prepare dispatch. The
+      // interpolation input is supplied through the present-color override
+      // above and consumed via the frame generation callback.
+      fsrFrameGen.prepareFrameGeneration(
+        &ctx,
+        ctx.m_execBarriers,
+        camera,
+        rtOutput.m_primaryScreenSpaceMotionVector.view,
+        rtOutput.m_primaryDepth.view,
+        viewModelActive,
+        ctx.m_resetHistory,
+        device->getCurrentFrameId(),
+        GlobalTime::get().deltaTimeMs());
+    }
+
+  } // namespace fork_hooks
 
 } // namespace dxvk

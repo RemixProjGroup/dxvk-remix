@@ -70,6 +70,11 @@ namespace dxvk {
     void bindAtmosphereLuts(RtxContext&);
     void dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
     void updateWeatherBlender(RtxContext& ctx, float deltaTimeSeconds);
+    bool isFsrUpscalerActive(RtxContext&);
+    void dispatchFsrUpscale(RtxContext&, const Resources::RaytracingOutput&);
+    void dispatchRcasSharpening(RtxContext&, const Resources::RaytracingOutput&);
+    void dispatchFsrFrameGeneration(RtxContext&, const Rc<DxvkImage>& hudLessBackBuffer);
+    void setFsrDownscaleExtent(RtxContext&, const VkExtent3D& upscaleExtent, VkExtent3D& downscaleExtent);
     // Returns the per-frame cloud-occluded sky-ambient transmittance LUT, or an
     // invalid Resource if the atmosphere has not been initialized yet. Used by
     // the debug view to bind the LUT into its pass-local descriptor set.
@@ -241,8 +246,6 @@ namespace dxvk {
     void dispatchReplaceCompositeWithDebugView(const Resources::RaytracingOutput& rtOutput);
     void dispatchNIS(const Resources::RaytracingOutput& rtOutput);
     void dispatchXeSS(const Resources::RaytracingOutput& rtOutput);
-    void dispatchFSR(const Resources::RaytracingOutput& rtOutput);
-    void dispatchRCAS(const Resources::RaytracingOutput& rtOutput);
     void dispatchTemporalAA(const Resources::RaytracingOutput& rtOutput);
     void dispatchToneMapping(const Resources::RaytracingOutput& rtOutput);
     void dispatchBloom(const Resources::RaytracingOutput& rtOutput);
@@ -252,7 +255,6 @@ namespace dxvk {
     void dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage);
     void dispatchObjectPicking(Resources::RaytracingOutput& rtOutput, const VkExtent3D& srcExtent, const VkExtent3D& targetExtent);
     void dispatchDLFG();
-    void dispatchFSRFrameGen(const Rc<DxvkImage>& hudLessBackBuffer);
     void dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput);
     void updateMetrics(const float gpuIdleTimeMilliseconds) const;
     void rasterizeToSkyMatte(const DrawParameters& params, const DrawCallState& drawCallState);
@@ -291,8 +293,7 @@ namespace dxvk {
     bool shouldUseNIS() const;
     bool shouldUseTAA() const;
     bool shouldUseXeSS() const;
-    bool shouldUseFSR() const;
-    bool shouldUseUpscaler() const { return shouldUseDLSS() || shouldUseNIS() || shouldUseTAA() || shouldUseXeSS() || shouldUseFSR(); }
+    bool shouldUseUpscaler() const { return shouldUseDLSS() || shouldUseNIS() || shouldUseTAA() || shouldUseXeSS() || RtxOptions::isFSREnabled(); }
 
     inline static bool s_triggerScreenshot = false;
     inline static bool s_triggerUsdCapture = false;
@@ -375,5 +376,10 @@ namespace dxvk {
     friend Resources::Resource fork_hooks::getCloudDAmbient(RtxContext& ctx);
     friend Resources::Resource fork_hooks::getCloudNvdfSdf(RtxContext& ctx);
     friend Resources::Resource fork_hooks::getCloudRenderRT(RtxContext& ctx);
+    friend bool fork_hooks::isFsrUpscalerActive(RtxContext&);
+    friend void fork_hooks::dispatchFsrUpscale(RtxContext&, const Resources::RaytracingOutput&);
+    friend void fork_hooks::dispatchRcasSharpening(RtxContext&, const Resources::RaytracingOutput&);
+    friend void fork_hooks::dispatchFsrFrameGeneration(RtxContext&, const Rc<DxvkImage>&);
+    friend void fork_hooks::setFsrDownscaleExtent(RtxContext&, const VkExtent3D&, VkExtent3D&);
   };
 } // namespace dxvk
