@@ -487,6 +487,21 @@ namespace dxvk {
     // Implementation in rtx_fork_weather.cpp.
     void showWeatherUI();
 
+    // Submits the weather precipitation emitter (rain / snow / blowing sand) for
+    // this frame. Called from RtxContext::injectRTX immediately BEFORE
+    // SceneManager::prepareSceneData, which is where the particle simulation
+    // runs — submitting after it would lose this frame's spawn contexts.
+    // Dormant unless rtx.weather.precipitation.intensity is non-zero, which the
+    // weather blender drives from the per-preset precipitation fields.
+    // No private-member access. Implementation in rtx_fork_precipitation.cpp.
+    void submitPrecipitation(class RtxContext& ctx);
+
+    // Renders the global (non-per-preset) precipitation controls — budget, spawn
+    // volume, collision. The per-preset look values are generated into the
+    // weather preset editor automatically by WEATHER_PRESET_FIELD_LIST.
+    // No private-member access. Implementation in rtx_fork_precipitation.cpp.
+    void showPrecipitationUI();
+
   } // namespace fork_hooks
 
 } // namespace dxvk

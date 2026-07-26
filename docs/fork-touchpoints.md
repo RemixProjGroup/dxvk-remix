@@ -2992,3 +2992,522 @@ linearToGamma (output encode) is deliberately left as x^(1/2.2).
 - **`RtxOptions.md`** - REGEN PENDING (new rtx.linearizeSrgbTextures option).
 
 ---
+
+## Workstream - weather precipitation particle system (fork - 2026-07-25)
+
+Rain / snow / blowing sand as a property of a Numos weather preset. Ported
+from the rain effect in xoxor4d's NFS Carbon RTX mod
+(https://github.com/xoxor4d/nfsc-rtx, `src/comp/modules/rain.cpp`), which
+builds its rain GAME-side: `CreateMaterial` + `CreateMesh` for a quad
+"spawner", then one `DrawInstance` per frame carrying an
+`InstanceInfoParticleSystemEXT` anchored to the camera. This workstream does
+the same thing from INSIDE the runtime against the same
+`RtxParticleSystemManager`, so no game integration has to re-implement it and
+the values blend with the rest of the weather.
+
+Ten new preset fields (group "Precipitation": intensity, fall speed, wind
+response, turbulence, drag, streak, drop width/length, opacity, colour) ride
+the existing `WEATHER_PRESET_FIELD_LIST` machinery, so per-preset options,
+blending, the preset editor UI, conf export and tooltips are all generated.
+They write the live `rtx.weather.precipitation.*` options that
+`PrecipitationSystem` reads. The 12 preset archetypes are authored: dry for
+clear/partlyCloudy/overcast/hazy/smoggy, mist for foggy, escalating rain for
+drizzle/rainstorm/thunderstorm, tumbling flakes for snow/blizzard (no streak,
+high drag + turbulence), and tinted near-horizontal grit for sandstorm.
+
+Implementation notes worth keeping:
+- **No shipped assets.** The drop sprite is generated on the CPU at init (64x64
+  RGBA8 soft radial falloff + box-filtered mip chain, RGB pinned white so the
+  UNORM-vs-sRGB question is moot). With motion trails the runtime stretches
+  only the sprite's centre and preserves its edges, so the same round drop is
+  a capped rain streak with trails on and a snowflake with them off.
+- **Emitter winding is load-bearing.** `particle_system_spawn.comp.slang`
+  derives the emission direction as `cross(normalize(p1-p0), normalize(p2-p0))`
+  and uses it UNNORMALIZED to scale initial velocity, so both quad triangles
+  must be wound off perpendicular unit-length edges (indices `{0,1,2}` and
+  `{3,2,1}`) or the two halves emit at different speeds.
+- **Drag/gravity are coupled deliberately.** The evolve shader integrates
+  `v = (v + up*gravity*dt) * (1 - drag*dt)`, so terminal velocity is
+  `gravity/drag`. Setting `gravity = -fallSpeed * drag` makes the spawn
+  velocity also the terminal velocity: turbulence kicks decay back to the fall
+  speed instead of the particles stalling or accelerating. That is what
+  separates snow (drag + turbulence: flutters, then resumes falling) from rain
+  (no drag: dead straight).
+- **Descriptor stability is mandatory, not an optimisation.**
+  `RtxParticleSystemManager::fetchParticleSystem` keys systems on
+  `materialHash ^ desc.calcHash()` and allocates full `maxNumParticles`-sized
+  buffers per system. A descriptor recomputed from continuously-blending
+  weather values every frame would therefore allocate a whole particle system
+  per frame, with orphans living until `maxTimeToLive`. The descriptor is
+  adopted on a dwell timer (`descUpdateIntervalMs`, default 750 ms) instead,
+  which bounds a transition to a handful of systems; the orphans stop spawning,
+  their particles finish their lifetime, and the manager evicts them - so the
+  step is a crossfade rather than a pop. The material is kept constant
+  (white albedo, colour/opacity ride on the per-particle colour that
+  `submitDrawState` modulates in via VertexColor0) so it never forks the
+  system identity.
+- **Nothing to reset on scene clear.** `SceneManager::clear()` does not touch
+  the asset replacer's external mesh/material tables, and the material holds
+  its `TextureRef` (and therefore the `Rc<DxvkImageView>`) directly rather than
+  resolving through the texture table, so it does not hit the API-uploaded
+  texture failure mode documented in `rtx_fork_api_entry.cpp`.
+
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.h`** - fork-owned addition. *`PrecipitationSystem`: the 10 blend-target options + the global budget/spawn-volume/collision options.*
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.cpp`** - fork-owned addition. *Procedural drop texture, emitter quad registration, parameter resolution, dwell-gated descriptor, per-frame external draw, global ImGui panel, and the three `fork_hooks` bodies.*
+- **`src/dxvk/rtx_render/rtx_fork_hooks.h`** - fork-owned addition. *Declares `submitPrecipitation` and `showPrecipitationUI`.*
+- **`src/dxvk/rtx_render/rtx_types.h`** - fork-touchpoint inline tweak - 2 blocks. *Forward-declares `fork_hooks::precipitationEmitterDrawCall` next to the existing `externalDrawTextureCategories` decl, and friends it inside `DrawCallState`. Required because `DrawCallState::transformData` / `::materialData` are private and the emitter builds its draw call from scratch - the same access `RemixAPIPrivateAccessor::toRtDrawState` has for the API's external draws.*
+- **`src/dxvk/rtx_render/rtx_context.cpp`** - fork-touchpoint inline tweak - 4 LOC in `injectRTX`. *Calls `fork_hooks::submitPrecipitation(*this)` immediately before `getSceneManager().prepareSceneData(...)`. Ordering is required: `prepareSceneData` is where `RtxParticleSystemManager::simulate` consumes the frame's spawn contexts.*
+- **`src/dxvk/rtx_render/rtx_fork_weather.h`** - fork-owned change. *10 rows appended to `WEATHER_PRESET_FIELD_LIST` + per-preset values in all 12 `WEATHER_PRESET_VALUES_*` macros (53 -> 63 fields, 636 -> 756 options).*
+- **`src/dxvk/rtx_render/rtx_fork_weather.cpp`** - fork-owned change. *`snapshotRenderer` reads, `writeBlendedToDerivedLayer` writes (gated as a block on `weatherVaries_precipitationIntensity`), tooltips mirrored from the live options, and the global panel hosted under the weather tree.*
+- **`src/dxvk/meson.build`** - fork-touchpoint inline tweak. *Adds the two new source entries.*
+- **`RtxOptions.md`** - REGEN PENDING (new `rtx.weather.precipitation.*` options + 120 new per-preset options).
+
+---
+
+## Fix - precipitation appeared to follow the camera (fork - 2026-07-25)
+
+User report against the initial precipitation drop: "when I turn the camera from
+left to right, the rain changes the direction it's falling... from left to
+right. Same with any other camera angle." Three separate camera couplings
+stacked; the first is the one that made it read as camera-locked at *every*
+heading rather than varying with the wind direction.
+
+1. **Billboard type.** `FaceCamera_Spherical` puts the billboard plane in the
+   CAMERA plane (`basisRight`/`basisUp` = camera right/up in
+   `particle_system_generate_geometry.comp.slang`), and the motion trail
+   stretches along the world velocity *projected into that plane*. Any
+   horizontal component of the fall therefore gets re-projected as the camera
+   yaws, sweeping the apparent fall direction. Streaked precipitation now uses
+   `FaceCamera_UpAxisLocked`, which pins `basisUp` to world up and only yaws to
+   face the viewer, so a falling streak stays locked to the world vertical.
+   Un-streaked snow keeps spherical - a round sprite has no orientation to
+   betray and spherical silhouettes better when looking up/down.
+2. **Emitter placement read camera orientation.** The spawn plane was biased
+   along the camera's flattened forward vector to push the volume into view.
+   That made panning swing the whole volume around the player, and because the
+   spawn shader smears new particles between the emitter's previous and current
+   transform (`lerp(worldPosition, prevWorldPosition, randSeed)`), a turn
+   dragged freshly spawned drops along the swing. The bias is GONE and the
+   option with it: only the camera's position may move the emitter. A 20 m
+   radius disc centred on the viewer already covers the view in every direction.
+3. **Wind coupling was ~3x too strong.** `windResponse` is a fraction of
+   `cloudWindSpeed`, which defaults to 0.02 km/s = 20 m/s - an ALTITUDE wind.
+   At 0.15-0.30 that produced ~21 deg of slant on rain. The slant is correctly
+   fixed in world space, which is exactly why it re-projects on screen as the
+   camera turns; big enough to notice reads as "the rain changes direction".
+   Retuned so rain drifts 6-9 deg and only blizzard (42 deg) / sandstorm
+   (63 deg) slant hard.
+
+Also added a "Live values" tree to the global panel exposing the per-preset
+fields directly, so a look can be A/B'd in-game without the blender running.
+
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.cpp`** - fork-owned change. *Billboard selection, orientation-free emitter transform, live-value ImGui tree.*
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.h`** - fork-owned change. *Dropped `forwardOffsetMeters` (with a note on why no view-bias option may exist); `windResponse` default 0.15 -> 0.04 and reworded.*
+- **`src/dxvk/rtx_render/rtx_fork_weather.h`** - fork-owned change. *Per-preset `precipitationWindResponse` retuned across all 12 presets.*
+- **`docs/integrators/weather-presets.md`, `weather-presets-reference.md`** - fork-owned change. *Orientation-independence + wind-tuning guidance; stale "the plugin owns all particles" / field-count claims corrected.*
+
+---
+
+## Fix - precipitation review pass (fork - 2026-07-25, adversarial review)
+
+Verification pass over the precipitation drop against the upstream particle
+manager/shaders. Confirmed sound: staging-buffer lifetime in `ensureTexture`
+(`DxvkContext::copyBufferToImage` calls `trackResource<Read>` on the source, so
+the command list owns the staging buffer until the GPU is done), emitter quad
+winding (both triangles yield exactly unit local +Z off unit-length edges, and
+the transform's third column is the unit fall direction), the sceneScale unit
+conventions, orphan crossfade/eviction (`prepareForNextFrame` erases a system
+`maxTimeToLive` after its last spawn; `simulate` keeps stepping spawn-less
+systems), and survival of the external mesh/material tables across
+`SceneManager::clear()`. Five real defects found and fixed:
+
+1. **fp16 `timeToLive` stalls at high refresh rates (upstream bug, exposed by
+   slow snow).** `GpuParticle::timeToLive` was a half; fp16 spacing in [16,32)
+   is 1/64 s, so the evolve shader's `timeToLive -= dt` rounds back to the same
+   value whenever dt < 1/128 s. At >128 fps every particle with >=16 s of
+   remaining life is IMMORTAL: the conservative counter never decrements, the
+   capacity gate blocks all further spawns, and after the initial population
+   falls out of view precipitation stops entirely. The snow preset's 1.1 m/s
+   fall over a 22 m volume needs ~20 s lifetimes, exactly in the broken range.
+   Promoted to a float by absorbing the two pad halves (struct stays 48 bytes);
+   sentinel + whole-buffer clear word are now float +inf.
+2. **Constant-population mode trap.** `spawnParticles` flips into "re-init every
+   particle every frame" when `spawnRatePerSecond >= maxNumParticles`; the
+   intensity-driven `budget/ttl` rate crosses that whenever ttl < 1 s (fast fall
+   + small volume) and would freeze precipitation into a static sheet at the
+   spawn plane. Rate now capped at 0.9x budget.
+3. **Orphan pile-up during blends with long lifetimes.** Orphaned systems live
+   for their remaining particle lifetime, so a flat 750 ms dwell blending the
+   snow preset (~20 s ttl, ~7.5 MB buffers/system at default budget) stacks
+   ~27 systems (~200 MB transient + 27 simulate groups/frame). Effective dwell
+   now floored at `maxTimeToLive/6` (~7 systems worst case);
+   `descUpdateIntervalMs = 0` still bypasses everything for debugging.
+4. **`roughness` / `metallic` were write-only after first init.** The material
+   registered once; later edits silently did nothing. refreshDesc now
+   re-registers the material (destroy + register under the same handle) when
+   they change, paced by the same dwell — submitExternalDraw stamps the external
+   material hash onto the emitter draw call via `setHashOverride`, and that is
+   the hash the particle manager keys systems on, so a material edit forks the
+   system identity exactly like a desc edit (crossfade; dwell prevents
+   per-frame forks while a slider drags).
+5. **Weather write gate missed constant-nonzero authoring.** Gate was
+   "intensity varies across presets"; a game authoring the SAME nonzero
+   intensity into all 12 presets would never get its live options written and
+   would never rain. Gate is now varies-OR-nonzero (all-zero remains the only
+   dormant case, preserving hand-authored configs).
+
+Also hardened: the singleton now tracks the `DxvkDevice*` its resources were
+built on and drops/rebuilds everything if the device changes (previously the
+registered-flags claimed "done" while a recreated device's asset replacer had
+never seen the handles -> per-frame "External mesh has no submeshes" forever);
+stale "cleared by onSceneClear" comment (no such hook exists) replaced with the
+real lifetime story. Deliberately NOT changed: frame-time-dependent motion-trail
+length (`speed * multiplier * dt` is upstream's motion-blur semantic — per-frame
+streaks tile temporally into continuous lines; compensating would gap them), and
+no interior suppression runtime-side (no renderer signal for "indoors" exists;
+documented as the integration's job in weather-presets.md).
+
+- **`src/dxvk/shaders/rtx/pass/particles/particle_system_binding_indices.h`** - fork-touchpoint inline tweak. *GpuParticle.timeToLive half -> float (absorbs pads, 48 bytes preserved); +inf sentinel/clear word.*
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.cpp`** - fork-owned change. *Spawn-rate cap, lifetime-scaled dwell floor, dwell-paced material re-registration, device-change reset, staging-lifetime note.*
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.h`** - fork-owned change. *refreshDesc signature (+ctx), m_resourceDevice / applied-material members, corrected lifetime comments + tooltips.*
+- **`src/dxvk/rtx_render/rtx_fork_weather.cpp`** - fork-owned change. *Precipitation write gate: varies-OR-nonzero.*
+- **`docs/integrators/weather-presets.md`** - fork-owned change. *Interiors-are-integration-responsibility section, fast-movement note, global-knob table additions.*
+- **`docs/integrators/weather-presets-reference.md`** - fork-owned change. *Write-gate semantics note.*
+
+---
+
+## Workstream - ray-traced spawn occlusion for particles (fork - 2026-07-25)
+
+Precipitation now stops under roofs, bridges and overhangs by asking the actual
+scene geometry, not the screen. Supersedes the previous "interiors are the
+integration's responsibility" position in `docs/integrators/weather-presets.md`.
+
+Motivation: upstream's only particle collision (`enableCollisionDetection` ->
+`collideParticleWithScene` in `particle_system_evolve.comp.slang`) reprojects the
+particle into the PREVIOUS FRAME'S G-BUFFER and early-outs if it lands outside
+[0,1] UV. That is a screen-space test, so it cannot see anything off-screen,
+behind the camera, or outside the frustum - i.e. it cannot see the roof over the
+player's head, which is exactly the geometry that decides whether it should be
+raining on them. This is a ray tracer; the TLAS is right there.
+
+Everything needed was already wired and simply unused:
+- all three particle passes already declare `COMMON_RAYTRACING_BINDINGS` (which
+  includes `BINDING_ACCELERATION_STRUCTURE`), and
+  `particle_system_bindings.slangh` already includes `common_bindings.slangh`,
+  so `topLevelAS` was already visible to the shaders;
+- `khrRayQueryFeatures.rayQuery` is already an enabled device feature and
+  `RayQuery<>` is used elsewhere (`visibility.slangh`);
+- the descriptor was never populated for these dispatches only because
+  `bindCommonRayTracingResources` runs later in the frame with the raytracing
+  work.
+
+Frame ordering makes this cheap rather than awkward: particle simulation runs
+from `SceneManager::prepareSceneData`, BEFORE `AccelManager::prepareSceneData`
+builds and swaps this frame's TLAS - so `getTLAS(Opaque).accelStructure` at that
+point is still last frame's fully-built structure. One frame of staleness is
+irrelevant for "is there a roof above this raindrop". It is null for the first
+frames of a scene, hence the `sceneTlasValid` gate.
+
+Design (reworked 2026-07-25 after the first in-game test): TWO rays per
+SPAWNED particle (hundreds per frame at default settings, not thousands).
+
+1. **Shelter probe** - upward, against the fall direction, 1 km of authored
+   distance (`100000 cm * sceneScale`). A hit means opaque cover hangs
+   somewhere overhead, so the drop would have been stopped up there and must
+   not exist: it is killed at birth (`timeToLive = 0` -> born sleeping, never
+   rendered, retired through the conservative counter exactly like upstream's
+   Kill collision mode).
+2. **Landing trace** - along the initial velocity for the particle's whole
+   ballistic path, shortening `timeToLive` so it dies at the surface. Skipped
+   when the shelter probe already killed the drop.
+
+For rain (no drag, no turbulence) the path IS a straight line so the landing
+trace is exact; heavy turbulence/drag curves it and makes it an approximation.
+Opaque-only (`OBJECT_MASK_OPAQUE` + `RAY_FLAG_CULL_NON_OPAQUE`), so glass and
+foliage cards do not stop precipitation and traversal needs no any-hit - a
+verified-safe combination here because fully opaque draws get
+`VK_GEOMETRY_OPAQUE_BIT_KHR` + `OBJECT_MASK_OPAQUE`
+(`rtx_instance_manager.cpp`), meaning solid world geometry is never culled by
+the flag and a single `Proceed()` completes traversal. Strictly opt-in: the
+new descriptor bit defaults to 0, so the remixapi, USD and global-preset particle
+paths are byte-identical to before.
+
+POST-MORTEM of the first version (single downward ray), which shipped and
+failed in-game ("rain still falls under roofs"): every link was verified
+correct from source afterwards - the C++/Slang bitfield layouts are
+byte-identical (proven by SPIR-V disassembly: the desc bit reads byte 95 bit 1
+on both sides), the compiled shader contains the full ray-query sequence with
+flags 0x84 and mask 0x8, the TLAS binding/ordering/lifetime all hold, and FO4
+world geometry really is opaque-flagged with the OPAQUE mask. The actual
+defect was geometric: the ray only looked DOWN from the spawn plane, so any
+cover ABOVE the spawn plane could never occlude - and in FO4 that is nearly
+all cover, because the integration runs `rtx.sceneScale = 0.1`
+(`meterToWorldUnitScale` = 10 units/m) while the game world is ~70 units per
+real meter, which shrinks the authored 14 m spawn-plane height to ~2 REAL
+meters above the camera - beneath canopies, overpasses and ceilings. The
+upward shelter probe closes the hole at any scale (it is also the correct
+model with an accurate scale: a bridge 30 m up should shelter the street even
+though the spawn plane hangs at 14 m). Diagnostics were added at the same
+time so the next failure is a measurement, not archaeology.
+
+Diagnostics (read-only, dev menu -> Weather Presets -> Precipitation (global),
+visible while occludeUnderCover is on): scene-TLAS availability, per-frame
+spawn-ray / shelter-kill / landing-hit counters (GPU atomics in the spawn
+kernel, 10-frame readback ring mirroring `ConservativeCounter`), and the
+spawn-plane height in WORLD UNITS next to the sceneScale that produced it -
+the line that would have exposed this bug on day one. Interpretation: rays = 0
+means the trace is not running; rays > 0 with zero kills/hits under a roof
+means the roof is not reachable in the TLAS under `OBJECT_MASK_OPAQUE`;
+shelter kills > 0 under cover means the feature is working.
+
+- **`src/dxvk/shaders/rtx/pass/particles/particle_system_common.h`** - fork-touchpoint inline tweak. *Adds `GpuParticleSystemDesc::traceSpawnOcclusion : 1` (default 0 in the ctor) and repurposes the trailing `ParticleSystemConstants::pad1` as `sceneTlasValid`.*
+- **`src/dxvk/shaders/rtx/pass/particles/particle_system_spawn.comp.slang`** - fork-owned change. *Shelter probe + landing trace at spawn; includes `instance_definitions.h` for `OBJECT_MASK_OPAQUE`; `SpawnTraceStats` diagnostic atomics.*
+- **`src/dxvk/shaders/rtx/pass/particles/particle_system_binding_indices.h`** - fork-touchpoint inline tweak. *Adds `PARTICLE_SYSTEM_BINDING_SPAWN_TRACE_STATS_OUTPUT` (63).*
+- **`src/dxvk/rtx_render/rtx_particle_system.h` / `.cpp`** - fork-touchpoint inline tweaks. *Binds `BINDING_ACCELERATION_STRUCTURE` (last frame's Opaque TLAS) in `simulate`, sets `constants.sceneTlasValid` in `setupConstants`, and owns the spawn-trace stats buffer + 10-frame readback ring + `getSpawnTraceDiagnostics()`.*
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.h` / `.cpp`** - fork-owned change. *`rtx.weather.precipitation.occludeUnderCover` (default on) driving the new bit, the dev-menu toggle, and the read-only occlusion diagnostics block.*
+- **`docs/integrators/weather-presets.md`** - fork-owned change. *"Interiors and cover" replaces "Interiors are the integration's responsibility".*
+- **`RtxOptions.md`** - REGEN PENDING.
+
+---
+
+## Fix - sheltered spawns relocate instead of dying (fork - 2026-07-25)
+
+User report against the spawn-occlusion drop above: "when I go into a sheltered
+area, the rain entirely stops" - including the rain that should stay visible
+outside, through the doorway. Everything else about occlusion was confirmed
+working (rain no longer falls through roofs).
+
+Root cause is the interaction of two facts, each fine on its own:
+
+1. The spawn volume is a camera-centred disc. With the integration's
+   understated scene scale (`rtx.sceneScale = 0.1` => 10 units per authored
+   meter, in a world that is really ~70 units/m) the authored 20 m radius /
+   14 m height is a ~3 REAL meter bubble around the player's head.
+2. The shelter probe killed sheltered drops at birth.
+
+Step under any porch, canopy or awning bigger than the bubble and EVERY spawn
+candidate is (correctly) judged sheltered, every drop dies at birth, and there
+is no rain left ANYWHERE - the rain "visible outside" only ever existed inside
+that same bubble. A pure scale correction (`worldUnitsPerMeter` = 70) was
+tried earlier, did not resolve the user-visible symptom, and was reverted at
+user request; this fix removes the starvation mechanism itself and works at
+any scene scale.
+
+The fix, in `particle_system_spawn.comp.slang`: a sheltered spawn candidate
+REROLLS instead of dying. Spawn-point sampling was factored into
+`sampleSpawnPoint()` (triangle pick + barycentric + emitter-motion smear +
+cone direction, i.e. everything random about a candidate), and the shelter
+probe loops: draw a candidate, probe upward, and on a hit draw a completely
+fresh candidate - up to `kShelterRelocationAttempts` (8) in all - keeping the
+first one with open sky. Only when every attempt is covered (a genuinely
+enclosed interior) is the drop killed at birth as before. The landing trace
+runs on the accepted candidate. Per-attempt RNG seed bases stride by
+`maxNumParticles` so a retry can never replay a neighbouring particle's seed
+window (which would spawn coincident drops).
+
+Consequences, deliberate:
+- The particle budget migrates to wherever the sky is visible: standing under
+  a roof, rain continues outside the doorway; a 95%-covered volume still lands
+  ~1/3 of its budget in the open 5% (1 - 0.95^8).
+- Density conservation is traded away: the surviving spawn rate concentrates
+  in the uncovered fraction, so rain framed in a doorway can read up to ~8x
+  denser than open-field rain. That errs on the visible side, which is the
+  point; killing proportionally is exactly the starvation this replaces.
+- Cost: worst case 9 rays per spawned particle (8 shelter probes + landing),
+  and only in enclosed spaces; the common outdoor case is unchanged at 2.
+
+Diagnostics: a fourth counter, "relocated" (`SpawnTraceStats[3]`), counts
+spawns rescued by the reroll. Interpretation shift: under PARTIAL cover
+(doorway, porch) expect relocated > 0 with shelter kills near ZERO now -
+shelter kills climbing there means the retries all land under the same cover
+(volume too small relative to the roof); shelter kills > 0 with relocated == 0
+is the signature of a genuinely enclosed space, where killing is correct.
+
+- **`src/dxvk/shaders/rtx/pass/particles/particle_system_spawn.comp.slang`** - fork-owned change. *`SpawnSample` / `sampleSpawnPoint()` factoring, shelter relocation loop, `kShelterRelocationAttempts`, stats[3].*
+- **`src/dxvk/rtx_render/rtx_particle_system.h` / `.cpp`** - fork-touchpoint inline tweaks. *`kSpawnTraceStatsCount` 3 -> 4, `s_spawnTraceRelocations`, extended `SpawnTraceDiagnostics`.*
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.h` / `.cpp`** - fork-owned change. *`occludeUnderCover` description now states the relocation semantics; the dev-panel diagnostics show "relocated" and the interpretation comment covers the new counter.*
+
+USER-VERIFIED 2026-07-26 ("you fixed it").
+
+---
+
+## Workstream - precipitation appearance overrides (fork - 2026-07-26)
+
+User request: adjustable rain appearance - "not just the roughness or
+whatever, but the color, length, etc."
+
+The per-preset look fields (color, opacity, drop width/length, streak) have
+existed since the first drop, but they are OWNED by the WeatherBlender
+whenever a preset is active: `writeBlendedToDerivedLayer` rewrites them every
+frame, so dragging them in the dev menu never sticks. The only look knobs
+that held were the material constants (roughness / metallic), which ride the
+registered material rather than the blended options - exactly the user's
+observation.
+
+Fix: a global appearance-override layer, `rtx.weather.precipitation.
+appearance.*`, applied multiplicatively ON TOP of the blended per-preset
+values inside `buildDesc`. The blender never touches these, so they stick
+under any weather, persist across presets and transitions, and save like any
+other rtx option. All defaults are identity => untouched configs produce
+bit-identical descriptors (and therefore identical particle-system hashes).
+
+Options: `tintColor` (multiplies preset color), `opacityScale`, `widthScale`,
+`lengthScale`, `streakScale` (0 suppresses trails entirely, also dropping
+velocity alignment like snow), plus two variance knobs: `sizeVariance` and
+`opacityVariance` (0..0.9). Variance costs nothing: the animation-data
+texture already carries a min row and a max row per property and the GPU
+samples between them with each particle's stable `randSeed`
+(`computeDataRow`, `randomizeAcrossTwoRows`) - upstream plumbing that the
+precipitation descriptor had been collapsing by writing identical min/max
+curves. Spreading the curves to `[1-v, 1+v]` gives every drop its own size /
+opacity, fixed for its lifetime. Per-drop variation is what breaks up the
+"sheet of identical sprites" look, especially for snow.
+
+Edits go through the existing descriptor dwell (~750 ms + lifetime floor), so
+slider drags fork a bounded number of crossfading systems - same contract as
+weather blends. UI: a new "Appearance overrides (stack on presets)" tree in
+the Precipitation (global) panel, between Live values and the budget knobs;
+the Live values note now points at it.
+
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.h`** - fork-owned change. *Seven `rtx.weather.precipitation.appearance.*` options with rationale block.*
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.cpp`** - fork-owned change. *buildDesc applies the overrides (streak, size + variance, tint + opacity + variance); Appearance overrides ImGui tree; Live values note.*
+- **`RtxOptions.md`** - REGEN PENDING.
+
+---
+
+## Fix - rain always renders dark (fork - 2026-07-26)
+
+User report (with screenshot, FNV overcast): rain streaks read as dark
+silhouettes against the bright cloud deck, "no matter what tint or color or
+opacity settings I choose", and the user asked why - "aren't these part of
+the remix particle system? I thought they'd be able to react to light."
+
+They DO react to light - that is precisely the problem. The drops are fully
+path-traced lit geometry, and the renderer shades them correctly for what
+they are: opaque diffuse sprites. Under an overcast preset that kills the
+sun, a diffuse card receives very little irradiance and legitimately renders
+darker than the bright sky behind it; albedo, tint and opacity are all
+MULTIPLIERS on received light, so no setting can lift a surface above the
+light falling on it. A real raindrop is transparent water that transmits and
+refracts the bright sky behind and around it (strong forward scattering) -
+that transmission is why real rain reads as bright streaks against clouds,
+and it is exactly the term a flat sprite cannot have. Every production rain
+system substitutes a small self-lit component for it.
+
+Fix: two more appearance options, `rtx.weather.precipitation.appearance.glow`
+(emissive intensity, default 2.0, 0 restores the previous scene-lit-only
+behavior) and `.glowColor` (default the same cool white-blue as the default
+drop color). Wired as material emission (`setEnableEmission` /
+`setEmissiveIntensity` / `setEmissiveColorConstant` - the same mechanism the
+instance manager uses for emissive-blend particles), so scene lighting still
+applies ON TOP: sunlit rain still catches real highlights, the glow only
+stands in for the missing sky transmission. Rides the existing dwell-paced
+material re-registration (change detection extended from roughness/metallic
+to glow/glowColor), so live drags fork crossfading systems at the bounded
+rate. The emissive term is uniform across the sprite; the drop texture's
+alpha falloff still shapes it at composite time because blending weights the
+whole contribution by opacity.
+
+Note: emissive intensity is scene-referred radiance, so the right value
+depends on exposure/time-of-day - it is a taste dial, surfaced in the
+Appearance overrides tree (Glow Intensity / Glow Color).
+
+REVISED SAME DAY - the constant glow failed its first night test ("rain just
+glows during the night", user) and was replaced by a sun-elevation-gated
+version, which the user also rejected in favor of researching the real
+mechanism. BOTH glow variants are now REMOVED - superseded by the sky-lit
+particle workstream below, which fixes the actual missing term.
+
+---
+
+## Workstream - sky-lit particles: real skylight for precipitation (fork - 2026-07-26)
+
+The definitive dark-rain fix, replacing the glow/emissive stand-ins after an
+in-depth trace of how the renderer actually shades the drops.
+
+MECHANISM (all source-verified):
+1. The particle manager stamps `InstanceCategories::Particle` on its
+   generated geometry -> `surface.isParticle`.
+2. The primary resolve DIVERTS isParticle surfaces away from normal lit
+   shading into the "opacity lighting approximation"
+   (`RESOLVE_OPACITY_LIGHTING_APPROXIMATION`, resolve.slangh):
+   `emission += albedo x evalVolumetricNEE(froxel radiance cache)` - the
+   same treatment as upstream's dust motes.
+3. The froxel radiance cache is filled ONLY by NEE over the analytic light
+   pool. `volume_integrate.slangh` has NO sky/ambient/environment term:
+   skylight exists in Remix only via path-traced miss rays, which never
+   feed froxels.
+4. Under a Numos overcast preset the sun distant light is heavily dimmed, so
+   froxels in open air are nearly black -> rain = albedo x ~0 = dark
+   silhouettes against a bright sky. No albedo-side knob (tint / opacity /
+   roughness / emissive hacks) can fix a lighting-side hole.
+
+FIX: add the missing skylight term at the same place the froxel term lives.
+`evaluateOpaqueApproximations` takes a new defaulted `skyLitParticle` flag
+(passed at all three call sites from a new opaque-material flag bit); when
+set - and only in Numos mode with a nonzero scale - the resolver samples the
+atmosphere's own sky-view LUT via `sampleSkyAmbientForVolume` (which folds in
+the cloud-transmittance LUT: real storm decks dim it, sunsets tint it, night
+zeroes it) and adds `albedo x skyAmbient x cb.particleSkyAmbientScale`. Two
+LUT taps per rain pixel: the view direction lifted above the horizon (forward
+transmission - the sky behind the drop) and the zenith (ambient), averaged.
+The froxel term stays, so local lights still light rain at night.
+
+WHY A MATERIAL FLAG AND NOT isParticle: generic game particles (indoor smoke)
+must not glow sky-blue - sky visibility is unknowable for them. It IS known
+for precipitation: the spawn-time shelter probe with relocation guarantees
+every living drop saw open sky at birth. The flag rides the opaque material
+(`sky_lit_particle`), set only by the precipitation drop material.
+Surface-flag bits (data2.w) are full; opaque material flags had bit
+TYPE_OFFSET(7) free.
+
+COMPILATION SCOPING: the sky term needs the atmosphere helpers + LUT
+bindings, which the geometry-resolver TUs include before resolve.slangh but
+other resolve consumers (integrators, visibility) may not. So
+geometry_resolver.slangh defines `RESOLVE_SKY_LIT_PARTICLES` right before
+including resolve.slangh, and the term compiles out everywhere else. This
+covers the primary view (including ray-query mode, whose variant directive
+defines ATMOSPHERE_AVAILABLE); indirect bounces keep froxel-only particle
+lighting, which is fine - the effect matters where the rain is looked at.
+
+The glow options (`glow`, `glowColor`) and `skyGlowFactor()` are REMOVED,
+replaced by one dial: `rtx.weather.precipitation.appearance.skyLightScale`
+(default 1 = physical, 0 = old froxel-only look; a per-frame constant, so it
+applies immediately with no descriptor/material rebuild). Stale glow keys in
+saved configs are harmless.
+
+- **`src/dxvk/shaders/rtx/utility/shared_constants.h`** - fork-touchpoint inline tweak. *`OPAQUE_SURFACE_MATERIAL_FLAG_SKY_LIT_PARTICLE` (TYPE_OFFSET(7)).*
+- **`src/dxvk/rtx_render/rtx_material_data.h`** - fork-touchpoint inline tweak. *`X(SkyLitParticle, sky_lit_particle, bool, ...)` in LIST_OPAQUE_MATERIAL_CONSTANTS.*
+- **`src/dxvk/rtx_render/rtx_materials.h`** - fork-touchpoint inline tweaks. *`RtOpaqueSurfaceMaterial`: defaulted ctor param, member, flags pack, hash-struct entry.*
+- **`src/dxvk/rtx_render/rtx_scene_manager.cpp`** - fork-touchpoint inline tweak. *Passes `getSkyLitParticle()` into the GPU material.*
+- **`src/dxvk/shaders/rtx/algorithm/geometry_resolver.slangh`** - fork-touchpoint inline tweak. *Defines `RESOLVE_SKY_LIT_PARTICLES` before including resolve.slangh.*
+- **`src/dxvk/shaders/rtx/algorithm/resolve.slangh`** - fork-touchpoint inline tweaks. *`skyLitParticle` param + sky-ambient term in the opacity lighting approximation; flag passed at all three call sites.*
+- **`src/dxvk/shaders/rtx/pass/raytrace_args.h`** - fork-touchpoint inline tweak. *`particleSkyAmbientScale` appended at the END of RaytraceArgs (no existing offsets move).*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned change. *Fills `constants.particleSkyAmbientScale` in updateAtmosphereConstants.*
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.h` / `.cpp`** - fork-owned change. *Glow machinery removed; `setSkyLitParticle(true)` on the drop material.*
+- **`RtxOptions.md`** - REGEN PENDING.
+
+ALIGNMENT PASS (same day, user request - "in line with the other Numos
+features"): the sky-light dial was folded into the weather preset table as an
+11TH precipitation field, `precipitationSkyLight` (group Precipitation ->
+Look, 0..10, default 1 in all 12 archetypes), driving a per-preset live
+option `rtx.weather.precipitation.skyLight` exactly like the other ten - so
+a blizzard can author different skylight than a drizzle, and the preset
+editor generates its slider from the same table as everything else. The
+short-lived global `appearance.skyLightScale` option was removed. The "Live
+values (per-preset fields)" tree in Precipitation (global) was also RETIRED
+in favor of the Weather Preset Editor (a pointer note remains) - preset
+fields now surface in exactly one place, matching the house pattern. The
+Appearance overrides tree (tint/scales/variance) stays: it is the one
+deliberate pattern deviation, kept because blender-owned fields cannot be
+live-edited mid-storm.
+- **`src/dxvk/rtx_render/rtx_fork_weather.h`** - fork-owned change. *`precipitationSkyLight` field row + 12 preset archetype rows; field counts 10 -> 11.*
+- **`src/dxvk/rtx_render/rtx_fork_weather.cpp`** - fork-owned change. *Description mirror, snapshot read, derived-layer write for the new field.*
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.h` / `.cpp`** - fork-owned change. *`skyLight` per-preset option replaces `appearance.skyLightScale`; Live values tree retired.*
+- **`src/dxvk/rtx_render/rtx_fork_atmosphere.cpp`** - fork-owned change. *cb fill reads `skyLight()`.*
+
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.h`** - fork-owned change. *`glow` / `glowColor` options; `m_materialGlow` / `m_materialGlowColor` registered-state members.*
+- **`src/dxvk/rtx_render/rtx_fork_precipitation.cpp`** - fork-owned change. *ensureMaterial sets emission; refreshDesc change detection extended; Glow widgets in the Appearance overrides tree.*
+- **`RtxOptions.md`** - REGEN PENDING.
+
+---
