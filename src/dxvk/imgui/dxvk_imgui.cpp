@@ -3481,17 +3481,11 @@ namespace dxvk {
         RemixGui::Separator();
       }
 
-      {
-        // NV-DXVK start: fork frame-generation backend selector (DLSS-G / FSR-FG)
-        const bool dlfgSupported = ctx->getCommonObjects()->metaNGXContext().supportsDLFG() &&
-                                   !ctx->getCommonObjects()->metaDLFG().hasDLFGFailed();
-        fork_hooks::showFrameGenerationTypeSelector(ctx, dlfgSupported);
-        if (fork_hooks::isDlfgSelected()) {
-          showDLFGOptions(ctx);
-        }
-        fork_hooks::showFsrFrameGenerationOptions(ctx);
-        // NV-DXVK end
-      }
+      // NV-DXVK start: fork frame-generation panel (DLSS-G / FSR-FG selector)
+      fork_hooks::showFrameGenerationOptions(ctx,
+        ctx->getCommonObjects()->metaNGXContext().supportsDLFG() &&
+        !ctx->getCommonObjects()->metaDLFG().hasDLFGFailed());
+      // NV-DXVK end
 
       RemixGui::Separator();
 

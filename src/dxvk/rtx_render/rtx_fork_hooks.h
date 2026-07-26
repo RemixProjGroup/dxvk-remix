@@ -574,23 +574,18 @@ namespace dxvk {
     bool anyFrameGenerationEnabled();
 
     // True when this device supports at least one frame-generation backend.
-    // Gates whether the user menu shows a "Frame Generation Settings" section.
+    // Gates whether the menus show a "Frame Generation Settings" section.
     // Implementation in rtx_fork_upscaler_ui.cpp.
     bool anyFrameGenerationSupported(const Rc<DxvkContext>& ctx, bool isDlfgSupported);
 
-    // Draws the fork's "Frame Generation" technology combo (Off / DLSS / FSR),
-    // and keeps the two backend enable flags mutually exclusive.
+    // Draws the whole frame-generation panel: the Off / DLSS / FSR technology
+    // combo (which is itself the enable control - see
+    // fork_hooks::applyFrameGenerationType), a status line, and whatever extra
+    // controls the selected backend has. Replaces the call to the upstream
+    // ImGUI::showDLFGOptions, which is left untouched but unused because its
+    // body is built around a per-backend enable checkbox this UI does not have.
     // Implementation in rtx_fork_upscaler_ui.cpp.
-    void showFrameGenerationTypeSelector(const Rc<DxvkContext>& ctx, bool isDlfgSupported);
-
-    // True when DLSS-G is the selected backend, i.e. the upstream DLSS-G panel
-    // (ImGUI::showDLFGOptions) should be drawn under the selector.
-    // Implementation in rtx_fork_upscaler_ui.cpp.
-    bool isDlfgSelected();
-
-    // Draws the FSR frame-generation sub-panel. No-ops unless FSR is selected.
-    // Implementation in rtx_fork_upscaler_ui.cpp.
-    void showFsrFrameGenerationOptions(const Rc<DxvkContext>& ctx);
+    void showFrameGenerationOptions(const Rc<DxvkContext>& ctx, bool isDlfgSupported);
 
     // Draws the FSR upscaler sub-panel: preset combo plus render-resolution
     // readout. Called from the upscaler-settings switch in both menus.

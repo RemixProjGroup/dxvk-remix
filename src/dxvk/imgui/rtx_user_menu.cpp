@@ -474,12 +474,8 @@ namespace dxvk {
     if (fork_hooks::anyFrameGenerationSupported(ctx, dlfgSupported)) {
       ImGui::Dummy(ImVec2(0.0f, 3.0f));
       ImGui::TextSeparator("Frame Generation Settings");
-      // NV-DXVK start: fork frame-generation backend selector (DLSS-G / FSR-FG)
-      fork_hooks::showFrameGenerationTypeSelector(ctx, dlfgSupported);
-      if (fork_hooks::isDlfgSelected()) {
-        showDLFGOptions(ctx);
-      }
-      fork_hooks::showFsrFrameGenerationOptions(ctx);
+      // NV-DXVK start: fork frame-generation panel (DLSS-G / FSR-FG selector)
+      fork_hooks::showFrameGenerationOptions(ctx, dlfgSupported);
       // NV-DXVK end
     }
 
