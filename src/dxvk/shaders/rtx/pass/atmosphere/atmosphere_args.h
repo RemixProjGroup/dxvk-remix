@@ -73,7 +73,7 @@ struct AtmosphereArgs {
 
   uint skyViewLutHeight;
   float ozoneLayerWidth;  // Width of ozone layer (km)
-  float viewAltitude;     // Camera altitude offset (km)
+  float padRetired10;     // retired: viewAltitude (camera altitude offset, km) — never read by any pass.
   float multiScatterPhysicalStrength;  // 0 = pure analytical (artistic, preset-faithful), 1 = pure LUT-based hemisphere integration (physical)
 
   // Derived parameters (computed on CPU)
@@ -368,7 +368,9 @@ struct AtmosphereArgs {
                                     // open sky from below/around, bypassing bottom-darkening; bright by
                                     // day, fades at sunset). Reuses the former cloudBottomDarkeningHeight
                                     // slot (was pad_cloudVoxel1); CB layout unchanged.
-  float cloudDetailStrength;        // [0,1] additive edge detail strength (0 = off)
+  float cloudDetailStrength;        // Silhouette wobble amplitude: how strongly the detail field
+                                    // displaces the cloud silhouette (0 = off). Scaled by
+                                    // kWobbleKmPerDetailStrength in cloud_nubis3_common.slangh.
 
   // ----- Nubis Cubed 2023 lighting params (fork — 2026-05-12, C4) -----
   // Consumed by cloud_render.comp.slang via evalNubisCubedSampleCore.
@@ -509,12 +511,11 @@ struct AtmosphereArgs {
                                       // reaches full strength [0..~0.5]. Below it the ambient fades
                                       // toward 0 so the soft skirt doesn't read as grey-brown haze.
                                       // 0 = off (ambient at full strength on all samples).
-  // Independent scale on the physical sun's contribution to volumetric fog
-  // in-scattering (fork — issue #35). Applied in volume_integrator.slangh where
-  // the sun term is added to the froxel SH, so it scales ONLY the sun and not
-  // the whole cache the way rtx.volumetrics.fogSunVisibilityGain does. Reuses
-  // the former pad_cloudEdge0 slot; CB layout unchanged. Default 1.0 = baseline.
-  float atmosphereSunVolumetricRadianceScale;
+  // retired: atmosphereSunVolumetricRadianceScale (fork — issue #35) scaled the
+  // sun term where it was added to the froxel SH in volume_integrator.slangh.
+  // That injection was removed on 2026-06-28 (it double-counted the sun, which
+  // is already sampled by the volume NEE loop), leaving this with no consumer.
+  float padRetired11;
 
   // ----- Artistic sunset color controls (fork — 2026-06-14) -----
   // Counteract the desaturation introduced when sunset reddening moved onto the

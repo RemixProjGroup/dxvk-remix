@@ -168,9 +168,9 @@ float sampleCloudDensityNubis3(vec3 worldPosKm,
   sdfKmOut = sdfLive;
 
   // 5. Silhouette wobble amplitude (anti-blobby pass — see step 6c). Rides the
-  //    legacy cloudDetailStrength knob, which is inert in Nubis3 mode: the
-  //    SAME semantic ("how strongly the detail field moves the silhouette")
-  //    in both models. The conservative early-out keeps the empty-air fast
+  //    cloudDetailStrength knob: its legacy additive-edge-detail role is gone,
+  //    but this keeps the SAME semantic ("how strongly the detail field moves
+  //    the silhouette"). The conservative early-out keeps the empty-air fast
   //    path: a sample can only become cloud if the wobble's maximum outward
   //    excursion (+0.5 signal x amplitude) could reach it.
   const float kWobbleKmPerDetailStrength = 0.6f;

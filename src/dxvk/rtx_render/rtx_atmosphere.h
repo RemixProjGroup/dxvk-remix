@@ -146,20 +146,6 @@ public:
   const Resources::Resource& getCloudSecondaryLut() const { return m_cloudSecondaryLut; }
 
   /**
-   * \brief Get the cloud placement map (fork — 2026-06-11, column-shaping
-   * rework).
-   *
-   * 512x512 RGBA8 tiled at cloudNoiseTileKm: R = cluster field (where clouds
-   * are, at cloud scale), G = per-cloud top-height jitter, B = base lift.
-   * Baked by cloud_placement_map_baker.comp.slang at init and re-baked live
-   * when cloudCellSizeKm / cloudNoiseTileKm change. Drives the per-column
-   * cloud model inside the density samplers (each cloud gets its own
-   * base/top and a per-cloud height axis for all vertical shaping +
-   * lighting).
-   */
-  const Resources::Resource& getCloudPlacementMap() const { return m_cloudPlacementMap; }
-
-  /**
    * \brief Ensure the cloud render RT exists at the requested downscale extent.
    *
    * Recreates the RT on resize. Cheap when the extent is unchanged. Called

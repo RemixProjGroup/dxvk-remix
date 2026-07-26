@@ -1571,21 +1571,13 @@ namespace dxvk {
                "have visibly darker volumetric ambient than clear-sky scenes). "
                "0 = sky ambient ignores cloud cover (debug only — visually "
                "inverted versus reality).");
-    // Independent scale on the sun's contribution to volumetric in-scattering
-    // (fork — issue #35). rtx.volumetrics.fogSunVisibilityGain multiplies the
-    // whole froxel SH cache at the fog consumer, so it scales the sun AND every
-    // remix scene light together — forcing it low for balanced scene lights
-    // leaves daytime sun-fog too weak. This knob scales ONLY the atmosphere sun
-    // term, applied where it is added to the SH in volume_integrator.slangh, so
-    // sun-fog can be boosted without over-brightening scene-light fog. Default
-    // 1.0 leaves the sun's contribution unchanged (bit-identical baseline).
-    RTX_OPTION_ARGS("rtx.atmosphere", float, atmosphereSunVolumetricRadianceScale, 1.0f,
-               "Independent multiplier on the physical sun's contribution to "
-               "volumetric fog in-scattering. Unlike rtx.volumetrics.fogSunVisibilityGain "
-               "(which scales the whole froxel cache, sun + all scene lights), this "
-               "affects only the atmosphere sun term. Gated on rtx.skyMode = 1 (Numos). "
-               "Default 1.0 = physical sun contribution unchanged.",
-               args.minValue = 0.0f, args.maxValue = 50.0f);
+    // Retired: rtx.atmosphere.atmosphereSunVolumetricRadianceScale (fork — issue
+    // #35) scaled the atmosphere sun's contribution where it was added to the
+    // froxel SH in volume_integrator.slangh. That injection was removed on
+    // 2026-06-28 because it double-counted the sun (the sun/moons are real Remix
+    // distant lights and are already sampled by the volume NEE loop), which left
+    // this knob with no consumer. Use rtx.volumetrics.fogSunVisibilityGain to
+    // scale fog in-scattering.
 
     // Wrenninge / Hillaire (Frostbite 2016) multi-scatter approximation for the
     // sun-cloud interaction. Replaces the prior flat-Lambert + single-HG approximation

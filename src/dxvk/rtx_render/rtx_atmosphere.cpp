@@ -634,9 +634,6 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // which zeroes it in the cache key so dragging the slider doesn't trigger a rebake.
   args.skyIndirectRadianceScale = std::max(RtxOptions::skyIndirectRadianceScale(), 0.0f);
 
-  // View Altitude (converted m to km)
-  args.viewAltitude = RtxOptions::altitude() * 0.001f;
-
   // LUT dimensions
   args.transmittanceLutWidth = kTransmittanceLutWidth;
   args.transmittanceLutHeight = kTransmittanceLutHeight;
@@ -881,9 +878,6 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // Cloud-edge / halo tuning (fork — 2026-06-13). Live knobs for silhouette
     // softness and the thin-edge ambient haze fade.
     args.cloudEdgeAmbientFade          = RtxOptions::cloudEdgeAmbientFade();
-
-    // Independent sun-only scale for volumetric fog in-scattering (issue #35).
-    args.atmosphereSunVolumetricRadianceScale = RtxOptions::atmosphereSunVolumetricRadianceScale();
   }
 
   // Cloud render camera basis (fork — 2026-05-12, C4). Pushed from
@@ -978,6 +972,8 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   args.padRetired7 = 0.0f;
   args.padRetired8 = 0u;
   args.padRetired9 = 0.0f;
+  args.padRetired10 = 0.0f;
+  args.padRetired11 = 0.0f;
 
   return args;
 }
