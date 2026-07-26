@@ -404,6 +404,7 @@ namespace {
           src.getMetallicConstant(),
           src.getEmissiveColorConstant(),
           src.getEnableEmission(),
+          src.getSkyLitParticle(), // fork (2026-07-26): sky-lit particle flag rides through preload
           src.getSpriteSheetRows(),
           src.getSpriteSheetCols(),
           src.getSpriteSheetFPS(),
@@ -501,6 +502,7 @@ namespace {
           extOpaque->metallicConstant,
           tovec3(info.emissiveColorConstant),
           info.emissiveIntensity > 0.f,
+          false, // fork (2026-07-26): OpaqueMaterial::SkyLitParticle - not exposed via remixapi
           info.spriteSheetRow,
           info.spriteSheetCol,
           info.spriteSheetFps,

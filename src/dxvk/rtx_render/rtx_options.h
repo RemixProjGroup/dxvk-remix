@@ -986,6 +986,12 @@ namespace dxvk {
 
     RTX_OPTION_ENV("rtx", bool, useWhiteMaterialMode, false, "RTX_USE_WHITE_MATERIAL_MODE", "Override all objects' materials by white material");
     RTX_OPTION("rtx", bool, useHighlightLegacyMode, false, "");
+    RTX_OPTION("rtx", bool, linearizeSrgbTextures, true,
+               "When true, opaque albedo/emissive textures that use an sRGB VkFormat are detected and the path tracer's software gamma\n"
+               "correction (gammaToLinear/pow(2.2)) is skipped for them, since the sampler hardware already linearized the value on read.\n"
+               "This avoids a double linearization (sampler sRGB curve + shader pow(2.2)) that darkens such textures. Constants and\n"
+               "non-sRGB (UNORM) textures are unaffected and still receive the software gamma correction. Set to false to restore the\n"
+               "legacy behavior where the software conversion is always applied regardless of texture format.");
     RTX_OPTION("rtx", float, nativeMipBias, 0.0f,
                "Specifies a mipmapping level bias to add to all material texture filtering. Stacks with the upscaling mip bias.\n"
                "Mipmaps are determined based on how far away a texture is, using this can bias the desired level in a lower quality direction (positive bias), or a higher quality direction with potentially more aliasing (negative bias).\n"

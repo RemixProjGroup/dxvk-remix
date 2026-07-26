@@ -22,6 +22,7 @@
 
 #include "rtx_fork_weather.h"
 #include "rtx_fork_hooks.h"
+#include "rtx_fork_precipitation.h"   // PrecipitationSystem — target of the precipitation* fields
 #include "rtx_context.h"
 #include "rtx_fork_game_state.h"
 #include "rtx_options.h"
@@ -585,6 +586,19 @@ namespace dxvk { namespace fork_weather { namespace {
     if (std::strcmp(name, "depthOffset") == 0) return RtxGlobalVolumetrics::depthOffsetObject().getDescription();
     if (std::strcmp(name, "noiseFieldOctaves") == 0) return RtxGlobalVolumetrics::noiseFieldOctavesObject().getDescription();
     if (std::strcmp(name, "atmosphereSunFogScale") == 0) return RtxOptions::atmosphereSunVolumetricRadianceScaleObject().getDescription();
+    // Precipitation (fork — 2026-07-25). Same pattern: mirror the live option's
+    // canonical description so the preset sliders document themselves.
+    if (std::strcmp(name, "precipitationIntensity") == 0)    return fork_precipitation::PrecipitationSystem::intensityObject().getDescription();
+    if (std::strcmp(name, "precipitationFallSpeed") == 0)    return fork_precipitation::PrecipitationSystem::fallSpeedObject().getDescription();
+    if (std::strcmp(name, "precipitationWindResponse") == 0) return fork_precipitation::PrecipitationSystem::windResponseObject().getDescription();
+    if (std::strcmp(name, "precipitationTurbulence") == 0)   return fork_precipitation::PrecipitationSystem::turbulenceObject().getDescription();
+    if (std::strcmp(name, "precipitationDrag") == 0)         return fork_precipitation::PrecipitationSystem::dragObject().getDescription();
+    if (std::strcmp(name, "precipitationStreak") == 0)       return fork_precipitation::PrecipitationSystem::streakObject().getDescription();
+    if (std::strcmp(name, "precipitationDropWidth") == 0)    return fork_precipitation::PrecipitationSystem::dropWidthObject().getDescription();
+    if (std::strcmp(name, "precipitationDropLength") == 0)   return fork_precipitation::PrecipitationSystem::dropLengthObject().getDescription();
+    if (std::strcmp(name, "precipitationOpacity") == 0)      return fork_precipitation::PrecipitationSystem::opacityObject().getDescription();
+    if (std::strcmp(name, "precipitationSkyLight") == 0)     return fork_precipitation::PrecipitationSystem::skyLightObject().getDescription();
+    if (std::strcmp(name, "precipitationColor") == 0)        return fork_precipitation::PrecipitationSystem::colorObject().getDescription();
     return "";
   }
   // True if any field in this (group[, section]) matches the filter.
@@ -802,6 +816,18 @@ namespace dxvk { namespace fork_weather { namespace {
     s.atmosphereSunFogScale    = RtxOptions::atmosphereSunVolumetricRadianceScale();
     s.depthOffset              = RtxGlobalVolumetrics::depthOffset();
     s.noiseFieldOctaves        = static_cast<float>(RtxGlobalVolumetrics::noiseFieldOctaves());
+    // Precipitation (11) — class is fork_precipitation::PrecipitationSystem
+    s.precipitationIntensity    = fork_precipitation::PrecipitationSystem::intensity();
+    s.precipitationFallSpeed    = fork_precipitation::PrecipitationSystem::fallSpeed();
+    s.precipitationWindResponse = fork_precipitation::PrecipitationSystem::windResponse();
+    s.precipitationTurbulence   = fork_precipitation::PrecipitationSystem::turbulence();
+    s.precipitationDrag         = fork_precipitation::PrecipitationSystem::drag();
+    s.precipitationStreak       = fork_precipitation::PrecipitationSystem::streak();
+    s.precipitationDropWidth    = fork_precipitation::PrecipitationSystem::dropWidth();
+    s.precipitationDropLength   = fork_precipitation::PrecipitationSystem::dropLength();
+    s.precipitationOpacity      = fork_precipitation::PrecipitationSystem::opacity();
+    s.precipitationSkyLight     = fork_precipitation::PrecipitationSystem::skyLight();
+    s.precipitationColor        = fork_precipitation::PrecipitationSystem::color();
     return s;
   }
 
@@ -868,6 +894,7 @@ namespace dxvk { namespace fork_weather { namespace {
   WVARIES(rayleighScattering)
   WVARIES(nightSkyColor)
   WVARIES(skyIndirectRadianceScale)
+  WVARIES(precipitationIntensity)
 #undef WVARIES
   void writeBlendedToDerivedLayer(const WeatherSnapshot& interp) {
     // Cloud (17)
@@ -938,6 +965,31 @@ namespace dxvk { namespace fork_weather { namespace {
     if (weatherVaries_atmosphereSunFogScale())    RtxOptions::atmosphereSunVolumetricRadianceScaleObject().setImmediately(interp.atmosphereSunFogScale);
     if (weatherVaries_depthOffset())              RtxGlobalVolumetrics::depthOffsetObject().setImmediately(interp.depthOffset);
     if (weatherVaries_noiseFieldOctaves())        RtxGlobalVolumetrics::noiseFieldOctavesObject().setImmediately(static_cast<uint32_t>(interp.noiseFieldOctaves + 0.5f));
+    // Precipitation (11) — class is fork_precipitation::PrecipitationSystem.
+    // Gated as a BLOCK on the intensity fields: precipitation is opt-in, and a
+    // game whose presets all leave intensity at 0 should not have its
+    // precipitation options written at all (the system is dormant anyway, and
+    // this keeps a hand-authored rtx.weather.precipitation.* config intact for
+    // integrations that drive the emitter themselves). The gate is "any preset
+    // has NONZERO intensity", not just "intensity varies": a game that authors
+    // the SAME nonzero intensity into every preset (constant-rain worlds) has
+    // zero variance but absolutely wants the blender to drive the options —
+    // with a varies-only gate its live intensity would sit at the 0 default and
+    // it would never rain at all. All-equal-and-zero is the only dormant case.
+    if (weatherVaries_precipitationIntensity() ||
+        RtxOptions::clear_precipitationIntensity() != 0.0f) {
+      fork_precipitation::PrecipitationSystem::intensityObject().setImmediately(interp.precipitationIntensity);
+      fork_precipitation::PrecipitationSystem::fallSpeedObject().setImmediately(interp.precipitationFallSpeed);
+      fork_precipitation::PrecipitationSystem::windResponseObject().setImmediately(interp.precipitationWindResponse);
+      fork_precipitation::PrecipitationSystem::turbulenceObject().setImmediately(interp.precipitationTurbulence);
+      fork_precipitation::PrecipitationSystem::dragObject().setImmediately(interp.precipitationDrag);
+      fork_precipitation::PrecipitationSystem::streakObject().setImmediately(interp.precipitationStreak);
+      fork_precipitation::PrecipitationSystem::dropWidthObject().setImmediately(interp.precipitationDropWidth);
+      fork_precipitation::PrecipitationSystem::dropLengthObject().setImmediately(interp.precipitationDropLength);
+      fork_precipitation::PrecipitationSystem::opacityObject().setImmediately(interp.precipitationOpacity);
+      fork_precipitation::PrecipitationSystem::skyLightObject().setImmediately(interp.precipitationSkyLight);
+      fork_precipitation::PrecipitationSystem::colorObject().setImmediately(interp.precipitationColor);
+    }
   }
 
 } } }  // namespace dxvk::fork_weather::(anonymous)
@@ -1171,6 +1223,12 @@ namespace dxvk { namespace fork_weather {
 
       ImGui::TreePop();
     }
+
+    // ---- Precipitation globals (budget / spawn volume / collision) ----
+    // The per-preset look values live in the preset editor, generated from the
+    // field table like everything else; these are the shared, non-weather knobs.
+    ImGui::Separator();
+    fork_hooks::showPrecipitationUI();
   }
   // ---------------------------------------------------------------------------
   // renderEditorWindow — the pop-out per-preset editor (separate movable window,

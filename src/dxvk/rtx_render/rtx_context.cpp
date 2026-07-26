@@ -635,6 +635,11 @@ namespace dxvk {
       m_submitContainsInjectRtx = true;
       m_cachedReflexFrameId = cachedReflexFrameId;
 
+      // Fork: submit the weather precipitation emitter. Must precede
+      // prepareSceneData -- that is where RtxParticleSystemManager::simulate
+      // consumes this frame's spawn contexts.
+      fork_hooks::submitPrecipitation(*this);
+
       // Update all the GPU buffers needed to describe the scene
       getSceneManager().prepareSceneData(this, m_execBarriers);
       

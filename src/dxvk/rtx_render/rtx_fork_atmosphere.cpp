@@ -20,6 +20,7 @@
 #include "rtx_light_manager.h"       // createExternallyTrackedLight / updateExternallyTrackedLight
 #include "rtx_lights.h"              // RtDistantLight, RtLight
 #include "rtx_options.h"
+#include "rtx_fork_precipitation.h"   // skyLight (particleSkyAmbientScale constant fill)
 #include "rtx/pass/raytrace_args.h"
 #include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/atmosphere/atmosphere_args.h" // MAX_MOONS (showAtmosphereUI moon loop)
@@ -294,6 +295,13 @@ namespace fork_hooks {
   // ---------------------------------------------------------------------------
   void updateAtmosphereConstants(RtxContext& ctx, RaytraceArgs& constants) {
     constants.skyMode = static_cast<uint32_t>(RtxOptions::skyMode());
+
+    // Fork (2026-07-26): sky-ambient scale for sky-lit particle materials
+    // (weather precipitation) - consumed by the resolver's opacity lighting
+    // approximation. Lives here because it is atmosphere-coupled and this is
+    // where the rest of the sky constants are filled.
+    constants.particleSkyAmbientScale =
+      std::max(fork_precipitation::PrecipitationSystem::skyLight(), 0.0f);
 
     // Detect sky mode change and clear sky buffers when switching to Numos
     SkyMode currentSkyMode = RtxOptions::skyMode();

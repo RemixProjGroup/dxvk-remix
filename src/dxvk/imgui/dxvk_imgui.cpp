@@ -4196,6 +4196,8 @@ namespace dxvk {
 
       RemixGui::Checkbox("Use White Material Textures", &RtxOptions::useWhiteMaterialModeObject());
       RemixGui::Separator();
+      RemixGui::Checkbox("Linearize sRGB Textures", &RtxOptions::linearizeSrgbTexturesObject());
+      RemixGui::Separator();
       constexpr float kMipBiasRange = 32;
       RemixGui::DragFloat("Mip LOD Bias", &RtxOptions::nativeMipBiasObject(), 0.01f, -kMipBiasRange, kMipBiasRange, "%.2f", sliderFlags);
       RemixGui::DragFloat("Upscaling LOD Bias", &RtxOptions::upscalingMipBiasObject(), 0.01f, -kMipBiasRange, kMipBiasRange, "%.2f", sliderFlags);

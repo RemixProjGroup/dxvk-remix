@@ -239,6 +239,8 @@ dxvk_src = files([
   'rtx_render/rtx_fork_hooks.h',
   'rtx_render/rtx_fork_light.cpp',
   'rtx_render/rtx_fork_overlay.cpp',
+  'rtx_render/rtx_fork_precipitation.cpp',
+  'rtx_render/rtx_fork_precipitation.h',
   'rtx_render/rtx_fork_rcas.cpp',
   'rtx_render/rtx_fork_rcas.h',
   'rtx_render/rtx_fork_submit.cpp',

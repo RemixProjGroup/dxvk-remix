@@ -39,6 +39,13 @@
 #include "rtx/concept/surface_material/opaque_surface_material_interaction.slangh"
 #include "rtx/concept/surface/alpha_blend_surface.slangh"
 #include "rtx/concept/light/light.slangh"
+// Fork (2026-07-26): the geometry-resolver TUs include atmosphere_common.slangh
+// (above) and the common bindings' atmosphere LUTs before resolve.slangh, so
+// resolve's opacity lighting approximation can add a sky-ambient term for
+// sky-lit particle materials (weather precipitation). Passes that include
+// resolve.slangh through other chains (integrators, visibility) leave this
+// undefined and compile the sky term out.
+#define RESOLVE_SKY_LIT_PARTICLES 1
 #include "rtx/algorithm/resolve.slangh"
 #include "rtx/algorithm/volume_lighting.slangh"
 #include "rtx/pass/post_fx/post_fx_motion_blur_geometry_flags.slangh"
