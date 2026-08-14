@@ -36,6 +36,22 @@ namespace dxvk {
   static constexpr const char* kallowUsageReportingKey = "allowUsageReporting";
 
   namespace {
+    bool aeroButton(const char* label, const ImVec2& size) {
+      ImGui::InvisibleButton(label, size);
+      const bool hovered = ImGui::IsItemHovered();
+      const bool held = ImGui::IsItemActive();
+      const ImVec2 min = ImGui::GetItemRectMin();
+      const ImVec2 max = ImGui::GetItemRectMax();
+      ImDrawList* draw = ImGui::GetWindowDrawList();
+      const ImU32 top = held ? IM_COL32(6, 94, 166, 255) : hovered ? IM_COL32(90, 205, 246, 255) : IM_COL32(75, 184, 231, 255);
+      const ImU32 bottom = held ? IM_COL32(29, 145, 209, 255) : IM_COL32(8, 111, 184, 255);
+      draw->AddRectFilledMultiColor(min, max, top, top, bottom, bottom);
+      draw->AddRectFilled(ImVec2(min.x + 2.0f, min.y + 2.0f), ImVec2(max.x - 2.0f, min.y + (max.y - min.y) * 0.42f), IM_COL32(220, 250, 255, hovered ? 95 : 70), 6.0f);
+      draw->AddRect(min, max, IM_COL32(15, 110, 174, 255), 6.0f, 0, 1.0f);
+      const ImVec2 text = ImGui::CalcTextSize(label);
+      draw->AddText(ImVec2(min.x + (max.x - min.x - text.x) * 0.5f, min.y + (max.y - min.y - text.y) * 0.5f), IM_COL32(245, 253, 255, 255), label);
+      return ImGui::IsItemClicked();
+    }
 
     void showPrivacyPolicyLink() {
       if (ImGui::SmallButton("NVIDIA Privacy Policy")) {
@@ -163,13 +179,13 @@ namespace dxvk {
       const float totalButtonsWidth = buttonWidth * 2.0f + spacing;
       ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availableWidth - totalButtonsWidth) * 0.5f);
 
-      if (ImGui::Button("Close", ImVec2(buttonWidth, 0))) {
+      if (aeroButton("Close", ImVec2(buttonWidth, ImGui::GetFrameHeight()))) {
         wantClose = true;
       }
 
       ImGui::SameLine();
 
-      if (ImGui::Button("Never Show This Again", ImVec2(buttonWidth, 0))) {
+      if (aeroButton("Never Show This Again", ImVec2(buttonWidth, ImGui::GetFrameHeight()))) {
         LocalData::app().set(kNeverShowFirstUseGuideKey, true);
         wantClose = true;
       }

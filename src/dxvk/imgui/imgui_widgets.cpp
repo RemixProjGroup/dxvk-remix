@@ -721,10 +721,14 @@ bool ImGui::ButtonEx(const char* label, const ImVec2& size_arg, ImGuiButtonFlags
     bool pressed = ButtonBehavior(bb, id, &hovered, &held, flags);
 
     // Render
-    const ImU32 col = GetColorU32((held && hovered) ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
+    // Aero material: glossy two-tone button face while retaining standard ImGui interaction.
+    const ImU32 top = held ? IM_COL32(8, 94, 165, 255) : hovered ? IM_COL32(92, 209, 248, 255) : IM_COL32(72, 181, 229, 255);
+    const ImU32 bottom = held ? IM_COL32(28, 145, 209, 255) : IM_COL32(7, 106, 179, 255);
+    window->DrawList->AddRectFilled(bb.Min, bb.Max, bottom, style.FrameRounding);
+    window->DrawList->AddRectFilledMultiColor(bb.Min, bb.Max, top, top, bottom, bottom);
+    window->DrawList->AddRectFilled(ImVec2(bb.Min.x + 2.0f, bb.Min.y + 2.0f), ImVec2(bb.Max.x - 2.0f, bb.Min.y + (bb.Max.y - bb.Min.y) * 0.42f), IM_COL32(226, 252, 255, hovered ? 110 : 74), style.FrameRounding);
+    window->DrawList->AddRect(bb.Min, bb.Max, IM_COL32(12, 102, 167, 255), style.FrameRounding, 0, 1.0f);
     RenderNavHighlight(bb, id);
-    RenderFrame(bb.Min, bb.Max, col, true, style.FrameRounding);
-
     if (g.LogEnabled)
         LogSetNextTextDecoration("[", "]");
     RenderTextClipped(bb.Min + style.FramePadding, bb.Max - style.FramePadding, label, NULL, &label_size, style.ButtonTextAlign, &bb);
@@ -1631,21 +1635,26 @@ bool ImGui::BeginCombo(const char* label, const char* preview_value, ImGuiComboF
         popup_open = true;
     }
 
-    // Render shape
-    const ImU32 frame_col = GetColorU32(hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg);
+    // Aero material: ivory glass preview with a distinct glossy cyan drop affordance.
     const float value_x2 = ImMax(bb.Min.x, bb.Max.x - arrow_size);
+    const ImU32 preview_top = hovered ? IM_COL32(250, 255, 255, 255) : IM_COL32(241, 252, 255, 255);
+    const ImU32 preview_bottom = hovered ? IM_COL32(213, 243, 251, 255) : IM_COL32(224, 246, 252, 255);
+    const ImU32 arrow_top = (popup_open || hovered) ? IM_COL32(100, 211, 248, 255) : IM_COL32(68, 176, 225, 255);
+    const ImU32 arrow_bottom = (popup_open || hovered) ? IM_COL32(14, 126, 198, 255) : IM_COL32(8, 105, 179, 255);
     RenderNavHighlight(bb, id);
-    if (!(flags & ImGuiComboFlags_NoPreview))
-        window->DrawList->AddRectFilled(bb.Min, ImVec2(value_x2, bb.Max.y), frame_col, style.FrameRounding, (flags & ImGuiComboFlags_NoArrowButton) ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersLeft);
-    if (!(flags & ImGuiComboFlags_NoArrowButton))
-    {
-        ImU32 bg_col = GetColorU32((popup_open || hovered) ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
-        ImU32 text_col = GetColorU32(ImGuiCol_Text);
-        window->DrawList->AddRectFilled(ImVec2(value_x2, bb.Min.y), bb.Max, bg_col, style.FrameRounding, (w <= arrow_size) ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersRight);
-        if (value_x2 + arrow_size - style.FramePadding.x <= bb.Max.x)
-            RenderArrow(window->DrawList, ImVec2(value_x2 + style.FramePadding.y, bb.Min.y + style.FramePadding.y), text_col, ImGuiDir_Down, 1.0f);
+    if (!(flags & ImGuiComboFlags_NoPreview)) {
+        window->DrawList->AddRectFilled(bb.Min, ImVec2(value_x2, bb.Max.y), preview_bottom, style.FrameRounding, (flags & ImGuiComboFlags_NoArrowButton) ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersLeft);
+        window->DrawList->AddRectFilledMultiColor(bb.Min, ImVec2(value_x2, bb.Max.y), preview_top, preview_top, preview_bottom, preview_bottom);
+        window->DrawList->AddRectFilled(ImVec2(bb.Min.x + 2.0f, bb.Min.y + 2.0f), ImVec2(value_x2 - 2.0f, bb.Min.y + (bb.Max.y - bb.Min.y) * 0.38f), IM_COL32(255, 255, 255, 130), style.FrameRounding);
     }
-    RenderFrameBorder(bb.Min, bb.Max, style.FrameRounding);
+    if (!(flags & ImGuiComboFlags_NoArrowButton)) {
+        window->DrawList->AddRectFilled(ImVec2(value_x2, bb.Min.y), bb.Max, arrow_bottom, style.FrameRounding, (w <= arrow_size) ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersRight);
+        window->DrawList->AddRectFilledMultiColor(ImVec2(value_x2, bb.Min.y), bb.Max, arrow_top, arrow_top, arrow_bottom, arrow_bottom);
+        window->DrawList->AddRectFilled(ImVec2(value_x2 + 1.0f, bb.Min.y + 2.0f), ImVec2(bb.Max.x - 2.0f, bb.Min.y + (bb.Max.y - bb.Min.y) * 0.40f), IM_COL32(231, 252, 255, 95), style.FrameRounding);
+        if (value_x2 + arrow_size - style.FramePadding.x <= bb.Max.x)
+            RenderArrow(window->DrawList, ImVec2(value_x2 + style.FramePadding.y, bb.Min.y + style.FramePadding.y), IM_COL32(8, 70, 111, 255), ImGuiDir_Down, 1.0f);
+    }
+    window->DrawList->AddRect(bb.Min, bb.Max, IM_COL32(27, 135, 194, 255), style.FrameRounding, 0, 1.0f);
 
     // Custom preview
     if (flags & ImGuiComboFlags_CustomPreview)
