@@ -105,6 +105,7 @@ namespace dxvk {
     inline bool isDofAutoFocusEnabled() const { return isDofEnabled() && autoFocusEnable(); }
     inline bool isChromaticAberrationEnabled() const { return enable() && enableLensEffects() && enableChromaticAberration() && chromaticAberrationAmount() > 0.0f; }
     inline bool isVignetteEnabled() const { return enable() && enableLensEffects() && enableVignette() && vignetteIntensity() > 0.0f; }
+    inline const Resources::Resource& getDofFocusState() const { return m_dofFocusState; }
 
     RTX_OPTION_ARGS("rtx.postfx", bool, enable, true, "Enables optional post-processing effects in the stack.",
                     args.environment = "RTX_POST_FX_ENABLE",

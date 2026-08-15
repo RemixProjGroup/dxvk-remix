@@ -6,6 +6,7 @@
 #include "rtx_fork_hooks.h"
 #include "rtx_context.h"
 #include "rtx_bloom.h"
+#include "rtx_external_effects.h"
 #include "rtx_postFx.h"
 #include "rtx_tone_mapping.h"
 #include "rtx_srgb_dither.h"
@@ -52,22 +53,60 @@ namespace dxvk {
     return descriptors[static_cast<size_t>(id)];
   }
 
-  std::vector<RtxPostProcessingStack::EffectId> RtxPostProcessingStack::defaultOrder() {
+  std::string RtxPostProcessingStack::configId(const EffectEntry& entry) {
+    return entry.external
+      ? "external:" + entry.externalId
+      : descriptor(entry.builtInId).configId;
+  }
+
+  std::string RtxPostProcessingStack::name(const EffectEntry& entry) {
+    if (!entry.external) {
+      return descriptor(entry.builtInId).name;
+    }
+
+    const auto infos = RtxExternalEffects::instance().effectInfos();
+    const auto info = std::find_if(infos.begin(), infos.end(), [&](const RtxExternalEffectInfo& candidate) {
+      return candidate.id == entry.externalId;
+    });
+    return info == infos.end() ? entry.externalId : info->name;
+  }
+
+  RtxPostProcessingStack::EffectDomain RtxPostProcessingStack::domain(const EffectEntry& entry) {
+    if (!entry.external) {
+      return descriptor(entry.builtInId).domain;
+    }
+
+    const auto infos = RtxExternalEffects::instance().effectInfos();
+    const auto info = std::find_if(infos.begin(), infos.end(), [&](const RtxExternalEffectInfo& candidate) {
+      return candidate.id == entry.externalId;
+    });
+    return info != infos.end() && info->domain == RtxExternalEffectDomain::HDR
+      ? EffectDomain::HDR
+      : EffectDomain::Display;
+  }
+
+  bool RtxPostProcessingStack::reorderable(const EffectEntry& entry) {
+    return entry.external || descriptor(entry.builtInId).reorderable;
+  }
+
+  std::vector<RtxPostProcessingStack::EffectEntry> RtxPostProcessingStack::defaultOrder() {
     return {
-      EffectId::Bloom,
-      EffectId::MotionBlur,
-      EffectId::DepthOfField,
-      EffectId::Tonemapping,
-      EffectId::NtscVhs,
-      EffectId::LensEffects,
-      EffectId::SRGBDither,
+      { false, EffectId::Bloom, {} },
+      { false, EffectId::MotionBlur, {} },
+      { false, EffectId::DepthOfField, {} },
+      { false, EffectId::Tonemapping, {} },
+      { false, EffectId::NtscVhs, {} },
+      { false, EffectId::LensEffects, {} },
+      { false, EffectId::SRGBDither, {} },
     };
   }
 
   size_t RtxPostProcessingStack::findEffect(
-    const std::vector<EffectId>& order,
-    EffectId id) {
-    const auto it = std::find(order.begin(), order.end(), id);
+    const std::vector<EffectEntry>& order,
+    const std::string& effectConfigId) {
+    const auto it = std::find_if(order.begin(), order.end(), [&](const EffectEntry& entry) {
+      return configId(entry) == effectConfigId;
+    });
     return it == order.end() ? kInvalidIndex : static_cast<size_t>(it - order.begin());
   }
 
@@ -81,100 +120,115 @@ namespace dxvk {
     return value.substr(first, last - first + 1);
   }
 
-  RtxPostProcessingStack::EffectId RtxPostProcessingStack::effectIdFromConfig(
+  RtxPostProcessingStack::EffectEntry RtxPostProcessingStack::effectFromConfig(
     const std::string& configId,
     bool& valid) {
     for (size_t i = 0; i < kEffectCount; i++) {
       const EffectId id = static_cast<EffectId>(i);
       if (configId == descriptor(id).configId) {
         valid = true;
-        return id;
+        return { false, id, {} };
+      }
+    }
+
+    constexpr const char* kExternalPrefix = "external:";
+    if (configId.rfind(kExternalPrefix, 0) == 0) {
+      const std::string id = configId.substr(std::char_traits<char>::length(kExternalPrefix));
+      if (RtxExternalEffects::instance().hasEffect(id)) {
+        valid = true;
+        return { true, EffectId::Bloom, id };
       }
     }
 
     valid = false;
-    return EffectId::Bloom;
+    return {};
   }
 
-  std::vector<RtxPostProcessingStack::EffectId> RtxPostProcessingStack::resolvedOrder() {
-    std::vector<EffectId> parsedOrder;
+  std::vector<RtxPostProcessingStack::EffectEntry> RtxPostProcessingStack::resolvedOrder() {
+    std::vector<EffectEntry> parsedOrder;
     std::stringstream stream(stackOrder());
     std::string token;
 
     while (std::getline(stream, token, ',')) {
       bool valid = false;
-      const EffectId id = effectIdFromConfig(trim(token), valid);
-      if (valid && findEffect(parsedOrder, id) == kInvalidIndex) {
-        parsedOrder.push_back(id);
+      const EffectEntry entry = effectFromConfig(trim(token), valid);
+      if (valid && findEffect(parsedOrder, configId(entry)) == kInvalidIndex) {
+        parsedOrder.push_back(entry);
       }
     }
 
-    for (const EffectId id : defaultOrder()) {
-      if (findEffect(parsedOrder, id) == kInvalidIndex) {
-        parsedOrder.push_back(id);
+    for (const EffectEntry& entry : defaultOrder()) {
+      if (findEffect(parsedOrder, configId(entry)) == kInvalidIndex) {
+        parsedOrder.push_back(entry);
       }
     }
 
-    std::vector<EffectId> result;
+    for (const RtxExternalEffectInfo& info : RtxExternalEffects::instance().effectInfos()) {
+      const EffectEntry entry { true, EffectId::Bloom, info.id };
+      if (findEffect(parsedOrder, configId(entry)) == kInvalidIndex) {
+        parsedOrder.push_back(entry);
+      }
+    }
+
+    std::vector<EffectEntry> result;
     result.reserve(parsedOrder.size());
 
-    for (const EffectId id : parsedOrder) {
-      if (descriptor(id).domain == EffectDomain::HDR && id != EffectId::Tonemapping) {
-        result.push_back(id);
+    for (const EffectEntry& entry : parsedOrder) {
+      if (domain(entry) == EffectDomain::HDR
+       && (entry.external || entry.builtInId != EffectId::Tonemapping)) {
+        result.push_back(entry);
       }
     }
 
     // Tonemapping is the fixed HDR-to-display boundary. It is never allowed
     // to move into either reorderable lane.
-    result.push_back(EffectId::Tonemapping);
+    result.push_back({ false, EffectId::Tonemapping, {} });
 
-    for (const EffectId id : parsedOrder) {
-      if (descriptor(id).domain == EffectDomain::Display) {
-        result.push_back(id);
+    for (const EffectEntry& entry : parsedOrder) {
+      if (domain(entry) == EffectDomain::Display) {
+        result.push_back(entry);
       }
     }
 
-    result.push_back(EffectId::SRGBDither);
+    result.push_back({ false, EffectId::SRGBDither, {} });
     return result;
   }
 
-  std::string RtxPostProcessingStack::serializeOrder(const std::vector<EffectId>& order) {
+  std::string RtxPostProcessingStack::serializeOrder(const std::vector<EffectEntry>& order) {
     std::string result;
-    for (const EffectId id : order) {
+    for (const EffectEntry& entry : order) {
       if (!result.empty()) {
         result += ",";
       }
-      result += descriptor(id).configId;
+      result += configId(entry);
     }
     return result;
   }
 
   bool RtxPostProcessingStack::canMove(
-    const std::vector<EffectId>& order,
+    const std::vector<EffectEntry>& order,
     size_t from,
     size_t to) {
     if (from >= order.size() || to >= order.size() || from == to) {
       return false;
     }
 
-    const EffectDescriptor& source = descriptor(order[from]);
-    const EffectDescriptor& target = descriptor(order[to]);
-    return source.reorderable
-        && target.reorderable
-        && source.domain == target.domain;
+    return reorderable(order[from])
+        && reorderable(order[to])
+        && domain(order[from]) == domain(order[to]);
   }
 
   bool RtxPostProcessingStack::moveEffect(
-    std::vector<EffectId>& order,
+    std::vector<EffectEntry>& order,
     size_t from,
     size_t to) {
     if (!canMove(order, from, to)) {
       return false;
     }
 
-    const EffectId id = order[from];
+    const EffectEntry entry = order[from];
     order.erase(order.begin() + from);
-    order.insert(order.begin() + to, id);
+    order.insert(order.begin() + to, entry);
     return true;
   }
 
@@ -184,13 +238,22 @@ namespace dxvk {
     bool performSRGBConversion,
     bool updateAutoExposure) {
     ScopedCpuProfileZone();
+    RtxExternalEffects::instance().ensureLoaded(ctx->getDevice().ptr());
 
     // The legacy post-FX option is now the stack's global optional-effect
     // switch. Tonemapping and the terminal sRGB/dither conversion remain
     // pipeline anchors because skipping either would change the output format.
     const bool optionalEffectsEnabled = ctx->getCommonObjects()->metaPostFx().enable();
 
-    for (const EffectId id : resolvedOrder()) {
+    for (const EffectEntry& entry : resolvedOrder()) {
+      if (entry.external) {
+        if (optionalEffectsEnabled) {
+          RtxExternalEffects::instance().dispatch(ctx, rtOutput, entry.externalId);
+        }
+        continue;
+      }
+
+      const EffectId id = entry.builtInId;
       if (!optionalEffectsEnabled
           && id != EffectId::Tonemapping
           && id != EffectId::SRGBDither) {
@@ -228,59 +291,80 @@ namespace dxvk {
   void RtxPostProcessingStack::showSettings(const Rc<DxvkContext>& ctx) {
     auto common = ctx->getCommonObjects();
     auto& postFx = common->metaPostFx();
+    auto& externalEffects = RtxExternalEffects::instance();
+    externalEffects.ensureLoaded(ctx->getDevice().ptr());
 
     RemixGui::Checkbox("Post FX Enabled", &postFx.enableObject());
+    if (ImGui::TreeNodeEx("External Effect Files", ImGuiTreeNodeFlags_DefaultOpen)) {
+      externalEffects.showGlobalSettings(ctx->getDevice().ptr());
+      ImGui::TreePop();
+    }
     ImGui::TextDisabled("Drag the grip to reorder effects within the same color domain.");
     ImGui::Spacing();
 
-    std::vector<EffectId> order = resolvedOrder();
+    std::vector<EffectEntry> order = resolvedOrder();
     for (size_t i = 0; i < order.size(); i++) {
-      const EffectDescriptor& effect = descriptor(order[i]);
-      const char* domain = effect.domain == EffectDomain::HDR
+      const EffectEntry& entry = order[i];
+      const EffectDomain effectDomain = domain(entry);
+      const bool effectReorderable = reorderable(entry);
+      const std::string effectConfigId = configId(entry);
+      const std::string effectName = name(entry);
+      const char* domainName = effectDomain == EffectDomain::HDR
         ? "HDR"
-        : effect.domain == EffectDomain::Display
+        : effectDomain == EffectDomain::Display
           ? "Display"
           : "Terminal";
 
-      ImGui::PushID(effect.configId);
+      ImGui::PushID(effectConfigId.c_str());
 
       RtxOption<bool>* enabledOption = nullptr;
-      switch (effect.id) {
-      case EffectId::Bloom:
-        enabledOption = &common->metaBloom().enableObject();
-        break;
-      case EffectId::MotionBlur:
-        enabledOption = &postFx.enableMotionBlurObject();
-        break;
-      case EffectId::DepthOfField:
-        enabledOption = &postFx.dofEnableObject();
-        break;
-      case EffectId::Tonemapping:
-        enabledOption = &common->metaToneMapping().tonemappingEnabledObject();
-        break;
-      case EffectId::NtscVhs:
-        enabledOption = &postFx.ntscEnableObject();
-        break;
-      case EffectId::LensEffects:
-        enabledOption = &postFx.enableLensEffectsObject();
-        break;
-      case EffectId::SRGBDither:
-        break;
+      RtxExternalEffectInfo externalInfo = {};
+      if (entry.external) {
+        const auto infos = externalEffects.effectInfos();
+        const auto info = std::find_if(infos.begin(), infos.end(), [&](const RtxExternalEffectInfo& candidate) {
+          return candidate.id == entry.externalId;
+        });
+        if (info != infos.end()) {
+          externalInfo = *info;
+        }
+      } else {
+        switch (entry.builtInId) {
+        case EffectId::Bloom:
+          enabledOption = &common->metaBloom().enableObject();
+          break;
+        case EffectId::MotionBlur:
+          enabledOption = &postFx.enableMotionBlurObject();
+          break;
+        case EffectId::DepthOfField:
+          enabledOption = &postFx.dofEnableObject();
+          break;
+        case EffectId::Tonemapping:
+          enabledOption = &common->metaToneMapping().tonemappingEnabledObject();
+          break;
+        case EffectId::NtscVhs:
+          enabledOption = &postFx.ntscEnableObject();
+          break;
+        case EffectId::LensEffects:
+          enabledOption = &postFx.enableLensEffectsObject();
+          break;
+        case EffectId::SRGBDither:
+          break;
+        }
       }
 
       ImGui::BeginGroup();
 
       const ImVec2 dragHandleSize(42.0f, ImGui::GetFrameHeight());
-      if (effect.reorderable) {
+      if (effectReorderable) {
         ImGui::Button("::##drag", dragHandleSize);
         if (ImGui::IsItemHovered()) {
-          ImGui::SetTooltip("Drag to reorder %s effects", domain);
+          ImGui::SetTooltip("Drag to reorder %s effects", domainName);
         }
 
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoPreviewTooltip)) {
-          const int effectId = static_cast<int>(effect.id);
-          ImGui::SetDragDropPayload("RTX_POSTFX_EFFECT_ID", &effectId, sizeof(effectId));
-          ImGui::Text("Move %s", effect.name);
+          ImGui::SetDragDropPayload(
+            "RTX_POSTFX_EFFECT_ID", effectConfigId.c_str(), effectConfigId.size() + 1);
+          ImGui::Text("Move %s", effectName.c_str());
           ImGui::EndDragDropSource();
         }
       } else {
@@ -293,7 +377,16 @@ namespace dxvk {
       }
 
       ImGui::SameLine();
-      if (enabledOption != nullptr) {
+      if (entry.external) {
+        bool enabled = externalInfo.enabled;
+        if (ImGui::Checkbox("##enabled", &enabled)) {
+          externalEffects.setEffectEnabled(entry.externalId, enabled);
+        }
+        if (!externalInfo.ready && ImGui::IsItemHovered()) {
+          ImGui::SetTooltip("This effect has no loadable shader.");
+        }
+        ImGui::SameLine();
+      } else if (enabledOption != nullptr) {
         inlineOptionCheckbox("##enabled", enabledOption);
         ImGui::SameLine();
       } else {
@@ -307,7 +400,7 @@ namespace dxvk {
         ImGui::SameLine();
       }
 
-      const std::string headerLabel = std::string(effect.name) + "  [" + domain + "]";
+      const std::string headerLabel = effectName + "  [" + domainName + "]";
       const ImGuiTreeNodeFlags headerFlags = ImGuiTreeNodeFlags_SpanAvailWidth
         | ImGuiTreeNodeFlags_FramePadding
         | ImGuiTreeNodeFlags_OpenOnArrow
@@ -319,15 +412,14 @@ namespace dxvk {
       // The whole compact row is a generous drop target. Payloads identify an
       // effect, not a transient row index, and are applied only on delivery so
       // hovering cannot repeatedly reshuffle the stack.
-      if (effect.reorderable && ImGui::BeginDragDropTarget()) {
+      if (effectReorderable && ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("RTX_POSTFX_EFFECT_ID")) {
-          if (payload->IsDelivery() && payload->DataSize == sizeof(int)) {
-            const int sourceEffectId = *static_cast<const int*>(payload->Data);
-            if (sourceEffectId >= 0 && sourceEffectId < static_cast<int>(kEffectCount)) {
-              const size_t sourceIndex = findEffect(order, static_cast<EffectId>(sourceEffectId));
-              if (sourceIndex != kInvalidIndex && moveEffect(order, sourceIndex, i)) {
-                stackOrderObject().setDeferred(serializeOrder(order));
-              }
+          if (payload->IsDelivery() && payload->DataSize > 1
+           && static_cast<const char*>(payload->Data)[payload->DataSize - 1] == '\0') {
+            const std::string sourceConfigId(static_cast<const char*>(payload->Data));
+            const size_t sourceIndex = findEffect(order, sourceConfigId);
+            if (sourceIndex != kInvalidIndex && moveEffect(order, sourceIndex, i)) {
+              stackOrderObject().setDeferred(serializeOrder(order));
             }
           }
         }
@@ -336,34 +428,38 @@ namespace dxvk {
 
       if (showEffectSettings) {
         ImGui::Indent();
-        switch (effect.id) {
-        case EffectId::Bloom:
-          common->metaBloom().showEffectSettings();
-          break;
-        case EffectId::MotionBlur:
-          postFx.showMotionBlurImguiSettings();
-          break;
-        case EffectId::DepthOfField:
-          postFx.showDofImguiSettings();
-          break;
-        case EffectId::Tonemapping:
-          common->metaAutoExposure().showImguiSettings();
-          // Carried over from the pre-stack Tonemapping header in dxvk_imgui.cpp;
-          // these two fork options have no other UI surface.
-          RemixGui::SliderInt("User Brightness", &RtxOptions::userBrightnessObject(), 0, 100, "%d");
-          RemixGui::DragFloat("User Brightness EV Range", &RtxOptions::userBrightnessEVRangeObject(), 0.5f, 0.f, 10.f, "%.1f");
-          RemixGui::Separator();
-          common->metaToneMapping().showEffectSettings();
-          break;
-        case EffectId::NtscVhs:
-          postFx.showNtscImguiSettings();
-          break;
-        case EffectId::LensEffects:
-          postFx.showLensEffectsImguiSettings();
-          break;
-        case EffectId::SRGBDither:
-          common->metaSRGBDither().showImguiSettings();
-          break;
+        if (entry.external) {
+          externalEffects.showEffectSettings(entry.externalId);
+        } else {
+          switch (entry.builtInId) {
+          case EffectId::Bloom:
+            common->metaBloom().showEffectSettings();
+            break;
+          case EffectId::MotionBlur:
+            postFx.showMotionBlurImguiSettings();
+            break;
+          case EffectId::DepthOfField:
+            postFx.showDofImguiSettings();
+            break;
+          case EffectId::Tonemapping:
+            common->metaAutoExposure().showImguiSettings();
+            // Carried over from the pre-stack Tonemapping header in
+            // dxvk_imgui.cpp; these two fork options have no other UI surface.
+            RemixGui::SliderInt("User Brightness", &RtxOptions::userBrightnessObject(), 0, 100, "%d");
+            RemixGui::DragFloat("User Brightness EV Range", &RtxOptions::userBrightnessEVRangeObject(), 0.5f, 0.f, 10.f, "%.1f");
+            RemixGui::Separator();
+            common->metaToneMapping().showEffectSettings();
+            break;
+          case EffectId::NtscVhs:
+            postFx.showNtscImguiSettings();
+            break;
+          case EffectId::LensEffects:
+            postFx.showLensEffectsImguiSettings();
+            break;
+          case EffectId::SRGBDither:
+            common->metaSRGBDither().showImguiSettings();
+            break;
+          }
         }
         ImGui::Unindent();
         ImGui::TreePop();

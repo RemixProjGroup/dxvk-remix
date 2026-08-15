@@ -56,19 +56,29 @@ namespace dxvk {
       bool reorderable;
     };
 
+    struct EffectEntry {
+      bool external = false;
+      EffectId builtInId = EffectId::Bloom;
+      std::string externalId;
+    };
+
     // This is a compile-time registry, not a public plugin ABI. A new effect
     // must provide a real dispatch adapter before it is added here; keeping
     // placeholder entries out of the table prevents a saved order from
     // silently claiming that an effect ran when it did not.
 
     static const EffectDescriptor& descriptor(EffectId id);
-    static std::vector<EffectId> defaultOrder();
-    static std::vector<EffectId> resolvedOrder();
-    static size_t findEffect(const std::vector<EffectId>& order, EffectId id);
-    static std::string serializeOrder(const std::vector<EffectId>& order);
-    static bool moveEffect(std::vector<EffectId>& order, size_t from, size_t to);
-    static bool canMove(const std::vector<EffectId>& order, size_t from, size_t to);
-    static EffectId effectIdFromConfig(const std::string& configId, bool& valid);
+    static std::vector<EffectEntry> defaultOrder();
+    static std::vector<EffectEntry> resolvedOrder();
+    static size_t findEffect(const std::vector<EffectEntry>& order, const std::string& configId);
+    static std::string serializeOrder(const std::vector<EffectEntry>& order);
+    static bool moveEffect(std::vector<EffectEntry>& order, size_t from, size_t to);
+    static bool canMove(const std::vector<EffectEntry>& order, size_t from, size_t to);
+    static EffectEntry effectFromConfig(const std::string& configId, bool& valid);
+    static std::string configId(const EffectEntry& entry);
+    static std::string name(const EffectEntry& entry);
+    static EffectDomain domain(const EffectEntry& entry);
+    static bool reorderable(const EffectEntry& entry);
     static std::string trim(const std::string& value);
 
     RTX_OPTION("rtx.postfx", std::string, stackOrder,

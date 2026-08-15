@@ -1,0 +1,217 @@
+// RemixFX scene-aware compute ABI. This file is intentionally self-contained
+// so it can be distributed beside an effect and included without the Remix
+// source tree.
+
+static const uint REMIXFX_INPUT_LINEAR_DEPTH = 1u << 0;
+static const uint REMIXFX_INPUT_MOTION = 1u << 1;
+static const uint REMIXFX_INPUT_WORLD_NORMAL = 1u << 2;
+static const uint REMIXFX_INPUT_ALBEDO = 1u << 3;
+static const uint REMIXFX_INPUT_ROUGHNESS = 1u << 4;
+static const uint REMIXFX_INPUT_SURFACE_FLAGS = 1u << 5;
+static const uint REMIXFX_INPUT_OBJECT_PICKING = 1u << 6;
+static const uint REMIXFX_INPUT_CONE_RADIUS = 1u << 7;
+static const uint REMIXFX_INPUT_BLUE_NOISE = 1u << 8;
+static const uint REMIXFX_INPUT_EXPOSURE = 1u << 9;
+static const uint REMIXFX_INPUT_FOCUS_STATE = 1u << 10;
+static const uint REMIXFX_INPUT_PROJECTED_DEPTH = 1u << 11;
+
+static const uint REMIXFX_SURFACE_VIEW_MODEL = 1u << 0;
+static const uint REMIXFX_SURFACE_STATIC = 1u << 1;
+static const uint REMIXFX_SURFACE_EMISSIVE = 1u << 2;
+static const uint REMIXFX_SURFACE_MASK_OUT = 1u << 3;
+
+struct RemixFxArgs {
+  uint2 imageSize;
+  float2 invImageSize;
+  float timeSeconds;
+  uint frameIndex;
+  uint parameterValueCount;
+  uint padding;
+  float4 parameterValues[14];
+};
+
+struct RemixFxFrameData {
+  float4x4 worldToView;
+  float4x4 viewToWorld;
+  float4x4 viewToProjection;
+  float4x4 projectionToView;
+  float4x4 viewToProjectionJittered;
+  float4x4 projectionToViewJittered;
+  float4x4 worldToProjectionJittered;
+  float4x4 projectionToWorldJittered;
+  float4x4 translatedWorldToView;
+  float4x4 translatedWorldToProjectionJittered;
+  float4x4 projectionToTranslatedWorld;
+  float4x4 previousWorldToView;
+  float4x4 previousViewToWorld;
+  float4x4 previousWorldToProjection;
+  float4x4 previousWorldToProjectionJittered;
+  float4x4 previousProjectionToView;
+  float4x4 previousProjectionToViewJittered;
+  float4x4 previousTranslatedWorldToView;
+  float4x4 previousTranslatedWorldToProjection;
+  float4x4 projectionToPreviousProjectionJittered;
+  uint2 outputSize;
+  uint2 renderSize;
+  float2 invRenderSize;
+  float nearPlane;
+  float meterToWorldScale;
+  uint cameraFlags;
+  uint availableInputs;
+  float linearDepthMissValue;
+  float deltaTimeSeconds;
+  float manualFocusDistance;
+  float autoFocusOffset;
+  uint autoFocusEnabled;
+  uint padding;
+};
+
+layout(binding = 0)
+Sampler2D<float4> InputColor;
+
+layout(binding = 1)
+RWTexture2D<float4> OutputColor;
+
+[[vk::binding(2)]]
+Texture2D<float> RemixFxLinearDepth;
+
+[[vk::binding(3)]]
+Texture2D<float2> RemixFxMotion;
+
+[[vk::binding(4)]]
+Texture2D<uint> RemixFxPackedWorldNormal;
+
+[[vk::binding(5)]]
+Texture2D<float4> RemixFxAlbedo;
+
+[[vk::binding(6)]]
+Texture2D<float> RemixFxRoughness;
+
+[[vk::binding(7)]]
+Texture2D<uint> RemixFxSurfaceFlags;
+
+[[vk::binding(8)]]
+Texture2D<uint> RemixFxObjectPicking;
+
+[[vk::binding(9)]]
+Texture2D<float> RemixFxConeRadius;
+
+[[vk::binding(10)]]
+Texture2DArray<float4> RemixFxBlueNoise;
+
+[[vk::binding(11)]]
+RWTexture1D<float> RemixFxExposure;
+
+[[vk::binding(12)]]
+SamplerState RemixFxSceneSampler;
+
+[[vk::binding(13)]]
+ConstantBuffer<RemixFxFrameData> remixFxFrame;
+
+[[vk::binding(14)]]
+SamplerState RemixFxSceneLinearSampler;
+
+[[vk::binding(15)]]
+RWTexture1D<float> RemixFxFocusState;
+
+[[vk::binding(16)]]
+Texture2D<float> RemixFxProjectedDepth;
+
+layout(push_constant)
+ConstantBuffer<RemixFxArgs> cb;
+
+bool remixFxHasInput(uint inputFlag) {
+  return (remixFxFrame.availableInputs & inputFlag) != 0;
+}
+
+uint2 remixFxScenePixel(float2 uv) {
+  return min(uint2(uv * float2(remixFxFrame.renderSize)), remixFxFrame.renderSize - 1u);
+}
+
+float3 remixFxDecodeWorldNormal(uint packedNormal) {
+  const int2 encodedInt = int2(
+    int(packedNormal << 16u) >> 16,
+    int(packedNormal) >> 16);
+  const float2 encoded = clamp(float2(encodedInt) / 32767.0f, -1.0f, 1.0f);
+  float3 normal = float3(encoded, 1.0f - abs(encoded.x) - abs(encoded.y));
+  if (normal.z < 0.0f) {
+    const float2 signNotZero = float2(
+      normal.x >= 0.0f ? 1.0f : -1.0f,
+      normal.y >= 0.0f ? 1.0f : -1.0f);
+    normal.xy = (1.0f - abs(normal.yx)) * signNotZero;
+  }
+  return normalize(normal);
+}
+
+float remixFxLoadLinearDepth(float2 uv) {
+  return RemixFxLinearDepth.Load(int3(remixFxScenePixel(uv), 0));
+}
+
+float2 remixFxLoadMotion(float2 uv) {
+  return RemixFxMotion.Load(int3(remixFxScenePixel(uv), 0));
+}
+
+float2 remixFxMotionUvOffset(float2 uv) {
+  return remixFxLoadMotion(uv) * remixFxFrame.invRenderSize;
+}
+
+float3 remixFxLoadWorldNormal(float2 uv) {
+  return remixFxDecodeWorldNormal(
+    RemixFxPackedWorldNormal.Load(int3(remixFxScenePixel(uv), 0)));
+}
+
+float3 remixFxLoadAlbedo(float2 uv) {
+  return RemixFxAlbedo.Load(int3(remixFxScenePixel(uv), 0)).rgb;
+}
+
+float remixFxLoadRoughness(float2 uv) {
+  return RemixFxRoughness.Load(int3(remixFxScenePixel(uv), 0));
+}
+
+uint remixFxLoadSurfaceFlags(float2 uv) {
+  return RemixFxSurfaceFlags.Load(int3(remixFxScenePixel(uv), 0));
+}
+
+uint remixFxLoadObjectPicking(float2 uv) {
+  return RemixFxObjectPicking.Load(int3(remixFxScenePixel(uv), 0));
+}
+
+float remixFxLoadConeRadius(float2 uv) {
+  return RemixFxConeRadius.Load(int3(remixFxScenePixel(uv), 0));
+}
+
+float remixFxLoadProjectedDepth(float2 uv) {
+  return RemixFxProjectedDepth.Load(int3(remixFxScenePixel(uv), 0));
+}
+
+float remixFxBlueNoise(uint2 pixel, uint dimensionOffset = 0u) {
+  const uint2 noisePixel = pixel & 127u;
+  const uint layer = (cb.frameIndex + dimensionOffset) & 63u;
+  return RemixFxBlueNoise.Load(int4(noisePixel, layer, 0)).r;
+}
+
+float2 remixFxScreenUvToNdc(float2 uv) {
+  return uv * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f);
+}
+
+float3 remixFxViewDirection(float2 uv, bool jittered = true) {
+  const float2 ndc = remixFxScreenUvToNdc(uv);
+  const float4 viewPosition = mul(
+    jittered
+      ? remixFxFrame.projectionToViewJittered
+      : remixFxFrame.projectionToView,
+    float4(ndc, 1.0f, 1.0f));
+  return normalize(viewPosition.xyz);
+}
+
+float3 remixFxReconstructViewPosition(float2 uv, float linearViewDepth) {
+  const float3 viewDirection = remixFxViewDirection(uv);
+  return viewDirection * (linearViewDepth / viewDirection.z);
+}
+
+float3 remixFxReconstructWorldPosition(float2 uv, float linearViewDepth) {
+  const float4 worldPosition = mul(
+    remixFxFrame.viewToWorld,
+    float4(remixFxReconstructViewPosition(uv, linearViewDepth), 1.0f));
+  return worldPosition.xyz / worldPosition.w;
+}

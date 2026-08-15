@@ -11,9 +11,9 @@ produce or stabilize the image that the effects consume. The final-output path
 then runs through these lanes:
 
 ```text
-HDR lane                 display lane                 terminal lane
-Bloom -> Motion Blur -> Depth of Field -> Tonemapping -> NTSC/VHS -> Lens Effects -> sRGB + Dither
-                         HDR/display boundary          final image
+HDR lane                            display lane                            terminal lane
+Bloom -> Motion Blur -> DoF -> [external HDR] -> Tonemapping -> NTSC/VHS -> Lens Effects -> [external display] -> sRGB + Dither
+                                            HDR/display boundary                                final image
 ```
 
 Tonemapping includes the existing color-grading controls. Color grading stays
@@ -63,8 +63,16 @@ for built-in effects. Each entry needs:
 3. a context dispatch adapter; and
 4. a settings section if the effect has user controls.
 
-There is deliberately no dynamic registration or user shader ABI in this first
-slice. A saved order only contains effects with an implemented dispatch path.
+File-based effects are registered by `RtxExternalEffects` after their metadata
+and fixed compute ABI validate. Their stable stack IDs use the
+`external:<effect-id>` namespace. They participate in drag ordering inside the
+HDR or display lane declared by the file and are appended when an older saved
+order does not mention them. See `docs/RemixFx.md` for the authoring contract.
+The fixed RemixFX ABI exposes the current color plus native post-effect and
+scene inputs: signed linear and projected depth, motion, world normals, albedo,
+roughness, surface flags, object picking, cone radius, blue noise, exposure,
+DoF focus state, full camera transforms, resolution, timing, and world scale.
+Availability flags protect configuration-dependent resources.
 
 ## Tonemapper extensibility
 
@@ -73,11 +81,10 @@ including Psycho17 and Neutwo, and remains the tonemapping backend. The stack
 therefore treats tonemapping as one fixed anchor rather than duplicating or
 wrapping the operator implementation.
 
-The proposed `tonemap_*.slang` discovery convention is a follow-up feature, not
-implemented by this migration. It needs a runtime shader compilation and
-pipeline-cache contract, validation of the expected resource/push-constant
-layout, error fallback to a built-in operator, and a clear search path policy.
-Until those are defined, files in the Remix folder are not loaded implicitly.
+External RemixFX files are ordinary HDR or display-space stack members; they do
+not replace the fixed tonemapping boundary. A future external tonemapper ABI can
+build on the same discovery and reload mechanism, but still needs an explicit
+HDR-to-display color contract and fallback operator.
 
 ## Remix Plus integration boundary
 

@@ -4179,6 +4179,39 @@ pass; manual focus remains unchanged when Auto Focus is disabled.
 - **`docs/PostProcessingStack.md`** and **`RtxOptions.md`** - document the
   self-driven focus path and regenerated options.
 
+---
+
+## Workstream - RemixFX external post-processing shaders (fork - 2026-08-14)
+
+The ordered post-processing stack now discovers shareable
+`.remixfx.slang` files from a configurable recursive search path. Each source
+declares stable metadata and UI parameters in comments, targets a fixed 8x8
+Slang compute ABI, and enters either the HDR or display lane without gaining
+the ability to cross the tonemapping or sRGB anchors. Reload recompiles through
+`slangc.exe` when available, loads a matching cached `.remixfx.spv`, and keeps
+the last good shader on failure.
+
+- **`src/dxvk/rtx_render/rtx_external_effect_manifest.cpp` / `.h`** - parses
+  and validates effect IDs, domains, defaults, and densely packed scalar/vector
+  parameter declarations independently of Slang compilation.
+- **`src/dxvk/rtx_render/rtx_external_effects.cpp` / `.h`** - owns recursive
+  discovery, compiler lookup and invocation, atomic SPIR-V cache replacement,
+  dynamic shader creation, persistent enabled/parameter state, parameter
+  get/set accessors, ImGui controls, and the dispatch adapter for color, scene
+  G-buffer textures, exposure/focus state, samplers, and camera/frame data.
+- **`src/dxvk/rtx_render/rtx_fork_post_processing.cpp` / `.h`** - extends the
+  saved order with `external:<id>` entries, places discovered files into their
+  declared color lane, supports drag ordering with built-ins in that lane, and
+  dispatches them through the external-effect manager.
+- **`examples/remixfx/`** - shareable useful samples plus the self-contained
+  `remixfx_bindings.slangh` scene ABI declaration and helper library.
+- **`docs/RemixFx.md`** and **`docs/PostProcessingStack.md`** - define the
+  authoring ABI, loading/reload workflow, persistence, and fixed-anchor rules.
+- **`tests/rtx/unit/test_external_effect_manifest.cpp`** - covers metadata,
+  vector packing, fallback IDs, and invalid declarations.
+- **`src/dxvk/meson.build`** and **`tests/rtx/unit/meson.build`** - register the
+  new runtime and unit-test sources.
+
 ### Rebase deltas applied when the stack landed on this branch
 
 - **DLSS-NR stays outside the stack.** `RtxContext::dispatchDlssNR` still runs in
