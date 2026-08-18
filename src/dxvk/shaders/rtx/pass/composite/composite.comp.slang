@@ -38,6 +38,7 @@
 
 #include "rtx/algorithm/volume_composite_helpers.slangh"
 #include "rtx/algorithm/accumulate.slangh"
+#include "rtx/pass/atmosphere/atmosphere_common.slangh"
 #include "rtx/pass/sparse_rendering/sparse_rendering.slangh"
 #include "rtx/pass/sparse_rendering/compact_active_pixels.slangh"
 
@@ -599,6 +600,43 @@ void applySkyContribution(
   radianceOutput += skyContribution;
 }
 
+// Aerial perspective (Hillaire EGSR 2020, Section 5.4 — fork 2026-08-18): the atmosphere's
+// extinction and in-scatter between the camera and the shaded surface, which is what makes distant
+// geometry hazy and desaturated.
+//
+// Skipped on primary misses: those directions carry the sky, whose radiance already integrates the
+// whole atmospheric column. PSR pixels use their camera-to-mirror distance, so a reflection is
+// correctly attenuated by the air in front of the mirror.
+//
+// The volume covers only the segment past the global volumetrics froxel grid, so its in-scatter is
+// attenuated by that grid's transmittance. Strictly the near in-scatter already in radianceOutput
+// should not then pick up the far transmittance in turn, but the froxel grid spans tens of metres
+// against this volume's kilometres, so its transmittance is near one wherever the far term matters.
+void applyAerialPerspective(
+  uint2 pixelCoordinate,
+  bool primaryMiss,
+  float viewDistance,
+  vec3 volumeAttenuation,
+  inout vec3 radianceOutput)
+{
+  if (cb.atmosphereArgs.aerialPerspectiveLutSize == 0 ||
+      cb.domeLightArgs.active ||
+      primaryMiss ||
+      viewDistance <= 0.0f)
+  {
+    return;
+  }
+
+  const vec2 screenUV = cameraPixelCoordinateToScreenUV(cb.camera, ivec2(pixelCoordinate));
+  const vec3 uvw = aerialPerspectiveScreenUvToUvw(screenUV, viewDistance, cb.atmosphereArgs);
+  const vec4 aerialPerspective = sampleAerialPerspectiveLut(
+    AtmosphereAerialPerspectiveLut, AtmosphereAerialPerspectiveSampler, uvw, cb.atmosphereArgs);
+
+  const vec3 inScatter = max(aerialPerspective.rgb, vec3(0.0f)) * volumeAttenuation;
+
+  radianceOutput = radianceOutput * saturate(aerialPerspective.a) + inScatter;
+}
+
 void applyFog(
   float viewDistance,
   float radianceScale,
@@ -773,6 +811,9 @@ vec4 compositeResult(
 
   // Note: Shared radiance should always be pre-attenuated so no need to factor that in here - it contains multiple layers of signal so each contribution must be attenuated inline.
   radianceOutput += sharedRadiance;
+
+  // Applied before the sky so it only affects geometry; the sky already carries its full column.
+  applyAerialPerspective(pixelCoordinate, primaryMiss, viewDistance, volumeAttenuation, radianceOutput);
 
   // Add sky radiance
   applySkyContribution(pixelCoordinate, primaryRayDirections, primaryMiss, radianceScale, volumeAttenuation, radianceOutput);

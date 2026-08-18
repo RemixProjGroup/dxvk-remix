@@ -66,6 +66,11 @@
 // Constants
 static const float kAtmosphereEpsilon = 1e-3f;
 static const float kPi = 3.14159265358979323846f;
+// Isotropic phase function p_u, used for every scattering order beyond the first
+// (Hillaire EGSR 2020, Section 5.5.1).
+static const float kIsotropicPhase = 1.0f / (4.0f * kPi);
+// Diffuse albedo of the virtual planet ground (paper Section 4).
+static const float kGroundAlbedo = 0.3f;
 
 // Rayleigh phase function (isotropic scattering for molecules)
 float rayleighPhase(float cosTheta) {
@@ -101,19 +106,47 @@ float mieDensity(float altitude, AtmosphereArgs args) {
   return exponentialDensity(altitude, args.mieScaleHeight);
 }
 
-// Ozone density profile - concentrated in a layer (Hillaire paper Section 3.4)
-// Uses a simple Gaussian profile centered at the ozone layer altitude
+// Ozone density profile (Hillaire EGSR 2020, Section 4): a tent function of total width
+// 2*ozoneLayerWidth centred on ozoneLayerAltitude, i.e. d_o(h) = max(0, 1 - |h - 25| / 15) for
+// Earth. The vertical ozone column is then exactly ozoneLayerWidth km, which is what makes the
+// Table 1 coefficients land on the correct sunset blue.
+//
+// Fork history: this was a Gaussian with sigma = 0.4 * ozoneLayerWidth, which has meaningful
+// support far outside the stated layer and a different column than the tent. That mismatch was
+// being compensated by 3x-oversized ozone coefficients plus a 0.15 fudge in the analytical
+// sun-transmittance path only, so the sky bake and the CPU-side sun light disagreed about ozone
+// and ozoneDensity was not a predictable slider. Both compensations are removed alongside this.
 float ozoneDensity(float altitude, AtmosphereArgs args) {
-  // Ozone is concentrated in a layer, typically around 25km altitude
-  // Use a simple Gaussian profile for predictable behavior
-  
-  float distFromCenter = abs(altitude - args.ozoneLayerAltitude);
-  float sigma = args.ozoneLayerWidth * 0.4f;  // Width parameter
-  
-  // Gaussian falloff
-  float density = exp(-distFromCenter * distFromCenter / (2.0f * sigma * sigma));
+  const float halfWidth = max(args.ozoneLayerWidth, kAtmosphereEpsilon);
+  return max(0.0f, 1.0f - abs(altitude - args.ozoneLayerAltitude) / halfWidth);
+}
 
-  return density;
+// Participating medium coefficients at a given altitude. Centralised so the scattering /
+// extinction composition cannot drift between the sky march, the transmittance bake, the
+// multiscattering bake and the aerial perspective bake — Mie absorption in particular was easy to
+// forget in one of the four before this existed.
+struct AtmosphereMedium {
+  vec3 rayleighScattering;
+  vec3 mieScattering;
+  vec3 scattering;   // Rayleigh + Mie, the sigma_s of the paper's Equation 3
+  vec3 extinction;   // sigma_t = sigma_s + sigma_a, including Mie and ozone absorption
+};
+
+AtmosphereMedium sampleAtmosphereMedium(float altitude, AtmosphereArgs args) {
+  const float densityR = rayleighDensity(altitude, args);
+  const float densityM = mieDensity(altitude, args);
+  const float densityO3 = ozoneDensity(altitude, args);
+
+  AtmosphereMedium medium;
+  medium.rayleighScattering = args.rayleighScattering * densityR;
+  medium.mieScattering = args.mieScattering * densityM;
+  medium.scattering = medium.rayleighScattering + medium.mieScattering;
+  // Rayleigh is treated as pure scattering; Mie and ozone contribute the absorption (paper Table 1).
+  medium.extinction = medium.scattering
+                    + args.mieAbsorption * densityM
+                    + args.ozoneAbsorption * densityO3;
+
+  return medium;
 }
 
 // Ray-sphere intersection with improved numerical stability
@@ -160,63 +193,160 @@ bool intersectSphere(vec3 origin, vec3 direction, vec3 center, float radius, out
   return true;
 }
 
-// Convert UV coordinates to atmosphere parameters for transmittance LUT
+// Nearest non-negative intersection distance, or -1 when the sphere is behind the ray or missed.
+float intersectSphereNearest(vec3 origin, vec3 direction, vec3 center, float radius) {
+  float t0, t1;
+  if (!intersectSphere(origin, direction, center, radius, t0, t1)) {
+    return -1.0f;
+  }
+
+  if (t1 < 0.0f) {
+    return -1.0f;
+  }
+
+  return t0 < 0.0f ? t1 : t0;
+}
+
+// Planet centre for the atmosphere's internal Y-up frame, whose origin sits on the ground.
+vec3 getPlanetCenter(AtmosphereArgs args) {
+  return vec3(0.0f, -args.planetRadius, 0.0f);
+}
+
+// Shadowing of the atmosphere by the planet itself — the Vis term of the paper's Equation 4.
+// Without it the air stays lit from below the horizon, and the Earth's own shadow rising into the
+// atmosphere at sunset (the dark band under the Belt of Venus) cannot appear at all.
+float evalPlanetShadow(vec3 samplePos, vec3 sunDir, AtmosphereArgs args) {
+  // Nudge the test sphere inward so a sample sitting exactly on the ground is not self shadowed by
+  // floating point error.
+  const float shadowRadius = args.planetRadius * (1.0f - 1e-5f);
+  return intersectSphereNearest(samplePos, sunDir, getPlanetCenter(args), shadowRadius) >= 0.0f
+    ? 0.0f
+    : 1.0f;
+}
+
+// Bruneton's half-texel aware remap, so the LUT edges land exactly on the parameter range bounds
+// rather than half a texel inside them. Without this every transmittance lookup carries a
+// systematic half-texel bias, which is most visible where the parameterization is densest (near
+// the horizon).
+float unitRangeToTextureCoord(float x, uint textureSize) {
+  const float size = float(max(textureSize, 1u));
+  return 0.5f / size + saturate(x) * (1.0f - 1.0f / size);
+}
+
+float textureCoordToUnitRange(float u, uint textureSize) {
+  const float size = float(max(textureSize, 1u));
+  return saturate((u - 0.5f / size) / (1.0f - 1.0f / size));
+}
+
+// Convert UV coordinates to atmosphere parameters for transmittance LUT.
+// Parameterization from Section 4 of Bruneton and Neyret [BN08], as referenced by paper Section 5.2.
 // uv: [0, 1]^2
 // Returns (viewZenithCosAngle, altitude in km)
 void uvToTransmittanceLutParams(vec2 uv, AtmosphereArgs args, out float viewZenithCosAngle, out float altitude) {
-  float H = sqrt(args.atmosphereRadius * args.atmosphereRadius - args.planetRadius * args.planetRadius);
-  float rho = H * uv.y;
+  const float xMu = textureCoordToUnitRange(uv.x, args.transmittanceLutWidth);
+  const float xR = textureCoordToUnitRange(uv.y, args.transmittanceLutHeight);
+
+  // Distance to the horizon, from which the altitude follows.
+  float H = sqrt(max(0.0f, args.atmosphereRadius * args.atmosphereRadius - args.planetRadius * args.planetRadius));
+  float rho = H * xR;
   altitude = sqrt(rho * rho + args.planetRadius * args.planetRadius) - args.planetRadius;
-  
-  float dMin = args.atmosphereRadius - altitude - args.planetRadius;
+
+  // Distance to the atmosphere's top boundary, and the view zenith angle that produces it.
+  float r = altitude + args.planetRadius;
+  float dMin = args.atmosphereRadius - r;
   float dMax = rho + H;
-  float d = dMin + uv.x * (dMax - dMin);
-  
+  float d = dMin + xMu * (dMax - dMin);
+
   if (d == 0.0f) {
     viewZenithCosAngle = 1.0f;
   } else {
-    float r = altitude + args.planetRadius;
     viewZenithCosAngle = (H * H - rho * rho - d * d) / (2.0f * r * d);
     viewZenithCosAngle = clamp(viewZenithCosAngle, -1.0f, 1.0f);
   }
 }
 
-// Convert atmosphere parameters to UV coordinates for transmittance LUT
+// Convert atmosphere parameters to UV coordinates for transmittance LUT. Exact inverse of
+// uvToTransmittanceLutParams, half-texel remap included — the two must stay inverses or the bake
+// and the lookup disagree.
 vec2 transmittanceLutParamsToUv(float altitude, float viewZenithCosAngle, AtmosphereArgs args) {
   float H = sqrt(max(0.0f, args.atmosphereRadius * args.atmosphereRadius - args.planetRadius * args.planetRadius));
   float rho = sqrt(max(0.0f, altitude * altitude + 2.0f * args.planetRadius * altitude));
-  
-  float discriminant = altitude * altitude - args.planetRadius * args.planetRadius + args.atmosphereRadius * args.atmosphereRadius;
-  float dMin = max(0.0f, args.atmosphereRadius - altitude - args.planetRadius);
-  float dMax = rho + H;
-  
+
   float r = altitude + args.planetRadius;
   float mu = clamp(viewZenithCosAngle, -1.0f, 1.0f);
   float d = max(0.0f, (-r * mu + sqrt(max(0.0f, r * r * (mu * mu - 1.0f) + args.atmosphereRadius * args.atmosphereRadius))));
-  
-  float u = clamp((d - dMin) / max(dMax - dMin, 1e-6f), 0.0f, 1.0f);
-  float v = clamp(rho / max(H, 1e-6f), 0.0f, 1.0f);
-  
-  return vec2(u, v);
+
+  float dMin = max(0.0f, args.atmosphereRadius - r);
+  float dMax = rho + H;
+
+  float xMu = (d - dMin) / max(dMax - dMin, 1e-6f);
+  float xR = rho / max(H, 1e-6f);
+
+  return vec2(
+    unitRangeToTextureCoord(xMu, args.transmittanceLutWidth),
+    unitRangeToTextureCoord(xR, args.transmittanceLutHeight));
 }
 
-// Sample transmittance LUT
+// Transmittance from an altitude along a view zenith angle to the atmosphere's top boundary.
+//
+// This deliberately ignores the planet: the bake integrates rays that would pass through the ground
+// with the density clamped at ground level rather than writing a hard zero, so bilinear filtering
+// near the horizon cannot bleed zeros into valid neighbours. Callers that need the sun's actual
+// visibility must combine this with evalPlanetShadow — use evalSunShadowing, which does both.
 vec3 sampleTransmittanceLut(Texture2D transmittanceLut, SamplerState lutSampler, float altitude, float viewZenithCosAngle, AtmosphereArgs args) {
   vec2 uv = transmittanceLutParamsToUv(altitude, viewZenithCosAngle, args);
-  return transmittanceLut.SampleLevel(lutSampler, uv, 0).rgb;
+  return max(transmittanceLut.SampleLevel(lutSampler, uv, 0).rgb, vec3(0.0f));
 }
 
-// Sample multiscattering LUT
-// The LUT stores second-order and higher scattering contribution
-// Parameterized by altitude and sun zenith angle cosine
+// Psi_ms of the paper's Equation 10: the transfer function (sr^-1) converting a directional light's
+// illuminance into the contribution of every scattering order at or above two. Parameterized by sun
+// zenith angle cosine and altitude, per paper Section 5.5.2.
+//
+// Neither the light's illuminance nor the local sigma_s is baked in, so callers must apply each
+// exactly once (see the note at the multiscatter blend in evalAtmosphereRadiance).
 vec3 sampleMultiscatteringLut(Texture2D multiscatteringLut, SamplerState lutSampler, float altitude, float sunZenithCosAngle, AtmosphereArgs args) {
   // LUT layout:
   // X axis: sun zenith angle cosine [-1, 1] -> [0, 1]
   // Y axis: altitude [0, atmosphereThickness] -> [0, 1]
-  float u = (sunZenithCosAngle + 1.0f) * 0.5f;  // Map [-1, 1] to [0, 1]
-  float v = saturate(altitude / args.atmosphereThickness);
-  
-  return multiscatteringLut.SampleLevel(lutSampler, vec2(u, v), 0).rgb;
+  const float u = unitRangeToTextureCoord(
+    (clamp(sunZenithCosAngle, -1.0f, 1.0f) + 1.0f) * 0.5f, args.multiscatteringLutSize);
+  const float v = unitRangeToTextureCoord(
+    saturate(altitude / max(args.atmosphereThickness, kAtmosphereEpsilon)), args.multiscatteringLutSize);
+
+  return max(multiscatteringLut.SampleLevel(lutSampler, vec2(u, v), 0).rgb, vec3(0.0f));
+}
+
+// Transmittance from a point in the atmosphere to the sun, combining the atmospheric extinction
+// term with the planet's own shadow. This is the S term of the paper's Equation 4, and is the
+// correct replacement for a bare sampleTransmittanceLut() call at a march sample.
+vec3 evalSunShadowing(vec3 samplePos, vec3 sunDir, Texture2D transmittanceLut,
+                      SamplerState lutSampler, AtmosphereArgs args) {
+  if (evalPlanetShadow(samplePos, sunDir, args) <= 0.0f) {
+    return vec3(0.0f);
+  }
+
+  const vec3 toSample = samplePos - getPlanetCenter(args);
+  const float radius = max(length(toSample), kAtmosphereEpsilon);
+  const float sunZenithCosAngle = dot(toSample / radius, sunDir);
+
+  return sampleTransmittanceLut(
+    transmittanceLut, lutSampler, max(radius - args.planetRadius, 0.0f), sunZenithCosAngle, args);
+}
+
+// Distributes N march samples along a span with a power curve so steps start short near the ray
+// origin, where the air is densest, and lengthen with distance.
+//
+// A uniform split badly under-resolves the 1.2 km Mie scale height that produces the horizon haze
+// and sunset colour: looking at the horizon the chord is several hundred km, so 32 uniform steps sit
+// ~20 km apart and the entire aerosol layer is represented by whichever single sample happens to
+// land nearest the ground. Because the span varies continuously with view elevation, so does that
+// sample's position — which is what makes the horizon band's brightness drift with view direction
+// and band across the sky-view LUT. Squaring costs nothing (same sample count) and puts the first
+// of 32 steps under a kilometre at the horizon.
+static const float kAtmosphereStepDistributionExponent = 2.0f;
+
+float atmosphereStepFraction(float x) {
+  return pow(saturate(x), kAtmosphereStepDistributionExponent);
 }
 
 // ============================================================================
@@ -289,11 +419,14 @@ vec3 evalAtmosphereRadiance(
     return vec3(0.0f);
   }
   
-  float dt = (t1 - t0) / float(numSamples);
-  
+  // Power-distributed segments rather than a uniform dt — see atmosphereStepFraction.
+  const int actualSamples = clamp(numSamples, 1, 64);
+  const float span = t1 - t0;
+  const float invSamples = 1.0f / float(actualSamples);
+
   vec3 L = vec3(0.0f);
   vec3 transmittance = vec3(1.0f);
-  
+
   float cosTheta = dot(rayDir, sunDir);
   float phaseR = rayleighPhase(cosTheta);
   float phaseM = hgPhase(cosTheta, args.mieAnisotropy);
@@ -340,37 +473,39 @@ vec3 evalAtmosphereRadiance(
     }
   }
 
-  for (int i = 0; i < numSamples; ++i) {
-    float t = t0 + (float(i) + 0.5f) * dt;
+  float segmentStart = 0.0f;
+  for (int i = 0; i < actualSamples; ++i) {
+    // Non-uniform segments: dense near the origin, coarse toward the far boundary.
+    const float segmentEnd = atmosphereStepFraction(float(i + 1) * invSamples);
+    const float dt = (segmentEnd - segmentStart) * span;
+    const float t = t0 + (segmentStart + (segmentEnd - segmentStart) * 0.5f) * span;
+    segmentStart = segmentEnd;
+
+    if (dt <= 0.0f) {
+      continue;
+    }
+
     vec3 samplePos = rayOrigin + rayDir * t;
     float altitude = length(samplePos - planetCenter) - args.planetRadius;
-    
+
     // Clamp altitude to valid range to prevent artifacts
     altitude = clamp(altitude, 0.0f, args.atmosphereThickness);
-    
-    // Sample atmospheric density
-    float densityR = rayleighDensity(altitude, args);
-    float densityM = mieDensity(altitude, args);
-    float densityO3 = ozoneDensity(altitude, args);
-    
-    // Compute scattering coefficients at this point
-    vec3 scatteringR = args.rayleighScattering * densityR;
-    vec3 scatteringM = args.mieScattering * densityM;
-    vec3 scattering = scatteringR + scatteringM;
-    
-    // Ozone absorption (Hillaire paper Section 3.4)
-    // Ozone only absorbs, it doesn't scatter
-    vec3 ozoneAbsorption = args.ozoneAbsorption * densityO3;
-    
-    // Extinction = scattering (Rayleigh + Mie) + absorption (Ozone)
-    vec3 extinction = scattering + ozoneAbsorption;
-    
-    // Sample transmittance LUT for sun visibility at this sample point.
-    // Encodes full extinction (Rayleigh + Mie + ozone); returns 0 when sun is
-    // below the planet horizon from this sample (handles twilight automatically).
+
+    // Scattering and extinction at this point. Extinction includes Mie AND ozone absorption;
+    // sampleAtmosphereMedium is shared with every bake so the composition cannot drift.
+    const AtmosphereMedium medium = sampleAtmosphereMedium(altitude, args);
+    vec3 scatteringR = medium.rayleighScattering;
+    vec3 scatteringM = medium.mieScattering;
+    vec3 scattering = medium.scattering;
+    vec3 extinction = medium.extinction;
+
+    // Sun visibility at this sample: atmospheric transmittance toward the sun times the planet's
+    // own shadow (the S term of paper Equation 4). The planet test is separate from the LUT so the
+    // LUT can stay free of hard zeros — see sampleTransmittanceLut. This is also what lets the
+    // Earth's shadow rise into the atmosphere at sunset.
     vec3 up = normalize(samplePos - planetCenter);
     float sunZenithCosAngle = dot(up, normalize(sunDir));
-    vec3 sunTransmittance = sampleTransmittanceLut(transmittanceLut, transmittanceLutSampler, altitude, sunZenithCosAngle, args);
+    vec3 sunTransmittance = evalSunShadowing(samplePos, normalize(sunDir), transmittanceLut, transmittanceLutSampler, args);
 
     // Multiscattering: blended between analytical (preset-faithful, artistic
     // control surface) and LUT-based hemisphere integration (physical, Hillaire
@@ -673,10 +808,24 @@ vec3 getAtmosphericTransmittanceForDir(vec3 dirYUp, AtmosphereArgs args) {
   // the cloud/moon sun color with the LUT-lit sky.
   float rayleighOpticalDepthToSun = H * airMass;
   float mieOpticalDepthToSun      = args.mieScaleHeight * airMass;
-  float ozonePathLength = ozoneDensity(args.ozoneLayerAltitude, args) * airMass;
+
+  // Ozone (fork — 2026-08-18, EGSR 2020 pass). Previously this was
+  // `ozoneDensity(ozoneLayerAltitude) * airMass * 0.15`, i.e. a dimensionless peak density times
+  // the Rayleigh air mass times a fudge — an optical depth of ~7.5e-4 at zenith against a physical
+  // ~0.028, so the cloud and moon paths had effectively no ozone at all while the LUT-lit sky did.
+  //
+  // The tent profile integrates to exactly ozoneLayerWidth km of vertical column, and ozone sits
+  // high enough that it does NOT follow the near-ground Rayleigh air mass: the standard Chapman
+  // form 1/sqrt(cos^2 z + 2h/R) saturates near 11 at the horizon rather than running to 200, which
+  // is why a low sun reddens without the beam being annihilated.
+  float ozoneAirMass = 1.0f / sqrt(max(zenithCosAngle * zenithCosAngle
+                                     + 2.0f * args.ozoneLayerAltitude / max(args.planetRadius, 1.0f),
+                                       1e-6f));
+  float ozoneOpticalDepthToSun = max(args.ozoneLayerWidth, 0.0f) * ozoneAirMass;
+
   vec3 transmittance = exp(-args.rayleighScattering * rayleighOpticalDepthToSun
-                            - args.mieScattering * mieOpticalDepthToSun
-                            - args.ozoneAbsorption * ozonePathLength * 0.15f);
+                            - (args.mieScattering + args.mieAbsorption) * mieOpticalDepthToSun
+                            - args.ozoneAbsorption * ozoneOpticalDepthToSun);
 
   // Twilight fade — sky/light should be effectively black by ~-15° below
   // horizon (astronomical twilight ends around -18°). Identical falloff
@@ -1833,3 +1982,171 @@ float sampleCloudGroundShadow_OptionB_explicit(vec3 worldPos, vec3 sunDir,
       worldPos, sunDir, args, isZUp, dSunTex, dSunSampler);
 }
 
+
+// ============================================================================
+// Aerial perspective froxel volume (Hillaire EGSR 2020, Section 5.4 — fork 2026-08-18)
+// ============================================================================
+// A camera-frustum-fitted volume holding, per froxel, the atmospheric in-scattered luminance toward
+// the camera in RGB and the mean transmittance in A. Applying it to a shaded pixel is then a single
+// multiply-add, which is what gives distant geometry its haze and desaturation.
+//
+// This is the strongest distance cue an outdoor scene has: without it, everything past the global
+// volumetrics froxel grid's range receives no atmospheric extinction at all and distant buildings
+// and terrain render at full saturation and contrast.
+//
+// Unlike the paper this runs alongside Remix's global volumetrics froxel grid, which already
+// integrates a homogeneous medium out to its own range. The march therefore starts at
+// aerialPerspectiveStartDistance so the two systems hand off instead of stacking.
+
+// In-scattered radiance along a bounded segment of a ray, with the segment's transmittance returned
+// separately. This is the sky march reduced to what the aerial perspective volume needs: no moons,
+// no artistic sunset saturation, no ground bounce (the volume integrates toward real scene
+// geometry, which supplies its own radiance), and an explicit [startDistance, maxDistance] window.
+//
+// rayOrigin / rayDir are in the atmosphere's Y-up km space; distances are in km.
+vec3 evalAtmosphereInScatterSegment(
+  vec3 rayOrigin,
+  vec3 rayDir,
+  vec3 sunDir,
+  AtmosphereArgs args,
+  Texture2D<float4> transmittanceLut,
+  SamplerState transmittanceLutSampler,
+  Texture2D<float4> multiscatteringLut,
+  int numSamples,
+  float startDistance,
+  float maxDistance,
+  out vec3 outTransmittance
+) {
+  outTransmittance = vec3(1.0f);
+
+  const vec3 planetCenter = getPlanetCenter(args);
+
+  float t0, t1;
+  if (!intersectSphere(rayOrigin, rayDir, planetCenter, args.atmosphereRadius, t0, t1)) {
+    return vec3(0.0f);
+  }
+
+  t0 = max(max(0.0f, t0), startDistance);
+
+  // Stop at the planet surface, then at the caller's far bound.
+  float tPlanet0, tPlanet1;
+  const bool hitsPlanet = intersectSphere(rayOrigin, rayDir, planetCenter, args.planetRadius, tPlanet0, tPlanet1);
+  if (hitsPlanet && tPlanet0 > 0.0f) {
+    t1 = min(t1, tPlanet0);
+  }
+  if (maxDistance > 0.0f) {
+    t1 = min(t1, maxDistance);
+  }
+
+  if (t1 <= t0) {
+    return vec3(0.0f);
+  }
+
+  const int actualSamples = clamp(numSamples, 1, 64);
+  const float span = t1 - t0;
+  const float invSamples = 1.0f / float(actualSamples);
+
+  const float cosTheta = dot(rayDir, sunDir);
+  const float phaseR = rayleighPhase(cosTheta);
+  const float phaseM = hgPhase(cosTheta, args.mieAnisotropy);
+
+  vec3 L = vec3(0.0f);
+  vec3 transmittance = vec3(1.0f);
+  float segmentStart = 0.0f;
+
+  for (int i = 0; i < actualSamples; ++i) {
+    const float segmentEnd = atmosphereStepFraction(float(i + 1) * invSamples);
+    const float dt = (segmentEnd - segmentStart) * span;
+    const float t = t0 + (segmentStart + (segmentEnd - segmentStart) * 0.5f) * span;
+    segmentStart = segmentEnd;
+
+    if (dt <= 0.0f) {
+      continue;
+    }
+
+    const vec3 samplePos = rayOrigin + rayDir * t;
+    const float altitude = clamp(
+      length(samplePos - planetCenter) - args.planetRadius, 0.0f, args.atmosphereThickness);
+
+    const AtmosphereMedium medium = sampleAtmosphereMedium(altitude, args);
+
+    // Single scattering, phase weighted (paper Equation 11).
+    const vec3 sunShadowing = evalSunShadowing(
+      samplePos, sunDir, transmittanceLut, transmittanceLutSampler, args);
+    const vec3 singleScatter = sunShadowing
+      * (medium.rayleighScattering * phaseR + medium.mieScattering * phaseM);
+
+    // Every higher scattering order, via Psi_ms. sigma_s and the illuminance are each applied
+    // exactly once, here — matching the convention in evalAtmosphereRadiance.
+    const vec3 up = normalize(samplePos - planetCenter);
+    const vec3 multiScatter = sampleMultiscatteringLut(
+      multiscatteringLut, transmittanceLutSampler, altitude, dot(up, sunDir), args) * medium.scattering;
+
+    vec3 scatteredLight = args.sunIlluminance * (singleScatter + multiScatter * args.multiScatterStrength);
+    scatteredLight = max(scatteredLight, vec3(0.0f));
+
+    // Energy-conserving analytical integration (paper Section 5.6.3, Equation 17).
+    const vec3 sampleTransmittance = clamp(exp(-medium.extinction * dt), vec3(0.0f), vec3(1.0f));
+    const vec3 clampedExtinction = max(medium.extinction, vec3(1e-7f));
+    const vec3 integScatt = (scatteredLight - scatteredLight * sampleTransmittance) / clampedExtinction;
+
+    const vec3 contribution = transmittance * integScatt;
+    if (any(isnan(contribution)) || any(isinf(contribution))) {
+      continue;
+    }
+
+    L += contribution;
+    transmittance *= sampleTransmittance;
+  }
+
+  outTransmittance = transmittance;
+
+  L = max(L, vec3(0.0f));
+  if (any(isnan(L)) || any(isinf(L))) {
+    L = vec3(0.0f);
+  }
+
+  return L;
+}
+
+// The volume is fitted to the camera frustum: uv spans the screen and w indexes depth.
+// cameraRight and cameraUp are pre-scaled by the frustum half extents at unit forward distance, so
+// the direction below always has a forward component of exactly one.
+vec3 aerialPerspectiveViewRayDirection(vec2 screenUv, AtmosphereArgs args) {
+  // Screen UV has its origin at the top left, so v grows downward while cameraUp points upward.
+  const vec2 ndc = vec2(screenUv.x * 2.0f - 1.0f, 1.0f - screenUv.y * 2.0f);
+  return args.cameraForward + args.cameraRight * ndc.x + args.cameraUp * ndc.y;
+}
+
+// Depth slices are distributed quadratically rather than uniformly. With 32 slices over a 32 km
+// range a linear split would put everything inside a city block into the first slice; squaring
+// gives the nearest slice tens of metres while still reaching the far end of the range.
+float aerialPerspectiveSliceToForwardDistance(float w, AtmosphereArgs args) {
+  return square(saturate(w)) * args.aerialPerspectiveDepthRange;
+}
+
+float aerialPerspectiveForwardDistanceToSlice(float forwardDistance, AtmosphereArgs args) {
+  return saturate(sqrt(max(forwardDistance, 0.0f) / max(args.aerialPerspectiveDepthRange, 1e-6f)));
+}
+
+vec3 aerialPerspectiveUvwToWorldPosition(vec3 uvw, AtmosphereArgs args) {
+  const float forwardDistance = aerialPerspectiveSliceToForwardDistance(uvw.z, args);
+
+  return args.cameraPosition + aerialPerspectiveViewRayDirection(uvw.xy, args) * forwardDistance;
+}
+
+// Inverse of aerialPerspectiveUvwToWorldPosition for a screen UV and a distance along the view ray.
+vec3 aerialPerspectiveScreenUvToUvw(vec2 screenUv, float viewRayDistance, AtmosphereArgs args) {
+  const vec3 direction = aerialPerspectiveViewRayDirection(screenUv, args);
+  const float directionLength = max(length(direction), 1e-6f);
+
+  // Convert the distance along the view ray into a forward (slice) distance.
+  const float forwardDistance = viewRayDistance / directionLength;
+
+  return vec3(screenUv, aerialPerspectiveForwardDistanceToSlice(forwardDistance, args));
+}
+
+vec4 sampleAerialPerspectiveLut(Texture3D<float4> aerialPerspectiveLut, SamplerState lutSampler,
+                                vec3 uvw, AtmosphereArgs args) {
+  return aerialPerspectiveLut.SampleLevel(lutSampler, clamp(uvw, vec3(0.0f), vec3(1.0f)), 0);
+}

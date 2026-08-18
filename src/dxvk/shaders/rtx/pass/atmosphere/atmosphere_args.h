@@ -62,9 +62,17 @@ struct AtmosphereArgs {
   vec3 mieScattering;
   float sunRayBrightness;  // Multiplier for direct sun ray brightness
 
+  // Aerosols absorb as well as scatter (Hillaire EGSR 2020, Table 1), so Mie extinction is
+  // scattering + absorption. Before this row existed the fork modelled only the scattering half,
+  // which left aerosol extinction at roughly half its physical value: haze brightened as it
+  // thickened instead of also darkening, and could not be tinted. Raising this relative to
+  // mieScattering is what makes dust brown-and-dim rather than grey-and-bright.
+  vec3 mieAbsorption;  // Absorption coefficients (km^-1)
+  float padMieAbsorptionRow;  // free
+
   // Ozone absorption (important for realistic sunset colors per Hillaire paper Section 3.4)
   vec3 ozoneAbsorption;  // Absorption coefficients (km^-1)
-  float ozoneLayerAltitude;  // Peak altitude of ozone layer (km)
+  float ozoneLayerAltitude;  // Peak altitude of the ozone tent profile (km)
 
   uint transmittanceLutWidth;
   uint transmittanceLutHeight;
@@ -72,7 +80,7 @@ struct AtmosphereArgs {
   uint skyViewLutWidth;
 
   uint skyViewLutHeight;
-  float ozoneLayerWidth;  // Width of ozone layer (km)
+  float ozoneLayerWidth;  // Half-width of the ozone tent profile (km); the paper's 30 km tent = 15
   float padRetired10;     // retired: viewAltitude (camera altitude offset, km) — never read by any pass.
   float multiScatterPhysicalStrength;  // 0 = pure analytical (artistic, preset-faithful), 1 = pure LUT-based hemisphere integration (physical)
 
@@ -643,4 +651,37 @@ struct AtmosphereArgs {
                                 // any further growth needs a new full
                                 // 16-byte row (see the CB-alignment
                                 // discipline note at the top).
+
+  // ----- Aerial perspective froxel volume (Hillaire EGSR 2020, Section 5.4) -----
+  // Camera-frustum-fitted 32^3 volume holding, per froxel, the atmospheric in-scattered luminance
+  // toward the camera in RGB and the mean transmittance in A, so applying it to a shaded pixel is a
+  // single multiply-add. This is what gives distant geometry its haze and desaturation; without it
+  // everything past the global volumetrics froxel range renders at full saturation and contrast.
+  //
+  // Rebuilt every frame (unlike the parameter-only transmittance / multiscattering / sky-view
+  // bakes), so these fields are deliberately grouped LAST: RtxAtmosphere's bake-invalidation
+  // memcmp only covers the camera-independent prefix ahead of them. Anything added below this
+  // point must be camera-dependent, and anything that should re-trigger a bake must go above.
+  uint aerialPerspectiveLutSize;      // Width/height/depth of the volume; 0 when disabled
+  float aerialPerspectiveDepthRange;  // Depth covered by the volume, in world units
+  // In-scatter nearer than this is already integrated by the global volumetrics froxel grid, so the
+  // aerial perspective march starts here rather than at the camera to avoid double counting.
+  // 0 when global volumetrics are disabled.
+  float aerialPerspectiveStartDistance;
+  uint isZUp;  // Non-zero when the game world is Z-up rather than the atmosphere's internal Y-up
+
+  // Camera basis in world units. cameraRight / cameraUp are pre-scaled by the frustum half extents
+  // at unit forward distance, so a ray built from them always has a forward component of exactly
+  // one and the slice index maps directly to forward distance.
+  vec3 cameraPosition;
+  float padAerial0;
+
+  vec3 cameraForward;
+  float padAerial1;
+
+  vec3 cameraRight;
+  float padAerial2;
+
+  vec3 cameraUp;
+  float padAerial3;
 };

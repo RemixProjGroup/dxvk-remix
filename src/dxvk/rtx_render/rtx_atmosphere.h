@@ -38,6 +38,7 @@ class WeatherBlender;
 class DxvkContext;
 class DxvkDevice;
 class RtxContext;
+class RtCamera;
 struct RtLight;
 struct LightManager;
 
@@ -67,6 +68,15 @@ public:
   Resources::Resource getTransmittanceLut() const { return m_transmittanceLut; }
   Resources::Resource getMultiscatteringLut() const { return m_multiscatteringLut; }
   Resources::Resource getSkyViewLut() const { return m_skyViewLut; }
+
+  // 32^3 RGBA16F camera-fitted froxel volume: atmospheric in-scatter toward the camera in RGB, mean
+  // transmittance in A. Rebuilt every frame because it is fitted to the frustum.
+  Resources::Resource getAerialPerspectiveLut() const { return m_aerialPerspectiveLut; }
+
+  // Cache the camera frustum basis the aerial perspective volume is fitted to. Same push-then-read
+  // shape as setCloudShadowCameraPosition: call once per frame before computeLuts, since the const
+  // getAtmosphereArgs() runs many times per frame and cannot derive this itself.
+  void setAerialPerspectiveCamera(const RtCamera& camera);
 
   // 2D R16F baked per frame; attenuates sky-view radiance by cloud coverage per hemisphere direction.
   Resources::Resource getCloudSkyTransmittanceLut() const { return m_cloudSkyTransmittanceLut; }
@@ -118,6 +128,18 @@ public:
   // before getAtmosphereArgs; getAtmosphereArgs is called many times per frame and cannot integrate itself.
   void advanceCloudMotion(float dt);
 
+  // Integrate the time-of-day clock. Call once per frame before getAtmosphereArgs, same contract as
+  // advanceCloudMotion. Re-seeds from the authored timeOfDayHours option whenever that value is
+  // changed (a UI scrub or a config load), so scrubbing the slider moves the clock.
+  void advanceTimeCycle(float dt);
+
+  // Live time of day in hours [0, 24). Equals the authored option while the cycle is disabled.
+  float getTimeOfDayHours() const { return m_timeOfDayHours; }
+
+  // Sun elevation / azimuth in degrees implied by a given time of day. Static so the UI can show
+  // what the cycle is driving without reaching for the live clock itself.
+  static void computeTimeCycleSunAngles(float timeOfDayHours, float& outElevationDeg, float& outAzimuthDeg);
+
   // Decay the flash envelope, fire restrike pulses, schedule new strikes. MUST be called exactly once per frame,
   // after setCloudShadowCameraPosition (so placement uses this frame's camera).
   void advanceLightning(float dt);
@@ -129,6 +151,16 @@ public:
   void syncDistantLights(LightManager& lm, const AtmosphereArgs& args);
 
     RTX_OPTION("rtx.atmosphere", float, sunSize, 0.545f, "Size of sun disc in degrees.");
+    RTX_OPTION("rtx.atmosphere", bool, aerialPerspective, true,
+               "Apply the atmosphere's in-scatter and extinction to scene geometry through a camera-fitted froxel "
+               "volume (Hillaire EGSR 2020, Section 5.4). This is what gives distant buildings and terrain their haze "
+               "and desaturation - the strongest distance cue an outdoor scene has. Without it, everything past the "
+               "global volumetrics froxel range renders at full saturation and contrast. Where global volumetrics are "
+               "enabled the march starts past that grid's range, so the two hand off instead of double counting.");
+    RTX_OPTION_ARGS("rtx.atmosphere", float, aerialPerspectiveDepthRangeMeters, 32000.0f,
+               "Depth in meters covered by the aerial perspective volume. Bring this closer to the camera for denser "
+               "atmospheres to spend the 32 slices over a shorter, more accurate range.",
+               args.minValue = 100.0f);
     RTX_OPTION("rtx.atmosphere", float, sunShadowSoftnessDeg, 0.0f,
                "Decoupled sun shadow softness, as the distant light's angular half-angle in degrees. "
                "0 = physical (use sunSize / 2, so shadow softness tracks the visible disc). When > 0 it "
@@ -139,6 +171,40 @@ public:
                "Sun elevation in degrees. Game-drivable per-frame; persists when saved unless overridden by a runtime push.");
     RTX_OPTION("rtx.atmosphere", float, sunRotation, 0.0f,
                "Sun rotation in degrees. Game-drivable per-frame; persists when saved unless overridden by a runtime push.");
+
+    // ----- Remix-side time of day cycle -----
+    // The intended workflow is for the game to drive sunElevation / sunRotation per frame through
+    // the Remix API. Plenty of games have no day/night cycle to drive it with, so this provides one
+    // on the Remix side. It is opt-in and, while enabled, OWNS the sun direction: sunElevation and
+    // sunRotation are ignored, including pushes from the API. Turn it off to hand control back.
+    RTX_OPTION("rtx.atmosphere", bool, timeCycleEnable, false,
+               "Drive the sun from a Remix-side clock instead of the sunElevation / sunRotation options. "
+               "Intended for games that have no day/night cycle of their own to push through the API. While enabled "
+               "this OWNS the sun direction and both of those options (and any API push to them) are ignored.");
+    RTX_OPTION_ARGS("rtx.atmosphere", float, timeOfDayHours, 12.0f,
+               "Time of day in hours [0, 24). 12 = solar noon, 6 ~ sunrise, 18 ~ sunset at an equinox. When the cycle "
+               "is running this is the START time - editing it re-seeds the running clock. When the cycle is off it is "
+               "still used to place the sun, so it doubles as a manual time-of-day control.",
+               args.minValue = 0.0f, args.maxValue = 24.0f);
+    RTX_OPTION_ARGS("rtx.atmosphere", float, dayLengthMinutes, 24.0f,
+               "Real-world minutes for one full 24-hour cycle. 24 gives a minute per in-game hour; raise for a slower "
+               "day. Only used while timeCycleEnable is set.",
+               args.minValue = 0.01f);
+    RTX_OPTION_ARGS("rtx.atmosphere", float, latitudeDegrees, 45.0f,
+               "Observer latitude in degrees, positive north. Sets how high the sun climbs and how tilted its arc is: "
+               "0 (equator) sends it near-vertically overhead, high latitudes keep it low and give long shallow "
+               "sunrises and sunsets.",
+               args.minValue = -90.0f, args.maxValue = 90.0f);
+    RTX_OPTION_ARGS("rtx.atmosphere", int, dayOfYear, 80,
+               "Day of year [1, 365], which sets the solar declination and therefore the season. 80 is the March "
+               "equinox (sun rises due east, sets due west, 12-hour day), 172 the June solstice, 355 the December "
+               "solstice. At latitude 0 the season barely matters; near the poles it is the difference between "
+               "midnight sun and polar night.",
+               args.minValue = 1, args.maxValue = 365);
+    RTX_OPTION_ARGS("rtx.atmosphere", float, northOffsetDegrees, 0.0f,
+               "Rotates the whole solar arc so the model's north lines up with the game world's north. Adjust until "
+               "sunrise comes from the direction the game world treats as east.",
+               args.minValue = -360.0f, args.maxValue = 360.0f);
     // rtx.atmosphere.altitude retired 2026-07-17: fed AtmosphereArgs::viewAltitude which nothing read.
     RTX_OPTION("rtx.atmosphere", float, airDensity, 1.0f, "Density of air molecules multiplier (1.0 = clear sky).");
     RTX_OPTION("rtx.atmosphere", float, aerosolDensity, 1.1f, "Density of aerosols/dust multiplier (1.0 = typical).");
@@ -146,11 +212,22 @@ public:
     RTX_OPTION("rtx.atmosphere", float, planetRadius, 6371.0f, "Planet radius in kilometers.");
     RTX_OPTION("rtx.atmosphere", float, atmosphereThickness, 100.0f, "Atmosphere thickness in kilometers.");
     RTX_OPTION("rtx.atmosphere", float, mieAnisotropy, 0.97f, "Mie phase function anisotropy (g parameter, -1 to 1).");
-    RTX_OPTION("rtx.atmosphere", Vector3, rayleighScattering, Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f), "Base Rayleigh scattering coefficients (km^-1).");
+    // Defaults follow Table 1 of Hillaire's EGSR 2020 paper, converted from m^-1 to km^-1.
+    RTX_OPTION("rtx.atmosphere", Vector3, rayleighScattering, Vector3(5.802e-3f, 13.558e-3f, 33.1e-3f), "Base Rayleigh scattering coefficients (km^-1).");
     RTX_OPTION("rtx.atmosphere", Vector3, mieScattering, Vector3(3.996e-3f, 3.996e-3f, 3.996e-3f), "Base Mie scattering coefficients (km^-1).");
-    RTX_OPTION("rtx.atmosphere", Vector3, ozoneAbsorption, Vector3(2.04e-3f, 4.97e-3f, 2.14e-4f), "Base Ozone absorption coefficients (km^-1).");
-    RTX_OPTION("rtx.atmosphere", float, ozoneLayerAltitude, 25.0f, "Altitude of ozone layer peak in kilometers.");
-    RTX_OPTION("rtx.atmosphere", float, ozoneLayerWidth, 15.0f, "Width of the ozone layer in kilometers.");
+    RTX_OPTION("rtx.atmosphere", Vector3, mieAbsorption, Vector3(4.4e-3f, 4.4e-3f, 4.4e-3f),
+               "Base Mie absorption coefficients (km^-1). Aerosols absorb roughly as much as they scatter on Earth, "
+               "so leaving this at zero puts aerosol extinction at about half its physical value — haze then brightens "
+               "as it thickens instead of also darkening. Raising this relative to mieScattering darkens the haze, and "
+               "making it chromatic tints it: this is the control that makes dust brown-and-dim or smoke grey-and-dark "
+               "rather than simply denser. Scaled by aerosolDensity alongside mieScattering.");
+    // Table 1 values. These are ~3x smaller than the coefficients used before 2026-08-18, which were
+    // paired with a Gaussian ozone profile and a 0.15 fudge in the analytical sun-transmittance path
+    // only; the tent profile (integrating to exactly ozoneLayerWidth km of column) plus these
+    // coefficients replace both, so ozoneDensity is now a predictable multiplier.
+    RTX_OPTION("rtx.atmosphere", Vector3, ozoneAbsorption, Vector3(0.650e-3f, 1.881e-3f, 0.085e-3f), "Base Ozone absorption coefficients (km^-1).");
+    RTX_OPTION("rtx.atmosphere", float, ozoneLayerAltitude, 25.0f, "Altitude of the ozone tent profile's peak in kilometers.");
+    RTX_OPTION("rtx.atmosphere", float, ozoneLayerWidth, 15.0f, "Half-width of the ozone tent profile in kilometers, and therefore the vertical ozone column. The paper uses a 30 km wide tent, so 15.");
     RTX_OPTION("rtx.atmosphere", Vector3, sunIlluminance, Vector3(15.0f, 15.0f, 15.0f), "Base Sun illuminance color/intensity.");
     RTX_OPTION("rtx.atmosphere", float, multiScatterPhysicalStrength, 1.0f, "Blend between the analytical multiscatter fit (0) and the physical Hillaire multiscattering LUT (1). Default 1.0 = physical: the LUT is the correct directional, transmittance-aware hemisphere integration and gives a believable zenith->horizon gradient with warm horizon tones. 0 = the legacy analytical inline fit, which is a flat isotropic blue-biased fill that flattens the gradient and desaturates the warm horizon (kept only for A/B). Intermediate values blend.");
     RTX_OPTION("rtx.atmosphere", float, multiScatterStrength, 1.0f, "Artistic global scale on the atmosphere's multiscattering 'fill' term. The physical two-term model adds a broadband (pale-blue) multiscatter term that desaturates warm sunset color. Lower this (e.g. 0.3-0.6) to let warm single-scatter dominate for a punchier sunset; 1.0 = physical. Feeds the sky-view LUT, so clouds inherit it.");
@@ -923,6 +1000,7 @@ private:
   void dispatchTransmittanceLut(Rc<DxvkContext> ctx);
   void dispatchMultiscatteringLut(Rc<DxvkContext> ctx);
   void dispatchSkyViewLut(Rc<DxvkContext> ctx);
+  void dispatchAerialPerspectiveLut(Rc<DxvkContext> ctx);  // per-frame; camera-fitted
   // Baked at init + on cloudCellSizeKm / cloudNoiseTileKm change.
   void dispatchCloudPlacementMapBake(Rc<DxvkContext> ctx);
   bool needsCloudPlacementRebake() const;
@@ -949,6 +1027,9 @@ private:
   static constexpr uint32_t kMultiscatteringLutSize = 32;
   static constexpr uint32_t kSkyViewLutWidth = 512;
   static constexpr uint32_t kSkyViewLutHeight = 256;
+  // Paper Section 5.4 uses 32^3 over the frustum, which is plenty for an effect this low frequency.
+  // Keep in lockstep with the [numthreads(4,4,4)] dispatch in aerial_perspective_lut.comp.slang.
+  static constexpr uint32_t kAerialPerspectiveLutSize = 32;
   // Keep in lockstep with kLutWidth/kLutHeight in cloud_sky_transmittance_lut.comp.slang.
   static constexpr uint32_t kCloudSkyTransmittanceLutWidth = 32;
   static constexpr uint32_t kCloudSkyTransmittanceLutHeight = 16;
@@ -983,6 +1064,7 @@ private:
   Resources::Resource m_transmittanceLut;
   Resources::Resource m_multiscatteringLut;
   Resources::Resource m_skyViewLut;
+  Resources::Resource m_aerialPerspectiveLut;
   Resources::Resource m_cloudSkyTransmittanceLut;
   Resources::Resource m_cloudDSun;
   Resources::Resource m_cloudDAmbient;
@@ -1003,6 +1085,21 @@ private:
   Vector3  m_cloudRenderUpYUp      { 0.0f, 1.0f, 0.0f };
   uint32_t m_cloudRenderFrameIdx   { 0u };
   Vector3  m_cameraWorldPosYUpKm   { 0.0f, 0.0f, 0.0f };
+
+  // Time-of-day clock. Integrated once per frame by advanceTimeCycle(); read by the const
+  // getAtmosphereArgs(). m_lastAuthoredTimeOfDayHours tracks the option so an edit to it (UI scrub,
+  // config load) re-seeds the running clock instead of being overwritten by it.
+  float    m_timeOfDayHours             { 12.0f };
+  float    m_lastAuthoredTimeOfDayHours { -1.0f };
+
+  // Aerial perspective camera basis, in world units. Right/Up are pre-scaled by the frustum half
+  // extents at unit forward distance. Pushed by setAerialPerspectiveCamera(), read by
+  // getAtmosphereArgs(). Defaults form a degenerate basis, which the shader tolerates (the volume
+  // simply collapses to the camera position) until the first push lands.
+  Vector3  m_apCameraPosition      { 0.0f, 0.0f, 0.0f };
+  Vector3  m_apCameraForward       { 0.0f, 0.0f, 1.0f };
+  Vector3  m_apCameraRight         { 1.0f, 0.0f, 0.0f };
+  Vector3  m_apCameraUp            { 0.0f, 1.0f, 0.0f };
 
   // Integrated once per frame by advanceCloudMotion(); read by getAtmosphereArgs().
   Vector2  m_cloudAdvectOffset     { 0.0f, 0.0f };
@@ -1061,6 +1158,7 @@ private:
   ChromaticityUiState m_sunIlluminanceUiState;
   ChromaticityUiState m_rayleighScatteringUiState;
   ChromaticityUiState m_mieScatteringUiState;
+  ChromaticityUiState m_mieAbsorptionUiState;
   ChromaticityUiState m_ozoneAbsorptionUiState;
 
   // Set by updateFrame before any atmosphere consumer runs; nullptr when the blender is dormant.

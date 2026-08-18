@@ -192,7 +192,7 @@ namespace {
     }
   }
 
-  void renderSunUI() {
+  void renderSunUI(float liveTimeOfDayHours) {
     constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
 
     if (ImGui::TreeNode("Sun")) {
@@ -220,11 +220,68 @@ namespace {
       RemixGui::DragFloat("Sun Intensity", &RtxAtmosphere::sunIntensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
       RemixGui::SetTooltipToLastWidgetOnHover("Strength of Sun");
 
-      RemixGui::DragFloat("Sun Elevation", &RtxAtmosphere::sunElevationObject(), 0.01f, -90.0f, 90.0f, "%.2f deg", sliderFlags);
-      RemixGui::SetTooltipToLastWidgetOnHover("Sun angle from horizon");
+      // The Remix-side time cycle owns the sun direction while it is on, so these two are inert.
+      // Show them disabled, displaying the angles the cycle is actually driving.
+      const bool timeCycleOwnsSun = RtxAtmosphere::timeCycleEnable();
+      ImGui::BeginDisabled(timeCycleOwnsSun);
+      if (timeCycleOwnsSun) {
+        float drivenElevationDeg = 0.0f;
+        float drivenAzimuthDeg = 0.0f;
+        RtxAtmosphere::computeTimeCycleSunAngles(liveTimeOfDayHours, drivenElevationDeg, drivenAzimuthDeg);
+        ImGui::Text("Sun Elevation   %7.2f deg", drivenElevationDeg);
+        ImGui::Text("Sun Rotation    %7.2f deg", drivenAzimuthDeg);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Driven by the Time Cycle below. Disable it to control the sun directly again.");
+      } else {
+        RemixGui::DragFloat("Sun Elevation", &RtxAtmosphere::sunElevationObject(), 0.01f, -90.0f, 90.0f, "%.2f deg", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Sun angle from horizon");
 
-      RemixGui::DragFloat("Sun Rotation", &RtxAtmosphere::sunRotationObject(), 0.01f, 0.0f, 360.0f, "%.1f deg", sliderFlags);
-      RemixGui::SetTooltipToLastWidgetOnHover("Rotation of sun around zenith");
+        RemixGui::DragFloat("Sun Rotation", &RtxAtmosphere::sunRotationObject(), 0.01f, 0.0f, 360.0f, "%.1f deg", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover("Rotation of sun around zenith");
+      }
+      ImGui::EndDisabled();
+
+      if (ImGui::TreeNode("Time Cycle")) {
+        RemixGui::Checkbox("Enable Time Cycle", &RtxAtmosphere::timeCycleEnableObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Drive the sun from a Remix-side clock instead of Sun Elevation / Sun Rotation. The "
+            "intended workflow is for the game to push the sun through the Remix API, but plenty of "
+            "games have no day/night cycle to push - this gives them one. While enabled it OWNS the "
+            "sun direction, and Sun Elevation / Sun Rotation (including API pushes) are ignored.");
+
+        // Live readout: the clock runs off this, not off the authored option, once it is ticking.
+        const int liveHour = int(liveTimeOfDayHours);
+        const int liveMinute = int((liveTimeOfDayHours - float(liveHour)) * 60.0f);
+        ImGui::Text("Current time    %02d:%02d", liveHour, liveMinute);
+
+        RemixGui::DragFloat("Time Of Day", &RtxAtmosphere::timeOfDayHoursObject(), 0.01f, 0.0f, 24.0f, "%.2f h", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Hours, 0-24. 12 is solar noon. While the cycle runs this is the START time and editing "
+            "it re-seeds the running clock; while the cycle is off it places the sun directly, so it "
+            "doubles as a manual time-of-day control.");
+
+        RemixGui::DragFloat("Day Length", &RtxAtmosphere::dayLengthMinutesObject(), 0.1f, 0.01f, 600.0f, "%.2f min", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Real-world minutes for one full 24-hour cycle. 24 gives a minute per in-game hour.");
+
+        RemixGui::DragFloat("Latitude", &RtxAtmosphere::latitudeDegreesObject(), 0.1f, -90.0f, 90.0f, "%.1f deg", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Observer latitude, positive north. Sets how high the sun climbs and how tilted its arc "
+            "is: 0 sends it near-vertically overhead, high latitudes keep it low with long shallow "
+            "sunrises and sunsets.");
+
+        RemixGui::DragInt("Day Of Year", &RtxAtmosphere::dayOfYearObject(), 1.0f, 1, 365, "%d", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Sets the solar declination, i.e. the season. 80 = March equinox (due-east sunrise, "
+            "12-hour day), 172 = June solstice, 355 = December solstice.");
+
+        RemixGui::DragFloat("North Offset", &RtxAtmosphere::northOffsetDegreesObject(), 0.1f, -360.0f, 360.0f, "%.1f deg", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Rotates the whole solar arc so the model's north matches the game world's. Adjust until "
+            "sunrise arrives from the direction the game treats as east.");
+
+        ImGui::TreePop();
+      }
 
       ImGui::TreePop();
     }
@@ -506,10 +563,12 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
       RtxAtmosphere::sunIlluminanceObject().setDeferred(Vector3(20.0f, 20.0f, 20.0f));
       RtxAtmosphere::planetRadiusObject().setDeferred(6371.0f);  // Earth's actual radius
       RtxAtmosphere::atmosphereThicknessObject().setDeferred(100.0f);
-      RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f));
+      // Table 1 of the paper, converted from m^-1 to km^-1.
+      RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(5.802e-3f, 13.558e-3f, 33.1e-3f));
       RtxAtmosphere::mieScatteringObject().setDeferred(Vector3(3.996e-3f, 3.996e-3f, 3.996e-3f));
+      RtxAtmosphere::mieAbsorptionObject().setDeferred(Vector3(4.4e-3f, 4.4e-3f, 4.4e-3f));
       RtxAtmosphere::mieAnisotropyObject().setDeferred(0.8f);
-      RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(2.04e-3f, 4.97e-3f, 2.14e-4f));
+      RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(0.650e-3f, 1.881e-3f, 0.085e-3f));
       RtxAtmosphere::ozoneLayerAltitudeObject().setDeferred(25.0f);
       RtxAtmosphere::ozoneLayerWidthObject().setDeferred(15.0f);
     }
@@ -524,6 +583,9 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
       RtxAtmosphere::atmosphereThicknessObject().setDeferred(50.0f);  // Thinner atmosphere
       RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(8.0e-3f, 10.0e-3f, 12.0e-3f));  // Red bias
       RtxAtmosphere::mieScatteringObject().setDeferred(Vector3(8.0e-3f, 8.0e-3f, 8.0e-3f));  // More dust
+      // Iron-rich dust absorbs strongly toward the blue end, which is what inverts the sky and
+      // sunset colours relative to Earth.
+      RtxAtmosphere::mieAbsorptionObject().setDeferred(Vector3(4.0e-3f, 6.0e-3f, 10.0e-3f));
       RtxAtmosphere::mieAnisotropyObject().setDeferred(0.7f);
       RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(0.0f, 0.0f, 0.0f));  // No ozone
       RtxAtmosphere::ozoneLayerAltitudeObject().setDeferred(0.0f);
@@ -540,8 +602,9 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
       RtxAtmosphere::atmosphereThicknessObject().setDeferred(80.0f);
       RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(4.0e-3f, 9.0e-3f, 22.0e-3f));  // Reduced
       RtxAtmosphere::mieScatteringObject().setDeferred(Vector3(1.0e-3f, 1.0e-3f, 1.0e-3f));  // Minimal dust
+      RtxAtmosphere::mieAbsorptionObject().setDeferred(Vector3(1.1e-3f, 1.1e-3f, 1.1e-3f));
       RtxAtmosphere::mieAnisotropyObject().setDeferred(0.9f);  // Sharp sun
-      RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(2.04e-3f, 4.97e-3f, 2.14e-4f));
+      RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(0.650e-3f, 1.881e-3f, 0.085e-3f));
       RtxAtmosphere::ozoneLayerAltitudeObject().setDeferred(25.0f);
       RtxAtmosphere::ozoneLayerWidthObject().setDeferred(15.0f);
     }
@@ -553,10 +616,12 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
       RtxAtmosphere::sunIlluminanceObject().setDeferred(Vector3(18.0f, 18.0f, 18.0f));
       RtxAtmosphere::planetRadiusObject().setDeferred(6371.0f);
       RtxAtmosphere::atmosphereThicknessObject().setDeferred(100.0f);
-      RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(5.8e-3f, 13.5e-3f, 33.1e-3f));
+      RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(5.802e-3f, 13.558e-3f, 33.1e-3f));
       RtxAtmosphere::mieScatteringObject().setDeferred(Vector3(12.0e-3f, 12.0e-3f, 12.0e-3f));  // Heavy aerosols
+      // Pollution is soot heavy, so absorption dominates scattering here.
+      RtxAtmosphere::mieAbsorptionObject().setDeferred(Vector3(18.0e-3f, 18.0e-3f, 18.0e-3f));
       RtxAtmosphere::mieAnisotropyObject().setDeferred(0.65f);  // More diffuse sun
-      RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(2.04e-3f, 4.97e-3f, 2.14e-4f));
+      RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(0.650e-3f, 1.881e-3f, 0.085e-3f));
       RtxAtmosphere::ozoneLayerAltitudeObject().setDeferred(25.0f);
       RtxAtmosphere::ozoneLayerWidthObject().setDeferred(15.0f);
     }
@@ -571,8 +636,11 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
       RtxAtmosphere::atmosphereThicknessObject().setDeferred(120.0f);
       RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(4.0e-3f, 18.0e-3f, 10.0e-3f));  // Green peak
       RtxAtmosphere::mieScatteringObject().setDeferred(Vector3(5.0e-3f, 5.0e-3f, 5.0e-3f));
+      RtxAtmosphere::mieAbsorptionObject().setDeferred(Vector3(5.5e-3f, 5.5e-3f, 5.5e-3f));
       RtxAtmosphere::mieAnisotropyObject().setDeferred(0.75f);
-      RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(1.0e-3f, 0.5e-3f, 3.0e-3f));  // Exotic absorption
+      // Artistic ozone, rescaled by the same ~0.38 factor the Earth default took moving to Table 1
+      // so this preset's tint stays at its authored strength relative to Earth's.
+      RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(0.38e-3f, 0.19e-3f, 1.14e-3f));  // Exotic absorption
       RtxAtmosphere::ozoneLayerAltitudeObject().setDeferred(30.0f);
       RtxAtmosphere::ozoneLayerWidthObject().setDeferred(20.0f);
     }
@@ -587,8 +655,9 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
       RtxAtmosphere::atmosphereThicknessObject().setDeferred(90.0f);
       RtxAtmosphere::rayleighScatteringObject().setDeferred(Vector3(7.0e-3f, 11.0e-3f, 18.0e-3f));
       RtxAtmosphere::mieScatteringObject().setDeferred(Vector3(15.0e-3f, 12.0e-3f, 8.0e-3f));  // Sandy dust
+      RtxAtmosphere::mieAbsorptionObject().setDeferred(Vector3(8.0e-3f, 10.0e-3f, 16.0e-3f));
       RtxAtmosphere::mieAnisotropyObject().setDeferred(0.6f);  // Diffuse from dust
-      RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(0.5e-3f, 1.0e-3f, 0.1e-3f));
+      RtxAtmosphere::ozoneAbsorptionObject().setDeferred(Vector3(0.19e-3f, 0.38e-3f, 0.04e-3f));
       RtxAtmosphere::ozoneLayerAltitudeObject().setDeferred(20.0f);
       RtxAtmosphere::ozoneLayerWidthObject().setDeferred(10.0f);
     }
@@ -614,7 +683,7 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
     ImGui::Separator();
 
     // Sun (lifted out of former "Atmosphere Parameters" tree)
-    renderSunUI();
+    renderSunUI(getTimeOfDayHours());
 
     // Numos controls (renamed; Sun fields moved to renderSunUI above)
     if (ImGui::TreeNode("Atmosphere")) {
@@ -635,6 +704,22 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
 
       RemixGui::DragFloat("Ozone", &RtxAtmosphere::ozoneDensityObject(), 0.01f, 0.0f, 100.0f, "%.2f", sliderFlags);
       RemixGui::SetTooltipToLastWidgetOnHover("Density of ozone layer");
+
+      RemixGui::Checkbox("Aerial Perspective", &RtxAtmosphere::aerialPerspectiveObject());
+      RemixGui::SetTooltipToLastWidgetOnHover(
+          "Apply the atmosphere's in-scatter and extinction to scene geometry, which is what gives "
+          "distant buildings and terrain their haze and desaturation - the strongest distance cue an "
+          "outdoor scene has. With this off, everything past the global volumetrics froxel range "
+          "renders at full saturation and contrast. Hands off to the volumetrics grid at its range so "
+          "the two do not double count.");
+
+      if (RtxAtmosphere::aerialPerspective()) {
+        RemixGui::DragFloat("Aerial Perspective Range", &RtxAtmosphere::aerialPerspectiveDepthRangeMetersObject(),
+                            100.0f, 100.0f, 200000.0f, "%.0f m", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Depth covered by the 32-slice aerial perspective volume. Reduce for denser atmospheres "
+            "to spend the slices over a shorter, more accurate range.");
+      }
 
       if (ImGui::TreeNode("Advanced")) {
         RemixGui::DragFloat("Planet Radius", &RtxAtmosphere::planetRadiusObject(), 10.0f, 1000.0f, 10000.0f, "%.0f km", sliderFlags);
@@ -669,6 +754,18 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
             m_mieScatteringUiState);
 
         renderChromaticityWidget(
+            "Dust Absorption Tint (Base)", "Dust Absorption Strength",
+            &RtxAtmosphere::mieAbsorptionObject(),
+            0.0005f, 0.05f, "%.4f /km",
+            "Aerosol / dust ABSORPTION chromaticity. Aerosols absorb as well as scatter, and this is "
+            "the half that darkens rather than brightens. Tinting it is what makes dust brown-and-dim "
+            "or smoke grey-and-dark instead of merely denser; a blue-weighted absorption is what "
+            "inverts a Mars-like sky and its sunsets.",
+            "Dust absorption magnitude. Raise relative to Dust Scattering Strength to darken haze as "
+            "it thickens; Earth's aerosols sit at roughly 4.4e-3 /km, comparable to their scattering.",
+            m_mieAbsorptionUiState);
+
+        renderChromaticityWidget(
             "Ozone Tint (Base)", "Ozone Absorption Strength",
             &RtxAtmosphere::ozoneAbsorptionObject(),
             0.0001f, 0.05f, "%.5f /km",
@@ -678,12 +775,17 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
             m_ozoneAbsorptionUiState);
         RemixGui::DragFloat("Ozone Layer Altitude", &RtxAtmosphere::ozoneLayerAltitudeObject(), 0.5f, 0.0f, 50.0f, "%.1f km", sliderFlags);
         RemixGui::DragFloat("Ozone Layer Width", &RtxAtmosphere::ozoneLayerWidthObject(), 0.5f, 1.0f, 30.0f, "%.1f km", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Half-width of the ozone tent profile, and therefore the vertical ozone column in km "
+            "(the paper uses a 30 km wide tent, so 15).");
 
         RemixGui::DragFloat("Multiscatter Physical Strength", &RtxAtmosphere::multiScatterPhysicalStrengthObject(), 0.01f, 0.0f, 1.0f, "%.2f", sliderFlags);
         RemixGui::SetTooltipToLastWidgetOnHover(
             "0 = artistic multiscattering (analytical inline fit; preset color stays faithful, easy to style). "
-            "1 = physical multiscattering (Hillaire-style LUT hemisphere integration; wavelength-amplifies each preset's "
-            "Rayleigh bias for realistic saturation but harder to art-direct). Intermediate values blend.");
+            "1 = physical multiscattering (the Hillaire EGSR 2020 Psi_ms LUT: second-order scattering plus the "
+            "1/(1-f_ms) series for every higher order, with the ground bounce evaluated in-march. Its colour is "
+            "derived from the atmosphere's composition rather than assumed, so it is harder to art-direct but "
+            "correct). Intermediate values blend.");
 
         // Artistic sunset color controls (2026-06-14). Recover the
         // sunset warmth/saturation lost when reddening moved onto the physical

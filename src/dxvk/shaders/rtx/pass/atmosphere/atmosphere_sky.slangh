@@ -769,7 +769,6 @@ vec3 evalSkyRadiance(
   //   - stars are held aside and composited AFTER the cloud composite below
   //     using pow(cloud_T, starCloudExtinctionPower) so HDR point-stars die
   //     through cumulus cores instead of pinpointing through them.
-  // Note: Sun disk rendering removed - direct lighting handles sun contribution.
   vec3 starLayer    = vec3(0.0f);
   vec3 airglowLayer = vec3(0.0f);
   evalNightSky(viewDirYUp, args, starLayer, airglowLayer);

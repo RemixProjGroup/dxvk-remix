@@ -28,14 +28,18 @@
 #include "rtx_context.h"
 #include "rtx_lights.h"
 #include "rtx_light_manager.h"
+#include "rtx_camera.h"
+#include "rtx_global_volumetrics.h"
 #include "rtx_render/rtx_shader_manager.h"
 #include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/atmosphere/transmittance_lut_binding_indices.h"
 #include "rtx/pass/atmosphere/multiscattering_lut_binding_indices.h"
 #include "rtx/pass/atmosphere/sky_view_lut_binding_indices.h"
+#include "rtx/pass/atmosphere/aerial_perspective_lut_binding_indices.h"
 #include <rtx_shaders/transmittance_lut.h>
 #include <rtx_shaders/multiscattering_lut.h>
 #include <rtx_shaders/sky_view_lut.h>
+#include <rtx_shaders/aerial_perspective_lut.h>
 #include <rtx_shaders/cloud_sky_transmittance_lut.h>
 #include <rtx_shaders/cloud_sun_density_grid.h>
 #include <rtx_shaders/cloud_ambient_density_grid.h>
@@ -88,6 +92,19 @@ namespace dxvk {
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(SkyViewLutShader);
+
+    class AerialPerspectiveLutShader : public ManagedShader {
+      SHADER_SOURCE(AerialPerspectiveLutShader, VK_SHADER_STAGE_COMPUTE_BIT, aerial_perspective_lut)
+
+      BEGIN_PARAMETER()
+        CONSTANT_BUFFER(0)
+        TEXTURE2D(1)
+        TEXTURE2D(2)
+        SAMPLER(3)
+        RW_TEXTURE3D(4)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(AerialPerspectiveLutShader);
 
     class CloudSkyTransmittanceLutShader : public ManagedShader {
       SHADER_SOURCE(CloudSkyTransmittanceLutShader, VK_SHADER_STAGE_COMPUTE_BIT, cloud_sky_transmittance_lut)
@@ -344,6 +361,17 @@ namespace {
     args.cloudRenderRightYUp         = vec3(0.0f, 0.0f, 0.0f);
     args.cloudRenderUpYUp            = vec3(0.0f, 0.0f, 0.0f);
     args.cameraWorldPosYUpKm         = vec3(0.0f, 0.0f, 0.0f);
+    // Aerial perspective is camera-fitted and rebuilt every frame from its own dispatch — none of it
+    // feeds the transmittance / multiscattering / sky-view bakes. Leaving the basis in the key would
+    // re-bake the entire LUT cascade on every camera movement (same class of bug as the starRotation
+    // one noted below). Zeroed in the base so every derived key inherits it.
+    args.aerialPerspectiveLutSize       = 0u;
+    args.aerialPerspectiveDepthRange    = 0.0f;
+    args.aerialPerspectiveStartDistance = 0.0f;
+    args.cameraPosition              = vec3(0.0f, 0.0f, 0.0f);
+    args.cameraForward               = vec3(0.0f, 0.0f, 0.0f);
+    args.cameraRight                 = vec3(0.0f, 0.0f, 0.0f);
+    args.cameraUp                    = vec3(0.0f, 0.0f, 0.0f);
     args.skyIndirectRadianceScale    = 0.0f;
     args.lightningStrikePosKm        = vec3(0.0f, 0.0f, 0.0f);
     args.lightningFlashIntensity     = 0.0f;
@@ -472,13 +500,84 @@ namespace {
   }
 } // anonymous namespace
 
+void RtxAtmosphere::advanceTimeCycle(float dt) {
+  // Re-seed whenever the authored option moves, so scrubbing the slider (or loading a config) sets
+  // the clock rather than the clock immediately overwriting the edit. The sentinel initial value
+  // guarantees a seed on the first frame.
+  const float authored = RtxAtmosphere::timeOfDayHours();
+  if (authored != m_lastAuthoredTimeOfDayHours) {
+    m_timeOfDayHours = authored;
+    m_lastAuthoredTimeOfDayHours = authored;
+  }
+
+  if (!RtxAtmosphere::timeCycleEnable()) {
+    // Frozen: the authored value is the time of day, so the option doubles as a manual control.
+    m_timeOfDayHours = authored;
+    return;
+  }
+
+  const float dayLengthSeconds = std::max(RtxAtmosphere::dayLengthMinutes(), 0.01f) * 60.0f;
+  m_timeOfDayHours += (std::max(dt, 0.0f) / dayLengthSeconds) * 24.0f;
+
+  // Wrap into [0, 24). fmod alone can return a negative for a negative input, hence the double fold.
+  m_timeOfDayHours = std::fmod(std::fmod(m_timeOfDayHours, 24.0f) + 24.0f, 24.0f);
+}
+
+void RtxAtmosphere::computeTimeCycleSunAngles(float timeOfDayHours, float& outElevationDeg, float& outAzimuthDeg) {
+  // Standard solar position model. Declination from the day of year (Cooper's approximation), then
+  // elevation and azimuth from the hour angle and observer latitude.
+  const float latitudeRad = RtxAtmosphere::latitudeDegrees() * dxvk::kDegreesToRadians;
+  const float declinationRad = 23.44f * dxvk::kDegreesToRadians
+    * std::sin(2.0f * dxvk::kPi * (284.0f + float(RtxAtmosphere::dayOfYear())) / 365.0f);
+
+  // Hour angle: 0 at solar noon, 15 degrees per hour, negative before noon.
+  const float hourAngleRad = (timeOfDayHours - 12.0f) * 15.0f * dxvk::kDegreesToRadians;
+
+  const float sinLat = std::sin(latitudeRad);
+  const float cosLat = std::cos(latitudeRad);
+  const float sinDec = std::sin(declinationRad);
+  const float cosDec = std::cos(declinationRad);
+
+  const float sinElevation = std::min(std::max(
+    sinLat * sinDec + cosLat * cosDec * std::cos(hourAngleRad), -1.0f), 1.0f);
+  const float elevationRad = std::asin(sinElevation);
+
+  // Azimuth measured from north, increasing clockwise (east = 90). The denominator collapses at the
+  // poles and at the exact zenith, where azimuth is undefined and any value renders identically.
+  const float cosElevation = std::cos(elevationRad);
+  const float denom = cosElevation * cosLat;
+  float azimuthRad;
+  if (std::abs(denom) < 1e-6f) {
+    azimuthRad = 0.0f;
+  } else {
+    const float cosAzimuth = std::min(std::max((sinDec - sinElevation * sinLat) / denom, -1.0f), 1.0f);
+    azimuthRad = std::acos(cosAzimuth);
+    // acos only resolves [0, 180]; afternoon (positive hour angle) is the western mirror.
+    if (hourAngleRad > 0.0f) {
+      azimuthRad = 2.0f * dxvk::kPi - azimuthRad;
+    }
+  }
+
+  outElevationDeg = elevationRad / dxvk::kDegreesToRadians;
+  outAzimuthDeg = azimuthRad / dxvk::kDegreesToRadians + RtxAtmosphere::northOffsetDegrees();
+}
+
 AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   AtmosphereArgs args = {};
 
   const auto wx = m_weatherOverride;  // non-null when WeatherBlender is active
 
-  float azimuthRad   = RtxAtmosphere::sunRotation()  * dxvk::kDegreesToRadians;
-  float elevationRad = RtxAtmosphere::sunElevation() * dxvk::kDegreesToRadians;
+  // The time cycle, when enabled, owns the sun direction outright — including over API pushes to
+  // sunElevation / sunRotation, since a game that had its own cycle would have no reason to enable
+  // this. See the option comment in rtx_atmosphere.h.
+  float sunElevationDeg = RtxAtmosphere::sunElevation();
+  float sunAzimuthDeg   = RtxAtmosphere::sunRotation();
+  if (RtxAtmosphere::timeCycleEnable()) {
+    computeTimeCycleSunAngles(m_timeOfDayHours, sunElevationDeg, sunAzimuthDeg);
+  }
+
+  float azimuthRad   = sunAzimuthDeg   * dxvk::kDegreesToRadians;
+  float elevationRad = sunElevationDeg * dxvk::kDegreesToRadians;
   args.sunDirection.x = std::cos(elevationRad) * std::sin(azimuthRad);
   args.sunDirection.y = std::sin(elevationRad);
   args.sunDirection.z = std::cos(elevationRad) * std::cos(azimuthRad);
@@ -495,16 +594,20 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
 
   float aerosolDensity = wx ? wx->aerosolDensity : RtxAtmosphere::aerosolDensity();
   args.mieScattering = RtxAtmosphere::mieScattering() * aerosolDensity;
-  
+
+  // Aerosols both scatter and absorb, so Mie extinction needs the absorption term too. Rides the
+  // same density multiplier as the scattering half — thickening the aerosol raises both.
+  args.mieAbsorption = RtxAtmosphere::mieAbsorption() * aerosolDensity;
+
   args.mieAnisotropy = RtxAtmosphere::mieAnisotropy();
-  
+
   // Sun Angular Radius (from Sun Size in degrees)
   // sunSize is diameter in degrees. Radius = Size / 2
   float sunSizeRad = RtxAtmosphere::sunSize() * dxvk::kDegreesToRadians;
   args.sunAngularRadius = sunSizeRad * 0.5f;
-  
+
   // Brightness multiplier
-  args.sunRayBrightness = 1.0f; 
+  args.sunRayBrightness = 1.0f;
 
   // Ozone absorption (Base * Density Multiplier)
   float ozoneDensity = RtxAtmosphere::ozoneDensity();
@@ -841,6 +944,26 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.cloudUndersideLightSigma = wx ? wx->cloudUndersideLightSigma : RtxAtmosphere::cloudUndersideLightSigma();
   }
 
+  // Aerial perspective (fork — 2026-08-18). The camera basis is filled in per frame by
+  // fillAerialPerspectiveArgs(); only the camera-independent scalars are set here.
+  {
+    const float worldUnitsPerMeter = RtxOptions::getMeterToWorldUnitScale();
+    args.aerialPerspectiveLutSize = RtxAtmosphere::aerialPerspective() ? kAerialPerspectiveLutSize : 0u;
+    args.aerialPerspectiveDepthRange =
+      RtxAtmosphere::aerialPerspectiveDepthRangeMeters() * worldUnitsPerMeter;
+    args.isZUp = RtxOptions::zUp() ? 1u : 0u;
+    args.cameraPosition = m_apCameraPosition;
+    args.cameraForward = m_apCameraForward;
+    args.cameraRight = m_apCameraRight;
+    args.cameraUp = m_apCameraUp;
+
+    // Hand off to the global volumetrics froxel grid: everything nearer than its range is already
+    // integrated there, so the atmospheric march starts past it rather than double counting.
+    args.aerialPerspectiveStartDistance = RtxGlobalVolumetrics::enable()
+      ? RtxGlobalVolumetrics::froxelMaxDistanceMeters() * worldUnitsPerMeter
+      : 0.0f;
+  }
+
   // Cloud Height LUT + two-layer cloud map (slides 1 + 3 lift, fork — 2026-05-15).
   // Pulled from RTX_OPTIONs so ImGui tuning works without rebuilding shaders.
   // Default cloudLayer2Enable = false means today's single-layer Nubis Cubed
@@ -946,6 +1069,26 @@ void RtxAtmosphere::createLutResources(Rc<DxvkContext> ctx) {
     1, // numLayers
     VK_IMAGE_TYPE_2D,
     VK_IMAGE_VIEW_TYPE_2D,
+    0, // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
+    VkClearColorValue{}, // clearValue
+    1 // mipLevels
+  );
+
+  // Aerial perspective volume (3D RGBA16F, 32^3). In-scatter toward the camera in RGB, mean
+  // transmittance in A. Camera-frustum-fitted, so rebuilt every frame rather than on parameter
+  // change; consumed by the composite pass to haze distant geometry.
+  VkExtent3D aerialPerspectiveExtent = {
+    kAerialPerspectiveLutSize, kAerialPerspectiveLutSize, kAerialPerspectiveLutSize
+  };
+  m_aerialPerspectiveLut = Resources::createImageResource(
+    ctx,
+    "Atmosphere Aerial Perspective LUT",
+    aerialPerspectiveExtent,
+    VK_FORMAT_R16G16B16A16_SFLOAT,
+    1, // numLayers
+    VK_IMAGE_TYPE_3D,
+    VK_IMAGE_VIEW_TYPE_3D,
     0, // imageCreateFlags
     VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags
     VkClearColorValue{}, // clearValue
@@ -1282,6 +1425,20 @@ void RtxAtmosphere::computeLuts(Rc<DxvkContext> ctx) {
     m_lutsNeedRecompute = false;
   }
 
+  // Aerial perspective volume. Camera-fitted, so this rebuilds every frame regardless of whether
+  // the parameter-driven bakes above ran. It reads the transmittance and multiscattering LUTs; when
+  // those were re-baked this frame the barriers above already order the writes ahead of this read,
+  // and when they were not, the writes completed in an earlier frame.
+  if (RtxAtmosphere::aerialPerspective()) {
+    dispatchAerialPerspectiveLut(ctx);
+
+    ctx->emitMemoryBarrier(0,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+      VK_ACCESS_SHADER_READ_BIT);
+  }
+
   // Perf-bisect gate (fork — 2026-06-11, diagnostic): each unconditional
   // per-frame dispatch below gets a default-ON skip toggle so a live ImGui
   // session can attribute frame-time per dispatch. Skipping leaves the
@@ -1493,6 +1650,56 @@ void RtxAtmosphere::dispatchSkyViewLut(Rc<DxvkContext> ctx) {
   uint32_t groupsX = (kSkyViewLutWidth + 15) / 16;
   uint32_t groupsY = (kSkyViewLutHeight + 15) / 16;
   ctx->dispatch(groupsX, groupsY, 1);
+}
+
+void RtxAtmosphere::setAerialPerspectiveCamera(const RtCamera& camera) {
+  // Frustum half extents at unit forward distance, so a ray built from this basis always has a
+  // forward component of exactly one and the slice index maps linearly to forward distance.
+  //
+  // Kept in world space rather than the atmosphere's Y-up km frame: the composite pass reconstructs
+  // the same basis from a screen UV, and the bake swaps to Y-up itself once it has a direction.
+  // freecam=true matches setCloudRenderCameraBasis, the other screen-aligned consumer.
+  const float tanHalfFovY = std::tan(camera.getFov() * 0.5f);
+  const float tanHalfFovX = tanHalfFovY * camera.getAspectRatio();
+
+  // Note the bake subtracts cameraPosition straight back off, so only the basis actually drives the
+  // volume; the position is carried for completeness.
+  m_apCameraPosition = camera.getPosition(/*freecam=*/false);
+  m_apCameraForward = camera.getDirection(/*freecam=*/true);
+  m_apCameraRight = camera.getRight(/*freecam=*/true) * tanHalfFovX;
+  m_apCameraUp = camera.getUp(/*freecam=*/true) * tanHalfFovY;
+}
+
+void RtxAtmosphere::dispatchAerialPerspectiveLut(Rc<DxvkContext> ctx) {
+  ScopedGpuProfileZone(ctx, "Atmosphere Aerial Perspective LUT");
+
+  AtmosphereArgs args = getAtmosphereArgs();
+  ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
+
+  ctx->bindResourceBuffer(AERIAL_PERSPECTIVE_LUT_ATMOSPHERE_ARGS, DxvkBufferSlice(m_constantsBuffer, 0, m_constantsBuffer->info().size));
+  ctx->bindResourceView(AERIAL_PERSPECTIVE_LUT_TRANSMITTANCE_INPUT, m_transmittanceLut.view, nullptr);
+  ctx->bindResourceView(AERIAL_PERSPECTIVE_LUT_MULTISCATTERING_INPUT, m_multiscatteringLut.view, nullptr);
+
+  DxvkSamplerCreateInfo samplerInfo = {};
+  samplerInfo.magFilter = VK_FILTER_LINEAR;
+  samplerInfo.minFilter = VK_FILTER_LINEAR;
+  samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  Rc<DxvkSampler> linearSampler = m_device->createSampler(samplerInfo);
+  ctx->bindResourceSampler(AERIAL_PERSPECTIVE_LUT_SAMPLER, linearSampler);
+  ctx->bindResourceView(AERIAL_PERSPECTIVE_LUT_OUTPUT, m_aerialPerspectiveLut.view, nullptr);
+
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_transmittanceLut.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_multiscatteringLut.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_aerialPerspectiveLut.image);
+
+  ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, AerialPerspectiveLutShader::getShader());
+
+  const uint32_t groups = (kAerialPerspectiveLutSize + 3) / 4;
+  ctx->dispatch(groups, groups, groups);
 }
 
 void RtxAtmosphere::dispatchCloudSkyTransmittanceLut(Rc<DxvkContext> ctx) {
@@ -2281,6 +2488,7 @@ AtmosphereArgs RtxAtmosphere::updateFrame(RtxContext& ctx,
   // Integrators are frame state, so advance them exactly once before any LUT
   // generation or AtmosphereArgs reads.
   advanceCloudMotion(deltaTimeSeconds);
+  advanceTimeCycle(deltaTimeSeconds);
 
   const RtCamera& camera = ctx.getSceneManager().getCamera();
   const Vector3 forward = camera.getDirection(/*freecam=*/true);
@@ -2309,6 +2517,9 @@ AtmosphereArgs RtxAtmosphere::updateFrame(RtxContext& ctx,
   const float sceneScaleSafe = std::max(RtxOptions::sceneScale(), 1e-5f);
   const float kmPerWorldUnit = 1.0f / (100000.0f * sceneScaleSafe);
   setCloudShadowCameraPosition(cameraPosWorldUnitsYUp * kmPerWorldUnit);
+
+  // Aerial perspective is fitted to this frame's frustum; push before any getAtmosphereArgs read.
+  setAerialPerspectiveCamera(camera);
 
   // Placement uses this frame's camera position and the active weather snapshot.
   advanceLightning(deltaTimeSeconds);
@@ -2415,30 +2626,102 @@ namespace {
     return Vector3(a.x * b.x, a.y * b.y, a.z * b.z);
   }
 
+  inline float fhOzoneDensity(const AtmosphereArgs& a, float altitudeKm) {
+    const float halfWidth = std::max(a.ozoneLayerWidth, 1e-3f);
+    return std::max(0.0f, 1.0f - std::abs(altitudeKm - a.ozoneLayerAltitude) / halfWidth);
+  }
+
+  // Ray-sphere roots for a unit-length direction, sorted. Returns false when the ray misses.
+  bool fhIntersectSphere(const Vector3& origin, const Vector3& direction, const Vector3& center,
+                         float radius, float& outNear, float& outFar) {
+    const Vector3 oc = origin - center;
+    const float b = 2.0f * dot(oc, direction);
+    const float c = dot(oc, oc) - radius * radius;
+    const float discriminant = b * b - 4.0f * c;
+
+    if (discriminant < 0.0f) {
+      return false;
+    }
+
+    const float sqrtDiscriminant = std::sqrt(discriminant);
+    outNear = (-b - sqrtDiscriminant) * 0.5f;
+    outFar = (-b + sqrtDiscriminant) * 0.5f;
+
+    return true;
+  }
+
+  // CPU counterpart of the GPU transmittance bake. Ray marches the optical depth from ground level
+  // toward dirYUp through the spherical atmosphere — the same integral transmittance_lut.comp.slang
+  // bakes, with the same tent ozone profile and the same Mie scattering + absorption extinction — so
+  // the distant sun/moon lights this feeds agree with the LUT-lit sky.
+  //
+  // Fork history (2026-08-18): this was a plane-parallel Kasten-Young air mass with the ozone term
+  // reduced to `airMass * 0.15`, giving an ozone optical depth of ~7.5e-4 at zenith against a
+  // physical ~0.028 — effectively no ozone at all, while the sky had it. It also needed an ad-hoc
+  // exp(-15 * |cos|) twilight fade below the horizon; the spherical march needs none, because it
+  // returns zero as soon as the planet occludes the body.
+  //
+  // dirYUp must be normalized and in Y-up space. Cost is 40 steps once per body per frame.
   Vector3 fhAtmTransmittanceYUp(const AtmosphereArgs& a, const Vector3& dirYUp) {
-    const float H = a.rayleighScaleHeight;
-    const float zc = dirYUp.y;
-    float airMass;
-    if (zc > 0.01f) {
-      const float zenithRad = std::acos(std::min(std::max(zc, -1.0f), 1.0f));
-      const float zenithDeg = zenithRad * (180.0f / kFhPi);
-      airMass = 1.0f / (zc + 0.15f * std::pow(93.885f - zenithDeg, -1.253f));
-    } else {
-      airMass = 40.0f * std::exp(-zc * 10.0f);
+    const Vector3 planetCenter(0.0f, -a.planetRadius, 0.0f);
+    const Vector3 origin(0.0f, 0.0f, 0.0f);
+
+    float tNear = 0.0f;
+    float tFar = 0.0f;
+
+    // Any intersection ahead of the origin means the body is below the local horizon. The radius is
+    // nudged inward so a sample sitting exactly on the ground is not self shadowed.
+    if (fhIntersectSphere(origin, dirYUp, planetCenter, a.planetRadius * (1.0f - 1e-5f), tNear, tFar)
+        && tFar >= 0.0f) {
+      return Vector3(0.0f, 0.0f, 0.0f);
     }
-    airMass = std::min(airMass, 200.0f);
-    const float rayleighOD = H * airMass;
-    const float mieOD = a.mieScaleHeight * airMass;
-    const float ozonePath = airMass;
-    Vector3 t(
-      std::exp(-(a.rayleighScattering.x * rayleighOD + a.mieScattering.x * mieOD + a.ozoneAbsorption.x * ozonePath * 0.15f)),
-      std::exp(-(a.rayleighScattering.y * rayleighOD + a.mieScattering.y * mieOD + a.ozoneAbsorption.y * ozonePath * 0.15f)),
-      std::exp(-(a.rayleighScattering.z * rayleighOD + a.mieScattering.z * mieOD + a.ozoneAbsorption.z * ozonePath * 0.15f)));
-    if (zc < 0.0f) {
-      const float f = std::exp(-(-zc) * 15.0f);
-      t = Vector3(t.x * f, t.y * f, t.z * f);
+
+    // March to the top of the atmosphere.
+    if (!fhIntersectSphere(origin, dirYUp, planetCenter, a.atmosphereRadius, tNear, tFar) || tFar <= 0.0f) {
+      return Vector3(1.0f, 1.0f, 1.0f);
     }
-    return t;
+
+    const float tEnd = tFar;
+
+    // Matches the shader's power-distributed steps: short near the origin where the air is densest.
+    constexpr int kSteps = 40;
+    constexpr float kStepExponent = 2.0f;
+    Vector3 opticalDepth(0.0f, 0.0f, 0.0f);
+    float segmentStart = 0.0f;
+
+    for (int i = 0; i < kSteps; ++i) {
+      const float segmentEnd = std::pow(float(i + 1) / float(kSteps), kStepExponent);
+      const float dt = (segmentEnd - segmentStart) * tEnd;
+      const float t = (segmentStart + (segmentEnd - segmentStart) * 0.5f) * tEnd;
+      segmentStart = segmentEnd;
+
+      if (dt <= 0.0f) {
+        continue;
+      }
+
+      const Vector3 samplePos = origin + dirYUp * t;
+      const float h = std::min(
+        std::max(length(samplePos - planetCenter) - a.planetRadius, 0.0f), a.atmosphereThickness);
+
+      const float densityR = std::exp(-h / std::max(a.rayleighScaleHeight, 1e-3f));
+      const float densityM = std::exp(-h / std::max(a.mieScaleHeight, 1e-3f));
+      const float densityO3 = fhOzoneDensity(a, h);
+
+      opticalDepth.x += (a.rayleighScattering.x * densityR
+                       + (a.mieScattering.x + a.mieAbsorption.x) * densityM
+                       + a.ozoneAbsorption.x * densityO3) * dt;
+      opticalDepth.y += (a.rayleighScattering.y * densityR
+                       + (a.mieScattering.y + a.mieAbsorption.y) * densityM
+                       + a.ozoneAbsorption.y * densityO3) * dt;
+      opticalDepth.z += (a.rayleighScattering.z * densityR
+                       + (a.mieScattering.z + a.mieAbsorption.z) * densityM
+                       + a.ozoneAbsorption.z * densityO3) * dt;
+    }
+
+    return Vector3(
+      std::exp(-std::min(opticalDepth.x, 1e3f)),
+      std::exp(-std::min(opticalDepth.y, 1e3f)),
+      std::exp(-std::min(opticalDepth.z, 1e3f)));
   }
 }  // anonymous namespace
 

@@ -32,75 +32,70 @@ ConstantBuffer<AtmosphereArgs> atmosphereArgs;
 layout(binding = TRANSMITTANCE_LUT_OUTPUT, rgba16f)
 RWTexture2D<float4> transmittanceLutOutput;
 
-// Compute transmittance along a ray through the atmosphere
+// Transmittance from (altitude, viewZenithCosAngle) to the atmosphere's top boundary.
+//
+// The planet is deliberately NOT tested here (fork — 2026-08-18, EGSR 2020 pass). This bake used to
+// return a hard vec3(0) for every entry whose ray passes through the ground, and the LUT is read
+// through a linear sampler — so texels adjacent to that region were averaged against zero and the
+// sun's transmittance came back artificially dark for exactly the near-horizon angles where it
+// matters most, dimming and reddening the sun too early and non-smoothly through sunset.
+//
+// Instead those rays still get a real entry, integrated with the density clamped at ground level,
+// and occlusion by the planet is handled as a separate visibility term at the point of use
+// (evalPlanetShadow / evalSunShadowing — the Vis factor of the paper's Equation 4).
 vec3 computeTransmittance(float altitude, float viewZenithCosAngle, AtmosphereArgs args) {
   // Safety clamps
   altitude = clamp(altitude, 0.0f, args.atmosphereThickness);
   viewZenithCosAngle = clamp(viewZenithCosAngle, -1.0f, 1.0f);
-  
-  vec3 planetCenter = vec3(0.0f, -args.planetRadius, 0.0f);
-  float r = altitude + args.planetRadius;
-  vec3 rayOrigin = vec3(0.0f, altitude, 0.0f);
-  
+
+  const vec3 planetCenter = getPlanetCenter(args);
+  const vec3 rayOrigin = vec3(0.0f, altitude, 0.0f);
+
   // Construct ray direction from cosine of zenith angle
-  float sinZenith = sqrt(max(0.0f, 1.0f - viewZenithCosAngle * viewZenithCosAngle));
-  vec3 rayDir = vec3(sinZenith, viewZenithCosAngle, 0.0f);
-  rayDir = normalize(rayDir);
-  
+  const float sinZenith = sqrt(max(0.0f, 1.0f - viewZenithCosAngle * viewZenithCosAngle));
+  const vec3 rayDir = normalize(vec3(sinZenith, viewZenithCosAngle, 0.0f));
+
   // Intersect with top of atmosphere
   float t0, t1;
   if (!intersectSphere(rayOrigin, rayDir, planetCenter, args.atmosphereRadius, t0, t1)) {
     return vec3(1.0f);  // No atmosphere intersection
   }
-  
-  // Check if ray hits planet
-  float tPlanet0, tPlanet1;
-  bool hitsPlanet = intersectSphere(rayOrigin, rayDir, planetCenter, args.planetRadius, tPlanet0, tPlanet1);
-  if (hitsPlanet && tPlanet0 > 0.0f) {
-    return vec3(0.0f);  // Ray hits planet, full absorption
-  }
-  
-  // March along ray and accumulate optical depth
-  const int numSamples = 40;
-  float tStart = max(0.0f, t0);
-  float tEnd = t1;
-  
-  // Safety check
+
+  const float tStart = max(0.0f, t0);
+  const float tEnd = t1;
   if (tEnd <= tStart) {
     return vec3(1.0f);
   }
-  
-  float dt = (tEnd - tStart) / float(numSamples);
-  
+
+  // Power-distributed segments: short near the ray origin where the medium is densest.
+  const int numSamples = 40;
+  const float span = tEnd - tStart;
+  const float invSamples = 1.0f / float(numSamples);
+
   vec3 opticalDepth = vec3(0.0f);
-  
+  float segmentStart = 0.0f;
+
   for (int i = 0; i < numSamples; ++i) {
-    float sampleT = tStart + (float(i) + 0.5f) * dt;
-    vec3 samplePos = rayOrigin + rayDir * sampleT;
-    float sampleAltitude = length(samplePos - planetCenter) - args.planetRadius;
-    
-    // Clamp to valid range
-    sampleAltitude = clamp(sampleAltitude, 0.0f, args.atmosphereThickness);
-    
-    float densityR = rayleighDensity(sampleAltitude, args);
-    float densityM = mieDensity(sampleAltitude, args);
-    float densityO3 = ozoneDensity(sampleAltitude, args);
-    
-    vec3 extinctionR = args.rayleighScattering * densityR;
-    vec3 extinctionM = args.mieScattering * densityM;
-    vec3 extinctionO3 = args.ozoneAbsorption * densityO3;  // Ozone only absorbs
-    vec3 extinction = extinctionR + extinctionM + extinctionO3;
-    
-    opticalDepth += extinction * dt;
+    const float segmentEnd = atmosphereStepFraction(float(i + 1) * invSamples);
+    const float dt = (segmentEnd - segmentStart) * span;
+    const float sampleT = tStart + (segmentStart + (segmentEnd - segmentStart) * 0.5f) * span;
+    segmentStart = segmentEnd;
+
+    if (dt <= 0.0f) {
+      continue;
+    }
+
+    const vec3 samplePos = rayOrigin + rayDir * sampleT;
+    const float sampleAltitude = clamp(
+      length(samplePos - planetCenter) - args.planetRadius, 0.0f, args.atmosphereThickness);
+
+    opticalDepth += sampleAtmosphereMedium(sampleAltitude, args).extinction * dt;
   }
-  
-  // Transmittance = exp(-optical depth)
+
   // Clamp optical depth to prevent numerical issues
   opticalDepth = min(opticalDepth, vec3(1e3f));
-  vec3 transmittance = exp(-opticalDepth);
-  
-  // Ensure valid output
-  return clamp(transmittance, vec3(0.0f), vec3(1.0f));
+
+  return clamp(exp(-opticalDepth), vec3(0.0f), vec3(1.0f));
 }
 
 [shader("compute")]
