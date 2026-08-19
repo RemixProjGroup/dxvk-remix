@@ -505,16 +505,12 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
       // in-game (helper bailed at slab-bottom intersect because a Y-up
       // vector was being treated as Z-up and double-swapped).
       const bool isZUpFlag = (cb.isZUp != 0u);
-      // Mirrors the CPU-side toWorld(): undo the up flip, then swap. The parity gate reports a
-      // false mismatch against production if this diverges.
-      const vec3 sunDirFlipped = (cb.atmosphereArgs.flipUpAxis != 0)
-          ? vec3(cb.atmosphereArgs.sunDirection.x,
-                -cb.atmosphereArgs.sunDirection.y,
-                 cb.atmosphereArgs.sunDirection.z)
-          : cb.atmosphereArgs.sunDirection;
-      const vec3 sunDirCallerFrame = isZUpFlag
-          ? vec3(sunDirFlipped.x, sunDirFlipped.z, sunDirFlipped.y)
-          : sunDirFlipped;
+      // atmosphereYUpToWorld undoes the up flip before the axis swap, which is the order the
+      // CPU-side toWorld() in syncDistantLights uses and the only one that is correct - the two do
+      // not commute. Shared rather than re-derived on purpose: this case exists to mirror
+      // production, so a private copy of the conversion is the one thing it must not have.
+      const vec3 sunDirCallerFrame = atmosphereYUpToWorld(
+          cb.atmosphereArgs.sunDirection, isZUpFlag, cb.atmosphereArgs.flipUpAxis != 0);
       const vec3 sunDir = normalize(sunDirCallerFrame);
 
       // CRITICAL: match production NEE call shape exactly.
