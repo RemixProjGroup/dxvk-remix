@@ -505,11 +505,16 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
       // in-game (helper bailed at slab-bottom intersect because a Y-up
       // vector was being treated as Z-up and double-swapped).
       const bool isZUpFlag = (cb.isZUp != 0u);
-      const vec3 sunDirCallerFrame = isZUpFlag
+      // Mirrors the CPU-side toWorld(): undo the up flip, then swap. The parity gate reports a
+      // false mismatch against production if this diverges.
+      const vec3 sunDirFlipped = (cb.atmosphereArgs.flipUpAxis != 0)
           ? vec3(cb.atmosphereArgs.sunDirection.x,
-                 cb.atmosphereArgs.sunDirection.z,
-                 cb.atmosphereArgs.sunDirection.y)
+                -cb.atmosphereArgs.sunDirection.y,
+                 cb.atmosphereArgs.sunDirection.z)
           : cb.atmosphereArgs.sunDirection;
+      const vec3 sunDirCallerFrame = isZUpFlag
+          ? vec3(sunDirFlipped.x, sunDirFlipped.z, sunDirFlipped.y)
+          : sunDirFlipped;
       const vec3 sunDir = normalize(sunDirCallerFrame);
 
       // CRITICAL: match production NEE call shape exactly.
@@ -592,9 +597,8 @@ vec4 loadInput(inout RNG randomState, ivec2 threadId)
       // Replicates sampleCloudGroundShadow_OptionB_impl up through the
       // dSunTex.SampleLevel call. worldPos comes from the G-buffer in
       // caller's frame; swap to Y-up only if engine is Z-up.
-      const vec3 worldPosYUp = isZUpFlag
-          ? vec3(worldPos.x, worldPos.z, worldPos.y)
-          : worldPos;
+      const vec3 worldPosYUp =
+          worldToAtmosphereYUp(worldPos, isZUpFlag, cb.atmosphereArgs.flipUpAxis != 0);
       const float kmPerWorldUnit = 1.0f / max(cb.atmosphereArgs.worldUnitsPerKm, 1e-6f);
       const vec3 worldPosKm = worldPosYUp * kmPerWorldUnit;
       const float slabTopY = cb.atmosphereArgs.cloudAltitude

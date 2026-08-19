@@ -196,7 +196,7 @@ bool evaluateOpaqueApproximations(
     if (skyLitParticle && cb.skyMode == 1 && cb.particleSkyAmbientScale > 0.0f)
     {
       vec3 viewDir = normalize(surfaceInteraction.position - cameraGetWorldPosition(camera));
-      vec3 viewDirYUp = cb.isZUp != 0 ? vec3(viewDir.x, viewDir.z, viewDir.y) : viewDir;
+      vec3 viewDirYUp = worldToAtmosphereYUp(viewDir, cb.isZUp != 0, cb.atmosphereArgs.flipUpAxis != 0);
       viewDirYUp.y = max(viewDirYUp.y, 0.05f);
       viewDirYUp = normalize(viewDirYUp);
 

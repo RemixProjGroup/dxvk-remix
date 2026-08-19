@@ -740,7 +740,7 @@ vec3 evalSkyRadiance(
   }
 
   // Transform view direction to Y-up space if needed
-  vec3 viewDirYUp = isZUp ? vec3(viewDir.x, viewDir.z, viewDir.y) : viewDir;
+  vec3 viewDirYUp = worldToAtmosphereYUp(viewDir, isZUp, args.flipUpAxis != 0);
   viewDirYUp = normalize(viewDirYUp);
 
   // Sample the pre-baked sky-view LUT instead of marching the atmosphere live.
