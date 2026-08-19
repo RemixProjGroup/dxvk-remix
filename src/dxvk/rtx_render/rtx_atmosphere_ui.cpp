@@ -241,6 +241,17 @@ namespace {
       }
       ImGui::EndDisabled();
 
+      RemixGui::Checkbox("Flip Up Axis", &RtxAtmosphere::flipUpAxisObject());
+      RemixGui::SetTooltipToLastWidgetOnHover(
+          "Fixes a sky rendered exactly upside down - bright zenith beneath you, dark ground half "
+          "overhead - in games whose up axis points the opposite way to what Remix assumes.\n\n"
+          "NOT the fix for a sky that looks rotated or sideways; that is rtx.zUp not matching the "
+          "game. To tell them apart: turn the Time Cycle off, set Sun Elevation to about 45, and "
+          "look straight up. Zenith off to one side = zUp problem. Zenith under your feet = this.\n\n"
+          "Also reverses the direction the sun travels across the sky - flipping which way is up "
+          "reverses the sense of rotation seen from the new zenith. Sun Rotation / North Offset move "
+          "where the arc sits but cannot undo that.");
+
       if (ImGui::TreeNode("Time Cycle")) {
         RemixGui::Checkbox("Enable Time Cycle", &RtxAtmosphere::timeCycleEnableObject());
         RemixGui::SetTooltipToLastWidgetOnHover(
@@ -719,6 +730,58 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
         RemixGui::SetTooltipToLastWidgetOnHover(
             "Depth covered by the 32-slice aerial perspective volume. Reduce for denser atmospheres "
             "to spend the slices over a shorter, more accurate range.");
+
+        RemixGui::Checkbox("Aerial Perspective Scene Shadows",
+                           &RtxAtmosphere::aerialPerspectiveSceneShadowObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Trace the scene for sun occlusion of the air column this volume integrates.\n\n"
+            "The volume covers the air BETWEEN the camera and a surface. Untraced, it treats that "
+            "air as fully sunlit even when the surface is precisely what is hiding the sun - and "
+            "the forward-scatter lobe is brightest in exactly that direction, so a bright halo "
+            "bleeds through walls and terrain wherever the sun sits behind them. One opaque shadow "
+            "ray per march step removes it. Visibility is averaged along the column rather than "
+            "decided once, so a doorway reads correctly: indoors is shadowed, past the threshold "
+            "is not.");
+
+        if (RtxAtmosphere::aerialPerspectiveSceneShadow()) {
+          RemixGui::DragFloat("Aerial Perspective Shadow Range",
+                              &RtxAtmosphere::aerialPerspectiveSceneShadowRangeMetersObject(),
+                              10.0f, 0.0f, 100000.0f, "%.0f m", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "How far from the camera scene geometry may shadow the column. Samples past this "
+              "trace nothing and count as sunlit, which is what the air above the rooftops "
+              "actually is. Raise it for scenes with occluders far larger than a kilometre; lower "
+              "it to spend fewer rays.");
+
+          const char* kShadowDebugModes[] = {
+            "Off (production)",
+            "1: Force occluded (no trace)",
+            "2: Trace, inverted",
+          };
+          RemixGui::Combo("Scene Shadow Diagnostic",
+                          &RtxAtmosphere::aerialPerspectiveSceneShadowDebugObject(),
+                          kShadowDebugModes, IM_ARRAYSIZE(kShadowDebugModes));
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Takes apart the ways scene shadowing can silently do nothing - they all look the "
+              "same on screen otherwise.\n\n"
+              "1 occludes the column without consulting the scene: the halo MUST vanish. If it "
+              "does not, the constant or the dispatch is broken and the ray tracing is beside the "
+              "point.\n\n"
+              "2 traces and inverts: the halo must survive ONLY where a ray found geometry. A "
+              "screen that stays uniformly lit means the rays are hitting nothing.");
+        }
+
+        RemixGui::DragFloat("Aerial Perspective Forward Scatter Cap",
+                            &RtxAtmosphere::aerialPerspectiveMieAnisotropyMaxObject(),
+                            0.01f, -1.0f, 1.0f, "%.2f", sliderFlags);
+        RemixGui::SetTooltipToLastWidgetOnHover(
+            "Caps the Mie anisotropy the aerial perspective volume may use. The sky keeps the full "
+            "Mie Anisotropy under Advanced, so this does not touch the glow around the sun itself.\n\n"
+            "A strongly forward-scattering lobe is brightest looking straight into the sun, which is "
+            "also where the air in front of a surface is most likely to sit in that surface's own "
+            "shadow. Scene Shadows above is what removes the resulting halo; this cap is the second "
+            "line of defence for the column beyond Shadow Range, where nothing is traced. Raise it "
+            "toward Mie Anisotropy for a stronger sunward haze wash on distant geometry.");
       }
 
       if (ImGui::TreeNode("Advanced")) {

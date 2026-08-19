@@ -68,7 +68,7 @@ struct AtmosphereArgs {
   // thickened instead of also darkening, and could not be tinted. Raising this relative to
   // mieScattering is what makes dust brown-and-dim rather than grey-and-bright.
   vec3 mieAbsorption;  // Absorption coefficients (km^-1)
-  float padMieAbsorptionRow;  // free
+  uint flipUpAxis;  // Negate the world up axis when converting into the atmosphere's Y-up frame
 
   // Ozone absorption (important for realistic sunset colors per Hillaire paper Section 3.4)
   vec3 ozoneAbsorption;  // Absorption coefficients (km^-1)
@@ -659,14 +659,24 @@ struct AtmosphereArgs {
   // everything past the global volumetrics froxel range renders at full saturation and contrast.
   //
   // Rebuilt every frame (unlike the parameter-only transmittance / multiscattering / sky-view
-  // bakes), so these fields are deliberately grouped LAST: RtxAtmosphere's bake-invalidation
-  // memcmp only covers the camera-independent prefix ahead of them. Anything added below this
-  // point must be camera-dependent, and anything that should re-trigger a bake must go above.
+  // bakes), so none of it may invalidate those bakes.
+  //
+  // Grouping them last is only for readability - it is NOT what protects the cache. This fork's
+  // bake-invalidation memcmp covers the WHOLE struct; what actually protects it is
+  // normalizeForSkyLutCache() explicitly zeroing every field here. Any field added below this
+  // point must be zeroed there too, or the entire LUT cascade re-bakes on every camera movement.
   uint aerialPerspectiveLutSize;      // Width/height/depth of the volume; 0 when disabled
   float aerialPerspectiveDepthRange;  // Depth covered by the volume, in world units
-  // In-scatter nearer than this is already integrated by the global volumetrics froxel grid, so the
-  // aerial perspective march starts here rather than at the camera to avoid double counting.
-  // 0 when global volumetrics are disabled.
+  // Near bound of the volume, in world units, as a FORWARD distance - the same axis
+  // aerialPerspectiveDepthRange lives on, and the axis the volumetrics grid's own froxelMaxDistance
+  // is expressed on (it becomes a projection Z). In-scatter nearer than this is already integrated
+  // by that grid, so the volume starts here rather than at the camera.
+  //
+  // The depth slices are laid out over [this, depthRange], so this is also the volume's zero point:
+  // no slice is spent on the segment the grid owns, and the stored in-scatter has no kink at the
+  // handoff for the composite's interpolation to overshoot on. Floored to a small positive distance
+  // by the CPU side, since the slice distribution is exponential and the handoff is 0 whenever
+  // global volumetrics are disabled.
   float aerialPerspectiveStartDistance;
   uint isZUp;  // Non-zero when the game world is Z-up rather than the atmosphere's internal Y-up
 
@@ -684,4 +694,28 @@ struct AtmosphereArgs {
 
   vec3 cameraUp;
   float padAerial3;
+
+  // Upper bound on the Mie anisotropy this volume's march may use; see
+  // aerialPerspectiveMieAnisotropyMax in rtx_atmosphere.h for why the volume needs a tamer lobe
+  // than the sky does. Grouped with the aerial perspective state and zeroed by
+  // normalizeForSkyLutCache: no bake reads it, so it must not invalidate the LUT cascade.
+  float aerialPerspectiveMieAnisotropyMax;
+
+  // How far from the camera, in world units, the bake is allowed to trace the scene for sun
+  // occlusion of the column it integrates. Samples beyond it are treated as sunlit, which is what
+  // the air above the rooftops is. Rides the former padAerial4 slot.
+  float aerialPerspectiveSceneShadowRange;
+
+  // What the bake's sun-occlusion hook should do. Diagnostic modes exist because the failure mode of
+  // this feature is silence: every way it can break (constant not arriving, TLAS descriptor unbound,
+  // rays missing the geometry) looks identical on screen to "working but the halo is from something
+  // else", and each costs a build-and-play cycle to guess at. Rides the former padAerial5 slot.
+  //   0 = off, no trace, always sunlit
+  //   1 = trace the scene (production)
+  //   2 = force fully occluded WITHOUT tracing. If the halo does not change under this, the
+  //       constant or the dispatch is broken, not the trace.
+  //   3 = trace, but invert the result. Isolates whether the rays hit anything at all: the halo
+  //       should survive ONLY where a ray found geometry.
+  uint aerialPerspectiveSceneShadowMode;
+  float padAerial6;
 };

@@ -629,6 +629,16 @@ void applyAerialPerspective(
 
   const vec2 screenUV = cameraPixelCoordinateToScreenUV(cb.camera, ivec2(pixelCoordinate));
   const vec3 uvw = aerialPerspectiveScreenUvToUvw(screenUV, viewDistance, cb.atmosphereArgs);
+
+  // Surface at or inside the volume's near bound: the whole camera-to-surface segment belongs to the
+  // global volumetrics froxel grid, which has already integrated it. The volume's first slice sits
+  // at that bound, so without this the nearest slice would be applied on top - a second helping of
+  // in-scatter over exactly the range that is already accounted for.
+  if (uvw.z <= 0.0f)
+  {
+    return;
+  }
+
   const vec4 aerialPerspective = sampleAerialPerspectiveLut(
     AtmosphereAerialPerspectiveLut, AtmosphereAerialPerspectiveSampler, uvw, cb.atmosphereArgs);
 

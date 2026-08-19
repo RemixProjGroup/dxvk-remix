@@ -149,6 +149,31 @@ AtmosphereMedium sampleAtmosphereMedium(float altitude, AtmosphereArgs args) {
   return medium;
 }
 
+// World space -> the atmosphere's internal Y-up frame.
+//
+// isZUp moves the game's up axis (Z) into Y. flipUpAxis then negates it, for worlds whose up axis
+// points the opposite way to what Remix assumes: without it those games render the sky exactly
+// upside down, because elevation is taken as asin(y) and every y is negated. It is a separate
+// toggle rather than a fix to the swap because the swap is shared by every game, and the games that
+// look correct today must keep looking correct.
+//
+// Note the isZUp swap transposes two axes, so its determinant is -1 — a mirror, not a rotation. That
+// preserves elevation (which is why it alone never inverts the sky) but flips azimuth handedness
+// relative to the Y-up path. That is pre-existing behaviour and deliberately left alone here.
+vec3 worldToAtmosphereYUp(vec3 v, bool isZUp, bool flipUpAxis) {
+  const vec3 yUp = isZUp ? vec3(v.x, v.z, v.y) : v;
+  return flipUpAxis ? vec3(yUp.x, -yUp.y, yUp.z) : yUp;
+}
+
+// Inverse of worldToAtmosphereYUp. Both the axis swap and the up flip are their own inverses, so
+// the same two operations in the opposite order take a Y-up vector back to world space - the up
+// flip must be undone BEFORE the axis swap, since the two do not commute. Mirrors the toWorld
+// lambda in RtxAtmosphere::syncDistantLights on the CPU side.
+vec3 atmosphereYUpToWorld(vec3 v, bool isZUp, bool flipUpAxis) {
+  const vec3 unflipped = flipUpAxis ? vec3(v.x, -v.y, v.z) : v;
+  return isZUp ? vec3(unflipped.x, unflipped.z, unflipped.y) : unflipped;
+}
+
 // Ray-sphere intersection with improved numerical stability
 // Returns true if intersection exists, outputs near and far intersection distances
 bool intersectSphere(vec3 origin, vec3 direction, vec3 center, float radius, out float t0, out float t1) {
@@ -953,11 +978,15 @@ struct AtmosphereVolumeSunSample {
 AtmosphereVolumeSunSample sampleAtmosphereSunLightVolume(vec3 volumePos, vec3 viewDir, AtmosphereArgs args, bool isZUp = false) {
   AtmosphereVolumeSunSample result;
   
-  // Get sun direction in world space
-  if (isZUp) {
-    result.direction = normalize(vec3(args.sunDirection.x, args.sunDirection.z, args.sunDirection.y));
-  } else {
-    result.direction = normalize(args.sunDirection);
+  // Get sun direction in world space. Inverse of worldToAtmosphereYUp, so the up flip is undone
+  // BEFORE the axis swap — the two do not commute. This helper currently has no callers (see the
+  // note above), but it is the last Y-up->world conversion on the GPU side and would misaim the
+  // phase term and the cloud ground shadow round trip if rewired without this.
+  {
+    const vec3 sunDirYUp = (args.flipUpAxis != 0)
+      ? vec3(args.sunDirection.x, -args.sunDirection.y, args.sunDirection.z)
+      : args.sunDirection;
+    result.direction = normalize(isZUp ? vec3(sunDirYUp.x, sunDirYUp.z, sunDirYUp.y) : sunDirYUp);
   }
   
   // Check if sun is contributing light (tighten twilight range)
@@ -1692,6 +1721,14 @@ bool intersectCloudSlabRay(vec3 originYUpKm, vec3 dirYUp, AtmosphereArgs args,
 // world origin in Y-up space, so the grid is anchored at the origin too.
 vec3 cloudVoxelWorldToUVW(vec3 worldPosKm, AtmosphereArgs args, bool isZUp) {
   // Convert to Y-up if the caller is in Z-up space.
+  //
+  // Deliberately NOT routed through worldToAtmosphereYUp: this function's isZUp parameter means
+  // "convert, or don't", and every caller passes false because it already holds a Y-up km position
+  // (the march positions, cloudEntryPosKm, and the worldPosKm that
+  // sampleCloudGroundShadow_OptionB_impl derives after doing its own conversion). Applying the up
+  // flip here as well would negate .y a second time, pinning the vertical voxel coordinate to the
+  // slab bottom for every sample and flattening cloud lighting. The flip belongs only where a
+  // genuinely world-space quantity enters, which is that one call site.
   vec3 posYUp = isZUp ? vec3(worldPosKm.x, worldPosKm.z, worldPosKm.y) : worldPosKm;
 
   const float halfExtent = 0.5f * args.cloudVoxelGridExtentKm;
@@ -1879,8 +1916,8 @@ float sampleCloudGroundShadow_OptionB_impl(vec3 worldPos, vec3 sunDir,
   // Y-up conversion (worldPos AND sunDir both swapped). MUST be identical
   // to the swap done at the production NEE call sites; the enum-875 gate
   // exists specifically to catch any divergence here.
-  const vec3 worldPosYUp = isZUp ? vec3(worldPos.x, worldPos.z, worldPos.y) : worldPos;
-  const vec3 sunDirYUp   = isZUp ? vec3(sunDir.x,   sunDir.z,   sunDir.y)   : sunDir;
+  const vec3 worldPosYUp = worldToAtmosphereYUp(worldPos, isZUp, args.flipUpAxis != 0);
+  const vec3 sunDirYUp   = worldToAtmosphereYUp(sunDir,   isZUp, args.flipUpAxis != 0);
 
   // Convert the surface position from engine game units to kilometers.
   // worldUnitsPerKm is derived CPU-side from RtxOptions::sceneScale (cm per
@@ -1998,13 +2035,30 @@ float sampleCloudGroundShadow_OptionB_explicit(vec3 worldPos, vec3 sunDir,
 // integrates a homogeneous medium out to its own range. The march therefore starts at
 // aerialPerspectiveStartDistance so the two systems hand off instead of stacking.
 
+// Scene occlusion of the sun along the marched ray.
+//
+// evalSunShadowing inside the march models the planet and the air column above each sample, and
+// nothing at all about the scene - so the march alone treats a wall as transparent to sunlight.
+// The volume's whole job is the air BETWEEN the camera and a surface, which is exactly the air a
+// building shadows when it is what stands between the camera and the sun, so the march needs a way
+// to ask the scene. Kept behind an interface rather than a TraceRayInline inlined here because this
+// header is included by a dozen passes with no acceleration structure bound, which would then fail
+// to compile on an undeclared TLAS. The implementation lives with its binding, in
+// aerial_perspective_lut.comp.slang; a future caller from a non-tracing pass supplies a trivial one
+// returning 1.
+interface IAtmosphereSunOccluder {
+  // Fraction of the sun reaching the point `distanceKm` along the marched ray (same origin,
+  // direction and units the march itself uses). 1 when no scene geometry occludes it.
+  float sunVisibility(float distanceKm);
+};
+
 // In-scattered radiance along a bounded segment of a ray, with the segment's transmittance returned
 // separately. This is the sky march reduced to what the aerial perspective volume needs: no moons,
 // no artistic sunset saturation, no ground bounce (the volume integrates toward real scene
 // geometry, which supplies its own radiance), and an explicit [startDistance, maxDistance] window.
 //
 // rayOrigin / rayDir are in the atmosphere's Y-up km space; distances are in km.
-vec3 evalAtmosphereInScatterSegment(
+vec3 evalAtmosphereInScatterSegment<TSunOccluder : IAtmosphereSunOccluder>(
   vec3 rayOrigin,
   vec3 rayDir,
   vec3 sunDir,
@@ -2015,6 +2069,8 @@ vec3 evalAtmosphereInScatterSegment(
   int numSamples,
   float startDistance,
   float maxDistance,
+  float skyVisibility,
+  TSunOccluder sunOccluder,
   out vec3 outTransmittance
 ) {
   outTransmittance = vec3(1.0f);
@@ -2048,7 +2104,24 @@ vec3 evalAtmosphereInScatterSegment(
 
   const float cosTheta = dot(rayDir, sunDir);
   const float phaseR = rayleighPhase(cosTheta);
-  const float phaseM = hgPhase(cosTheta, args.mieAnisotropy);
+
+  // Forward-scatter cap, this volume only (fork — 2026-08-18).
+  //
+  // The air this volume integrates is the air BETWEEN the camera and a surface, so when that
+  // surface is what stands between the camera and the sun, the whole column sits inside that
+  // surface's own shadow. That is also the configuration that drives cosTheta to one, where the
+  // Henyey-Greenstein lobe peaks — so the term is at its largest exactly where its true value is
+  // near zero. At the mieAnisotropy default of 0.97 the lobe peaks at 174x isotropic, which is over
+  // a unit of radiance gathered across a couple of hundred metres of air, against a shadowed wall
+  // sitting nearer 0.1: a bright halo painted over whatever the sun is hiding behind.
+  //
+  // sunOccluder is what actually removes that halo (fork — 2026-08-18, second pass) by tracing the
+  // column against the scene. The cap stays as a second, cheaper line of defence for the samples
+  // the trace cannot reach: it is bounded to aerialPerspectiveSceneShadowRange, and past that the
+  // march is back to knowing nothing about the scene. Note the sky path deliberately keeps the
+  // uncapped anisotropy: its aureole is a primary-miss term that geometry occludes correctly, and
+  // with no sun disk drawn that lobe is what reads as the sun.
+  const float phaseM = hgPhase(cosTheta, min(args.mieAnisotropy, args.aerialPerspectiveMieAnisotropyMax));
 
   vec3 L = vec3(0.0f);
   vec3 transmittance = vec3(1.0f);
@@ -2070,17 +2143,35 @@ vec3 evalAtmosphereInScatterSegment(
 
     const AtmosphereMedium medium = sampleAtmosphereMedium(altitude, args);
 
-    // Single scattering, phase weighted (paper Equation 11).
+    // Single scattering, phase weighted (paper Equation 11), gated on the scene actually seeing the
+    // sun from this sample. Deliberately applied to the single-scatter term only: multiScatter
+    // below stands in for every higher order, which reaches a shadowed sample from all directions
+    // and so must survive the occlusion that kills the directional term. That is also what keeps a
+    // shaded interior reading as softly hazy rather than snapping to black.
     const vec3 sunShadowing = evalSunShadowing(
       samplePos, sunDir, transmittanceLut, transmittanceLutSampler, args);
-    const vec3 singleScatter = sunShadowing
+    const float sceneSunVisibility = sunOccluder.sunVisibility(t);
+    const vec3 singleScatter = sunShadowing * sceneSunVisibility
       * (medium.rayleighScattering * phaseR + medium.mieScattering * phaseM);
 
     // Every higher scattering order, via Psi_ms. sigma_s and the illuminance are each applied
     // exactly once, here — matching the convention in evalAtmosphereRadiance.
+    //
+    // skyVisibility is how much of the sky this segment can actually see (fork — 2026-08-18, third
+    // pass). The paper drops visibility from this term outright — Section 5.5.1, "Visibility Vis is
+    // ignored when evaluating multiple scattering. This relies on the fact that light will scatter
+    // around mountains anyway, e.g. the impact of visibility is low for natural atmospheres with a
+    // large mean free path." That reasoning is about mountains standing in open air, where light
+    // does route around the occluder. It does not survive being carried indoors: the air inside a
+    // room is not reached by the sky's multiply-scattered light at all, and with the directional
+    // term correctly shadowed this was the entire remaining haze bleeding through walls.
+    //
+    // Applied here rather than to scatteredLight below so the single-scattering term keeps its own,
+    // directional visibility. The two are occluded by different things and must not share a factor.
     const vec3 up = normalize(samplePos - planetCenter);
     const vec3 multiScatter = sampleMultiscatteringLut(
-      multiscatteringLut, transmittanceLutSampler, altitude, dot(up, sunDir), args) * medium.scattering;
+      multiscatteringLut, transmittanceLutSampler, altitude, dot(up, sunDir), args)
+      * medium.scattering * skyVisibility;
 
     vec3 scatteredLight = args.sunIlluminance * (singleScatter + multiScatter * args.multiScatterStrength);
     scatteredLight = max(scatteredLight, vec3(0.0f));
@@ -2118,24 +2209,56 @@ vec3 aerialPerspectiveViewRayDirection(vec2 screenUv, AtmosphereArgs args) {
   return args.cameraForward + args.cameraRight * ndc.x + args.cameraUp * ndc.y;
 }
 
-// Depth slices are distributed quadratically rather than uniformly. With 32 slices over a 32 km
-// range a linear split would put everything inside a city block into the first slice; squaring
-// gives the nearest slice tens of metres while still reaching the far end of the range.
+// Depth slices are distributed exponentially over [near, depthRange], which gives every slice the
+// same RELATIVE depth resolution: each is a fixed percentage further out than the last. With 32
+// slices from 20 m to 32 km that is ~26% per slice, so the step is ~6 m at 25 m and ~250 m at 1 km
+// - fine where a room is, coarse where only haze lives.
+//
+// This replaces a quadratic split over [0, depthRange] (fork — 2026-08-18, second pass). Two things
+// were wrong with it, and together they are what let the sun's halo survive onto interior walls
+// even once the column was correctly shadowed:
+//
+//   * It spent slices on ground it does not own. The volume starts at the global volumetrics
+//     handoff, so every slice inside that radius bakes an empty column - at the 32 km default the
+//     first slice carrying anything at all sat at 70 m, leaving a 50 m interpolation gap over
+//     exactly the range an interior occupies.
+//   * Worse, that put a kink in the stored function: zero out to the handoff, then rising. Linear
+//     interpolation across a kink is badly wrong in one direction, and the direction here is
+//     over-integration - a surface at 25 m read a blend dominated by a froxel holding the whole
+//     20-70 m column, roughly 4x the in-scatter it should have received, gathered mostly from air
+//     on the far side of the wall it was being applied to.
+//
+// Anchoring the near end at the handoff removes both: no slice is wasted, the function is smooth
+// across the whole axis, and the column a pixel reads is the length of the column in front of it.
+float aerialPerspectiveSliceNearDistance(AtmosphereArgs args) {
+  return max(args.aerialPerspectiveStartDistance, 1e-4f);
+}
+
+float aerialPerspectiveSliceFarDistance(AtmosphereArgs args) {
+  // Keep the range strictly increasing so the log below never divides by zero.
+  const float near = aerialPerspectiveSliceNearDistance(args);
+  return max(args.aerialPerspectiveDepthRange, near * 1.0001f);
+}
+
 float aerialPerspectiveSliceToForwardDistance(float w, AtmosphereArgs args) {
-  return square(saturate(w)) * args.aerialPerspectiveDepthRange;
+  const float near = aerialPerspectiveSliceNearDistance(args);
+  const float far = aerialPerspectiveSliceFarDistance(args);
+
+  return near * pow(far / near, saturate(w));
 }
 
+// Inverse of the above. Anything at or nearer than the near bound maps to 0, i.e. a zero-length
+// column - correct, since that segment belongs to the volumetrics grid rather than to this volume.
 float aerialPerspectiveForwardDistanceToSlice(float forwardDistance, AtmosphereArgs args) {
-  return saturate(sqrt(max(forwardDistance, 0.0f) / max(args.aerialPerspectiveDepthRange, 1e-6f)));
+  const float near = aerialPerspectiveSliceNearDistance(args);
+  const float far = aerialPerspectiveSliceFarDistance(args);
+
+  return saturate(log(max(forwardDistance, near) / near) / log(far / near));
 }
 
-vec3 aerialPerspectiveUvwToWorldPosition(vec3 uvw, AtmosphereArgs args) {
-  const float forwardDistance = aerialPerspectiveSliceToForwardDistance(uvw.z, args);
-
-  return args.cameraPosition + aerialPerspectiveViewRayDirection(uvw.xy, args) * forwardDistance;
-}
-
-// Inverse of aerialPerspectiveUvwToWorldPosition for a screen UV and a distance along the view ray.
+// Screen UV plus a distance along the view ray to a volume UVW. The bake walks a whole column at a
+// time and needs only a direction and a slice distance, so this is the one direction of the mapping
+// that survives; the uvw-to-world-position form it used to pair with went with the per-froxel bake.
 vec3 aerialPerspectiveScreenUvToUvw(vec2 screenUv, float viewRayDistance, AtmosphereArgs args) {
   const vec3 direction = aerialPerspectiveViewRayDirection(screenUv, args);
   const float directionLength = max(length(direction), 1e-6f);

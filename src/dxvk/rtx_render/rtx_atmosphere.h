@@ -158,9 +158,49 @@ public:
                "global volumetrics froxel range renders at full saturation and contrast. Where global volumetrics are "
                "enabled the march starts past that grid's range, so the two hand off instead of double counting.");
     RTX_OPTION_ARGS("rtx.atmosphere", float, aerialPerspectiveDepthRangeMeters, 32000.0f,
-               "Depth in meters covered by the aerial perspective volume. Bring this closer to the camera for denser "
-               "atmospheres to spend the 32 slices over a shorter, more accurate range.",
+               "Far bound in meters of the aerial perspective volume's depth axis. The 32 slices are distributed "
+               "exponentially from the global volumetrics handoff out to here, so each carries the same relative "
+               "depth resolution rather than the same absolute depth - the near slices stay metres apart while the "
+               "far ones stretch to kilometres. Surfaces beyond this bound receive the last slice's haze.\n"
+               "32 km is the value from Hillaire EGSR 2020 Section 5.4, sized for a 3 km world map. Because the "
+               "distribution is relative, raising it costs near-field accuracy only logarithmically.",
                args.minValue = 100.0f);
+    RTX_OPTION("rtx.atmosphere", bool, aerialPerspectiveSceneShadow, true,
+               "Trace the scene for sun occlusion of the air column the aerial perspective volume integrates.\n"
+               "The volume covers the air BETWEEN the camera and a surface. Untraced, it treats that air as fully "
+               "sunlit even when the surface is precisely what is hiding the sun - and since the forward-scatter lobe "
+               "peaks in exactly that direction, the result is a bright halo bleeding through walls and terrain "
+               "wherever the sun sits behind them. One opaque shadow ray per march step removes it, and because the "
+               "visibility is averaged over the column rather than decided once, a doorway reads correctly: the "
+               "indoor part of the column is shadowed while the part past the threshold is not. Costs roughly a "
+               "shadow ray per froxel step within aerialPerspectiveSceneShadowRangeMeters.");
+    RTX_OPTION_ARGS("rtx.atmosphere", int, aerialPerspectiveSceneShadowDebug, 0,
+               "Diagnostic for aerialPerspectiveSceneShadow. Every way that feature can silently fail - the "
+               "constant not reaching the bake, the TLAS descriptor never binding, the rays missing the "
+               "geometry - looks identical on screen, so these modes take them apart one build at a time.\n"
+               "0 = off (production).\n"
+               "1 = force the column fully occluded WITHOUT tracing. The halo must disappear. If it does not, "
+               "the constant or the dispatch is broken and the trace is irrelevant.\n"
+               "2 = trace, then invert the result. The halo must survive ONLY where a ray found geometry. A "
+               "screen that stays uniformly lit means the rays are hitting nothing.",
+               args.minValue = 0, args.maxValue = 2);
+    RTX_OPTION_ARGS("rtx.atmosphere", float, aerialPerspectiveSceneShadowRangeMeters, 1000.0f,
+               "How far from the camera, in meters, scene geometry is allowed to shadow the aerial perspective "
+               "column. Samples past this trace nothing and are treated as sunlit, which is what the air above the "
+               "rooftops actually is - and a ray launched from kilometres out would only pay for a bounds test it "
+               "always loses. Raise it if a scene has occluders far larger than a kilometre (a mountain ridge, a "
+               "megastructure) casting into the volume; lower it to spend fewer rays.",
+               args.minValue = 0.0f);
+    RTX_OPTION_ARGS("rtx.atmosphere", float, aerialPerspectiveMieAnisotropyMax, 0.8f,
+               "Upper bound on the Mie anisotropy the aerial perspective volume may use. The sky is not affected, and "
+               "values at or above mieAnisotropy do nothing.\n"
+               "A strongly forward-scattering lobe is at its brightest looking straight into the sun, which is also "
+               "where the air in front of a surface is most likely to be sitting in that surface's own shadow. "
+               "aerialPerspectiveSceneShadow is what removes the resulting halo; this cap is the second line of "
+               "defence for the column past aerialPerspectiveSceneShadowRangeMeters, where nothing is traced. 0.8 is "
+               "the Mie anisotropy of Hillaire EGSR 2020 Table 1. Raise it toward mieAnisotropy for a stronger "
+               "sunward haze wash on distant geometry.",
+               args.minValue = -1.0f, args.maxValue = 1.0f);
     RTX_OPTION("rtx.atmosphere", float, sunShadowSoftnessDeg, 0.0f,
                "Decoupled sun shadow softness, as the distant light's angular half-angle in degrees. "
                "0 = physical (use sunSize / 2, so shadow softness tracks the visible disc). When > 0 it "
@@ -171,6 +211,18 @@ public:
                "Sun elevation in degrees. Game-drivable per-frame; persists when saved unless overridden by a runtime push.");
     RTX_OPTION("rtx.atmosphere", float, sunRotation, 0.0f,
                "Sun rotation in degrees. Game-drivable per-frame; persists when saved unless overridden by a runtime push.");
+
+    RTX_OPTION("rtx.atmosphere", bool, flipUpAxis, false,
+               "Negate the world's up axis when converting into the atmosphere's internal Y-up frame. Some games have "
+               "an up axis pointing the opposite way to what Remix assumes, which renders the sky exactly upside down - "
+               "bright zenith beneath you, dark ground half overhead - because elevation is taken as asin(up).\n"
+               "Note this is NOT the fix for a sky that looks rotated 90 degrees or sideways; that is rtx.zUp not "
+               "matching the game's convention. Check that first: with a mid-elevation sun and the time cycle off, a "
+               "zenith that sits off to one side is a zUp problem, a zenith under your feet is this one.\n"
+               "Enabling this also REVERSES the direction the sun travels across the sky. Azimuth is unchanged, but "
+               "reversing which way is up reverses the sense of rotation seen from the new zenith. sunRotation and "
+               "northOffsetDegrees shift where the arc sits and cannot undo this, so if the sun ends up setting where "
+               "it should rise, that is expected and the arc has to be re-placed rather than offset.");
 
     // ----- Remix-side time of day cycle -----
     // The intended workflow is for the game to drive sunElevation / sunRotation per frame through

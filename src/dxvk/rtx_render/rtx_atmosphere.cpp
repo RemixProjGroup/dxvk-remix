@@ -51,6 +51,7 @@
 #include <rtx_shaders/cloud_nvdf_resolve.h>
 #include <rtx_shaders/cloud_detail_noise_baker.h>
 #include "rtx/pass/atmosphere/cloud_nvdf.h"
+#include "../../util/util_once.h"  // ONCE() — one-shot warn when the scene TLAS is unavailable
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -102,6 +103,7 @@ namespace dxvk {
         TEXTURE2D(2)
         SAMPLER(3)
         RW_TEXTURE3D(4)
+        ACCELERATION_STRUCTURE(5)
       END_PARAMETER()
     };
     PREWARM_SHADER_PIPELINE(AerialPerspectiveLutShader);
@@ -368,6 +370,9 @@ namespace {
     args.aerialPerspectiveLutSize       = 0u;
     args.aerialPerspectiveDepthRange    = 0.0f;
     args.aerialPerspectiveStartDistance = 0.0f;
+    args.aerialPerspectiveMieAnisotropyMax = 0.0f;
+    args.aerialPerspectiveSceneShadowRange = 0.0f;
+    args.aerialPerspectiveSceneShadowMode = 0u;
     args.cameraPosition              = vec3(0.0f, 0.0f, 0.0f);
     args.cameraForward               = vec3(0.0f, 0.0f, 0.0f);
     args.cameraRight                 = vec3(0.0f, 0.0f, 0.0f);
@@ -951,7 +956,25 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     args.aerialPerspectiveLutSize = RtxAtmosphere::aerialPerspective() ? kAerialPerspectiveLutSize : 0u;
     args.aerialPerspectiveDepthRange =
       RtxAtmosphere::aerialPerspectiveDepthRangeMeters() * worldUnitsPerMeter;
+    args.aerialPerspectiveMieAnisotropyMax =
+      std::min(std::max(RtxAtmosphere::aerialPerspectiveMieAnisotropyMax(), -1.0f), 1.0f);
+    // Sun occlusion of the marched column by scene geometry. The range is independent of the mode so
+    // the no-trace diagnostic below still runs when the TLAS is missing; dispatchAerialPerspectiveLut
+    // demotes only the tracing modes when no acceleration structure is bound.
+    args.aerialPerspectiveSceneShadowRange =
+      std::max(RtxAtmosphere::aerialPerspectiveSceneShadowRangeMeters(), 0.0f) * worldUnitsPerMeter;
+
+    if (!RtxAtmosphere::aerialPerspectiveSceneShadow()) {
+      args.aerialPerspectiveSceneShadowMode = 0u;
+    } else {
+      switch (RtxAtmosphere::aerialPerspectiveSceneShadowDebug()) {
+      case 1:  args.aerialPerspectiveSceneShadowMode = 2u; break;  // force occluded, no trace
+      case 2:  args.aerialPerspectiveSceneShadowMode = 3u; break;  // trace, inverted
+      default: args.aerialPerspectiveSceneShadowMode = 1u; break;  // production
+      }
+    }
     args.isZUp = RtxOptions::zUp() ? 1u : 0u;
+    args.flipUpAxis = RtxAtmosphere::flipUpAxis() ? 1u : 0u;
     args.cameraPosition = m_apCameraPosition;
     args.cameraForward = m_apCameraForward;
     args.cameraRight = m_apCameraRight;
@@ -959,9 +982,16 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
 
     // Hand off to the global volumetrics froxel grid: everything nearer than its range is already
     // integrated there, so the atmospheric march starts past it rather than double counting.
-    args.aerialPerspectiveStartDistance = RtxGlobalVolumetrics::enable()
-      ? RtxGlobalVolumetrics::froxelMaxDistanceMeters() * worldUnitsPerMeter
-      : 0.0f;
+    // This doubles as the near bound of the depth axis: slices span [start, depthRange], so no slice
+    // is spent on the segment the grid owns and the stored function carries no kink at the handoff
+    // for the composite's interpolation to overshoot on. Floored to a small positive distance
+    // because that distribution is exponential, and the handoff is 0 whenever volumetrics are off.
+    constexpr float kMinNearDistanceMeters = 1.0f;
+    args.aerialPerspectiveStartDistance = std::max(
+      RtxGlobalVolumetrics::enable()
+        ? RtxGlobalVolumetrics::froxelMaxDistanceMeters() * worldUnitsPerMeter
+        : 0.0f,
+      kMinNearDistanceMeters * worldUnitsPerMeter);
   }
 
   // Cloud Height LUT + two-layer cloud map (slides 1 + 3 lift, fork — 2026-05-15).
@@ -1674,6 +1704,25 @@ void RtxAtmosphere::dispatchAerialPerspectiveLut(Rc<DxvkContext> ctx) {
   ScopedGpuProfileZone(ctx, "Atmosphere Aerial Perspective LUT");
 
   AtmosphereArgs args = getAtmosphereArgs();
+
+  // Sun occlusion of the marched column (fork — 2026-08-18). This dispatch runs from
+  // updateRaytraceArgsConstantBuffer, which RtxContext calls AFTER SceneManager::prepareSceneData
+  // has built and swapped this frame's TLAS, so the structure below is current rather than stale.
+  // It is null for the first frames of a scene though, and DxvkContext writes VK_NULL_HANDLE into
+  // the descriptor when it is - hence disabling the trace outright rather than leaving the shader
+  // to guard a dangling binding.
+  const Rc<DxvkAccelStructure>& sceneTlas =
+    ctx->getCommonObjects()->getResources().getTLAS(Tlas::Opaque).accelStructure;
+  if (sceneTlas.ptr() != nullptr) {
+    ctx->bindAccelerationStructure(AERIAL_PERSPECTIVE_LUT_ACCELERATION_STRUCTURE, sceneTlas);
+  } else if (args.aerialPerspectiveSceneShadowMode == 1u || args.aerialPerspectiveSceneShadowMode == 3u) {
+    // Only the tracing modes need the structure. Demoting rather than zeroing the range keeps the
+    // no-trace diagnostic (mode 2) usable, which is what distinguishes "the constant never arrived"
+    // from "the TLAS was missing".
+    args.aerialPerspectiveSceneShadowMode = 0u;
+    ONCE(Logger::warn("[RTX Atmosphere] Aerial perspective scene shadows disabled this frame: no opaque TLAS bound."));
+  }
+
   ctx->updateBuffer(m_constantsBuffer, 0, sizeof(AtmosphereArgs), &args);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_constantsBuffer);
 
@@ -1698,8 +1747,10 @@ void RtxAtmosphere::dispatchAerialPerspectiveLut(Rc<DxvkContext> ctx) {
 
   ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, AerialPerspectiveLutShader::getShader());
 
-  const uint32_t groups = (kAerialPerspectiveLutSize + 3) / 4;
-  ctx->dispatch(groups, groups, groups);
+  // One thread per screen column; the shader walks that column's depth slices itself, so the
+  // dispatch is 2D over the volume's face rather than 3D over its froxels.
+  const uint32_t groups = (kAerialPerspectiveLutSize + 7) / 8;
+  ctx->dispatch(groups, groups, 1);
 }
 
 void RtxAtmosphere::dispatchCloudSkyTransmittanceLut(Rc<DxvkContext> ctx) {
@@ -2495,9 +2546,13 @@ AtmosphereArgs RtxAtmosphere::updateFrame(RtxContext& ctx,
   const Vector3 right   = camera.getRight(/*freecam=*/true);
   const Vector3 up      = camera.getUp(/*freecam=*/true);
 
+  // CPU twin of worldToAtmosphereYUp(); must stay in lockstep with it or the cloud render basis
+  // and the sky it composites against disagree about which way is up.
   const bool isZUp = RtxOptions::zUp();
-  auto toYUp = [isZUp](const Vector3& v) -> Vector3 {
-    return isZUp ? Vector3(v.x, v.z, v.y) : v;
+  const bool flipUpAxisForYUp = RtxAtmosphere::flipUpAxis();
+  auto toYUp = [isZUp, flipUpAxisForYUp](const Vector3& v) -> Vector3 {
+    const Vector3 yUp = isZUp ? Vector3(v.x, v.z, v.y) : v;
+    return flipUpAxisForYUp ? Vector3(yUp.x, -yUp.y, yUp.z) : yUp;
   };
 
   const Vector3 forwardYUp = toYUp(forward);
@@ -2752,8 +2807,12 @@ void RtxAtmosphere::syncDistantLights(LightManager& lm, const AtmosphereArgs& ar
   const float radScale = RtxAtmosphere::directionalLightRadianceScale();
   constexpr float kMinHalfAngle = 0.0005f;
 
-  auto toWorld = [isZUp](const Vector3& yup) -> Vector3 {
-    return isZUp ? Vector3(yup.x, yup.z, yup.y) : yup;
+  // Inverse of worldToAtmosphereYUp(). Both the axis swap and the up flip are their own inverses,
+  // so the same operations in the opposite order take a Y-up direction back to world space.
+  const bool flipUpAxis = RtxAtmosphere::flipUpAxis();
+  auto toWorld = [isZUp, flipUpAxis](const Vector3& yup) -> Vector3 {
+    const Vector3 flipped = flipUpAxis ? Vector3(yup.x, -yup.y, yup.z) : yup;
+    return isZUp ? Vector3(flipped.x, flipped.z, flipped.y) : flipped;
   };
 
   auto ensureLight = [&](RtLight*& slot, const Vector3& propDir, float halfAngle, const Vector3& radiance, bool cloudShadowed) {
