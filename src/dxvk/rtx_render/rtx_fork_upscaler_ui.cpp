@@ -80,6 +80,15 @@ namespace dxvk {
       } }
     };
 
+    RemixGui::ComboWithKey<uint32_t> g_dlfgModelPresetCombo {
+      "DLSS-G Model Preset",
+      RemixGui::ComboWithKey<uint32_t>::ComboEntries { {
+          { 0, "Default" },
+          { 1, "Preset A" },
+          { 2, "Preset B" },
+      } }
+    };
+
     DxvkFSRFrameGen& fsrFrameGen(const Rc<DxvkContext>& ctx) {
       return ctx->getCommonObjects()->metaFSRFrameGen();
     }
@@ -192,6 +201,8 @@ namespace dxvk {
       // Per-backend extras. Neither draws an enable toggle - the dropdown above
       // is the enable control.
       if (RtxOptions::frameGenerationType() == FrameGenerationType::DLSS && isDlfgSupported) {
+        g_dlfgModelPresetCombo.getKey(&DxvkDLFG::modelPresetObject());
+
         if (ctx->getCommonObjects()->metaNGXContext().dlfgMaxInterpolatedFrames() > 1) {
           dlfgMfgModeCombo.getKey(&DxvkDLFG::maxInterpolatedFramesObject());
         }

@@ -402,6 +402,13 @@ namespace dxvk {
       switch (RtxOptions::upscalerType()) {
         case UpscalerType::DLSS: {
           dlssProfileCombo.getKey(&RtxOptions::qualityDLSSObject());
+          // NV-DXVK start: DLSS model preset selector
+          if (RtxOptions::enableRayReconstruction()) {
+            rayReconstruction.showModelPresetSelector();
+          } else {
+            dlss.showModelPresetSelector();
+          }
+          // NV-DXVK end
 
           // Display DLSS Upscaling Information
 

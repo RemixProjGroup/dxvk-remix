@@ -45,6 +45,7 @@ namespace dxvk {
     void prewarmShaders(DxvkPipelineManager& pipelineManager) const;
 
     void showRayReconstructionImguiSettings(bool showAdvancedSettings);
+    void showModelPresetSelector();
 
     RayReconstructionParticleBufferMode getParticleBufferMode();
 
@@ -88,6 +89,9 @@ namespace dxvk {
     RTX_OPTION_ARGS("rtx.rayreconstruction", RayReconstructionModel, model, RayReconstructionModel::Transformer, "Ray reconstruction model to use. 0: CNN, 1: Transformer (higher quality).",
                     args.environment = "RTX_RAY_RECONSTRUCTION_MODEL",
                     args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.rayreconstruction", DLSSModelPreset, modelPreset, DLSSModelPreset::Default,
+                    "Selects the DLSS Ray Reconstruction model preset. 0: Default, 1: A, 2: B, 3: C, 4: D, 5: E, 6: F.",
+                    args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION("rtx.rayreconstruction", bool, enableDisocclusionMaskBlur, false, "Enables blurring of disocclusion mask to suppress instabilities due to abrupt mask value changes.");
     RTX_OPTION("rtx.rayreconstruction", uint, disocclusionMaskBlurRadius, 32, "Pixel radius to use for blurring disocclusion mask.");
     RTX_OPTION("rtx.rayreconstruction", float, disocclusionMaskBlurNormalizedGaussianWeightSigma, 0.5f,
@@ -101,6 +105,7 @@ namespace dxvk {
     bool                        m_biasCurrentColorEnabled = true;
     RayReconstructionModel      m_prevModel;
     bool                        m_prevEnableTransformerModelD;
+    DLSSModelPreset             m_prevModelPreset = DLSSModelPreset::Default;
 
     Rc<DxvkBuffer> m_constants;
     std::unique_ptr<NGXRayReconstructionContext> m_rayReconstructionContext;

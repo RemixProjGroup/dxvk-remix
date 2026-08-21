@@ -293,6 +293,9 @@ namespace dxvk {
     RTX_OPTION_ARGS("rtx.dlfg", uint32_t, maxInterpolatedFrames, 2, "For DLSS 4.5 frame generation, controls the number of interpolated frames for each rendered frame. Ignored for DLSS 3.0.",
                     args.minValue = 1, args.maxValue = 6,
                     args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dlfg", uint32_t, modelPreset, 0, "Selects the DLSS Frame Generation model preset. 0: Default, 1: A, 2: B.",
+                    args.minValue = 0, args.maxValue = 2,
+                    args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION("rtx.dlfg", bool, enablePresentMetering, true, "Use hardware present metering for DLSS 4.0 frame generation instead of CPU pacing.");
 
   private:
@@ -300,6 +303,7 @@ namespace dxvk {
     std::atomic<bool> m_hasDLFGFailed = { false };
     uint32_t m_currentDisplaySize[2] = { 0,0 };
     bool m_contextDirty = true;
+    uint32_t m_previousModelPreset = 0;
     
     DxvkDLFGCommandListArray m_dlfgEvalCommandLists;
 

@@ -38,6 +38,25 @@
 
 
 namespace dxvk {
+  namespace {
+    RemixGui::ComboWithKey<DLSSModelPreset> g_dlssModelPresetCombo {
+      "DLSS Model Preset",
+      RemixGui::ComboWithKey<DLSSModelPreset>::ComboEntries { {
+          { DLSSModelPreset::Default, "Default" },
+          { DLSSModelPreset::A, "Preset A" },
+          { DLSSModelPreset::B, "Preset B" },
+          { DLSSModelPreset::C, "Preset C" },
+          { DLSSModelPreset::D, "Preset D" },
+          { DLSSModelPreset::E, "Preset E" },
+          { DLSSModelPreset::F, "Preset F" },
+          { DLSSModelPreset::J, "Preset J" },
+          { DLSSModelPreset::K, "Preset K" },
+          { DLSSModelPreset::L, "Preset L" },
+          { DLSSModelPreset::M, "Preset M" },
+      } }
+    };
+  }
+
   const char* dlssProfileToString(DLSSProfile dlssProfile) {
     switch (dlssProfile) {
     case DLSSProfile::UltraPerf: return "Ultra Performance";
@@ -201,8 +220,10 @@ namespace dxvk {
     ctx->setFramePassStage(RtxFramePassStage::DLSS);
 
     bool dlssAutoExposure = useDlssAutoExposure();
-    mRecreate |= (mAutoExposure != dlssAutoExposure);
+    mRecreate |= (mAutoExposure != dlssAutoExposure)
+      || mPreviousModelPreset != RtxOptions::modelPreset();
     mAutoExposure = dlssAutoExposure;
+    mPreviousModelPreset = RtxOptions::modelPreset();
 
     if (mRecreate) {
       initializeDLSS(ctx);
@@ -320,7 +341,12 @@ namespace dxvk {
   }
 
   void DxvkDLSS::showImguiSettings() {
+    showModelPresetSelector();
     RemixGui::Checkbox("Anti-Ghost", &mBiasCurrentColorEnabled);
+  }
+
+  void DxvkDLSS::showModelPresetSelector() {
+    g_dlssModelPresetCombo.getKey(&RtxOptions::modelPresetObject());
   }
 
   void DxvkDLSS::initializeDLSS(Rc<DxvkContext> renderContext) {
@@ -337,6 +363,7 @@ namespace dxvk {
     // required for initializing DLSS.
     const NVSDK_NGX_PerfQuality_Value perfQuality = profileToQuality(mActualProfile);
 
-    m_dlssContext->initialize(renderContext, mInputSize, mDLSSOutputSize, mIsHDR, mInverseDepth, mAutoExposure, false, perfQuality);
+    m_dlssContext->initialize(renderContext, mInputSize, mDLSSOutputSize, mIsHDR, mInverseDepth, mAutoExposure, false,
+                              static_cast<uint32_t>(RtxOptions::modelPreset()), perfQuality);
   }
 }

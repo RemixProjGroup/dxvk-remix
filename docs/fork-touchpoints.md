@@ -3916,3 +3916,34 @@ Note: user rtx.conf files carrying `rtx.atmosphere.nubis3SunNearFieldKm` will lo
 harmless unknown-option warning.
 
 ---
+
+## Workstream - DLSS model preset selectors (fork - 2026-08-21)
+
+Adds persisted user-facing selectors for the DLSS model hints reported by NVIDIA
+Profile Inspector: DLSS A-F/J-M, DLSS Ray Reconstruction A-F, and DLSS Frame
+Generation A-B. The new Ray Reconstruction F option is passed as its numeric NGX
+hint so it is not constrained by an older SDK enum. Selecting Default preserves the
+previous Ray Reconstruction CNN/Transformer/D compatibility behaviour.
+
+- **src/dxvk/rtx_render/rtx_dlss.h** - inline tweak. *Shared numeric preset enum,
+  selector declaration, and reinitialization state.*
+- **src/dxvk/rtx_render/rtx_options.h** - inline tweak. *Adds
+  rtx.dlss.modelPreset.*
+- **src/dxvk/rtx_render/rtx_dlss.cpp** - inline tweak. *DLSS selector and
+  context recreation when its preset changes.*
+- **src/dxvk/rtx_render/rtx_ray_reconstruction.h** - inline tweak. *Adds
+  rtx.rayreconstruction.modelPreset and selector state.*
+- **src/dxvk/rtx_render/rtx_ray_reconstruction.cpp** - inline tweak. *DLSS-RR
+  selector, context recreation, and legacy Default mapping.*
+- **src/dxvk/rtx_render/rtx_ngx_wrapper.h** - inline tweak. *Threads numeric
+  model-hint values through DLSS, DLSS-RR, and DLSS-G initialization.*
+- **src/dxvk/rtx_render/rtx_ngx_wrapper.cpp** - inline tweak. *Sets the five
+  quality-mode hint keys for DLSS and DLSS-RR plus the DLSS-G render hint.*
+- **src/dxvk/rtx_render/rtx_dlfg.h** - inline tweak. *Adds
+  rtx.dlfg.modelPreset.*
+- **src/dxvk/rtx_render/rtx_dlfg.cpp** - inline tweak. *Recreates DLSS-G when
+  its model preset changes.*
+- **src/dxvk/imgui/rtx_user_menu.cpp** - existing fork hook extended. *Shows the
+  relevant DLSS or DLSS-RR model selector in the user menu.*
+- **src/dxvk/rtx_render/rtx_fork_upscaler_ui.cpp** - fork-owned change.
+  *Shows the DLSS-G model selector in the frame-generation panel.*

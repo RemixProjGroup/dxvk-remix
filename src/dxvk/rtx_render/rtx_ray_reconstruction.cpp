@@ -49,6 +49,19 @@ namespace dxvk {
 
   // Defined within an unnamed namespace to ensure unique definition across binary
   namespace {
+    RemixGui::ComboWithKey<DLSSModelPreset> g_rayReconstructionModelPresetCombo {
+      "DLSS-RR Model Preset",
+      RemixGui::ComboWithKey<DLSSModelPreset>::ComboEntries { {
+          { DLSSModelPreset::Default, "Default" },
+          { DLSSModelPreset::A, "Preset A" },
+          { DLSSModelPreset::B, "Preset B" },
+          { DLSSModelPreset::C, "Preset C" },
+          { DLSSModelPreset::D, "Preset D" },
+          { DLSSModelPreset::E, "Preset E" },
+          { DLSSModelPreset::F, "Preset F" },
+      } }
+    };
+
     class PrepareRayReconstructionShader : public ManagedShader {
       SHADER_SOURCE(PrepareRayReconstructionShader, VK_SHADER_STAGE_COMPUTE_BIT, prepare_ray_reconstruction)
 
@@ -84,7 +97,8 @@ namespace dxvk {
   DxvkRayReconstruction::DxvkRayReconstruction(DxvkDevice* device)
     : DxvkDLSS(device)
     , m_prevModel(model())
-    , m_prevEnableTransformerModelD(enableTransformerModelD()) {
+    , m_prevEnableTransformerModelD(enableTransformerModelD())
+    , m_prevModelPreset(modelPreset()) {
 
     DxvkBufferCreateInfo info;
     info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -143,10 +157,12 @@ namespace dxvk {
     bool dlssAutoExposure = true;
     mRecreate |= (mAutoExposure != dlssAutoExposure)
       || m_prevModel != model()
-      || m_prevEnableTransformerModelD != enableTransformerModelD();
+      || m_prevEnableTransformerModelD != enableTransformerModelD()
+      || m_prevModelPreset != modelPreset();
     mAutoExposure = dlssAutoExposure;
     m_prevModel = model();
     m_prevEnableTransformerModelD = enableTransformerModelD();
+    m_prevModelPreset = modelPreset();
 
     if (mRecreate) {
       initializeRayReconstruction(ctx);
@@ -356,6 +372,7 @@ namespace dxvk {
   }
 
   void DxvkRayReconstruction::showRayReconstructionImguiSettings(bool showAdvancedSettings) {
+    showModelPresetSelector();
     RemixGui::Checkbox("Anti-Ghost", &m_biasCurrentColorEnabled);
 
     if (showAdvancedSettings) {
@@ -389,6 +406,10 @@ namespace dxvk {
         ImGui::Unindent();
       }
     }
+  }
+
+  void DxvkRayReconstruction::showModelPresetSelector() {
+    g_rayReconstructionModelPresetCombo.getKey(&modelPresetObject());
   }
 
   void DxvkRayReconstruction::setSettings(const uint32_t displaySize[2], const DLSSProfile profile, uint32_t outRenderSize[2]) {
@@ -442,16 +463,19 @@ namespace dxvk {
 
     if (m_rayReconstructionContext) {
 
-      // Model to use for DLSS-RR
-      NVSDK_NGX_RayReconstruction_Hint_Render_Preset dlssdModel = (model() == RayReconstructionModel::CNN)
-        ? /* CNN */ NVSDK_NGX_RayReconstruction_Hint_Render_Preset_A
-        : enableTransformerModelD()
-          ? /* Transformer D */ NVSDK_NGX_RayReconstruction_Hint_Render_Preset_D
-          : /* Transformer E - Truthful Shrimp */ NVSDK_NGX_RayReconstruction_Hint_Render_Preset_E;
+      DLSSModelPreset dlssdModel = modelPreset();
+      if (dlssdModel == DLSSModelPreset::Default) {
+        dlssdModel = model() == RayReconstructionModel::CNN
+          ? DLSSModelPreset::A
+          : enableTransformerModelD()
+            ? DLSSModelPreset::D
+            : DLSSModelPreset::E;
+      }
 
       auto optimalSettings = m_rayReconstructionContext->queryOptimalSettings(mInputSize, perfQuality);
 
-      m_rayReconstructionContext->initialize(renderContext, mInputSize, mDLSSOutputSize, mIsHDR, mInverseDepth, mAutoExposure, false, dlssdModel, perfQuality);
+      m_rayReconstructionContext->initialize(renderContext, mInputSize, mDLSSOutputSize, mIsHDR, mInverseDepth, mAutoExposure, false,
+                                              static_cast<uint32_t>(dlssdModel), perfQuality);
     }
   }
 } // namespace dxvk

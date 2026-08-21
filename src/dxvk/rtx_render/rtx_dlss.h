@@ -49,6 +49,20 @@ namespace dxvk {
     Invalid
   };
 
+  enum class DLSSModelPreset : uint32_t {
+    Default = 0,
+    A = 1,
+    B = 2,
+    C = 3,
+    D = 4,
+    E = 5,
+    F = 6,
+    J = 10,
+    K = 11,
+    L = 12,
+    M = 13,
+  };
+
   enum class PathTracerPreset : int {
     Default,
     RayReconstruction,
@@ -85,6 +99,7 @@ namespace dxvk {
       bool resetHistory = false);
 
     void showImguiSettings();
+    void showModelPresetSelector();
 
     void onDestroy();
 
@@ -107,6 +122,7 @@ namespace dxvk {
     float                       mPreExposure = 1.f;
     bool                        mAutoExposure = false;
     bool                        mInverseDepth = false;
+    DLSSModelPreset             mPreviousModelPreset = DLSSModelPreset::Default;
 
     bool                        mRecreate = true;
     uint32_t                    mInputSize[2] = {};            ///< Input size in pixels.
