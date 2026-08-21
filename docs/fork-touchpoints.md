@@ -3947,6 +3947,9 @@ previous Ray Reconstruction CNN/Transformer/D compatibility behaviour.
   relevant DLSS or DLSS-RR model selector in the user menu.*
 - **src/dxvk/rtx_render/rtx_fork_upscaler_ui.cpp** - fork-owned change.
   *Shows the DLSS-G model selector in the frame-generation panel.*
+
+---
+
 ## Workstream - independent aerial perspective scale (fork - 2026-08-21)
 
 Adds rtx.atmosphere.aerialPerspectiveScale, a game-units-per-centimetre

@@ -161,6 +161,12 @@ public:
                "and desaturation - the strongest distance cue an outdoor scene has. Without it, everything past the "
                "global volumetrics froxel range renders at full saturation and contrast. Where global volumetrics are "
                "enabled the march starts past that grid's range, so the two hand off instead of double counting.");
+    RTX_OPTION_ARGS("rtx.atmosphere", float, aerialPerspectiveScale, 0.0f,
+               "Defines the aerial perspective's own scene-unit scale, in game units per centimetre. 0 uses "
+               "rtx.sceneScale for legacy behaviour; a positive value overrides it only for aerial perspective. "
+               "This calibrates the Range, Near Fade, and Scene Shadow Range controls without changing clouds, "
+               "the sky, or global volumetrics.",
+               args.minValue = 0.0f);
     RTX_OPTION_ARGS("rtx.atmosphere", float, aerialPerspectiveDepthRangeMeters, 32000.0f,
                "Far bound in meters of the aerial perspective volume's depth axis. The 32 slices are distributed "
                "exponentially from the global volumetrics handoff out to here, so each carries the same relative "

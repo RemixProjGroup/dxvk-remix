@@ -745,6 +745,9 @@ struct AtmosphereArgs {
   // exponential slice distribution already makes smooth. Tying them together would charge a square
   // for an axis that does not need it.
   uint aerialPerspectiveLutDepthSlices;
-  float padAerial7;
+  // Scene-unit calibration local to aerial perspective. This may differ from worldUnitsPerKm:
+  // cloud and sky units still use rtx.sceneScale, while this conversion calibrates only the
+  // camera-fitted geometry haze volume.
+  float aerialPerspectiveWorldUnitsPerKm;
   float padAerial8;
 };

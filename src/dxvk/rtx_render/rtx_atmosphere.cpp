@@ -371,6 +371,7 @@ namespace {
     args.aerialPerspectiveLutDepthSlices = 0u;
     args.aerialPerspectiveDepthRange    = 0.0f;
     args.aerialPerspectiveStartDistance = 0.0f;
+    args.aerialPerspectiveWorldUnitsPerKm = 0.0f;
     args.aerialPerspectiveMieAnisotropyMax = 0.0f;
     args.aerialPerspectiveSceneShadowRange = 0.0f;
     args.aerialPerspectiveSceneShadowMode = 0u;
@@ -956,7 +957,15 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
   // Aerial perspective. The camera basis is filled in per frame by
   // fillAerialPerspectiveArgs(); only the camera-independent scalars are set here.
   {
-    const float worldUnitsPerMeter = RtxOptions::getMeterToWorldUnitScale();
+    // Keep the legacy scene-scale conversion until a game supplies a dedicated calibration. Scene
+    // scale drives several unrelated systems and is not a reliable measurement of the world space
+    // used by the aerial perspective composite, so a positive aerialPerspectiveScale overrides it
+    // here without changing the sky, clouds, or global volumetrics.
+    const float configuredScale = RtxAtmosphere::aerialPerspectiveScale();
+    const float aerialPerspectiveScale = std::max(
+      configuredScale > 0.0f ? configuredScale : RtxOptions::sceneScale(), 1e-5f);
+    const float worldUnitsPerMeter = 100.0f * aerialPerspectiveScale;
+    args.aerialPerspectiveWorldUnitsPerKm = 1000.0f * worldUnitsPerMeter;
     args.aerialPerspectiveLutSize = RtxAtmosphere::aerialPerspective()
       ? static_cast<uint32_t>(std::max(RtxAtmosphere::aerialPerspectiveLutResolution(), 1))
       : 0u;
@@ -1004,10 +1013,13 @@ AtmosphereArgs RtxAtmosphere::getAtmosphereArgs() const {
     // for the composite's interpolation to overshoot on. Floored to a small positive distance
     // because that distribution is exponential, and the handoff is 0 whenever volumetrics are off.
     constexpr float kMinNearDistanceMeters = 1.0f;
+    // This bound must remain in the global volumetrics' native world units so the two passes hand
+    // off at the same physical point even when aerialPerspectiveScale is independently calibrated.
+    const float volumetricsHandoffWorldUnits = RtxGlobalVolumetrics::enable()
+      ? RtxGlobalVolumetrics::froxelMaxDistanceMeters() * RtxOptions::getMeterToWorldUnitScale()
+      : 0.0f;
     args.aerialPerspectiveStartDistance = std::max(
-      RtxGlobalVolumetrics::enable()
-        ? RtxGlobalVolumetrics::froxelMaxDistanceMeters() * worldUnitsPerMeter
-        : 0.0f,
+      volumetricsHandoffWorldUnits,
       kMinNearDistanceMeters * worldUnitsPerMeter);
   }
 

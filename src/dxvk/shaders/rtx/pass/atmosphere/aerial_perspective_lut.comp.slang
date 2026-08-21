@@ -238,7 +238,7 @@ void main(uint3 threadId : SV_DispatchThreadID) {
     worldToAtmosphereYUp(rayDirWorld, args.isZUp != 0, args.flipUpAxis != 0));
   const vec3 sunDir = normalize(args.sunDirection);
 
-  const float kmPerWorldUnit = 1.0f / max(args.worldUnitsPerKm, 1e-6f);
+  const float kmPerWorldUnit = 1.0f / max(args.aerialPerspectiveWorldUnitsPerKm, 1e-6f);
   // Ground level, matching the sky-view LUT bake's camera position.
   const vec3 rayOrigin = vec3(0.0f, 0.0f, 0.0f);
 
@@ -253,7 +253,7 @@ void main(uint3 threadId : SV_DispatchThreadID) {
   // with the frame everything else in this bake is expressed in.
   sunOccluder.worldUpDirection = normalize(
     atmosphereYUpToWorld(vec3(0.0f, 1.0f, 0.0f), args.isZUp != 0, args.flipUpAxis != 0));
-  sunOccluder.worldUnitsPerKm = args.worldUnitsPerKm;
+  sunOccluder.worldUnitsPerKm = args.aerialPerspectiveWorldUnitsPerKm;
   sunOccluder.maxTraceDistance = args.aerialPerspectiveSceneShadowRange;
   sunOccluder.mode = args.aerialPerspectiveSceneShadowMode;
 

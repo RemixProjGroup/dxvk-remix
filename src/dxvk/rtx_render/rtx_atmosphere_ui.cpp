@@ -726,6 +726,14 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
             "the two do not double count.");
 
         if (RtxAtmosphere::aerialPerspective()) {
+          RemixGui::DragFloat("Scene Unit Scale", &RtxAtmosphere::aerialPerspectiveScaleObject(),
+                              0.001f, 0.0f, 1000.0f, "%.5f", sliderFlags);
+          RemixGui::SetTooltipToLastWidgetOnHover(
+              "Game units per centimetre used only by aerial perspective. 0 uses the global Scene Unit "
+              "Scale for legacy behaviour. Set a positive value when that global scale does not match "
+              "the geometry distance that this haze volume should use; clouds, sky, and global "
+              "volumetrics are not changed.");
+
           RemixGui::DragFloat("Range", &RtxAtmosphere::aerialPerspectiveDepthRangeMetersObject(),
                               100.0f, 100.0f, 200000.0f, "%.0f m", sliderFlags);
           RemixGui::SetTooltipToLastWidgetOnHover(
