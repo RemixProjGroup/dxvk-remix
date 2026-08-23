@@ -358,6 +358,38 @@ vec3 evalSunShadowing(vec3 samplePos, vec3 sunDir, Texture2D transmittanceLut,
     transmittanceLut, lutSampler, max(radius - args.planetRadius, 0.0f), sunZenithCosAngle, args);
 }
 
+// evalSunShadowing for a march sample that may have fallen below the planet's surface, shading it
+// as the ground point directly above it instead of as buried rock.
+//
+// The atmosphere frame puts its origin ON the surface, directly under the camera, so every ray
+// aimed below the horizon is underground from its very first step. Those samples are not really
+// inside the planet: the game's world continues below the camera, and the lower half of the sky
+// stands in for distant terrain the atmosphere model knows nothing about. Treating them as the
+// ground-level air they stand in for keeps that half a continuation of the horizon haze, with the
+// sun's phase glow intact.
+//
+// Without the clamp evalPlanetShadow returns zero for every one of them, so single scattering
+// vanishes and only the multiscatter fill survives. That fill carries no phase term and, at ground
+// level, no directional variation either — every below-horizon direction integrates the same
+// nearly-constant value, which is what turns the lower half of the daytime sky into one flat dark
+// disc. Nights look unaffected only because the deep-night fade in evalSkyRadiance scales the whole
+// atmosphere term to zero and the stars, airglow and moons that remain are composited on top.
+//
+// A no-op for any sample at or above the surface, so above-horizon rays are untouched — including
+// the planet shadow rising into the atmosphere at sunset, which this must not defeat.
+vec3 evalSunShadowingClampedToSurface(vec3 samplePos, vec3 sunDir, Texture2D transmittanceLut,
+                                      SamplerState lutSampler, AtmosphereArgs args) {
+  const vec3 planetCenter = getPlanetCenter(args);
+  const vec3 toSample = samplePos - planetCenter;
+  const float radius = length(toSample);
+
+  const vec3 clampedPos = (radius < args.planetRadius)
+    ? planetCenter + toSample * (args.planetRadius / max(radius, kAtmosphereEpsilon))
+    : samplePos;
+
+  return evalSunShadowing(clampedPos, sunDir, transmittanceLut, lutSampler, args);
+}
+
 // Distributes N march samples along a span with a power curve so steps start short near the ray
 // origin, where the air is densest, and lengthen with distance.
 //
@@ -430,14 +462,19 @@ vec3 evalAtmosphereRadiance(
     t0 = 0.0f;  // Start from camera position
   }
   
-  // Check if ray intersects planet
+  // Stop at the planet's surface, but only for an origin genuinely above it.
+  //
+  // Every caller marches from the atmosphere frame's origin, which sits ON the surface — so for a
+  // ray aimed below the horizon the near root is exactly t == 0 and this clamp deliberately does
+  // not fire. Terminating there would collapse the span to nothing and return black for the whole
+  // lower hemisphere. The march continues instead, and evalSunShadowingClampedToSurface shades the
+  // resulting sub-surface samples as the ground-level air they stand in for; see that helper.
   float tPlanet0, tPlanet1;
-  bool hitsPlanet = intersectSphere(rayOrigin, rayDir, planetCenter, args.planetRadius, tPlanet0, tPlanet1);
-  
-  // Clamp to valid range
+  const bool hitsPlanet = intersectSphere(rayOrigin, rayDir, planetCenter, args.planetRadius, tPlanet0, tPlanet1);
+
   t0 = max(0.0f, t0);
   if (hitsPlanet && tPlanet0 > 0.0f) {
-    t1 = tPlanet0;  // Stop at planet surface
+    t1 = tPlanet0;
   }
   
   if (t1 <= t0) {
@@ -530,7 +567,7 @@ vec3 evalAtmosphereRadiance(
     // Earth's shadow rise into the atmosphere at sunset.
     vec3 up = normalize(samplePos - planetCenter);
     float sunZenithCosAngle = dot(up, normalize(sunDir));
-    vec3 sunTransmittance = evalSunShadowing(samplePos, normalize(sunDir), transmittanceLut, transmittanceLutSampler, args);
+    vec3 sunTransmittance = evalSunShadowingClampedToSurface(samplePos, normalize(sunDir), transmittanceLut, transmittanceLutSampler, args);
 
     // Multiscattering: blended between analytical (preset-faithful, artistic
     // control surface) and LUT-based hemisphere integration (physical, Hillaire
@@ -2084,7 +2121,10 @@ vec3 evalAtmosphereInScatterSegment<TSunOccluder : IAtmosphereSunOccluder>(
 
   t0 = max(max(0.0f, t0), startDistance);
 
-  // Stop at the planet surface, then at the caller's far bound.
+  // Stop at the planet surface, then at the caller's far bound. As in evalAtmosphereRadiance this
+  // never fires for a ray aimed below the horizon, because the march origin sits on the surface and
+  // the near root is then t == 0 — which is what lets the volume keep hazing scene geometry that
+  // stands below the camera.
   float tPlanet0, tPlanet1;
   const bool hitsPlanet = intersectSphere(rayOrigin, rayDir, planetCenter, args.planetRadius, tPlanet0, tPlanet1);
   if (hitsPlanet && tPlanet0 > 0.0f) {
@@ -2148,7 +2188,7 @@ vec3 evalAtmosphereInScatterSegment<TSunOccluder : IAtmosphereSunOccluder>(
     // below stands in for every higher order, which reaches a shadowed sample from all directions
     // and so must survive the occlusion that kills the directional term. That is also what keeps a
     // shaded interior reading as softly hazy rather than snapping to black.
-    const vec3 sunShadowing = evalSunShadowing(
+    const vec3 sunShadowing = evalSunShadowingClampedToSurface(
       samplePos, sunDir, transmittanceLut, transmittanceLutSampler, args);
     const float sceneSunVisibility = sunOccluder.sunVisibility(t);
     const vec3 singleScatter = sunShadowing * sceneSunVisibility
