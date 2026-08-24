@@ -526,6 +526,24 @@ namespace dxvk {
     // Implementation in rtx_fork_upscaler_ui.cpp.
     void showSharedSharpnessSlider();
 
+    // Resolves the emitter instance a particle spawn context was recorded against.
+    //
+    // RtxParticleSystemManager::spawnParticles stores the emitter's slot index into
+    // InstanceManager::m_instances, but writeSpawnContextsToGpu consumes it a few steps
+    // later - after SceneManager::prepareSceneData has run garbageCollection(), which
+    // swap-compacts that vector. An emitter submitted late in the frame is exactly the
+    // back element that moves, so its recorded index is stale by the time it is read
+    // and the spawn silently collapses to zero particles.
+    //
+    // Falls back to a scan keyed on the stable RtInstance id when the index no longer
+    // matches, and returns null only when the instance is genuinely gone.
+    // No private-member access.
+    // Implementation in rtx_fork_particle_spawn.cpp.
+    const RtInstance* resolveSpawnEmitterInstance(
+      const std::vector<RtInstance*>& instanceTable,
+      uint32_t recordedVectorIdx,
+      uint64_t recordedInstanceUid);
+
   } // namespace fork_hooks
 
 } // namespace dxvk

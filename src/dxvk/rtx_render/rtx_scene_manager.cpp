@@ -1417,7 +1417,7 @@ namespace dxvk {
     }
     if (instance && pParticleSystemDesc) {
       RtxParticleSystemManager& particleSystem = device()->getCommon()->metaParticleSystem();
-      particleSystem.spawnParticles(ctx.ptr(), *pParticleSystemDesc, instance->getVectorIdx(), drawCallState, renderMaterialData);
+      particleSystem.spawnParticles(ctx.ptr(), *pParticleSystemDesc, instance->getVectorIdx(), instance->getId(), drawCallState, renderMaterialData);
 
       if (pParticleSystemDesc->hideEmitter) {
         instance->setHidden(true);

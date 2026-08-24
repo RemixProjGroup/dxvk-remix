@@ -52,6 +52,12 @@ namespace dxvk {
       uint32_t instanceId;
       XXH64_hash_t particleSystemHash;
       uint32_t particleOffset;
+      // Fork: RtInstance::getId() of the emitter, captured at spawn time. instanceId above is a
+      // slot index into InstanceManager::m_instances, and that vector is swap-compacted by
+      // InstanceManager::garbageCollection() - which runs at the top of prepareSceneData, i.e.
+      // AFTER spawnParticles recorded the index and BEFORE writeSpawnContextsToGpu consumes it.
+      // The unique id survives the reindex; see fork_hooks::resolveSpawnEmitterInstance.
+      uint64_t instanceUid;
     };
 
     class ConservativeCounter : public RcObject {
@@ -300,10 +306,13 @@ namespace dxvk {
       * \param ctx                Command list to perform any potential allocation clears with.
       * \param desc               Description for the particle system.
       * \param instanceIdx        This is the index into the vector of instances held by instance manager.
+      * \param instanceUid        Fork: RtInstance::getId() of that same instance. The index above does not
+      *                           survive the instance vector being swap-compacted by garbage collection
+      *                           later in the frame; this stable id does.
       * \param drawCallState      The current draw call state referencing material info.
       * \param renderMaterialData The material preference to apply to particle system
       */
-    void spawnParticles(DxvkContext* ctx, const RtxParticleSystemDesc& desc, const uint32_t instanceIdx, const DrawCallState& drawCallState, const MaterialData& overrideMaterial);
+    void spawnParticles(DxvkContext* ctx, const RtxParticleSystemDesc& desc, const uint32_t instanceIdx, const uint64_t instanceUid, const DrawCallState& drawCallState, const MaterialData& overrideMaterial);
 
     /**
       * Issues the draw state (vertex buffer, index buffer) for rendering particles

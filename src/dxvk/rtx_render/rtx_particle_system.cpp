@@ -27,6 +27,7 @@
 #include "dxvk_scoped_annotation.h"
 #include "dxvk_context.h"
 #include "rtx_context.h"
+#include "rtx_fork_hooks.h"
 #include "rtx_imgui.h"
 
 #include "../util/util_global_time.h"
@@ -562,7 +563,7 @@ namespace dxvk {
     return numParticles;
   }
 
-  void RtxParticleSystemManager::spawnParticles(DxvkContext* ctx, const RtxParticleSystemDesc& desc, const uint32_t instanceId, const DrawCallState& drawCallState, const MaterialData& renderMaterialData) {
+  void RtxParticleSystemManager::spawnParticles(DxvkContext* ctx, const RtxParticleSystemDesc& desc, const uint32_t instanceId, const uint64_t instanceUid, const DrawCallState& drawCallState, const MaterialData& renderMaterialData) {
     ScopedCpuProfileZone();
     if (!enable() || !enableSpawning()) {
       return;
@@ -595,6 +596,7 @@ namespace dxvk {
     spawnCtx.numberOfParticles = numParticles;
     spawnCtx.particleOffset = particleSystem->context.particleHeadOffset;
     spawnCtx.instanceId = instanceId;
+    spawnCtx.instanceUid = instanceUid;
     spawnCtx.particleSystemHash = particleSystem->getHash();
 
     // Update material specific counters
@@ -632,6 +634,11 @@ namespace dxvk {
       s_spawnTraceShelterKills.store(0, std::memory_order_relaxed);
       s_spawnTraceLandingHits.store(0, std::memory_order_relaxed);
       s_spawnTraceRelocations.store(0, std::memory_order_relaxed);
+      // Fork (2026-08-23): also clear the TLAS flag. It is only ever stored below, inside the
+      // has-systems branch, so leaving it latched made the panel read "Scene TLAS: available"
+      // long after the last particle system was evicted - which made "no system at all" and
+      // "system exists but spawned nothing" look identical while diagnosing exactly that.
+      s_spawnTraceTlasValid.store(false, std::memory_order_relaxed);
     }
 
     // If we have particles to simulate...
@@ -878,12 +885,17 @@ namespace dxvk {
       const uint32_t contextIdx = spawnCtxIt - m_spawnContexts.begin();
       GpuSpawnContext& gpuCtx = gpuSpawnContexts[contextIdx];
 
-      const RtInstance* pTargetInstance = spawnCtx.instanceId < ctx->getSceneManager().getInstanceTable().size() ? ctx->getSceneManager().getInstanceTable()[spawnCtx.instanceId] : nullptr;
+      // Fork: the recorded instanceId is a slot index into InstanceManager::m_instances, and that
+      // vector is swap-compacted by InstanceManager::garbageCollection() at the top of
+      // prepareSceneData - i.e. after spawnParticles recorded it and before this consumes it. Any
+      // emitter that was appended late in the frame (a camera-glued one gets a brand new RtInstance
+      // every frame) therefore sits at the back and is the element GC moves, which silently zeroed
+      // the whole system's spawn count below. Resolve through the stable RtInstance id instead.
+      const RtInstance* pTargetInstance = fork_hooks::resolveSpawnEmitterInstance(
+        ctx->getSceneManager().getInstanceTable(), spawnCtx.instanceId, spawnCtx.instanceUid);
 
       if (pTargetInstance == nullptr) {
-        // I dont see this case being hit, but in theory it could happen since we track the 
-        //   instance ID at draw time, and the instance list can change over the course of a frame.
-        //   In the event it does happen, handle gracefully...dw
+        // Reached only when the emitter instance was genuinely destroyed between draw time and here.
         memset(&gpuCtx, 0, sizeof(GpuSpawnContext));
         // zero out the spawn count, so we dont try to create any new particles here
         auto particleSystemIt = m_particleSystems.find(spawnCtx.particleSystemHash);

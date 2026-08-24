@@ -3973,3 +3973,51 @@ double count.
   shadow rays.*
 - **src/dxvk/rtx_render/rtx_atmosphere_ui.cpp** - fork-owned change. *Exposes
   the independent Scene Unit Scale control in the Aerial Perspective panel.*
+
+---
+
+## Workstream - particle spawn/render correctness (fork - 2026-08-24)
+
+Weather precipitation spawned and simulated correctly but rendered nothing
+under an API-driven integration at a metric scene scale. Two independent
+upstream defects, either of which is sufficient on its own to produce zero
+visible particles.
+
+**1. Spawn context resolved its emitter by vector slot.**
+`RtxParticleSystemManager::spawnParticles` records the emitter as
+`RtInstance::getVectorIdx()`, an index into `InstanceManager::m_instances`, but
+`writeSpawnContextsToGpu` consumes that index from inside
+`SceneManager::prepareSceneData`, which begins by running
+`garbageCollection()`. `InstanceManager::garbageCollection()` removes an
+instance by swapping the vector's back element into the freed slot, so any
+emitter appended late in the frame is precisely the element that moves. The
+lookup then returned null and took the branch commented "I dont see this case
+being hit", which zeroes `spawnParticleCount` for the whole particle system -
+silently, with no log line. A camera-glued emitter gets a brand new `RtInstance`
+every frame (its identity hash includes `objectToWorld`), so for precipitation
+this was permanent rather than intermittent.
+
+**2. The degenerate-particle cull tested the world-space size.**
+`particle_system_generate_geometry.comp.slang` culled on
+`max(size.x, size.y) < 0.1f` after `size` had already been multiplied by
+`particleCb.sceneScale`. Sizes are authored in centimetres, so the constant's
+physical meaning tracked `rtx.sceneScale`: at the default `sceneScale = 1` it
+means "smaller than 1 mm" (the intended guard), but at `sceneScale = 0.01` it
+means "smaller than 10 cm" and discards essentially every realistic particle.
+The thunderstorm preset authors a 0.38 x 9.0 cm drop - 0.09 world units, just
+under the cliff. Corroboration that the constant assumed unity scale:
+`rtx.particles.globalPreset.minSpawnSize` defaults to 10 cm, landing exactly on
+0.1 world units at `sceneScale = 0.01`. The screen-space `minParticleSize` cull
+below it is the real visibility gate and is already scale-free.
+
+- **`src/dxvk/rtx_render/rtx_fork_particle_spawn.cpp`** - fork-owned file. *`fork_hooks::resolveSpawnEmitterInstance()`: treats the recorded slot index as a hint, confirms it against the stable `RtInstance::getId()`, falls back to an id-keyed scan on drift, and reports genuine loss instead of failing silently.*
+- **`src/dxvk/rtx_render/rtx_fork_hooks.h`** - fork-owned change. *Declares `resolveSpawnEmitterInstance`.*
+- **`src/dxvk/rtx_render/rtx_particle_system.h` / `.cpp`** - fork-touchpoint inline tweaks. *`SpawnContext::instanceUid`; `spawnParticles` takes the stable id; the emitter lookup dispatches into the hook. `SpawnContext` is CPU-side only - `GpuSpawnContext` is unchanged, so there is no GPU layout or shader-binding change.*
+- **`src/dxvk/rtx_render/rtx_scene_manager.cpp`** - fork-touchpoint inline tweak. *One line: passes `instance->getId()` alongside `instance->getVectorIdx()`.*
+- **`src/dxvk/shaders/rtx/pass/particles/particle_system_generate_geometry.comp.slang`** - fork-touchpoint inline tweak. *Keeps `authoredSize` alongside the world-space `size` and runs the degenerate guard against the authored value. Bit-identical at `sceneScale = 1`.*
+- **`src/dxvk/meson.build`** - fork-owned change. *Adds the new fork module.*
+
+Both defects are NVIDIA-authored code and are present verbatim in
+`NVIDIAGameWorks/dxvk-remix` main; neither was introduced by this fork.
+
+USER-VERIFIED 2026-08-24 ("you fixed it").

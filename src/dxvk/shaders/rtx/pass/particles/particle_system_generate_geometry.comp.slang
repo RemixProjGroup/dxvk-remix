@@ -138,10 +138,34 @@ void main(uint2 threadIdx : SV_DispatchThreadID)
   const GpuParticle particle = Particles[particleIdx];
   
   // precache some values
-  const float2 size = particle.size(particleSystem, animationDataTex) * particleCb.sceneScale;
+  // Fork-touchpoint inline tweak (2026-08-23): keep BOTH the authored size and the
+  // world-space size. The degenerate-particle guard below has to test the authored
+  // one - see kMinimumAuthoredSize.
+  const float2 authoredSize = particle.size(particleSystem, animationDataTex);
+  const float2 size = authoredSize * particleCb.sceneScale;
   const float4 color = particle.color(particleSystem, animationDataTex);
   
-  if(particle.isDead() || particle.isSleeping() || color.w < particleCb.resolveTransparencyThreshold || max(size.x, size.y) < 0.1f)
+  // Fork-touchpoint inline tweak (2026-08-23): this guard used to read
+  // `max(size.x, size.y) < 0.1f` against the WORLD-space size, which silently made
+  // its meaning depend on rtx.sceneScale. Particle sizes are authored in
+  // centimetres (RtxParticleSystemDesc::minSize/maxSize; the animation-data texture
+  // stores them unscaled), so at the Remix default sceneScale = 1 the test meant
+  // "smaller than 1 mm" - a sensible degenerate-geometry guard. At a metric scene
+  // scale it means something else entirely: at rtx.sceneScale = 0.01 it meant
+  // "smaller than 10 cm", which discards essentially every realistic particle. The
+  // weather precipitation system spawned and simulated correctly but rendered
+  // nothing for exactly this reason - the thunderstorm preset authors a 0.38 x 9.0 cm
+  // drop, i.e. 0.09 world units, just under the 0.1 cliff.
+  //
+  // Testing the AUTHORED size restores the constant's original physical meaning at
+  // every scene scale, and is bit-identical to the old behaviour at sceneScale = 1.
+  // Nothing is at risk of surviving that should not: this is only a cheap pre-cull
+  // that skips the projection math, and the screen-space test a few lines below
+  // (particleCb.minParticleSize, in pixels) is the actual visibility cull and is
+  // already scale-free.
+  const float kMinimumAuthoredSize = 0.1f;  // centimetres == 1 mm
+  
+  if(particle.isDead() || particle.isSleeping() || color.w < particleCb.resolveTransparencyThreshold || max(authoredSize.x, authoredSize.y) < kMinimumAuthoredSize)
   {
     clearParticleVertices(threadIdx.x, particleSystem);
     return;
