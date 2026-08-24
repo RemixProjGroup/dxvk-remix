@@ -1,9 +1,20 @@
 #Requires -Version 5.1
+[CmdletBinding()]
+param(
+    # Fetch even when the pin is marked disabled in scripts/dlss-pins.json.
+    [switch]$Force
+)
+
 $ErrorActionPreference = 'Stop'
 
 # Fetches the pinned DLSS / NGX DLL bundle into dlss_override/ at repo root.
 # meson.build prefers dlss_override/ over the packman-shipped NGX DLLs when
 # this dir is populated, so re-run this after editing scripts/dlss-pins.json.
+#
+# The pin is only worth installing while the bundle is NEWER than the NGX SDK
+# packman-external.xml pulls. Set "enabled": false in dlss-pins.json to park it
+# once packman catches up - this script then no-ops (exit 0) so CI stays green
+# and builds use the packman-shipped DLLs.
 
 $scriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot    = Split-Path -Parent $scriptDir
@@ -14,6 +25,17 @@ $stampFile   = Join-Path $overrideDir '.installed-pin'
 
 $pin         = Get-Content -Raw -LiteralPath $pinFile | ConvertFrom-Json
 $expectedSha = $pin.sha256.ToUpperInvariant()
+
+# A pin file with no 'enabled' field predates this switch and counts as enabled.
+$pinEnabled = $true
+if ($null -ne $pin.PSObject.Properties['enabled']) { $pinEnabled = [bool]$pin.enabled }
+
+if (-not $pinEnabled -and -not $Force) {
+    Write-Host "DLSS override pin is disabled in scripts/dlss-pins.json - skipping fetch."
+    if ($pin.PSObject.Properties['disabled_note']) { Write-Host "  $($pin.disabled_note)" }
+    Write-Host "  Builds will use the NGX DLLs shipped by packman. Pass -Force to fetch anyway."
+    return
+}
 
 # Idempotent: skip if the stamp matches and every expected DLL is present.
 if ((Test-Path -LiteralPath $stampFile) -and
