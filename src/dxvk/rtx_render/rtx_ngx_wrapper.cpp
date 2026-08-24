@@ -447,7 +447,7 @@ namespace dxvk
                                   bool depthInverted,
                                   bool autoExposure,
                                   bool sharpening,
-                                  uint32_t modelPreset,
+                                  NVSDK_NGX_DLSS_Hint_Render_Preset dlssPreset,
                                   NVSDK_NGX_PerfQuality_Value perfQuality) {
     ScopedCpuProfileZone();
 
@@ -476,13 +476,14 @@ namespace dxvk
 
     VkCommandBuffer vkCommandBuffer = renderContext->getCommandList()->getCmdBuffer(dxvk::DxvkCmdBuffer::ExecBuffer);
 
+    m_parameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, dlssPreset);
+    m_parameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, dlssPreset);
+    m_parameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, dlssPreset);
+    m_parameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, dlssPreset);
+    m_parameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, dlssPreset);
+
     // Release video memory when DLSS is disabled.
     m_parameters->Set(NVSDK_NGX_Parameter_FreeMemOnReleaseFeature, 1);
-    m_parameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, static_cast<int>(modelPreset));
-    m_parameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, static_cast<int>(modelPreset));
-    m_parameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, static_cast<int>(modelPreset));
-    m_parameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, static_cast<int>(modelPreset));
-    m_parameters->Set(NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, static_cast<int>(modelPreset));
 
     NVSDK_NGX_Result result = NGX_VULKAN_CREATE_DLSS_EXT1(m_device->handle(), vkCommandBuffer, CreationNodeMask, VisibilityNodeMask, &m_featureDLSS, m_parameters, &createParams);
 
@@ -591,7 +592,7 @@ namespace dxvk
                                   bool depthInverted,
                                   bool autoExposure,
                                   bool sharpening,
-                                  uint32_t modelPreset,
+                                  NVSDK_NGX_RayReconstruction_Hint_Render_Preset dlssdModel,
                                   NVSDK_NGX_PerfQuality_Value perfQuality) {
     ScopedCpuProfileZone();
 
@@ -636,11 +637,11 @@ namespace dxvk
     dlssdCreateParams.InFeatureCreateFlags = createFlags;
     dlssdCreateParams.InUseHWDepth = NVSDK_NGX_DLSS_Depth_Type_HW;
 
-    m_parameters->Set(NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA, static_cast<int>(modelPreset));
-    m_parameters->Set(NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality, static_cast<int>(modelPreset));
-    m_parameters->Set(NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced, static_cast<int>(modelPreset));
-    m_parameters->Set(NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance, static_cast<int>(modelPreset));
-    m_parameters->Set(NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance, static_cast<int>(modelPreset));
+    m_parameters->Set(NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA, dlssdModel);
+    m_parameters->Set(NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality, dlssdModel);
+    m_parameters->Set(NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced, dlssdModel);
+    m_parameters->Set(NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance, dlssdModel);
+    m_parameters->Set(NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance, dlssdModel);
 
     // Release video memory when DLSS-RR is disabled.
     m_parameters->Set(NVSDK_NGX_Parameter_FreeMemOnReleaseFeature, 1);
@@ -790,14 +791,11 @@ namespace dxvk
   void NGXDLFGContext::initialize(Rc<DxvkContext> renderContext,
                                   VkCommandBuffer commandList,
                                   uint32_t displayOutSize[2],
-                                  VkFormat outputFormat,
-                                  uint32_t modelPreset) {
+                                  VkFormat outputFormat) {
     NVSDK_NGX_DLSSG_Create_Params createParams = { };
     createParams.Width = displayOutSize[0];
     createParams.Height = displayOutSize[1];
     createParams.NativeBackbufferFormat = outputFormat;
-
-    m_parameters->Set("DLSSG.Hint.Render.Preset", static_cast<int>(modelPreset));
 
     NVSDK_NGX_Result result = NGX_VK_CREATE_DLSSG(commandList,
                                                   1, // InCreationNodeMask

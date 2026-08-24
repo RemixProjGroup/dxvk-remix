@@ -182,7 +182,7 @@ namespace dxvk {
       bool depthInverted,
       bool autoExposure,
       bool sharpening,
-      uint32_t modelPreset,
+      NVSDK_NGX_DLSS_Hint_Render_Preset dlssPreset,
       NVSDK_NGX_PerfQuality_Value perfQuality = NVSDK_NGX_PerfQuality_Value_MaxPerf);
 
     /** Release DLSS.
@@ -269,7 +269,7 @@ namespace dxvk {
       bool depthInverted,
       bool autoExposure,
       bool sharpening,
-      uint32_t modelPreset,
+      NVSDK_NGX_RayReconstruction_Hint_Render_Preset dlssdModel,
       NVSDK_NGX_PerfQuality_Value perfQuality = NVSDK_NGX_PerfQuality_Value_MaxPerf);
 
     /** Release DLSS-RR
@@ -322,8 +322,7 @@ namespace dxvk {
       Rc<DxvkContext> renderContext,
       VkCommandBuffer commandList,
       uint32_t displayOutSize[2],
-      VkFormat outputFormat,
-      uint32_t modelPreset
+      VkFormat outputFormat
       );
 
     // interpolates one frame

@@ -3917,39 +3917,6 @@ harmless unknown-option warning.
 
 ---
 
-## Workstream - DLSS model preset selectors (fork - 2026-08-21)
-
-Adds persisted user-facing selectors for the DLSS model hints reported by NVIDIA
-Profile Inspector: DLSS A-F/J-M, DLSS Ray Reconstruction A-F, and DLSS Frame
-Generation A-B. The new Ray Reconstruction F option is passed as its numeric NGX
-hint so it is not constrained by an older SDK enum. Selecting Default preserves the
-previous Ray Reconstruction CNN/Transformer/D compatibility behaviour.
-
-- **src/dxvk/rtx_render/rtx_dlss.h** - inline tweak. *Shared numeric preset enum,
-  selector declaration, and reinitialization state.*
-- **src/dxvk/rtx_render/rtx_options.h** - inline tweak. *Adds
-  rtx.dlss.modelPreset.*
-- **src/dxvk/rtx_render/rtx_dlss.cpp** - inline tweak. *DLSS selector and
-  context recreation when its preset changes.*
-- **src/dxvk/rtx_render/rtx_ray_reconstruction.h** - inline tweak. *Adds
-  rtx.rayreconstruction.modelPreset and selector state.*
-- **src/dxvk/rtx_render/rtx_ray_reconstruction.cpp** - inline tweak. *DLSS-RR
-  selector, context recreation, and legacy Default mapping.*
-- **src/dxvk/rtx_render/rtx_ngx_wrapper.h** - inline tweak. *Threads numeric
-  model-hint values through DLSS, DLSS-RR, and DLSS-G initialization.*
-- **src/dxvk/rtx_render/rtx_ngx_wrapper.cpp** - inline tweak. *Sets the five
-  quality-mode hint keys for DLSS and DLSS-RR plus the DLSS-G render hint.*
-- **src/dxvk/rtx_render/rtx_dlfg.h** - inline tweak. *Adds
-  rtx.dlfg.modelPreset.*
-- **src/dxvk/rtx_render/rtx_dlfg.cpp** - inline tweak. *Recreates DLSS-G when
-  its model preset changes.*
-- **src/dxvk/imgui/rtx_user_menu.cpp** - existing fork hook extended. *Shows the
-  relevant DLSS or DLSS-RR model selector in the user menu.*
-- **src/dxvk/rtx_render/rtx_fork_upscaler_ui.cpp** - fork-owned change.
-  *Shows the DLSS-G model selector in the frame-generation panel.*
-
----
-
 ## Workstream - independent aerial perspective scale (fork - 2026-08-21)
 
 Adds rtx.atmosphere.aerialPerspectiveScale, a game-units-per-centimetre
@@ -4021,3 +3988,54 @@ Both defects are NVIDIA-authored code and are present verbatim in
 `NVIDIAGameWorks/dxvk-remix` main; neither was introduced by this fork.
 
 USER-VERIFIED 2026-08-24 ("you fixed it").
+
+---
+
+## Workstream - upstream DLSS 4.5 preset selectors (backport - 2026-08-24)
+
+Replaces the fork's own DLSS model preset selectors with upstream's, cherry-picked
+verbatim from `NVIDIAGameWorks/dxvk-remix` `7294f6856` ("[REMIX-5655, REMIX-5656]
+Updated DLSS SR & RR to 4.5 (310.7.128)"). That commit landed after this fork's
+upstream base (`59affb700`), so it is a fork delta until the next sync - taken
+verbatim so that sync is a no-op rather than a conflict.
+
+What changed relative to the fork's previous selectors:
+
+- **Option keys.** `rtx.dlss.modelPreset` -> `rtx.dlss.preset`,
+  `rtx.rayreconstruction.modelPreset` -> `rtx.rayreconstruction.preset` (the
+  latter also gains `RTX_RAY_RECONSTRUCTION_PRESET`). User rtx.conf files
+  carrying the old keys will log a harmless unknown-option warning.
+- **Exposed values.** SR is Default/J/K/L/M, RR is Default/D/E/F. Presets A-C were
+  removed from the 4.5 SDK and SR E/F are deprecated, so the fork's A-F entries are
+  gone; out-of-range values now fall back to Default instead of being cast through
+  raw as a numeric hint.
+- **Legacy RR model options deleted.** `rtx.rayreconstruction.model` (CNN/Transformer)
+  and `rtx.rayreconstruction.enableTransformerModelD` are gone, along with the
+  `GraphicsPreset` assignments that drove them. Default no longer resolves to an
+  explicit A/D/E - it sends NGX preset 0 and lets DLSS pick per quality mode.
+- **DLSS-G selector dropped.** `rtx.dlfg.modelPreset` wrote `"DLSSG.Hint.Render.Preset"`,
+  which is not a key the DLSS-G SDK defines (`nvsdk_ngx_defs_dlssg.h` exposes no
+  render-preset hint), so the selector was a no-op. Upstream has no equivalent.
+- **SDK bump.** packman `ngx_sdk_dldn` 5 -> 7 (DLSS SR/RR 310.7.128), and
+  `target_dlss_lib_path` -> `lib/Windows_x86_64/x64` to match the new package layout.
+
+- **src/dxvk/rtx_render/rtx_dlss.h / .cpp** - inline tweaks. *`DxvkDLSS::DLSSPreset`,
+  `rtx.dlss.preset`, recreate-on-change state, and the validated cast to the NGX hint.*
+- **src/dxvk/rtx_render/rtx_ray_reconstruction.h / .cpp** - inline tweaks.
+  *`RayReconstructionPreset` replaces `RayReconstructionModel`; shares the combo box
+  defined in dxvk_imgui.cpp.*
+- **src/dxvk/rtx_render/rtx_ngx_wrapper.h / .cpp** - inline tweaks. *SR init takes an
+  `NVSDK_NGX_DLSS_Hint_Render_Preset` and sets the five quality-mode hint keys; the RR
+  and DLSS-G signatures return to their upstream form.*
+- **src/dxvk/imgui/dxvk_imgui.cpp** - inline tweak. *`dlssRenderPresetCombo` and
+  `rayReconstructionPresetCombo`, both with per-preset tooltips.*
+- **src/dxvk/imgui/rtx_user_menu.cpp** - existing fork hook rebased onto upstream's
+  placement. *SR preset above the quality mode, shown only when Ray Reconstruction is
+  off; RR gets its preset from the Ray Reconstruction row.*
+- **src/dxvk/rtx_render/rtx_options.cpp / .h**, **rtx_dlfg.h / .cpp**,
+  **rtx_fork_upscaler_ui.cpp** - fork additions removed, back to upstream.
+- **packman-external.xml**, **src/dxvk/meson.build** - SDK version and lib path.
+
+Note: `scripts/dlss-pins.json` still pins the `dlss_override/` bundle at 310.6.0,
+now older than the packman SDK. Leave `dlss_override/` unpopulated to run the 310.7.128
+DLLs that packman ships, or refresh the pin.
