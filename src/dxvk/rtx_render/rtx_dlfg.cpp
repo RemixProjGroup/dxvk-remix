@@ -1251,11 +1251,6 @@ namespace dxvk {
       m_contextDirty = true;
     }
 
-    if (m_previousModelPreset != modelPreset()) {
-      m_previousModelPreset = modelPreset();
-      m_contextDirty = true;
-    }
-
     // check if the output extents have changed
     VkExtent3D outputExtent = outputImage->imageInfo().extent;
     if (outputExtent.width != m_currentDisplaySize[0] ||
@@ -1276,8 +1271,7 @@ namespace dxvk {
       m_dlfgContext->initialize(ctx,
                                 commandList->getCmdBuffer(),
                                 m_currentDisplaySize,
-                                outputImage->info().format,
-                                modelPreset());
+                                outputImage->info().format);
       m_contextDirty = false;
     }
 

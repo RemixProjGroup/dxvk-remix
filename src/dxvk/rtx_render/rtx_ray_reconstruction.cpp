@@ -49,19 +49,6 @@ namespace dxvk {
 
   // Defined within an unnamed namespace to ensure unique definition across binary
   namespace {
-    RemixGui::ComboWithKey<DLSSModelPreset> g_rayReconstructionModelPresetCombo {
-      "DLSS-RR Model Preset",
-      RemixGui::ComboWithKey<DLSSModelPreset>::ComboEntries { {
-          { DLSSModelPreset::Default, "Default" },
-          { DLSSModelPreset::A, "Preset A" },
-          { DLSSModelPreset::B, "Preset B" },
-          { DLSSModelPreset::C, "Preset C" },
-          { DLSSModelPreset::D, "Preset D" },
-          { DLSSModelPreset::E, "Preset E" },
-          { DLSSModelPreset::F, "Preset F" },
-      } }
-    };
-
     class PrepareRayReconstructionShader : public ManagedShader {
       SHADER_SOURCE(PrepareRayReconstructionShader, VK_SHADER_STAGE_COMPUTE_BIT, prepare_ray_reconstruction)
 
@@ -94,11 +81,12 @@ namespace dxvk {
     };
   }
 
+  // Combo box shared with dxvk_imgui.cpp
+  extern RemixGui::ComboWithKey<DxvkRayReconstruction::RayReconstructionPreset> rayReconstructionPresetCombo;
+
   DxvkRayReconstruction::DxvkRayReconstruction(DxvkDevice* device)
     : DxvkDLSS(device)
-    , m_prevModel(model())
-    , m_prevEnableTransformerModelD(enableTransformerModelD())
-    , m_prevModelPreset(modelPreset()) {
+    , m_prevPreset(preset()) {
 
     DxvkBufferCreateInfo info;
     info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -156,13 +144,9 @@ namespace dxvk {
 
     bool dlssAutoExposure = true;
     mRecreate |= (mAutoExposure != dlssAutoExposure)
-      || m_prevModel != model()
-      || m_prevEnableTransformerModelD != enableTransformerModelD()
-      || m_prevModelPreset != modelPreset();
+      || m_prevPreset != preset();
     mAutoExposure = dlssAutoExposure;
-    m_prevModel = model();
-    m_prevEnableTransformerModelD = enableTransformerModelD();
-    m_prevModelPreset = modelPreset();
+    m_prevPreset = preset();
 
     if (mRecreate) {
       initializeRayReconstruction(ctx);
@@ -372,7 +356,6 @@ namespace dxvk {
   }
 
   void DxvkRayReconstruction::showRayReconstructionImguiSettings(bool showAdvancedSettings) {
-    showModelPresetSelector();
     RemixGui::Checkbox("Anti-Ghost", &m_biasCurrentColorEnabled);
 
     if (showAdvancedSettings) {
@@ -394,7 +377,7 @@ namespace dxvk {
       RemixGui::DragFloat("DLSS-RR Roughness Sensitivity", &upscalerRoughnessDemodulationOffsetObject(), 0.01f, 0.0f, 2.0f, "%.3f");
       RemixGui::DragFloat("DLSS-RR Roughness Multiplier", &upscalerRoughnessDemodulationMultiplierObject(), 0.01f, 0.0f, 20.0f, "%.3f");
       RemixGui::Checkbox("Composite Volumetric Light", &compositeVolumetricLightObject());
-      RemixGui::Checkbox("Transformer Model D", &enableTransformerModelDObject());
+      rayReconstructionPresetCombo.getKey(&presetObject());
 
       if (RemixGui::CollapsingHeader("Disocclusion Mask")) {
         ImGui::Indent();
@@ -406,10 +389,6 @@ namespace dxvk {
         ImGui::Unindent();
       }
     }
-  }
-
-  void DxvkRayReconstruction::showModelPresetSelector() {
-    g_rayReconstructionModelPresetCombo.getKey(&modelPresetObject());
   }
 
   void DxvkRayReconstruction::setSettings(const uint32_t displaySize[2], const DLSSProfile profile, uint32_t outRenderSize[2]) {
@@ -463,19 +442,23 @@ namespace dxvk {
 
     if (m_rayReconstructionContext) {
 
-      DLSSModelPreset dlssdModel = modelPreset();
-      if (dlssdModel == DLSSModelPreset::Default) {
-        dlssdModel = model() == RayReconstructionModel::CNN
-          ? DLSSModelPreset::A
-          : enableTransformerModelD()
-            ? DLSSModelPreset::D
-            : DLSSModelPreset::E;
+      // RayReconstructionPreset enum values match the NGX preset enum, so a direct cast is valid.
+      // Fall back to the default preset for any unexpected/out-of-range value.
+      NVSDK_NGX_RayReconstruction_Hint_Render_Preset dlssdModel;
+      switch (preset()) {
+      case RayReconstructionPreset::D:
+      case RayReconstructionPreset::E:
+      case RayReconstructionPreset::F:
+        dlssdModel = static_cast<NVSDK_NGX_RayReconstruction_Hint_Render_Preset>(preset());
+        break;
+      default:
+        dlssdModel = NVSDK_NGX_RayReconstruction_Hint_Render_Preset_Default;
+        break;
       }
 
       auto optimalSettings = m_rayReconstructionContext->queryOptimalSettings(mInputSize, perfQuality);
 
-      m_rayReconstructionContext->initialize(renderContext, mInputSize, mDLSSOutputSize, mIsHDR, mInverseDepth, mAutoExposure, false,
-                                              static_cast<uint32_t>(dlssdModel), perfQuality);
+      m_rayReconstructionContext->initialize(renderContext, mInputSize, mDLSSOutputSize, mIsHDR, mInverseDepth, mAutoExposure, false, dlssdModel, perfQuality);
     }
   }
 } // namespace dxvk

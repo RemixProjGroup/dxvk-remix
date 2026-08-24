@@ -3947,3 +3947,125 @@ previous Ray Reconstruction CNN/Transformer/D compatibility behaviour.
   relevant DLSS or DLSS-RR model selector in the user menu.*
 - **src/dxvk/rtx_render/rtx_fork_upscaler_ui.cpp** - fork-owned change.
   *Shows the DLSS-G model selector in the frame-generation panel.*
+## Workstream - independent aerial perspective scale (fork - 2026-08-21)
+
+Adds rtx.atmosphere.aerialPerspectiveScale, a game-units-per-centimetre
+calibration used only by the aerial perspective volume. Its default value of 0
+preserves legacy behaviour by inheriting rtx.sceneScale; a positive override
+calibrates the volume's depth range, near fades, and scene-shadow distances
+without affecting the sky, cloud system, or global volumetrics. The froxel
+handoff remains in global-volumetrics world units so the two systems do not
+double count.
+
+- **src/dxvk/rtx_render/rtx_atmosphere.h** - fork-owned change. *Declares the
+  persisted scale option.*
+- **src/dxvk/rtx_render/rtx_atmosphere.cpp** - fork-owned change. *Converts
+  AP metric controls with the independent scale and keeps the global-volumetrics
+  handoff in its native world units.*
+- **src/dxvk/shaders/rtx/pass/atmosphere/atmosphere_args.h** - fork-owned
+  change. *Repurposes the AP reserve word as the volume-local
+  world-units-per-kilometre value.*
+- **src/dxvk/shaders/rtx/pass/atmosphere/aerial_perspective_lut.comp.slang** -
+  fork-owned change. *Uses the volume-local conversion for integration and scene
+  shadow rays.*
+- **src/dxvk/rtx_render/rtx_atmosphere_ui.cpp** - fork-owned change. *Exposes
+  the independent Scene Unit Scale control in the Aerial Perspective panel.*
+
+---
+
+## Workstream - particle spawn/render correctness (fork - 2026-08-24)
+
+Weather precipitation spawned and simulated correctly but rendered nothing
+under an API-driven integration at a metric scene scale. Two independent
+upstream defects, either of which is sufficient on its own to produce zero
+visible particles.
+
+**1. Spawn context resolved its emitter by vector slot.**
+`RtxParticleSystemManager::spawnParticles` records the emitter as
+`RtInstance::getVectorIdx()`, an index into `InstanceManager::m_instances`, but
+`writeSpawnContextsToGpu` consumes that index from inside
+`SceneManager::prepareSceneData`, which begins by running
+`garbageCollection()`. `InstanceManager::garbageCollection()` removes an
+instance by swapping the vector's back element into the freed slot, so any
+emitter appended late in the frame is precisely the element that moves. The
+lookup then returned null and took the branch commented "I dont see this case
+being hit", which zeroes `spawnParticleCount` for the whole particle system -
+silently, with no log line. A camera-glued emitter gets a brand new `RtInstance`
+every frame (its identity hash includes `objectToWorld`), so for precipitation
+this was permanent rather than intermittent.
+
+**2. The degenerate-particle cull tested the world-space size.**
+`particle_system_generate_geometry.comp.slang` culled on
+`max(size.x, size.y) < 0.1f` after `size` had already been multiplied by
+`particleCb.sceneScale`. Sizes are authored in centimetres, so the constant's
+physical meaning tracked `rtx.sceneScale`: at the default `sceneScale = 1` it
+means "smaller than 1 mm" (the intended guard), but at `sceneScale = 0.01` it
+means "smaller than 10 cm" and discards essentially every realistic particle.
+The thunderstorm preset authors a 0.38 x 9.0 cm drop - 0.09 world units, just
+under the cliff. Corroboration that the constant assumed unity scale:
+`rtx.particles.globalPreset.minSpawnSize` defaults to 10 cm, landing exactly on
+0.1 world units at `sceneScale = 0.01`. The screen-space `minParticleSize` cull
+below it is the real visibility gate and is already scale-free.
+
+- **`src/dxvk/rtx_render/rtx_fork_particle_spawn.cpp`** - fork-owned file. *`fork_hooks::resolveSpawnEmitterInstance()`: treats the recorded slot index as a hint, confirms it against the stable `RtInstance::getId()`, falls back to an id-keyed scan on drift, and reports genuine loss instead of failing silently.*
+- **`src/dxvk/rtx_render/rtx_fork_hooks.h`** - fork-owned change. *Declares `resolveSpawnEmitterInstance`.*
+- **`src/dxvk/rtx_render/rtx_particle_system.h` / `.cpp`** - fork-touchpoint inline tweaks. *`SpawnContext::instanceUid`; `spawnParticles` takes the stable id; the emitter lookup dispatches into the hook. `SpawnContext` is CPU-side only - `GpuSpawnContext` is unchanged, so there is no GPU layout or shader-binding change.*
+- **`src/dxvk/rtx_render/rtx_scene_manager.cpp`** - fork-touchpoint inline tweak. *One line: passes `instance->getId()` alongside `instance->getVectorIdx()`.*
+- **`src/dxvk/shaders/rtx/pass/particles/particle_system_generate_geometry.comp.slang`** - fork-touchpoint inline tweak. *Keeps `authoredSize` alongside the world-space `size` and runs the degenerate guard against the authored value. Bit-identical at `sceneScale = 1`.*
+- **`src/dxvk/meson.build`** - fork-owned change. *Adds the new fork module.*
+
+Both defects are NVIDIA-authored code and are present verbatim in
+`NVIDIAGameWorks/dxvk-remix` main; neither was introduced by this fork.
+
+USER-VERIFIED 2026-08-24 ("you fixed it").
+
+---
+
+## Workstream - upstream DLSS 4.5 preset selectors (backport - 2026-08-24)
+
+Replaces the fork's own DLSS model preset selectors with upstream's, cherry-picked
+verbatim from `NVIDIAGameWorks/dxvk-remix` `7294f6856` ("[REMIX-5655, REMIX-5656]
+Updated DLSS SR & RR to 4.5 (310.7.128)"). That commit landed after this fork's
+upstream base (`59affb700`), so it is a fork delta until the next sync - taken
+verbatim so that sync is a no-op rather than a conflict.
+
+What changed relative to the fork's previous selectors:
+
+- **Option keys.** `rtx.dlss.modelPreset` -> `rtx.dlss.preset`,
+  `rtx.rayreconstruction.modelPreset` -> `rtx.rayreconstruction.preset` (the
+  latter also gains `RTX_RAY_RECONSTRUCTION_PRESET`). User rtx.conf files
+  carrying the old keys will log a harmless unknown-option warning.
+- **Exposed values.** SR is Default/J/K/L/M, RR is Default/D/E/F. Presets A-C were
+  removed from the 4.5 SDK and SR E/F are deprecated, so the fork's A-F entries are
+  gone; out-of-range values now fall back to Default instead of being cast through
+  raw as a numeric hint.
+- **Legacy RR model options deleted.** `rtx.rayreconstruction.model` (CNN/Transformer)
+  and `rtx.rayreconstruction.enableTransformerModelD` are gone, along with the
+  `GraphicsPreset` assignments that drove them. Default no longer resolves to an
+  explicit A/D/E - it sends NGX preset 0 and lets DLSS pick per quality mode.
+- **DLSS-G selector dropped.** `rtx.dlfg.modelPreset` wrote `"DLSSG.Hint.Render.Preset"`,
+  which is not a key the DLSS-G SDK defines (`nvsdk_ngx_defs_dlssg.h` exposes no
+  render-preset hint), so the selector was a no-op. Upstream has no equivalent.
+- **SDK bump.** packman `ngx_sdk_dldn` 5 -> 7 (DLSS SR/RR 310.7.128), and
+  `target_dlss_lib_path` -> `lib/Windows_x86_64/x64` to match the new package layout.
+
+- **src/dxvk/rtx_render/rtx_dlss.h / .cpp** - inline tweaks. *`DxvkDLSS::DLSSPreset`,
+  `rtx.dlss.preset`, recreate-on-change state, and the validated cast to the NGX hint.*
+- **src/dxvk/rtx_render/rtx_ray_reconstruction.h / .cpp** - inline tweaks.
+  *`RayReconstructionPreset` replaces `RayReconstructionModel`; shares the combo box
+  defined in dxvk_imgui.cpp.*
+- **src/dxvk/rtx_render/rtx_ngx_wrapper.h / .cpp** - inline tweaks. *SR init takes an
+  `NVSDK_NGX_DLSS_Hint_Render_Preset` and sets the five quality-mode hint keys; the RR
+  and DLSS-G signatures return to their upstream form.*
+- **src/dxvk/imgui/dxvk_imgui.cpp** - inline tweak. *`dlssRenderPresetCombo` and
+  `rayReconstructionPresetCombo`, both with per-preset tooltips.*
+- **src/dxvk/imgui/rtx_user_menu.cpp** - existing fork hook rebased onto upstream's
+  placement. *SR preset above the quality mode, shown only when Ray Reconstruction is
+  off; RR gets its preset from the Ray Reconstruction row.*
+- **src/dxvk/rtx_render/rtx_options.cpp / .h**, **rtx_dlfg.h / .cpp**,
+  **rtx_fork_upscaler_ui.cpp** - fork additions removed, back to upstream.
+- **packman-external.xml**, **src/dxvk/meson.build** - SDK version and lib path.
+
+Note: `scripts/dlss-pins.json` still pins the `dlss_override/` bundle at 310.6.0,
+now older than the packman SDK. Leave `dlss_override/` unpopulated to run the 310.7.128
+DLLs that packman ships, or refresh the pin.
