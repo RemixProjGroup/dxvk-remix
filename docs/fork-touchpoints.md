@@ -4036,6 +4036,10 @@ What changed relative to the fork's previous selectors:
   **rtx_fork_upscaler_ui.cpp** - fork additions removed, back to upstream.
 - **packman-external.xml**, **src/dxvk/meson.build** - SDK version and lib path.
 
-Note: `scripts/dlss-pins.json` still pins the `dlss_override/` bundle at 310.6.0,
-now older than the packman SDK. Leave `dlss_override/` unpopulated to run the 310.7.128
-DLLs that packman ships, or refresh the pin.
+Note: the `dlss_override/` pin is now parked. `scripts/dlss-pins.json` gains
+`"enabled": false`, and `scripts/update-dlss-dlls.ps1` grows a `-Force` switch and
+no-ops (exit 0) when the pin is disabled, so the CI "Fetch pinned DLSS / NGX DLL
+bundle" step stays green while builds use the DLLs packman ships. The pinned bundle
+is 310.6.0, older than packman's 310.7.128 - installing it would be a downgrade.
+Re-enable by flipping `enabled` and refreshing `release_tag`/`url`/`sha256` once the
+bundle is ahead of packman again.
