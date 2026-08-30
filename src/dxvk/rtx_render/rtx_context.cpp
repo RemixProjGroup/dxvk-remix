@@ -763,6 +763,10 @@ namespace dxvk {
         fork_hooks::dispatchRcasSharpening(*this, rtOutput);
         m_previousUpscaler = m_currentUpscaler;
 
+        // Alternate home for the neural pass, on the upscaler output before any post effect has
+        // touched it. Still linear HDR here, which the snippet has no exposure input to cope with.
+        dispatchNeuralUplift(rtOutput, NeuralUpliftInjectionPoint::PostUpscale);
+
         RtxDustParticles& dust = m_common->metaDustParticles();
         dust.simulateAndDraw(this, m_state, rtOutput);
 
@@ -772,6 +776,11 @@ namespace dxvk {
         dispatchPostFxMotionBlur(rtOutput);
 
         dispatchToneMapping(rtOutput);
+
+        // Default home for the neural pass: the image is display-referred here but has not yet
+        // picked up the display-space artifacts below, which are not scene content for it to
+        // enhance.
+        dispatchNeuralUplift(rtOutput, NeuralUpliftInjectionPoint::PostToneMapping);
 
         // Lens effects (chromatic aberration, vignette) run AFTER tonemapping. They are
         // display-space artifacts so they operate on post-tonemap LDR data.
@@ -1809,6 +1818,12 @@ namespace dxvk {
   void RtxContext::dispatchRayReconstruction(const Resources::RaytracingOutput& rtOutput) {
     DxvkRayReconstruction& rayReconstruction = m_common->metaRayReconstruction();
     rayReconstruction.dispatch(this, m_execBarriers, rtOutput, m_resetHistory, GlobalTime::get().deltaTimeMs());
+  }
+
+  void RtxContext::dispatchNeuralUplift(const Resources::RaytracingOutput& rtOutput,
+                                        NeuralUpliftInjectionPoint callSite) {
+    ScopedCpuProfileZone();
+    m_common->metaNeuralUplift().dispatch(this, m_execBarriers, rtOutput, callSite, m_resetHistory);
   }
 
   void RtxContext::dispatchNIS(const Resources::RaytracingOutput& rtOutput) {

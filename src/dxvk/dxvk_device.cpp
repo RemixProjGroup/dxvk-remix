@@ -582,6 +582,7 @@ namespace dxvk {
     m_imageUtils(device),
     m_postFx(device),
     m_srgbDither(device),
+    m_neuralUplift(device),
     m_capturer(new GameCapturer(device, m_sceneManager, m_exporter.get())),
     m_lastKnownWindowHandle((HWND) 0) { }
 
@@ -605,6 +606,7 @@ namespace dxvk {
     m_rayReconstruction.get().onDestroy();
     m_dlss.get().onDestroy();
     m_dlfg.get().onDestroy();
+    m_neuralUplift.get().onDestroy();
     m_fsrFrameGen.get().onDestroy();
   }
 }

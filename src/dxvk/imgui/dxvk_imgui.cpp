@@ -426,6 +426,7 @@ namespace dxvk {
       { RtxFramePassStage::AutoExposure_Histogram, "AutoExposure_Histogram" },
       { RtxFramePassStage::AutoExposure_Exposure, "AutoExposure_Exposure" },
       { RtxFramePassStage::ToneMapping, "ToneMapping" },
+      { RtxFramePassStage::NeuralUplift, "NeuralUplift" },
       { RtxFramePassStage::FrameEnd, "FrameEnd" },
   } };
 
@@ -4001,6 +4002,9 @@ namespace dxvk {
         common->metaToneMapping().showImguiSettings();
         RemixGui::Separator();
       }
+
+      if (RemixGui::CollapsingHeader("Neural Uplift (DLSS-NR)", collapsingHeaderClosedFlags))
+        common->metaNeuralUplift().showImguiSettings();
 
       if (RemixGui::CollapsingHeader("Post FX", collapsingHeaderClosedFlags))
         common->metaPostFx().showImguiSettings();
