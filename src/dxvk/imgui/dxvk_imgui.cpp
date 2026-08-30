@@ -3614,6 +3614,17 @@ namespace dxvk {
 
       fork_hooks::showSharedSharpnessSlider();
 
+      // Sits with the upscaler controls rather than under Post-Processing: it is the same NGX
+      // family, and it is not tied to any one upscaler - it runs on whatever produced the frame,
+      // including none - so it belongs after the per-upscaler branches rather than inside one.
+      if (RemixGui::CollapsingHeader("Neural Uplift (DLSS-NR)", collapsingHeaderClosedFlags)) {
+        ImGui::Indent();
+        ImGui::PushID("Neural Uplift");
+        ctx->getCommonObjects()->metaNeuralUplift().showImguiSettings();
+        ImGui::PopID();
+        ImGui::Unindent();
+      }
+
       RemixGui::Separator();
 
       RemixGui::Checkbox("Allow Full Screen Exclusive?", &RtxOptions::allowFSEObject());
@@ -4019,9 +4030,6 @@ namespace dxvk {
         common->metaToneMapping().showImguiSettings();
         RemixGui::Separator();
       }
-
-      if (RemixGui::CollapsingHeader("Neural Uplift (DLSS-NR)", collapsingHeaderClosedFlags))
-        common->metaNeuralUplift().showImguiSettings();
 
       if (RemixGui::CollapsingHeader("Post FX", collapsingHeaderClosedFlags))
         common->metaPostFx().showImguiSettings();
