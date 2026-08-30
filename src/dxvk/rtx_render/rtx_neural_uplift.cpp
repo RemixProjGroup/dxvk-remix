@@ -32,19 +32,6 @@
 
 namespace dxvk {
 
-  namespace {
-    RemixGui::ComboWithKey<NeuralUpliftInjectionPoint> injectionPointCombo {
-      "Injection Point",
-      RemixGui::ComboWithKey<NeuralUpliftInjectionPoint>::ComboEntries { {
-          { NeuralUpliftInjectionPoint::PostToneMapping, "After Tone Mapping",
-            "Display-referred image, before lens effects. The snippet has no exposure input, so this is\n"
-            "the only point where the values it sees are bounded." },
-          { NeuralUpliftInjectionPoint::PostUpscale, "After Upscaling",
-            "Linear HDR image, ahead of all Remix post effects. For comparison against the default." },
-      } }
-    };
-  }
-
   DxvkNeuralUplift::DxvkNeuralUplift(DxvkDevice* device)
     : CommonDeviceObject(device)
     , RtxPass(device) {
@@ -168,9 +155,22 @@ namespace dxvk {
   void DxvkNeuralUplift::dispatch(RtxContext* ctx,
                                   DxvkBarrierSet& barriers,
                                   const Resources::RaytracingOutput& rtOutput,
-                                  NeuralUpliftInjectionPoint callSite,
+                                  bool displayEncoded,
                                   bool resetHistory) {
-    if (!isActive() || injectionPoint() != callSite) {
+    if (!isActive()) {
+      return;
+    }
+
+    // The model is trained on display-encoded frames and this is the only point in the chain
+    // where one exists, so a frame the sRGB pass skipped has no valid input to offer it - running
+    // anyway would hand the network a linear image, which is the gamma domain it was not trained
+    // on. Rare (screenshot captures) or permanent (a host that set disableSrgbConversionForOutput),
+    // and in both cases declining is the correct answer rather than a fallback.
+    if (!displayEncoded) {
+      m_statusReason = "skipped: frame is not display-encoded";
+      m_evaluatedLastFrame = false;
+      // Whatever the next frame is, it is not continuous with the last one the model saw.
+      m_forceHistoryReset = true;
       return;
     }
 
@@ -321,9 +321,7 @@ namespace dxvk {
     // Passed through unclamped: -1 is a meaningful sentinel, not an out-of-range value.
     settings.skinStructureStrength = skinStructureStrength();
     settings.autoMask = autoMask();
-    // A move between injection points changes the encoding of the colour the snippet sees, which
-    // its history cannot be reprojected across.
-    settings.resetAccumulation = resetHistory || m_forceHistoryReset || m_lastInjectionPoint != callSite;
+    settings.resetAccumulation = resetHistory || m_forceHistoryReset;
     settings.depthInverted = m_createdDepthInverted;
     // A zero scale is not "no motion vectors", it is a motion field that says nothing moved, which
     // is worse than either alternative: the snippet still reprojects, and does it through a history
@@ -340,7 +338,6 @@ namespace dxvk {
     // A rejected evaluation left the snippet history where the previous one put it, so the next
     // frame would reproject across the gap. Held until an evaluation actually succeeds.
     m_forceHistoryReset = !evaluated;
-    m_lastInjectionPoint = callSite;
 
     barriers.accessImage(
       inOutColor.image,
@@ -399,8 +396,6 @@ namespace dxvk {
     }
 
     ImGui::Indent();
-
-    injectionPointCombo.getKey(&injectionPointObject());
 
     RemixGui::DragInt("Style", &styleObject(), 1.0f, 0, kNeuralUpliftMaxStyle, "%d");
     if (ImGui::IsItemHovered()) {

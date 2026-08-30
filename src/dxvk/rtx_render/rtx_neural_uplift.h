@@ -39,15 +39,6 @@ namespace dxvk {
   class RtxContext;
   class NGXNeuralUpliftContext;
 
-  // Where in the post-processing chain the neural pass runs. The snippet takes no exposure input
-  // and has Backbuffer/UICorrection parameters, which reads as "expects a display-referred image",
-  // so the default is after tone mapping. Kept selectable because that is an inference from the
-  // shipping binary rather than something NVIDIA documents.
-  enum class NeuralUpliftInjectionPoint : int {
-    PostToneMapping = 0,
-    PostUpscale = 1,
-  };
-
   /**
    * \brief DLSS-NR (Neural Uplift) image enhancement pass
    *
@@ -59,6 +50,11 @@ namespace dxvk {
    * Depth and motion vectors arrive at render resolution while the colour is at display
    * resolution; the snippet is told their real sizes through its per-buffer subrects rather than
    * having them resampled.
+   *
+   * The model is LDR-clamped and trained on tonemapped, display-encoded frames, so it has exactly
+   * one valid anchor in this pipeline: after the sRGB pass, which is where the image acquires its
+   * display encoding, and before the UI is composited. That is a correctness requirement rather
+   * than a tuning choice, which is why it is not selectable.
    */
   class DxvkNeuralUplift : public CommonDeviceObject, public RtxPass {
   public:
@@ -79,16 +75,20 @@ namespace dxvk {
     }
 
     /**
-     * Enhances rtOutput.m_finalOutput in place, if injectionPoint() names this call site.
+     * Enhances rtOutput.m_finalOutput in place.
      *
      * The colour is read and written, so the pass stages it into an internally owned intermediate
      * and evaluates intermediate -> final output; NGX has no defined behaviour for aliasing its
      * colour input and output.
+     *
+     * displayEncoded reports whether the sRGB pass actually converted this frame. It does not on
+     * screenshot captures, and not at all when a host sets disableSrgbConversionForOutput, and the
+     * model must not be handed a linear frame - see the class comment.
      */
     void dispatch(RtxContext* ctx,
                   DxvkBarrierSet& barriers,
                   const Resources::RaytracingOutput& rtOutput,
-                  NeuralUpliftInjectionPoint callSite,
+                  bool displayEncoded,
                   bool resetHistory);
 
     void showImguiSettings();
@@ -107,18 +107,6 @@ namespace dxvk {
                     "consumed. Requires nvngx_dlssnr.dll next to the runtime; NVIDIA does not deploy this snippet\n"
                     "with the driver, and the snippet itself requires a Blackwell GPU and driver 570 or newer.",
                     args.environment = "RTX_NEURAL_UPLIFT_ENABLE",
-                    args.flags = RtxOptionFlags::UserSetting);
-
-    RTX_OPTION_ARGS("rtx.neuralUplift", NeuralUpliftInjectionPoint, injectionPoint, NeuralUpliftInjectionPoint::PostToneMapping,
-                    "Where in the post-processing chain the neural pass runs.\n"
-                    "0: After tone mapping, before lens effects. The image is display-referred, which is what the\n"
-                    "   snippet's Backbuffer and UICorrection parameters imply it was trained on, and it is the only\n"
-                    "   point where the values it sees are bounded.\n"
-                    "1: Immediately after the upscaler, ahead of all Remix post effects. The image is still linear\n"
-                    "   HDR at this point and the snippet has no exposure input to cope with that, so this is for\n"
-                    "   comparison rather than a second supported mode.\n"
-                    "Changing this resets the temporal history.",
-                    args.environment = "RTX_NEURAL_UPLIFT_INJECTION_POINT",
                     args.flags = RtxOptionFlags::UserSetting);
 
     RTX_OPTION_ARGS("rtx.neuralUplift", int, preset, 0,
@@ -258,7 +246,6 @@ namespace dxvk {
     // internally when Style, UseAutoMask, LocalToneStrength, LocalStructureStrength or
     // SkinStructureStrength change, so mirroring that here would be dead code.
     bool m_forceHistoryReset = true;
-    NeuralUpliftInjectionPoint m_lastInjectionPoint = NeuralUpliftInjectionPoint::PostToneMapping;
 
     // Colour staging copy: NGX has no defined behaviour for aliasing DLSSNR.Color with
     // DLSSNR.Output, so the frame is copied here first.

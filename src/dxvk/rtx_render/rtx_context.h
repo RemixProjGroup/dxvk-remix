@@ -60,9 +60,6 @@ namespace dxvk {
   // above; RtxContext is forward-declared here so the fork_hooks signatures compile
   // before the class definition is encountered.
   class RtxContext;
-  // Defined in rtx_neural_uplift.h; declared here so dispatchNeuralUplift can name it
-  // without that header reaching everything that includes this one.
-  enum class NeuralUpliftInjectionPoint : int;
   namespace fork_hooks {
     void dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
     bool isFsrUpscalerActive(RtxContext&);
@@ -222,8 +219,7 @@ namespace dxvk {
     void dispatchDenoise(const Resources::RaytracingOutput& rtOutput);
     void dispatchComposite(const Resources::RaytracingOutput& rtOutput);
     void dispatchReplaceCompositeWithDebugView(const Resources::RaytracingOutput& rtOutput);
-    void dispatchNeuralUplift(const Resources::RaytracingOutput& rtOutput,
-                              NeuralUpliftInjectionPoint callSite);
+    void dispatchNeuralUplift(const Resources::RaytracingOutput& rtOutput, bool displayEncoded);
     void dispatchNIS(const Resources::RaytracingOutput& rtOutput);
     void dispatchXeSS(const Resources::RaytracingOutput& rtOutput);
     void dispatchTemporalAA(const Resources::RaytracingOutput& rtOutput);
