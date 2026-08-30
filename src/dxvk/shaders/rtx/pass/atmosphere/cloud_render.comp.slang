@@ -95,6 +95,15 @@ RWTexture2D<float4> cloudRenderOutput;
 // these as explicit parameters (so the helper compiles in any TU).
 // Linear/CLAMP sampler — sky-view LUT is keyed by (azimuth, elevation);
 // REPEAT would alias the south pole onto the north.
+// Apparent cloud distance as LINEAR VIEW Z in world units, or 0 where the ray
+// found no cloud. View Z rather than the ray distance the march produces, and
+// world units rather than km, so it drops straight into the same space as
+// PrimaryLinearViewZ and the combine needs no camera constants of its own.
+// A separate RT rather than a channel of the colour output, whose rgba16f would
+// quantise this range far too coarsely to reproject through.
+layout(binding = 15, r32f)
+RWTexture2D<float> cloudRenderDepthOutput;
+
 layout(binding = 7)
 Texture2D<float4> AtmosphereSkyViewLut;
 
@@ -155,6 +164,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
   }
   if (args.cloudEnabled < 0.5f || effectiveCoverageMean < 0.01f || args.cloudViewSamples == 0u) {
     cloudRenderOutput[pixelCoord] = vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    cloudRenderDepthOutput[pixelCoord] = 0.0f;
     return;
   }
 
@@ -173,6 +183,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
   // Below-horizon view direction: no clouds above this pixel.
   if (viewDirYUp.y <= 0.001f) {
     cloudRenderOutput[pixelCoord] = vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    cloudRenderDepthOutput[pixelCoord] = 0.0f;
     return;
   }
 
@@ -195,14 +206,32 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
   // the pre-extraction inline march.
   vec3 accumColor = vec3(0.0f);
   float viewTransmittance = 1.0f;
+  float depthWeightedSumKm = 0.0f;
 
   marchCloudLayers(viewDirYUp, jitter, jitterStatic,
                    /*tMinClamp=*/0.0f,
                    /*tMaxClamp=*/0.0f,
                    args.cloudViewSamples, ctx, args,
-                   accumColor, viewTransmittance);
+                   accumColor, viewTransmittance, depthWeightedSumKm);
 
   // Output is premultiplied: rgb = accumulated cloud radiance,
   // a = view-ray cloud transmittance.
   cloudRenderOutput[pixelCoord] = vec4(accumColor, viewTransmittance);
+
+  // Normalising by the opacity the ray actually accumulated turns the weighted
+  // sum into a distance. A ray that stayed almost transparent has no meaningful
+  // one to report, and 0 is the combine pass's "no cloud here" sentinel - which
+  // is why the threshold is on accumulated opacity rather than on the sum.
+  const float accumulatedOpacity = 1.0f - viewTransmittance;
+  float cloudViewZ = 0.0f;
+  if (accumulatedOpacity > 0.001f) {
+    const float distanceKm = depthWeightedSumKm / accumulatedOpacity;
+    // The march measures along the view ray; view Z is its projection onto the
+    // camera axis, which is what a depth buffer holds. Without the cosine a
+    // cloud at the screen edge would read as nearer than the same cloud dead
+    // ahead, and the error grows with FOV.
+    const float cosFromAxis = max(dot(viewDirYUp, normalize(args.cloudRenderForwardYUp)), 1e-4f);
+    cloudViewZ = distanceKm * args.worldUnitsPerKm * cosFromAxis;
+  }
+  cloudRenderDepthOutput[pixelCoord] = cloudViewZ;
 }

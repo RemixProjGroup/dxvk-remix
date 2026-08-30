@@ -160,8 +160,27 @@ namespace dxvk {
                     args.environment = "RTX_NEURAL_UPLIFT_AUTO_MASK",
                     args.flags = RtxOptionFlags::UserSetting);
 
+    RTX_OPTION_ARGS("rtx.neuralUplift", bool, cloudDepth, true,
+                    "Gives the Numos clouds a depth for the neural pass to see. The path tracer treats clouds as sky,\n"
+                    "so every cloud pixel is a ray miss at infinite depth and the model cannot tell a cloud edge from\n"
+                    "empty sky. This substitutes the cloud march's own apparent depth for those pixels.\n"
+                    "Puts the pass on the linear view Z path, which is the space the substitution works in. Only\n"
+                    "the neural pass sees the result; the path tracer's own depth buffer is left alone, because NRD\n"
+                    "identifies sky by it and would start treating clouds as geometry.\n"
+                    "Note the motion vectors for those pixels are still the sky's rotation-only ones, so a cloud gets\n"
+                    "a correct depth but no translational parallax.",
+                    args.environment = "RTX_NEURAL_UPLIFT_CLOUD_DEPTH",
+                    args.flags = RtxOptionFlags::UserSetting);
+
+    RTX_OPTION_ARGS("rtx.neuralUplift", float, cloudDepthOpacityThreshold, 0.05f,
+                    "Accumulated cloud opacity below which a pixel keeps its sky depth rather than the cloud's.\n"
+                    "Stops a faint wisp from planting a hard depth edge where the image has almost nothing.",
+                    args.environment = "RTX_NEURAL_UPLIFT_CLOUD_DEPTH_OPACITY_THRESHOLD",
+                    args.flags = RtxOptionFlags::UserSetting);
+
     RTX_OPTION_ARGS("rtx.neuralUplift", bool, useLinearDepth, false,
-                    "Feeds the primary linear view Z instead of the primary depth buffer. Off by default so the pass\n"
+                    "Feeds the primary linear view Z instead of the primary depth buffer. Ignored while cloudDepth\n"
+                    "is on, which requires the linear path. Off by default so the pass\n"
                     "sees the same depth DLSS is given, which is the closest thing to a known-good input for an NGX\n"
                     "feature; on, it feeds linear view-space Z, which is worth comparing because NGX neural models\n"
                     "are generally trained on linearised depth.",
@@ -207,13 +226,20 @@ namespace dxvk {
     bool isEnabled() const override;
     void createTargetResource(Rc<DxvkContext>& ctx, const VkExtent3D& targetExtent) override;
     void releaseTargetResource() override;
+    void createDownscaledResource(Rc<DxvkContext>& ctx, const VkExtent3D& downscaledExtent) override;
+    void releaseDownscaledResource() override;
     void onDeactivation() override;
 
   private:
     void initializeFeature(Rc<DxvkContext> ctx, const VkExtent3D& outputExtent);
 
     // Selects the depth resource the current options ask for, or null when it does not exist.
+    // May be m_combinedDepth, which dispatchDepthCombine fills in first.
     const Resources::Resource* selectDepth(const Resources::RaytracingOutput& rtOutput) const;
+
+    // Substitutes cloud depth for sky depth into m_combinedDepth. Returns whether it ran; when
+    // it does not, selectDepth falls back to the path tracer's buffer untouched.
+    bool dispatchDepthCombine(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput);
 
     // Linear view Z is never reversed, so the inversion flag only applies to the depth buffer.
     bool effectiveDepthInverted() const {
@@ -250,6 +276,11 @@ namespace dxvk {
     // Colour staging copy: NGX has no defined behaviour for aliasing DLSSNR.Color with
     // DLSSNR.Output, so the frame is copied here first.
     Resources::Resource m_intermediateColor;
+
+    // Linear view Z with cloud depth substituted for sky pixels. Lives at the downscaled extent
+    // and is only allocated while cloudDepth is actually in use.
+    Resources::Resource m_combinedDepth;
+    bool m_lastUsedCloudDepth = false;
 
     // Diagnostics for the developer panel.
     uint32_t m_initCount = 0;

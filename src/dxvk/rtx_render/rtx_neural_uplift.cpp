@@ -27,10 +27,33 @@
 #include "dxvk_scoped_annotation.h"
 #include "rtx_context.h"
 #include "rtx_imgui.h"
+#include "rtx_atmosphere.h"
 #include "rtx_ngx_wrapper.h"
 #include "rtx_options.h"
+#include "rtx_shader_manager.h"
+
+#include "rtx/pass/neural_uplift/neural_uplift_depth.h"
+
+#include <rtx_shaders/neural_uplift_depth.h>
 
 namespace dxvk {
+
+  namespace {
+    class NeuralUpliftDepthShader : public ManagedShader {
+      SHADER_SOURCE(NeuralUpliftDepthShader, VK_SHADER_STAGE_COMPUTE_BIT, neural_uplift_depth)
+
+      PUSH_CONSTANTS(NeuralUpliftDepthArgs)
+
+      BEGIN_PARAMETER()
+        TEXTURE2D(NEURAL_UPLIFT_DEPTH_PRIMARY_LINEAR_VIEW_Z_INPUT)
+        TEXTURE2D(NEURAL_UPLIFT_DEPTH_PRIMARY_HIT_DISTANCE_INPUT)
+        TEXTURE2D(NEURAL_UPLIFT_DEPTH_CLOUD_DEPTH_INPUT)
+        TEXTURE2D(NEURAL_UPLIFT_DEPTH_CLOUD_COLOR_INPUT)
+        RW_TEXTURE2D(NEURAL_UPLIFT_DEPTH_COMBINED_OUTPUT)
+      END_PARAMETER()
+    };
+    PREWARM_SHADER_PIPELINE(NeuralUpliftDepthShader);
+  }
 
   DxvkNeuralUplift::DxvkNeuralUplift(DxvkDevice* device)
     : CommonDeviceObject(device)
@@ -79,6 +102,16 @@ namespace dxvk {
     m_intermediateColor.reset();
   }
 
+  void DxvkNeuralUplift::createDownscaledResource(Rc<DxvkContext>& ctx, const VkExtent3D& downscaledExtent) {
+    // Matches PrimaryLinearViewZ, which is what it is a modified copy of.
+    m_combinedDepth = Resources::createImageResource(
+      ctx, "neural uplift combined depth", downscaledExtent, VK_FORMAT_R32_SFLOAT);
+  }
+
+  void DxvkNeuralUplift::releaseDownscaledResource() {
+    m_combinedDepth.reset();
+  }
+
   void DxvkNeuralUplift::onDeactivation() {
     if (m_context) {
       // The feature owns GPU resources DXVK knows nothing about and so cannot keep alive, which
@@ -93,10 +126,67 @@ namespace dxvk {
   }
 
   const Resources::Resource* DxvkNeuralUplift::selectDepth(const Resources::RaytracingOutput& rtOutput) const {
+    // The combined buffer is linear view Z, so it can only stand in for the linear source.
+    if (m_lastUsedCloudDepth && m_combinedDepth.image != nullptr) {
+      return &m_combinedDepth;
+    }
+
     const Resources::Resource* depth =
       useLinearDepth() ? &rtOutput.m_primaryLinearViewZ : &rtOutput.m_primaryDepth;
 
     return depth->image != nullptr ? depth : nullptr;
+  }
+
+  bool DxvkNeuralUplift::dispatchDepthCombine(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput) {
+    // Substituting a cloud distance into a depth buffer only makes sense in a space where a
+    // distance IS the value, so this always builds on linear view Z and the pass follows it
+    // there - rather than the option quietly doing nothing whenever useLinearDepth is off.
+    if (!cloudDepth()) {
+      return false;
+    }
+
+    RtxAtmosphere& atmosphere = m_device->getCommon()->metaAtmosphere();
+    const Resources::Resource& cloudDepthRT = atmosphere.getCloudRenderDepthRT();
+    const Resources::Resource& cloudColorRT = atmosphere.getCloudRenderRT();
+
+    if (cloudDepthRT.image == nullptr || cloudColorRT.image == nullptr ||
+        m_combinedDepth.image == nullptr ||
+        rtOutput.m_primaryLinearViewZ.image == nullptr ||
+        rtOutput.m_primaryHitDistance.image == nullptr) {
+      return false;
+    }
+
+    ScopedGpuProfileZone(ctx, "Neural Uplift Depth Combine");
+
+    ctx->setPushConstantBank(DxvkPushConstantBank::RTX);
+
+    const VkExtent3D outputExtent = m_combinedDepth.image->info().extent;
+    const VkExtent3D cloudExtent = cloudDepthRT.image->info().extent;
+
+    NeuralUpliftDepthArgs pushArgs = {};
+    pushArgs.outputDimensions = uint2 { outputExtent.width, outputExtent.height };
+    pushArgs.cloudDimensions = uint2 { cloudExtent.width, cloudExtent.height };
+    pushArgs.cloudOpacityThreshold = std::clamp(cloudDepthOpacityThreshold(), 0.0f, 1.0f);
+    pushArgs.cloudDepthEnabled = 1u;
+
+    ctx->bindResourceView(NEURAL_UPLIFT_DEPTH_PRIMARY_LINEAR_VIEW_Z_INPUT, rtOutput.m_primaryLinearViewZ.view, nullptr);
+    ctx->bindResourceView(NEURAL_UPLIFT_DEPTH_PRIMARY_HIT_DISTANCE_INPUT, rtOutput.m_primaryHitDistance.view, nullptr);
+    ctx->bindResourceView(NEURAL_UPLIFT_DEPTH_CLOUD_DEPTH_INPUT, cloudDepthRT.view, nullptr);
+    ctx->bindResourceView(NEURAL_UPLIFT_DEPTH_CLOUD_COLOR_INPUT, cloudColorRT.view, nullptr);
+    ctx->bindResourceView(NEURAL_UPLIFT_DEPTH_COMBINED_OUTPUT, m_combinedDepth.view, nullptr);
+
+    const VkExtent3D workgroups = util::computeBlockCount(outputExtent, VkExtent3D { 16, 16, 1 });
+
+    ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, NeuralUpliftDepthShader::getShader());
+    ctx->pushConstants(0, sizeof(pushArgs), &pushArgs);
+    ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
+
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(cloudDepthRT.image);
+    ctx->getCommandList()->trackResource<DxvkAccess::Read>(cloudColorRT.image);
+    ctx->getCommandList()->trackResource<DxvkAccess::None>(m_combinedDepth.view);
+    ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_combinedDepth.image);
+
+    return true;
   }
 
   void DxvkNeuralUplift::initializeFeature(Rc<DxvkContext> ctx, const VkExtent3D& outputExtent) {
@@ -185,6 +275,8 @@ namespace dxvk {
 
     ScopedGpuProfileZone(ctx, "Neural Uplift");
     ctx->setFramePassStage(RtxFramePassStage::NeuralUplift);
+
+    m_lastUsedCloudDepth = dispatchDepthCombine(ctx, rtOutput);
 
     const Resources::Resource* depth = selectDepth(rtOutput);
     const Resources::Resource* motionVectors = rtOutput.m_primaryScreenSpaceMotionVector.image != nullptr
@@ -422,6 +514,18 @@ namespace dxvk {
                         "strengths below are applied through this mask, so turning it off disables them.");
     }
 
+    RemixGui::Checkbox("Cloud Depth", &cloudDepthObject());
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Gives the Numos clouds a depth the model can see. Without it every cloud pixel is a\n"
+                        "ray miss at sky distance, so a cloud edge and empty sky look identical to it.\n"
+                        "Puts the pass on the linear depth path, which is the space the substitution works in.");
+    }
+    ImGui::BeginDisabled(!cloudDepth());
+    ImGui::Indent();
+    RemixGui::DragFloat("Cloud Opacity Threshold", &cloudDepthOpacityThresholdObject(), 0.005f, 0.0f, 1.0f, "%.3f");
+    ImGui::Unindent();
+    ImGui::EndDisabled();
+
     ImGui::BeginDisabled(!autoMask());
     RemixGui::DragFloat("Local Structure Strength", &localStructureStrengthObject(), 0.01f, 0.0f, 2.0f, "%.2f");
     RemixGui::DragFloat("Skin Structure Strength", &skinStructureStrengthObject(), 0.01f, -1.0f, 2.0f, "%.2f");
@@ -439,11 +543,14 @@ namespace dxvk {
                           "back to them for every value. Changing it still recreates the feature and\n"
                           "resets the temporal history, which is the only difference you will see.");
       }
+      ImGui::BeginDisabled(cloudDepth());
       RemixGui::Checkbox("Use Linear View Z Depth", &useLinearDepthObject());
       if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Off feeds the same primary depth DLSS consumes; on feeds primary linear view Z.");
+        ImGui::SetTooltip("Off feeds the same primary depth DLSS consumes; on feeds primary linear view Z.\n"
+                          "Cloud Depth forces the linear path, so this has no effect while that is on.");
       }
-      if (!useLinearDepth()) {
+      ImGui::EndDisabled();
+      if (!useLinearDepth() && !cloudDepth()) {
         RemixGui::Checkbox("Depth Inverted", &depthInvertedObject());
       }
       // Minimum is 0.01 rather than 0 so the control cannot express a value the pass would silently

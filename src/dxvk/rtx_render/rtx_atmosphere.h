@@ -92,6 +92,10 @@ public:
 
   // Screen-space RGBA16F at downscale extent: premultiplied cloud rgb + transmittance alpha, per frame.
   const Resources::Resource& getCloudRenderRT() const { return m_cloudRenderRT; }
+  // Apparent cloud distance in km, 0 where the ray found no cloud. Same extent
+  // as the colour RT, which is cloudRenderResolutionScale of the downscale one.
+  const Resources::Resource& getCloudRenderDepthRT() const { return m_cloudRenderDepthRT; }
+  const VkExtent2D& getCloudRenderExtent() const { return m_cloudRenderExtent; }
 
   // 256x128 RGBA16F dome LUT baked per frame; supplies clouds to secondary rays (indirect/PSR/reflection).
   const Resources::Resource& getCloudSecondaryLut() const { return m_cloudSecondaryLut; }
@@ -1171,6 +1175,7 @@ private:
   uint32_t            m_cloudNvdfSdfFront = 0;
   Resources::Resource m_cloudDetailNoise3D;
   Resources::Resource m_cloudRenderRT;
+  Resources::Resource m_cloudRenderDepthRT;
   VkExtent2D          m_cloudRenderExtent = { 0u, 0u };
   VkExtent2D          m_cloudRenderFullExtent = { 0u, 0u };
   RtxMipmap::Resource m_cloudSecondaryLut;

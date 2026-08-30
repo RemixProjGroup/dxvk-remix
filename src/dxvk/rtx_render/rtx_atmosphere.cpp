@@ -2121,7 +2121,7 @@ void RtxAtmosphere::ensureCloudRenderRT(Rc<DxvkContext> ctx,
 
   const bool extentsMatch = (m_cloudRenderExtent.width  == scaledExtent.width)
                          && (m_cloudRenderExtent.height == scaledExtent.height);
-  if (extentsMatch && m_cloudRenderRT.isValid()) {
+  if (extentsMatch && m_cloudRenderRT.isValid() && m_cloudRenderDepthRT.isValid()) {
     return;
   }
 
@@ -2137,6 +2137,23 @@ void RtxAtmosphere::ensureCloudRenderRT(Rc<DxvkContext> ctx,
     0,                          // imageCreateFlags
     VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags (SAMPLED implied)
     VkClearColorValue{},        // clearValue (zero -- "no cloud, full transmittance")
+    1);                         // mipLevels
+
+  // Apparent cloud distance in km, paired with the colour RT above. R32 rather
+  // than a spare channel of the rgba16f: half floats run out of mantissa well
+  // inside the tens-of-km range this covers, and a depth that steps is worse
+  // than no depth for anything reprojecting through it.
+  m_cloudRenderDepthRT = Resources::createImageResource(
+    ctx,
+    "Atmosphere Cloud Render Depth RT",
+    extent3D,
+    VK_FORMAT_R32_SFLOAT,
+    1,                          // numLayers
+    VK_IMAGE_TYPE_2D,
+    VK_IMAGE_VIEW_TYPE_2D,
+    0,                          // imageCreateFlags
+    VK_IMAGE_USAGE_STORAGE_BIT, // extraUsageFlags (SAMPLED implied)
+    VkClearColorValue{},        // clearValue (zero -- "no cloud on this ray")
     1);                         // mipLevels
 
   m_cloudRenderExtent = downscaleExtent;
@@ -2307,7 +2324,7 @@ void RtxAtmosphere::advanceLightning(float dt) {
 void RtxAtmosphere::dispatchCloudRender(Rc<DxvkContext> ctx) {
   ScopedGpuProfileZone(ctx, "Atmosphere Cloud Render (Nubis Cubed)");
 
-  if (!m_cloudRenderRT.isValid()) {
+  if (!m_cloudRenderRT.isValid() || !m_cloudRenderDepthRT.isValid()) {
     return;  // ensureCloudRenderRT hasn't allocated yet (first frame with zero extent)
   }
 
@@ -2353,12 +2370,14 @@ void RtxAtmosphere::dispatchCloudRender(Rc<DxvkContext> ctx) {
   // Nubis3 model inputs (fork — Phase B): front SDF + detail volume at 13/14.
   ctx->bindResourceView(13, m_cloudNvdfSdf[m_cloudNvdfSdfFront].view, nullptr);
   ctx->bindResourceView(14, m_cloudDetailNoise3D.view, nullptr);
+  ctx->bindResourceView(15, m_cloudRenderDepthRT.view, nullptr);
 
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDSun.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDAmbient.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudNvdfSdf[m_cloudNvdfSdfFront].image);
   ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_cloudDetailNoise3D.image);
   ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudRenderRT.image);
+  ctx->getCommandList()->trackResource<DxvkAccess::Write>(m_cloudRenderDepthRT.image);
   if (m_skyViewLut.isValid()) {
     ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_skyViewLut.image);
   }

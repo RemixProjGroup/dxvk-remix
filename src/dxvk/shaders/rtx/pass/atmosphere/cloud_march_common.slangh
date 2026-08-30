@@ -767,6 +767,7 @@ bool integrateCloudSample(float tSampleKm,
                           AtmosphereArgs args,
                           inout vec3  accumColor,
                           inout float viewTransmittance,
+                          inout float depthWeightedSumKm,
                           out float sdfStepKmOut) {
   sdfStepKmOut = 0.0f;
 
@@ -975,7 +976,14 @@ bool integrateCloudSample(float tSampleKm,
   // keep the camera-at-origin convention), so haze/fade behave identically
   // across passes.
   accumColor += stepRadiance * viewTransmittance * aerialT_haze;
+  const float transmittanceBefore = viewTransmittance;
   viewTransmittance *= mix(1.0f, stepTransmittance, aerialT_fade);
+  // Expected first-scatter distance: each step contributes its own distance
+  // weighted by the opacity it actually added, so the running sum divided by
+  // (1 - viewTransmittance) is where the ray "hit" the volume. Weighting by the
+  // opacity increment rather than by density is what makes a thin haze in front
+  // of a dense deck resolve to the deck instead of splitting the difference.
+  depthWeightedSumKm += tSampleKm * (transmittanceBefore - viewTransmittance);
   return true;
 }
 
@@ -995,7 +1003,8 @@ void marchCloudSlab(vec3   viewDirYUp,
                     CloudShadeContext ctx,
                     AtmosphereArgs args,
                     inout vec3  accumColor,
-                    inout float viewTransmittance) {
+                    inout float viewTransmittance,
+                    inout float depthWeightedSumKm) {
   // Slab intersection (mirrors the original main() body — same ray-sphere
   // tests against the base + top shells of the curvature-adjusted cloud
   // planet, but with slabAltitudeKm / slabThicknessKm threaded through so
@@ -1078,6 +1087,7 @@ void marchCloudSlab(vec3   viewDirYUp,
                                           typeNoiseEntry, typeNoiseExit,
                                           coverageNoiseEntry, coverageNoiseExit,
                                           ctx, args, accumColor, viewTransmittance,
+                                          depthWeightedSumKm,
                                           sdfStepKm);
       // SDF empty-space skip (fork — Nubis3 conversion Phase C). The sampler
       // reported a guaranteed-empty radius around this sample (min hex tap,
@@ -1156,6 +1166,7 @@ void marchCloudSlab(vec3   viewDirYUp,
                          typeNoiseEntry, typeNoiseExit,
                          coverageNoiseEntry, coverageNoiseExit,
                          ctx, args, accumColor, viewTransmittance,
+                         depthWeightedSumKm,
                          sdfStepKm);
     t += stepKm;
   }
@@ -1206,7 +1217,8 @@ void marchEchoDeck(vec3   viewDirYUp,
                    CloudShadeContext ctx,
                    AtmosphereArgs args,
                    inout vec3  accumColor,
-                   inout float viewTransmittance) {
+                   inout float viewTransmittance,
+                   inout float depthWeightedSumKm) {
   float cloudR = ctx.cloudRadiusKm;  // == cloudPlanetRadius(args), hoisted per frame
   vec3 planetCenter = vec3(0.0f, -cloudR, 0.0f);
   float baseRadius = cloudR + slabAltitudeKm;
@@ -1375,7 +1387,11 @@ void marchEchoDeck(vec3   viewDirYUp,
     float aerialT_haze = exp(-args.cloudAerialHazePerKm * t);
     float aerialT_fade = exp(-args.cloudAerialFadePerKm * t);
     accumColor += stepRadiance * viewTransmittance * aerialT_haze;
+    const float transmittanceBefore = viewTransmittance;
     viewTransmittance *= mix(1.0f, stepTransmittance, aerialT_fade);
+    // Same opacity-weighted distance accumulation as integrateCloudSample; the
+    // deck keeps its own copy of the step because it marches at a fixed rate.
+    depthWeightedSumKm += t * (transmittanceBefore - viewTransmittance);
   }
 }
 
@@ -1396,7 +1412,8 @@ void marchCloudLayers(vec3  viewDirYUp,
                       CloudShadeContext ctx,
                       AtmosphereArgs args,
                       inout vec3  accumColor,
-                      inout float viewTransmittance) {
+                      inout float viewTransmittance,
+                      inout float depthWeightedSumKm) {
   // Per-ray shading precompute (fork — 2026-07-30, perf). Fills the
   // view-direction-dependent half of the context ONCE, replacing the same work
   // repeated at every march sample. Both layers share it: every term here is
@@ -1412,7 +1429,7 @@ void marchCloudLayers(vec3  viewDirYUp,
                  /*slabNoiseSeedOffset=*/0.0f,
                  tMinClamp, tMaxClamp,
                  sampleCount, ctx, args,
-                 accumColor, viewTransmittance);
+                 accumColor, viewTransmittance, depthWeightedSumKm);
 
   // Layer 2 echo deck — same slab model at a gapped altitude, marched cheaply.
   // Reads its own coverage/type spread via an args copy so the shared density
@@ -1461,6 +1478,6 @@ void marchCloudLayers(vec3  viewDirYUp,
                   args.cloudLayer2DensityScale,
                   args.cloudLayer2NoiseSeed,
                   ctx, args2,
-                  accumColor, viewTransmittance);
+                  accumColor, viewTransmittance, depthWeightedSumKm);
   }
 }

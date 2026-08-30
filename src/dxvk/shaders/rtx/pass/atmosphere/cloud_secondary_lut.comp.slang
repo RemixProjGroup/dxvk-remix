@@ -129,11 +129,14 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
   float viewTransmittance = 1.0f;
   // The LUT bake's jitter is already frame-constant, so the adaptive march's
   // near (animated) and far (static) hashes are the same value here.
+  // The dome bake has no depth consumer; the accumulator is written and dropped.
+  float depthWeightedSumKm = 0.0f;
+
   marchCloudLayers(viewDirYUp, jitter, jitter,
                    /*tMinClamp=*/0.0f,
                    /*tMaxClamp=*/0.0f,
                    args.cloudViewSamples, ctx, args,
-                   accumColor, viewTransmittance);
+                   accumColor, viewTransmittance, depthWeightedSumKm);
 
   cloudSecondaryLutOutput[pixelCoord] = vec4(accumColor, viewTransmittance);
 }
