@@ -94,6 +94,10 @@ namespace dxvk {
 
   void DxvkNeuralUplift::onDeactivation() {
     if (m_context) {
+      // The feature owns GPU resources DXVK knows nothing about and so cannot keep alive, which
+      // is why NGXNeuralUpliftContext::initialize waits before releasing one to rebuild it. The
+      // same applies to releasing one for good.
+      m_device->waitForIdle();
       m_context->releaseNGXFeature();
     }
     m_recreate = true;
@@ -350,6 +354,12 @@ namespace dxvk {
 
     barriers.recordCommands(ctx->getCommandList());
 
+    // The staging copy is the only resource this pass owns, so it is the only one that can be
+    // destroyed while the snippet's work still references it - releaseTargetResource() on
+    // deactivation drops it, and so does the recreate above. NGX captured the raw VkImageView, so
+    // the view has to be tracked as well as the image: a DxvkImageView holds a reference to its
+    // image, not the other way around, and tracking only the image leaves the view free to go.
+    ctx->getCommandList()->trackResource<DxvkAccess::None>(m_intermediateColor.view);
     ctx->getCommandList()->trackResource<DxvkAccess::Read>(m_intermediateColor.image);
     ctx->getCommandList()->trackResource<DxvkAccess::None>(inOutColor.view);
     ctx->getCommandList()->trackResource<DxvkAccess::Write>(inOutColor.image);
