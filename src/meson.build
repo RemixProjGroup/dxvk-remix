@@ -1,4 +1,6 @@
-subdir('usd-plugins')
+if dxvk_is_msvc
+  subdir('usd-plugins')
+endif
 subdir('tracy')
 subdir('util')
 subdir('spirv')

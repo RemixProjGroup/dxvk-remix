@@ -1,6 +1,6 @@
 fs = import('fs')
 usd_schema_plugins_cpp_compiler = meson.get_compiler('cpp')
-if usd_schema_plugins_cpp_compiler.get_id() != 'msvc'
+if usd_schema_plugins_cpp_compiler.get_argument_syntax() != 'msvc'
   error('USD-SCHEMA-PLUGINS requires the MSVC compiler.')
 endif
 usd_schema_plugins_isdebug = get_option('buildtype') == 'debug'
@@ -10,8 +10,11 @@ usd_schema_plugins_is_woa = target_machine.cpu() == 'armv8'
 # Note: arm64 deps placed in a separate xml to keep x64 builds functional
 dependencies_file = not usd_schema_plugins_is_woa ? 'packman-external.xml' : 'packman-external-arm64.xml'
 message('USD-SCHEMA-PLUGINS: Downloading USD and other dependencies...')
+packman_program = build_os == 'windows' \
+  ? join_paths(meson.current_source_dir(), '../../scripts-common/packman/packman.cmd') \
+  : join_paths(meson.current_source_dir(), '../../scripts-common/packman/packman')
 packman_result = run_command(
-  join_paths(meson.current_source_dir(), '../../scripts-common/packman/packman.cmd'), 
+  packman_program,
   'pull', 
   join_paths(meson.current_source_dir(), dependencies_file), 
   '-p', 
@@ -29,7 +32,10 @@ if usd_schema_plugins_is_woa
   usd_schema_plugins_python_dir = '_external/python311_x64/'
 endif
 
-usd_schema_plugins_python = join_paths(meson.current_source_dir(), usd_schema_plugins_python_dir, 'python.exe')
+usd_schema_plugins_python_exe = join_paths(meson.current_source_dir(), usd_schema_plugins_python_dir, 'python.exe')
+usd_schema_plugins_python = build_os == 'windows' \
+  ? usd_schema_plugins_python_exe \
+  : find_program('../../scripts-common/wine-usd-python.sh')
 
 usd_schema_plugins_nvusd_dir = usd_schema_plugins_isdebug ? '_external/nv_usd/debug/' : '_external/nv_usd/release/'
 if usd_schema_plugins_is_woa
@@ -58,7 +64,7 @@ usd_schema_plugins_nvusd_deplibs_22 = [
   'cameraUtil',
   'gf',
   'hd',
-  'hdst',
+  'hdSt',
   'hf',
   'hgi',
   'hgiGL',
@@ -131,7 +137,9 @@ usd_schema_plugins_compilerflags = [
 ]
 
 # On Windows, echo %PATH% gives you the system PATH
-orig_path = run_command('cmd', ['/C', 'echo', '%PATH%'])
+orig_path = build_os == 'windows' \
+  ? run_command('cmd', ['/C', 'echo', '%PATH%']) \
+  : run_command('wine', ['cmd', '/C', 'echo', '%PATH%'])
 orig_path = orig_path.stdout().strip()
 
 # Do we have jinja

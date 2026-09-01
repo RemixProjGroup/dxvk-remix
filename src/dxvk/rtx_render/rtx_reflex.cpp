@@ -24,7 +24,7 @@
 
 #include <limits>
 #include <cassert>
-#include <Windows.h>
+#include <windows.h>
 
 #include "NvLowLatencyVk.h"
 #include "pclstats.h"

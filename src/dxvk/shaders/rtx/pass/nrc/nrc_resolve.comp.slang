@@ -25,7 +25,7 @@
 
 #define ENABLE_NRC 1  // Needed to access global values guarded by the define
 #include "rtx/external/NRC.slangh"
-#include "nrc/include/NRCHelpers.hlsli"
+#include "nrc/Include/NrcHelpers.hlsli"
 #include "rtx/utility/geometry_flags.slangh"
 #include "rtx/concept/ray/ray_helper.slangh"
 #include "rtx/pass/raytrace_args.h"

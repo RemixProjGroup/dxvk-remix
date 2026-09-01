@@ -58,7 +58,7 @@
 #include <pxr/base/arch/fileSystem.h>
 #include <pxr/base/plug/registry.h>
 #include <pxr/base/plug/plugin.h>
-#include <src/usd-plugins/RemixParticleSystem/ParticleSystemAPI.h>
+#include "../../usd-plugins/RemixParticleSystem/particleSystemAPI.h"
 #include "../../lssusd/usd_include_end.h"
 #include "../util/util_watchdog.h"
 

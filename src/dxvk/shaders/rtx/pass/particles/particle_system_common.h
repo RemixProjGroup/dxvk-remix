@@ -144,7 +144,7 @@ struct RtxParticleSystemDesc : GpuParticleSystemDesc {
   RtxParticleSystemDesc() 
     : GpuParticleSystemDesc{}
   {
-    attractorPosition = {0.0f, 0.0f, 0.0f};
+    attractorPosition = vec3(0.0f, 0.0f, 0.0f);
     attractorForce = 0.0f;
     minTimeToLive = 0.0f;
     maxTimeToLive = 0.0f;

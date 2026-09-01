@@ -274,9 +274,14 @@ namespace dxvk {
         pVertex += vertexStride;
       }
 
+      float minValues[4];
+      float maxValues[4];
+      _mm_storeu_ps(minValues, minPos);
+      _mm_storeu_ps(maxValues, maxPos);
+
       AxisAlignedBoundingBox boundingBox{
-        Vector3{ minPos.m128_f32[0], minPos.m128_f32[1], minPos.m128_f32[2] },
-        Vector3{ maxPos.m128_f32[0], maxPos.m128_f32[1], maxPos.m128_f32[2] }
+        Vector3{ minValues[0], minValues[1], minValues[2] },
+        Vector3{ maxValues[0], maxValues[1], maxValues[2] }
       };
 #endif
 

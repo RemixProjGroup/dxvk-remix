@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+xwin_root="${DXVK_XWIN_ROOT:-${XDG_CACHE_HOME:-${HOME}/.cache}/xwin/dxvk-remix}"
+
+exec /usr/bin/llvm-rc \
+  "/I${xwin_root}/crt/include" \
+  "/I${xwin_root}/sdk/include/ucrt" \
+  "/I${xwin_root}/sdk/include/shared" \
+  "/I${xwin_root}/sdk/include/um" \
+  "$@"

@@ -64,7 +64,7 @@ struct TranslucentMaterialArgs {
 static_assert((sizeof(OpaqueMaterialArgs) & 15) == 0);
 static_assert((sizeof(TranslucentMaterialArgs) & 15) == 0);
 
-#include "rtx_option.h"
+#include "../../../rtx_render/rtx_option.h"
 #include "../util/util_macro.h"
 #include <algorithm>
 #include "../shaders/rtx/utility/shared_constants.h"

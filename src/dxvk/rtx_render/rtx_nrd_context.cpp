@@ -27,7 +27,7 @@
 #include "rtx/pass/nrd_args.h"
 #include "../../util/util_string.h"
 #include "../../util/util_global_time.h"
-#include <Shlwapi.h>
+#include <shlwapi.h>
 #include <filesystem>
 
 namespace nrd {
@@ -988,10 +988,10 @@ namespace dxvk {
   }
 
   NrdArgs NRDContext::getNrdArgs() const {
-    static_assert(nrd::CommonSettings{}.denoisingRange == 500000.0f, "NRD's default settings has changed, denoisingRange must be re-evaluated");
-    constexpr float denoisingRangeLimit = nrd::CommonSettings{}.denoisingRange;
+    constexpr float denoisingRangeLimit = 500000.0f;
+    assert(nrd::CommonSettings{}.denoisingRange == denoisingRangeLimit && "NRD's default denoising range has changed");
 
-    const float missLinearViewZ = denoisingRangeLimit + 1.0f;
+    constexpr float missLinearViewZ = denoisingRangeLimit + 1.0f;
     static_assert(missLinearViewZ > denoisingRangeLimit && missLinearViewZ - denoisingRangeLimit > 0.01f);
 
     // Note: Ensure the denoising range is at least 1 ulp less than the miss linear view Z value, otherwise it will not

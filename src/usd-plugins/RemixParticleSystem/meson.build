@@ -1,6 +1,8 @@
 # NOTE: This needs to be updated per plugin, based on the class names defined in the schema
-plugin_classes = [
-	'ParticleSystemAPI',
+generated_files = [
+  'wrapParticleSystemAPI.cpp',
+  'particleSystemAPI.h',
+  'particleSystemAPI.cpp',
 ]
 
 # Below here, things should remain the same plugin to plugin -
@@ -13,18 +15,11 @@ plugin_name = fs.name(meson.current_source_dir())
 plugin_src = meson.current_source_dir()
 schema_usda = join_paths(plugin_src, 'schema.usda')
 
-generated_files = []
-foreach class : plugin_classes
-  generated_files += 'wrap' + class + '.cpp'
-  generated_files += class + '.h'
-  generated_files += class + '.cpp'
-endforeach
-
 schema_script = join_paths(global_src_root_norm, 'scripts-common', 'generate_and_patch_schema.py')
 
 gen_and_patch = custom_target(
   'gen_and_patch_schema_' + plugin_name,
-  input: [ schema_usda, usd_schema_plugins_python ],
+  input: [ schema_usda, usd_schema_plugins_python_exe ],
   output: [
     'generatedSchema.usda',
     'plugInfo.json',
@@ -44,7 +39,7 @@ gen_and_patch = custom_target(
   console : true,    
   env: {
     # mirror what the script expects
-    'USD_SCHEMA_PYTHON':    usd_schema_plugins_python,
+    'USD_SCHEMA_PYTHON':    usd_schema_plugins_python_exe,
     'USD_NVUSD_BINDIR':     usd_schema_plugins_nvusd_bindir_host,
     'USD_LIBPYTHON_DIR':    usd_libpython_dir_host,
     'ORIG_PATH':            orig_path,

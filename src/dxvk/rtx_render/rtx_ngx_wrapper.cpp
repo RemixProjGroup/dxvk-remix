@@ -24,7 +24,7 @@
 #include <windows.h>
 #include <ntstatus.h>
 #undef WIN32_NO_STATUS
-#include <Winternl.h>
+#include <winternl.h>
 #include <d3dkmthk.h>
 #include <d3dkmdt.h>
 

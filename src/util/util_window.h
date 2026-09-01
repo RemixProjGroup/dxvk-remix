@@ -22,7 +22,7 @@
 
 // NV-DXVK start: Fix some circular inclusion stuff
 #include <string>
-#include <Windows.h>
+#include <windows.h>
 // NV-DXVK end
 
 namespace dxvk::window {

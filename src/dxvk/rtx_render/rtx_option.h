@@ -380,7 +380,7 @@ namespace dxvk {
     // Add a hash to a hash set option in a specific layer.
     // This layer will contribute this hash to the resolved set.
     // If layer is nullptr, uses the current target layer from RtxOptionLayerTarget.
-    template<typename = std::enable_if_t<std::is_same_v<T, fast_unordered_set>>>
+    template<typename U = T, typename = std::enable_if_t<std::is_same_v<U, fast_unordered_set>>>
     void addHash(const XXH64_hash_t& value, const RtxOptionLayer* layer = nullptr) {
       std::lock_guard<std::mutex> lock(RtxOptionImpl::getUpdateMutex());
       
@@ -402,7 +402,7 @@ namespace dxvk {
     // Remove a hash from a hash set option in a specific layer.
     // This layer will exclude this hash from the resolved set, overriding lower priority layers.
     // If layer is nullptr, uses the current target layer from RtxOptionLayerTarget.
-    template<typename = std::enable_if_t<std::is_same_v<T, fast_unordered_set>>>
+    template<typename U = T, typename = std::enable_if_t<std::is_same_v<U, fast_unordered_set>>>
     void removeHash(const XXH64_hash_t& value, const RtxOptionLayer* layer = nullptr) {
       std::lock_guard<std::mutex> lock(RtxOptionImpl::getUpdateMutex());
       
@@ -424,7 +424,7 @@ namespace dxvk {
     // Clear any opinion about a hash from a specific layer.
     // The hash will be neither added nor removed by this layer.
     // If layer is nullptr, uses the current target layer from RtxOptionLayerTarget.
-    template<typename = std::enable_if_t<std::is_same_v<T, fast_unordered_set>>>
+    template<typename U = T, typename = std::enable_if_t<std::is_same_v<U, fast_unordered_set>>>
     void clearHash(const XXH64_hash_t& value, const RtxOptionLayer* layer = nullptr) {
       std::lock_guard<std::mutex> lock(RtxOptionImpl::getUpdateMutex());
       
@@ -449,7 +449,7 @@ namespace dxvk {
       markDirty();
     }
 
-    template<typename = std::enable_if_t<std::is_same_v<T, fast_unordered_set>>>
+    template<typename U = T, typename = std::enable_if_t<std::is_same_v<U, fast_unordered_set>>>
     bool containsHash(const XXH64_hash_t& value) const {
       std::lock_guard<std::mutex> lock(RtxOptionImpl::getUpdateMutex());
       return m_resolvedValue.hashSet->count(value) > 0;
@@ -511,7 +511,7 @@ namespace dxvk {
       return OptionType::Int;
     }
 
-    template<typename = std::enable_if_t<isClampable()>>
+    template<typename U = T, typename = std::enable_if_t<RtxOption<U>::isClampable()>>
     void setMinValue(const T& v) {
       std::lock_guard<std::mutex> lock(RtxOptionImpl::getUpdateMutex());
       
@@ -521,13 +521,13 @@ namespace dxvk {
       }
     }
 
-    template<typename = std::enable_if_t<isClampable()>>
+    template<typename U = T, typename = std::enable_if_t<RtxOption<U>::isClampable()>>
     std::optional<T> getMinValue() const {
       std::lock_guard<std::mutex> lock(RtxOptionImpl::getUpdateMutex());
       return getMinMaxValueHelper(minValue);
     }
 
-    template<typename = std::enable_if_t<isClampable()>>
+    template<typename U = T, typename = std::enable_if_t<RtxOption<U>::isClampable()>>
     void setMaxValue(const T& v) {
       std::lock_guard<std::mutex> lock(RtxOptionImpl::getUpdateMutex());
       bool changed = setMinMaxValueHelper(v, maxValue);
@@ -536,7 +536,7 @@ namespace dxvk {
       }
     }
 
-    template<typename = std::enable_if_t<isClampable()>>
+    template<typename U = T, typename = std::enable_if_t<RtxOption<U>::isClampable()>>
     std::optional<T> getMaxValue() const {
       std::lock_guard<std::mutex> lock(RtxOptionImpl::getUpdateMutex());
       return getMinMaxValueHelper(maxValue);
@@ -545,11 +545,11 @@ namespace dxvk {
   private:
     // Prevent `new RtxOption` from being used.  Use the RTX_OPTION macro to create RtxOptions.
     static void* operator new(size_t size) = delete;
-    static void operator delete(void* ptr) = delete;
+    static void operator delete(void* ptr) { ::operator delete(ptr); }
 
     // Prevent `new RtxOption[N]` from being used.  Use the RTX_OPTION macro to create RtxOptions.
     static void* operator new[](size_t size) = delete;
-    static void operator delete[](void* ptr) = delete;
+    static void operator delete[](void* ptr) { ::operator delete[](ptr); }
 
     // Delete copy constructor and assignment operator to prevent accidental copying of RtxOption objects
     RtxOption(const RtxOption&) = delete;

@@ -21,12 +21,26 @@
 */
 #include <math.h>
 #include <intrin.h>
+#include <cstring>
+
 #include "util_math.h"
 #include "util_fastops.h"
 #include <algorithm>
+#if defined(_MSC_VER)
 #include <ppl.h>
+#endif
 
 #define SSE_ENABLE ((fast::g_simdSupportLevel != fast::SIMD::None) && 1)
+
+#if defined(__clang__)
+#define FAST_TARGET_AVX2 __attribute__((target("avx2")))
+#define FAST_TARGET_AVX512 __attribute__((target("avx512f,avx512bw")))
+#define FAST_TARGET_BMI2 __attribute__((target("bmi,bmi2")))
+#else
+#define FAST_TARGET_AVX2
+#define FAST_TARGET_AVX512
+#define FAST_TARGET_BMI2
+#endif
 
 namespace fast {
   static SIMD initSimdSupport() {
@@ -323,7 +337,7 @@ namespace fast {
   }
 
 #if !defined(NO_AVX)
-  __forceinline void findMinMax16_AVX2(const uint32_t count, const uint16_t* data, uint32_t& minOut, uint32_t& maxOut) {
+  FAST_TARGET_AVX2 inline void findMinMax16_AVX2(const uint32_t count, const uint16_t* data, uint32_t& minOut, uint32_t& maxOut) {
     const uint32_t numLanes = 16;
     const uint32_t alignedCount = dxvk::alignDown(count, numLanes);
     uint16_t minOut16 = data[0];
@@ -369,7 +383,7 @@ namespace fast {
   }
 
 #if !defined(NO_AVX)
-  __forceinline void findMinMaxWithsentinelValue16_AVX2(const uint32_t count, const uint16_t* data, uint32_t& minOut, uint32_t& maxOut, const uint16_t sentinelValue) {
+  FAST_TARGET_AVX2 inline void findMinMaxWithsentinelValue16_AVX2(const uint32_t count, const uint16_t* data, uint32_t& minOut, uint32_t& maxOut, const uint16_t sentinelValue) {
     const uint32_t numLanes = 16;
     const uint32_t alignedCount = dxvk::alignDown(count, numLanes);
     uint16_t minOut16 = data[0];
@@ -477,7 +491,7 @@ namespace fast {
     }
   }
 #if !defined(NO_AVX)
-  __forceinline void findMinMax32_AVX2(const uint32_t count, const uint32_t* data, uint32_t& minOut, uint32_t& maxOut) {
+  FAST_TARGET_AVX2 inline void findMinMax32_AVX2(const uint32_t count, const uint32_t* data, uint32_t& minOut, uint32_t& maxOut) {
     const uint32_t numLanes = 8;
     const uint32_t alignedCount = dxvk::alignDown(count, numLanes);
 
@@ -516,7 +530,7 @@ namespace fast {
     }
   }
 #if !defined(NO_AVX)
-  __forceinline void findMinMaxWithsentinelValue32_AVX2(const uint32_t count, const uint32_t* data, uint32_t& minOut, uint32_t& maxOut, const uint32_t sentinelValue) {
+  FAST_TARGET_AVX2 inline void findMinMaxWithsentinelValue32_AVX2(const uint32_t count, const uint32_t* data, uint32_t& minOut, uint32_t& maxOut, const uint32_t sentinelValue) {
     const uint32_t numLanes = 8;
     const uint32_t alignedCount = dxvk::alignDown(count, numLanes);
     minOut = data[0];
@@ -745,7 +759,7 @@ namespace fast {
     }
   }
 #if !defined(NO_AVX)
-  __forceinline void copySubtract16_AVX2(uint16_t* dstData, const uint16_t* srcData, const uint32_t count, const uint16_t value, const bool ignoreSentinel, const uint16_t sentinelValue) {
+  FAST_TARGET_AVX2 inline void copySubtract16_AVX2(uint16_t* dstData, const uint16_t* srcData, const uint32_t count, const uint16_t value, const bool ignoreSentinel, const uint16_t sentinelValue) {
     const uint32_t numLanes = 16;
     const uint32_t alignedCount = dxvk::alignDown(count, numLanes);
 
@@ -776,7 +790,7 @@ namespace fast {
     }
   }
   
-  __forceinline void copySubtract32_AVX2(uint32_t* dstData, const uint32_t* srcData, const uint32_t count, const uint32_t value, const bool ignoreSentinel, const uint32_t sentinelValue) {
+  FAST_TARGET_AVX2 inline void copySubtract32_AVX2(uint32_t* dstData, const uint32_t* srcData, const uint32_t count, const uint32_t value, const bool ignoreSentinel, const uint32_t sentinelValue) {
     const uint32_t numLanes = 8;
     const uint32_t alignedCount = dxvk::alignDown(count, numLanes);
 
@@ -806,7 +820,7 @@ namespace fast {
       dstData[i] = srcData[i] - ((ignoreSentinel && srcData[i] == sentinelValue) ? 0 : value);
     }
   }
-  __forceinline void copySubtract16_AVX512(uint16_t* dstData, const uint16_t* srcData, const uint32_t count, const uint16_t value, const bool ignoreSentinel, const uint16_t sentinelValue) {
+  FAST_TARGET_AVX512 inline void copySubtract16_AVX512(uint16_t* dstData, const uint16_t* srcData, const uint32_t count, const uint16_t value, const bool ignoreSentinel, const uint16_t sentinelValue) {
     const uint32_t numLanes = 32;
     const uint32_t alignedCount = dxvk::alignDown(count, numLanes);
 
@@ -835,7 +849,7 @@ namespace fast {
       dstData[i] = srcData[i] - ((ignoreSentinel && srcData[i] == sentinelValue) ? 0 : value);
     }
   }
-  __forceinline void copySubtract32_AVX512(uint32_t* dstData, const uint32_t* srcData, const uint32_t count, const uint32_t value, const bool ignoreSentinel, const uint32_t sentinelValue) {
+  FAST_TARGET_AVX512 inline void copySubtract32_AVX512(uint32_t* dstData, const uint32_t* srcData, const uint32_t count, const uint32_t value, const bool ignoreSentinel, const uint32_t sentinelValue) {
     const uint32_t numLanes = 16;
     const uint32_t alignedCount = dxvk::alignDown(count, numLanes);
 
@@ -962,6 +976,7 @@ namespace fast {
 
     // It's only worth the effort if theres at least 3 threads saturated
     if (numChunks > 3) {
+#if defined(_MSC_VER)
       concurrency::parallel_for<size_t>(0, numChunks, [&](size_t i) {
         size_t offset = i * chunkSize;
         std::memcpy(dstBytes + offset, srcBytes + offset, chunkSize);
@@ -969,6 +984,9 @@ namespace fast {
 
       // Copy any remaining bytes
       std::memcpy(dstBytes + numChunks * chunkSize, srcBytes + numChunks * chunkSize, count % chunkSize);
+#else
+      std::memcpy(dst, src, count);
+#endif
     } else {
       std::memcpy(dst, src, count);
     }
@@ -976,7 +994,7 @@ namespace fast {
 
 #if !defined(NO_AVX)
   template<typename T>
-  __forceinline T findNthBit_BMI2(const T num, const T n) {
+  FAST_TARGET_BMI2 inline T findNthBit_BMI2(const T num, const T n) {
     return _tzcnt_u32(_pdep_u32(1 << n, num));
   }
 #endif

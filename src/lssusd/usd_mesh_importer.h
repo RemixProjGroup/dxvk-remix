@@ -150,6 +150,6 @@ namespace lss {
 
     dxvk::AxisAlignedBoundingBox m_boundingBox;
 
-    const pxr::UsdGeomMesh& m_meshPrim;
+    const pxr::UsdGeomMesh m_meshPrim;
   };
 }

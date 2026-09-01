@@ -26,7 +26,7 @@
 #include "rtx_common_object.h"
 
 #include "rtx/external/NRC.h"
-#include <NrcVK.h>
+#include <NrcVk.h>
 
 namespace dxvk {
   struct NrcCtxOptions {

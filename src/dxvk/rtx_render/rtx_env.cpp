@@ -22,7 +22,7 @@
 
 #include "rtx_env.h"
 
-#include <Windows.h>
+#include <windows.h>
 #include "rtx_options.h"
 
 namespace dxvk {

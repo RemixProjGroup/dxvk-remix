@@ -30,7 +30,7 @@
 #include "../util/rc/util_rc.h"
 #include "../util/rc/util_rc_ptr.h"
 
-#include <Windows.h>
+#include <windows.h>
 
 // FFX SDK header defines FFX_API_ENTRY as dllexport, but we need dllimport
 // since we're linking against the prebuilt DLL

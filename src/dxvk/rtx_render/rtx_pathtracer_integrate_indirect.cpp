@@ -53,13 +53,13 @@
 #include <rtx_shaders/integrate_indirect_rayquery_nrc.h>
 
 #include <rtx_shaders/integrate_indirect_material_opaque_translucent_closestHit.h>
-#include <rtx_shaders/integrate_indirect_material_rayPortal_closestHit.h>
+#include <rtx_shaders/integrate_indirect_material_rayportal_closestHit.h>
 #include <rtx_shaders/integrate_indirect_pom_material_opaque_translucent_closestHit.h>
-#include <rtx_shaders/integrate_indirect_pom_material_rayPortal_closestHit.h>
+#include <rtx_shaders/integrate_indirect_pom_material_rayportal_closestHit.h>
 #include <rtx_shaders/integrate_indirect_nrc_material_opaque_translucent_closestHit.h>
-#include <rtx_shaders/integrate_indirect_nrc_material_rayPortal_closestHit.h>
+#include <rtx_shaders/integrate_indirect_nrc_material_rayportal_closestHit.h>
 #include <rtx_shaders/integrate_indirect_nrc_pom_material_opaque_translucent_closestHit.h>
-#include <rtx_shaders/integrate_indirect_nrc_pom_material_rayPortal_closestHit.h>
+#include <rtx_shaders/integrate_indirect_nrc_pom_material_rayportal_closestHit.h>
 #include <rtx_shaders/integrate_indirect_neeCache_material_rayportal_closestHit.h>
 #include <rtx_shaders/integrate_indirect_neeCache_material_opaque_translucent_closestHit.h>
 #include <rtx_shaders/integrate_indirect_neeCache_pom_material_rayportal_closestHit.h>
@@ -95,13 +95,13 @@
 #include <rtx_shaders/integrate_indirect_rayquery_nrc_wboit.h>
 
 #include <rtx_shaders/integrate_indirect_material_opaque_translucent_closestHit_wboit.h>
-#include <rtx_shaders/integrate_indirect_material_rayPortal_closestHit_wboit.h>
+#include <rtx_shaders/integrate_indirect_material_rayportal_closestHit_wboit.h>
 #include <rtx_shaders/integrate_indirect_pom_material_opaque_translucent_closestHit_wboit.h>
-#include <rtx_shaders/integrate_indirect_pom_material_rayPortal_closestHit_wboit.h>
+#include <rtx_shaders/integrate_indirect_pom_material_rayportal_closestHit_wboit.h>
 #include <rtx_shaders/integrate_indirect_nrc_material_opaque_translucent_closestHit_wboit.h>
-#include <rtx_shaders/integrate_indirect_nrc_material_rayPortal_closestHit_wboit.h>
+#include <rtx_shaders/integrate_indirect_nrc_material_rayportal_closestHit_wboit.h>
 #include <rtx_shaders/integrate_indirect_nrc_pom_material_opaque_translucent_closestHit_wboit.h>
-#include <rtx_shaders/integrate_indirect_nrc_pom_material_rayPortal_closestHit_wboit.h>
+#include <rtx_shaders/integrate_indirect_nrc_pom_material_rayportal_closestHit_wboit.h>
 #include <rtx_shaders/integrate_indirect_neeCache_material_rayportal_closestHit_wboit.h>
 #include <rtx_shaders/integrate_indirect_neeCache_material_opaque_translucent_closestHit_wboit.h>
 #include <rtx_shaders/integrate_indirect_neeCache_pom_material_rayportal_closestHit_wboit.h>

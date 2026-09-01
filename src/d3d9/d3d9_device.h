@@ -83,6 +83,8 @@ namespace dxvk {
 
   using D3D9DeviceFlags = Flags<D3D9DeviceFlag>;
 
+  class D3D9SwapchainExternal;
+
   struct D3D9DrawInfo {
     uint32_t vertexCount;
     uint32_t instanceCount;

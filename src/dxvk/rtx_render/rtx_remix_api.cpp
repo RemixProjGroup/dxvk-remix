@@ -60,7 +60,7 @@
 #include "rtx_fork_hooks.h"
 
 #include "../../lssusd/usd_include_begin.h"
-#include <src/usd-plugins/RemixParticleSystem/ParticleSystemAPI.h>
+#include "../../usd-plugins/RemixParticleSystem/particleSystemAPI.h"
 #include "../../lssusd/usd_include_end.h"
 
 #include <windows.h>
@@ -294,7 +294,7 @@ namespace {
     using namespace dxvk;
 
     std::string tostr(const remixapi_MaterialHandle& h) {
-      static_assert(sizeof h == sizeof uint64_t);
+      static_assert(sizeof(h) == sizeof(uint64_t));
       return std::to_string(reinterpret_cast<uint64_t>(h));
     }
 
@@ -705,8 +705,8 @@ namespace {
             params->nearPlane,
             params->farPlane,
             isLhs ? PROJ_LEFT_HANDED : 0);
-          static_assert(sizeof result.viewToProjection == sizeof proj);
-          memcpy(&result.viewToProjection, &proj, sizeof float4x4);
+          static_assert(sizeof(result.viewToProjection) == sizeof(proj));
+          memcpy(&result.viewToProjection, &proj, sizeof(float4x4));
         }
         return result;
       }

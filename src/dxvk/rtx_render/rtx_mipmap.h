@@ -28,6 +28,8 @@
 
 namespace dxvk {
 
+  class RtxContext;
+
   class RtxMipmap {   
   public:
     struct Resource : public Resources::Resource {

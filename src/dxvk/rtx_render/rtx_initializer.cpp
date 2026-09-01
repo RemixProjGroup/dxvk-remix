@@ -46,13 +46,13 @@ namespace dxvk {
 
   void RtxInitializer::initialize() {
     ShaderManager::getInstance()->setDevice(m_device);
+    DxvkObjects* pCommon = m_device->getCommon();
 
 #ifdef WITH_RTXIO
     if (RtxIo::enabled()) {
       RtxIo::get().initialize(m_device);
     }
     // start async before starting asset loading
-    DxvkObjects* pCommon = m_device->getCommon();
     pCommon->getTextureManager().startAsync();
 #endif
 

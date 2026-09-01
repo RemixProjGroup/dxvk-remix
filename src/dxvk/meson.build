@@ -493,9 +493,9 @@ if dxvk_is_woa
   nrc_lib_path = join_paths(meson.global_source_root(), 'external/nrc_arm64/lib/')
   nrc_include_path = include_directories(join_paths('../../', 'external/nrc_arm64/include'))
 else
-  nrc_dll_path = join_paths(meson.global_source_root(), 'submodules/nrc/bin/')
-  nrc_lib_path = join_paths(meson.global_source_root(), 'submodules/nrc/lib/')
-  nrc_include_path = include_directories(join_paths('../../', 'submodules/nrc/include'))
+  nrc_dll_path = join_paths(meson.global_source_root(), 'submodules/nrc/Bin/')
+  nrc_lib_path = join_paths(meson.global_source_root(), 'submodules/nrc/Lib/')
+  nrc_include_path = include_directories(join_paths('../../', 'submodules/nrc/Include'))
 endif
 
 # XeSS dependency

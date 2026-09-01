@@ -65,7 +65,7 @@ namespace dxvk {
     template<
       typename T,
       std::enable_if_t<std::is_same_v<T, CameraManager> || std::is_same_v<T, const CameraManager>, bool> = true>
-    static auto& accessCamera(T& cameraManager, CameraType::Enum cameraType) {
+    static std::conditional_t<std::is_const_v<T>, const RtCamera&, RtCamera&> accessCamera(T& cameraManager, CameraType::Enum cameraType) {
       assert(cameraType < CameraType::Count);
       // Default Unknown to Main camera object
       // since cameras can get rejected but rtx pipeline can

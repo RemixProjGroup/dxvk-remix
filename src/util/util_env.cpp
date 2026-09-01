@@ -30,11 +30,11 @@
 #include "./com/com_include.h"
 #include <shellapi.h>
 
-#include <Windows.h>
+#include <windows.h>
 #include <stdio.h>
 #include <tlhelp32.h>
-#include <Psapi.h>
-#include <Shlwapi.h>
+#include <psapi.h>
+#include <shlwapi.h>
 // NV-DXVK start
 #include <set>
 #include <filesystem>

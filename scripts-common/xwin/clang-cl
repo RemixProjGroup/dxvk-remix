@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+xwin_root="${DXVK_XWIN_ROOT:-${XDG_CACHE_HOME:-${HOME}/.cache}/xwin/dxvk-remix}"
+export LIB="${xwin_root}/crt/lib/x86_64;${xwin_root}/sdk/lib/ucrt/x86_64;${xwin_root}/sdk/lib/um/x86_64${LIB:+;${LIB}}"
+
+xwin_include_args=(
+  "/imsvc${xwin_root}/crt/include"
+  "/imsvc${xwin_root}/sdk/include/ucrt"
+  "/imsvc${xwin_root}/sdk/include/shared"
+  "/imsvc${xwin_root}/sdk/include/um"
+  "/imsvc${xwin_root}/sdk/include/winrt"
+)
+
+compile_only=false
+has_link=false
+for arg in "$@"; do
+  if [[ "${arg,,}" == "/c" ]]; then
+    compile_only=true
+  elif [[ "${arg,,}" == "/link" ]]; then
+    has_link=true
+  fi
+done
+
+if ${compile_only}; then
+  exec /usr/bin/clang-cl "${xwin_include_args[@]}" "$@"
+elif ${has_link}; then
+  exec /usr/bin/clang-cl "${xwin_include_args[@]}" "$@" \
+    "/libpath:${xwin_root}/crt/lib/x86_64" \
+    "/libpath:${xwin_root}/sdk/lib/ucrt/x86_64" \
+    "/libpath:${xwin_root}/sdk/lib/um/x86_64"
+else
+  exec /usr/bin/clang-cl "${xwin_include_args[@]}" "$@" /link \
+    "/libpath:${xwin_root}/crt/lib/x86_64" \
+    "/libpath:${xwin_root}/sdk/lib/ucrt/x86_64" \
+    "/libpath:${xwin_root}/sdk/lib/um/x86_64"
+fi

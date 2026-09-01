@@ -572,7 +572,7 @@ namespace dxvk {
 
       // Runtime array of CapturedVertex with 48B stride
       const uint32_t capArrayType = m_module.defRuntimeArrayTypeUnique(capturedVertexType);
-      m_module.decorateArrayStride(capArrayType, sizeof CapturedVertex);
+      m_module.decorateArrayStride(capArrayType, sizeof(CapturedVertex));
 
       // SSBO block: layout(std430) CapturedVertex data[];
       const uint32_t capBlockType = m_module.defStructTypeUnique(1, &capArrayType);
@@ -602,7 +602,7 @@ namespace dxvk {
       uav.sampledTypeId = floatType;
       // NOTE: we won't use imageTypeId for member stores anymore, but keep it valid
       uav.imageTypeId = m_module.defPointerType(capturedVertexType, spv::StorageClassUniform);
-      uav.structStride = sizeof CapturedVertex;
+      uav.structStride = sizeof(CapturedVertex);
       uav.structAlign = 16;
       m_vs.vertexOutBuf = uav;
 

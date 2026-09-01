@@ -40,6 +40,8 @@ generateSlangRepro = False
 
 includePaths = ' '.join([f'-I{path}' for path in args.includes])
 slangDll = os.path.join(os.path.dirname(args.slangc), 'slang.dll')
+if not os.path.exists(slangDll):
+    slangDll = os.path.join(os.path.dirname(__file__), '..', 'external', 'slang', 'slang.dll')
 
 tools = [args.glslang, args.slangc, slangDll, __file__]
 newestTool = max([os.path.getmtime(x) for x in tools])
@@ -643,3 +645,6 @@ if len(tasks):
 
 if terminate:
     sys.exit(1)
+
+with open(os.path.join(os.path.dirname(args.output), '_built_shaders.txt'), 'w') as marker:
+    marker.write('Shaders built successfully.\n')

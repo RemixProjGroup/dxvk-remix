@@ -35,7 +35,7 @@
 #include "rtx/external/NRC.h"
 #include "rtx/pass/nrc_args.h"
 
-#include "nrc/include/NRC.hlsli"
+#include "nrc/Include/Nrc.hlsli"
 
 // Evaluates an expression only when NRC is enabled and returns its output
 // Returns true when NRC is disabled

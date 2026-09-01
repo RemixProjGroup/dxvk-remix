@@ -222,6 +222,7 @@ namespace dxvk {
 
   };
   
+  template<>
   inline Matrix4Base<float> Matrix4Base<float>::operator*(const Matrix4Base<float>& m2) const {
 #if defined(_M_X64) && !defined(_M_ARM64EC)
     const auto& m1 = *this;

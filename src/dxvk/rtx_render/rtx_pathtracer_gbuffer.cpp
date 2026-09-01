@@ -39,28 +39,28 @@
 #include <rtx_shaders/gbuffer_psr_miss.h>
 #include <rtx_shaders/gbuffer_psr_nrc_miss.h>
 
-#include <rtx_shaders/gbuffer_material_opaque_translucent_closesthit.h>
-#include <rtx_shaders/gbuffer_material_rayPortal_closesthit.h>
-#include <rtx_shaders/gbuffer_nrc_material_opaque_translucent_closesthit.h>
-#include <rtx_shaders/gbuffer_nrc_material_rayPortal_closesthit.h>
-#include <rtx_shaders/gbuffer_psr_material_opaque_translucent_closesthit.h>
-#include <rtx_shaders/gbuffer_psr_material_rayPortal_closesthit.h>
-#include <rtx_shaders/gbuffer_psr_nrc_material_opaque_translucent_closesthit.h>
-#include <rtx_shaders/gbuffer_psr_nrc_material_rayPortal_closesthit.h>
+#include <rtx_shaders/gbuffer_material_opaque_translucent_closestHit.h>
+#include <rtx_shaders/gbuffer_material_rayportal_closestHit.h>
+#include <rtx_shaders/gbuffer_nrc_material_opaque_translucent_closestHit.h>
+#include <rtx_shaders/gbuffer_nrc_material_rayportal_closestHit.h>
+#include <rtx_shaders/gbuffer_psr_material_opaque_translucent_closestHit.h>
+#include <rtx_shaders/gbuffer_psr_material_rayportal_closestHit.h>
+#include <rtx_shaders/gbuffer_psr_nrc_material_opaque_translucent_closestHit.h>
+#include <rtx_shaders/gbuffer_psr_nrc_material_rayportal_closestHit.h>
 
 #include <rtx_shaders/gbuffer_miss_wboit.h>
 #include <rtx_shaders/gbuffer_nrc_miss_wboit.h>
 #include <rtx_shaders/gbuffer_psr_miss_wboit.h>
 #include <rtx_shaders/gbuffer_psr_nrc_miss_wboit.h>
 
-#include <rtx_shaders/gbuffer_material_opaque_translucent_closesthit_wboit.h>
-#include <rtx_shaders/gbuffer_material_rayPortal_closesthit_wboit.h>
-#include <rtx_shaders/gbuffer_nrc_material_opaque_translucent_closesthit_wboit.h>
-#include <rtx_shaders/gbuffer_nrc_material_rayPortal_closesthit_wboit.h>
-#include <rtx_shaders/gbuffer_psr_material_opaque_translucent_closesthit_wboit.h>
-#include <rtx_shaders/gbuffer_psr_material_rayPortal_closesthit_wboit.h>
-#include <rtx_shaders/gbuffer_psr_nrc_material_opaque_translucent_closesthit_wboit.h>
-#include <rtx_shaders/gbuffer_psr_nrc_material_rayPortal_closesthit_wboit.h>
+#include <rtx_shaders/gbuffer_material_opaque_translucent_closestHit_wboit.h>
+#include <rtx_shaders/gbuffer_material_rayportal_closestHit_wboit.h>
+#include <rtx_shaders/gbuffer_nrc_material_opaque_translucent_closestHit_wboit.h>
+#include <rtx_shaders/gbuffer_nrc_material_rayportal_closestHit_wboit.h>
+#include <rtx_shaders/gbuffer_psr_material_opaque_translucent_closestHit_wboit.h>
+#include <rtx_shaders/gbuffer_psr_material_rayportal_closestHit_wboit.h>
+#include <rtx_shaders/gbuffer_psr_nrc_material_opaque_translucent_closestHit_wboit.h>
+#include <rtx_shaders/gbuffer_psr_nrc_material_rayportal_closestHit_wboit.h>
 
 #include "dxvk_scoped_annotation.h"
 #include "rtx_context.h"

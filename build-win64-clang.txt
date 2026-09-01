@@ -1,0 +1,21 @@
+[binaries]
+c = '@GLOBAL_SOURCE_ROOT@/scripts-common/xwin/clang-cl'
+cpp = '@GLOBAL_SOURCE_ROOT@/scripts-common/xwin/clang-cl'
+ar = 'llvm-lib'
+strip = 'llvm-strip'
+windres = 'llvm-rc'
+c_ld = '@GLOBAL_SOURCE_ROOT@/scripts-common/xwin/lld-link'
+cpp_ld = '@GLOBAL_SOURCE_ROOT@/scripts-common/xwin/lld-link'
+
+[built-in options]
+c_args = ['/clang:-fuse-ld=lld']
+cpp_args = ['/clang:-fuse-ld=lld', '/clang:-msse4.1']
+
+[properties]
+needs_exe_wrapper = true
+
+[host_machine]
+system = 'windows'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'

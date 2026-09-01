@@ -78,15 +78,15 @@
 #endif
 
 // MinGW headers are broken. Who'dve guessed?
-#ifndef _MSC_VER
+#if !defined(_MSC_VER) && !defined(__MINGW32__)
 typedef struct _D3DDEVINFO_RESOURCEMANAGER
 {
   char dummy;
 } D3DDEVINFO_RESOURCEMANAGER, * LPD3DDEVINFO_RESOURCEMANAGER;
-
-#ifndef __WINE__
-extern "C" WINUSERAPI WINBOOL WINAPI SetProcessDPIAware(VOID);
 #endif
+
+#if !defined(_MSC_VER) && !defined(__WINE__)
+extern "C" WINUSERAPI WINBOOL WINAPI SetProcessDPIAware(VOID);
 #endif
 
 // This is the managed pool on D3D9Ex, it's just hidden!

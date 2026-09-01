@@ -45,7 +45,7 @@ namespace dxvk {
     static std::string renderToString(const RtxOptionLayer* layer, const char* layerName);
     
     // Render layer's state to ImGui with colored text
-    static void renderToImGui(const RtxOptionLayer* layer, const RenderOptions& options = {});
+    static void renderToImGui(const RtxOptionLayer* layer, const RenderOptions& options);
     
     // Convenience: display all options in a layer with optional filtering
     // Shows unsaved status for layers with config files
@@ -58,4 +58,3 @@ namespace dxvk {
   };
 
 } // namespace dxvk
-

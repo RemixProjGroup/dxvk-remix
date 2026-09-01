@@ -22,7 +22,7 @@
 #pragma once
 
 #include "rtx/external/NRC.h"
-#include "nrc/include/NrcStructures.h"
+#include "nrc/Include/NrcStructures.h"
 
 // Thread group dimensions for NRC resolve dispatch
 #define NRC_RESOLVE_THREADS_DISPATCH_WIDTH  16

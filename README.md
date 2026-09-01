@@ -134,6 +134,66 @@ The finished `d3d9.dll` is installed to `_output/`.
 See the contribution guide for local auto-deployment setup and bridge
 build instructions.
 
+### Linux cross-build with clang-cl
+
+Linux can build the x64 Windows runtime directly with clang-cl. This is
+a cross-build: the output is still `d3d9.dll`, not a native Linux shared
+library. Only the x64 target is supported.
+
+Install Git, LLVM/clang (including `clang-cl`, `lld-link`, `llvm-lib`,
+and `llvm-rc`), Meson, Ninja, Python 3, Wine, curl or wget, and Rust/Cargo.
+For example:
+
+```bash
+# Arch Linux
+sudo pacman -S --needed base-devel git clang lld llvm meson ninja python wine rust curl
+
+# Ubuntu/Debian
+sudo apt install build-essential git clang lld llvm meson ninja-build python3 wine64 cargo curl
+```
+
+Install [xwin](https://github.com/Jake-Shadle/xwin) and use it to obtain
+the Microsoft CRT and Windows SDK files. Passing `--accept-license`
+acknowledges Microsoft's download license terms.
+
+```bash
+cargo install xwin
+xwin --accept-license splat --output "${XDG_CACHE_HOME:-$HOME/.cache}/xwin/dxvk-remix"
+```
+
+Clone the repository with its submodules, then configure a
+`debugoptimized` build. Wine runs the Windows-only shader and embedding
+tools during compilation.
+
+```bash
+git clone --recursive https://github.com/<your-fork>/dxvk-remix.git
+cd dxvk-remix
+
+PATH="$PWD/scripts-common/xwin:$PATH" meson setup _Comp64Clang \
+  --cross-file build-win64-clang.txt \
+  --buildtype debugoptimized \
+  -Denable_tests=false \
+  -Denable_rtxio=true
+
+PATH="$PWD/scripts-common/xwin:$PATH" meson compile -C _Comp64Clang d3d9
+```
+
+The resulting runtime and symbols are written to:
+
+```text
+_Comp64Clang/src/d3d9/d3d9.dll
+_Comp64Clang/src/d3d9/d3d9.pdb
+```
+
+For subsequent builds, rerun only the `meson compile` command. Set
+`DXVK_XWIN_ROOT` before setup and compilation if the xwin files are
+stored somewhere other than the default cache path.
+
+The DLL must be deployed with the matching runtime dependencies from
+the build, particularly the USD, Boost.Python, and Python DLLs. Mixing
+the Python 3.10/unprefixed USD dependency set with a Python 3.11/prefixed
+USD package can prevent `d3d9.dll` from loading.
+
 ## Contributing
 
 Contributions are welcome, whether you're working on a game integration,

@@ -994,6 +994,8 @@ namespace dxvk {
                                        const BlasEntry& blas,
                                        const DrawCallState& drawCall,
                                        const MaterialData* materialData) {
+    MaterialData patchedMaterialData;
+
     const CategoryFlags previousCategoryFlags = currentInstance.m_categoryFlags;
     const uint8_t previousInstanceMask = currentInstance.m_vkInstance.mask;
     const uint32_t previousCustomIndexFlags = currentInstance.m_vkInstance.instanceCustomIndex & ~uint32_t(CUSTOM_INDEX_SURFACE_MASK);
@@ -1106,29 +1108,26 @@ namespace dxvk {
         currentInstance.m_isAnimated = currentInstance.surface.spriteSheetFPS != 0;
         currentInstance.surface.objectPickingValue = drawCall.drawCallID;
 
-        // Temp storage for the case we need to patch the material data
-        MaterialData tmpMaterialData;
-
         if (materialData->getType() == MaterialDataType::Opaque)
         {
           const bool useLegacyAlphaState = materialData->getOpaqueMaterialData().getUseLegacyAlphaState();
 
           if (currentInstance.m_isWorldSpaceUI) {
             // Here we need to do deep copy and patch the material
-            tmpMaterialData = *materialData;
-            materialData = &tmpMaterialData;
+            patchedMaterialData = *materialData;
+            materialData = &patchedMaterialData;
             // For worldspace UI, we want to show the UI (unlit) in the world.  So configure the blend mode if blending is used accordingly.
-            tmpMaterialData.getOpaqueMaterialData().setEnableEmission(true);
-            tmpMaterialData.getOpaqueMaterialData().setEmissiveIntensity(2.0f);
-            tmpMaterialData.getOpaqueMaterialData().setEmissiveColorTexture(tmpMaterialData.getOpaqueMaterialData().getAlbedoOpacityTexture());
+            patchedMaterialData.getOpaqueMaterialData().setEnableEmission(true);
+            patchedMaterialData.getOpaqueMaterialData().setEmissiveIntensity(2.0f);
+            patchedMaterialData.getOpaqueMaterialData().setEmissiveColorTexture(patchedMaterialData.getOpaqueMaterialData().getAlbedoOpacityTexture());
           } else if (currentInstance.surface.alphaState.emissiveBlend && RtxOptions::enableEmissiveBlendEmissiveOverride() && useLegacyAlphaState) {
             // Here we need to do deep copy and patch the material
-            tmpMaterialData = *materialData;
-            materialData = &tmpMaterialData;
+            patchedMaterialData = *materialData;
+            materialData = &patchedMaterialData;
             // If the user has decided to override the legacy alpha state, assume they know what they are doing and allow for explicit emission controls.
-            tmpMaterialData.getOpaqueMaterialData().setEnableEmission(true);
-            tmpMaterialData.getOpaqueMaterialData().setEmissiveIntensity(RtxOptions::emissiveBlendOverrideEmissiveIntensity());
-            tmpMaterialData.getOpaqueMaterialData().setEmissiveColorTexture(tmpMaterialData.getOpaqueMaterialData().getAlbedoOpacityTexture());
+            patchedMaterialData.getOpaqueMaterialData().setEnableEmission(true);
+            patchedMaterialData.getOpaqueMaterialData().setEmissiveIntensity(RtxOptions::emissiveBlendOverrideEmissiveIntensity());
+            patchedMaterialData.getOpaqueMaterialData().setEmissiveColorTexture(patchedMaterialData.getOpaqueMaterialData().getAlbedoOpacityTexture());
           }
 
           currentInstance.m_isSubsurface = materialData->getOpaqueMaterialData().getSubsurfaceDiffusionProfile();

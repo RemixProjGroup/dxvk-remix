@@ -47,7 +47,7 @@ static_assert((sizeof(ViewDistanceArgs) & 15) == 0);
 
 #include <cassert>
 
-#include "rtx_option.h"
+#include "../../../rtx_render/rtx_option.h"
 
 namespace dxvk {
 

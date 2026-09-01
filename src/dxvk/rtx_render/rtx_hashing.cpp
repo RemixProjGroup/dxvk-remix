@@ -134,7 +134,7 @@ namespace dxvk {
     __m128 val = _mm_set_ps(0.f, in[2], in[1], in[0]);
     // Calculate: round(val * invStepSize) * stepSize
     val = _mm_mul_ps(val, invStepSize);
-#if !defined(_M_ARM64EC)
+#if !defined(_M_ARM64EC) && !defined(__clang__)
     // NOTE: On arm64ec _mm_round_ps() is only available in software
     // NOTE: MathLib is polluting our usage of mm here, undef and use actual intrinsic
 #undef _mm_round_ps

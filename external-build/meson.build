@@ -49,7 +49,7 @@ if enable_sentry
   powrprof_lib = dxvk_compiler.find_library('powrprof')
   rpcrt4_lib = dxvk_compiler.find_library('rpcrt4')
   user32_lib = dxvk_compiler.find_library('user32')
-  synchronization_lib = dxvk_compiler.find_library('Synchronization')
+  synchronization_lib = dxvk_compiler.find_library('synchronization')
 
   # Declare the complete Sentry dependency with all required libraries
   sentry_dep = declare_dependency(
@@ -78,16 +78,16 @@ if enable_sentry
       ],
       include_directories : sentry_include_path
     )
-  add_project_arguments('/DREMIX_SENTRY_ENABLED=1', language : 'cpp')
+  add_project_arguments(cpp_define_prefix + 'REMIX_SENTRY_ENABLED=1', language : 'cpp')
 else
   sentry_dep = declare_dependency()
-  add_project_arguments('/DREMIX_SENTRY_ENABLED=0', language : 'cpp')
+  add_project_arguments(cpp_define_prefix + 'REMIX_SENTRY_ENABLED=0', language : 'cpp')
 endif
 
 # Sentry environment: when -Dremix_sentry_environment= is set (e.g. by CI), bake it in; otherwise C++ uses "development".
 remix_sentry_environment = get_option('remix_sentry_environment')
 if remix_sentry_environment != ''
-  add_global_arguments('/DREMIX_SENTRY_ENVIRONMENT="' + remix_sentry_environment + '"', language : 'cpp')
+  add_global_arguments(cpp_define_prefix + 'REMIX_SENTRY_ENVIRONMENT="' + remix_sentry_environment + '"', language : 'cpp')
 endif
 
 # ============================================================================
@@ -103,7 +103,7 @@ endif
 if dxvk_is_woa
   usd_debug_release_dir = 'external/usd_stock_arm64/' + usd_debug_or_release + '/'
 else
-  usd_debug_release_dir = 'external/nv_usd_' + usd_debug_or_release + '/'
+  usd_debug_release_dir = 'external/nv_usd_' + usd_debug_or_release.to_lower() + '/'
 endif
 
 usd_lib_path = join_paths(global_src_root_norm, usd_debug_release_dir)

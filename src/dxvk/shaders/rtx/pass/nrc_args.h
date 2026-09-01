@@ -24,7 +24,7 @@
 #include "rtx/utility/shader_types.h"
 #include "rtx/external/NRC.h"
 // WAR: Specify a relative path to this file since a file including this file doesn't resolve a relative path to global include paths specified in meson
-#include "../../../../../submodules/nrc/include/NrcStructures.h"
+#include "../../../../../submodules/nrc/Include/NrcStructures.h"
 #include "../shaders/rtx/concept/surface/surface_shared.h"
 
 // Note: Ensure 16B alignment
