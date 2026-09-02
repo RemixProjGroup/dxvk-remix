@@ -171,6 +171,42 @@ namespace dxvk {
   XXH64_hash_t g_usedFogStateHash;
   std::mutex g_imguiFogMapMutex; // protects g_imguiFogMap
 
+  bool aeroActionButton(const char* label, const ImVec2& size) {
+    ImGui::InvisibleButton(label, size);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImU32 top = held ? IM_COL32(6, 94, 166, 255) : hovered ? IM_COL32(92, 207, 247, 255) : IM_COL32(74, 182, 229, 255);
+    const ImU32 bottom = held ? IM_COL32(25, 142, 208, 255) : IM_COL32(7, 108, 181, 255);
+    draw->AddRectFilledMultiColor(min, max, top, top, bottom, bottom);
+    draw->AddRectFilled(ImVec2(min.x + 2.0f, min.y + 2.0f), ImVec2(max.x - 2.0f, min.y + (max.y - min.y) * 0.42f), IM_COL32(224, 251, 255, hovered ? 110 : 76), 6.0f);
+    draw->AddRect(min, max, IM_COL32(12, 103, 168, 255), 6.0f, 0, 1.0f);
+    const char* displayEnd = ImGui::FindRenderedTextEnd(label);
+    const ImVec2 text = ImGui::CalcTextSize(label, displayEnd);
+    draw->AddText(ImVec2(min.x + (max.x - min.x - text.x) * 0.5f, min.y + (max.y - min.y - text.y) * 0.5f), IM_COL32(247, 253, 255, 255), label, displayEnd);
+    return ImGui::IsItemClicked();
+  }
+
+  bool aeroBeginTabItem(const char* label, bool* pOpen, ImGuiTabItemFlags flags) {
+    const bool selected = ImGui::BeginTabItem(label, pOpen, flags);
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    if (max.x > min.x && max.y > min.y) {
+      ImDrawList* draw = ImGui::GetWindowDrawList();
+      const bool hovered = ImGui::IsItemHovered();
+      const ImU32 top = selected ? IM_COL32(96, 212, 248, 255) : hovered ? IM_COL32(183, 239, 255, 255) : IM_COL32(215, 244, 253, 255);
+      const ImU32 bottom = selected ? IM_COL32(16, 129, 200, 255) : IM_COL32(101, 188, 224, 255);
+      draw->AddRectFilledMultiColor(min, max, top, top, bottom, bottom);
+      draw->AddRectFilled(ImVec2(min.x + 1.0f, min.y + 1.0f), ImVec2(max.x - 1.0f, min.y + (max.y - min.y) * 0.42f), IM_COL32(245, 254, 255, selected ? 92 : 72), 5.0f);
+      draw->AddRect(min, max, IM_COL32(35, 136, 192, 255), 5.0f, 0, 1.0f);
+      const char* displayEnd = ImGui::FindRenderedTextEnd(label);
+      const ImVec2 text = ImGui::CalcTextSize(label, displayEnd);
+      draw->AddText(ImVec2(min.x + (max.x - min.x - text.x) * 0.5f, min.y + (max.y - min.y - text.y) * 0.5f), selected ? IM_COL32(255, 255, 255, 255) : IM_COL32(10, 67, 107, 255), label, displayEnd);
+    }
+    return selected;
+  }
   struct RtxTextureOption {
     const char* uniqueId;
     const char* displayName;
@@ -1034,10 +1070,19 @@ namespace dxvk {
     bool advancedMenuOpen = RtxOptions::showUI() == UIType::Advanced;
 
     if (ImGui::Begin("RTX Remix Developer Menu", &advancedMenuOpen, windowFlags)) {
+      // Aero material layer: title-band gradient and inset glass edge, behind controls.
+      ImDrawList* aeroDraw = ImGui::GetWindowDrawList();
+      const ImVec2 aeroPos = ImGui::GetWindowPos();
+      const ImVec2 aeroSize = ImGui::GetWindowSize();
+      const float aeroTitle = ImGui::GetFrameHeight();
+      aeroDraw->AddRectFilledMultiColor(aeroPos, ImVec2(aeroPos.x + aeroSize.x, aeroPos.y + aeroTitle),
+        IM_COL32(112, 225, 255, 255), IM_COL32(34, 157, 224, 255), IM_COL32(9, 107, 183, 255), IM_COL32(62, 187, 238, 255));
+      aeroDraw->AddLine(ImVec2(aeroPos.x + 3.0f, aeroPos.y + aeroTitle), ImVec2(aeroPos.x + aeroSize.x - 3.0f, aeroPos.y + aeroTitle), IM_COL32(201, 248, 255, 220), 1.5f);
+      aeroDraw->AddRect(ImVec2(aeroPos.x + 1.0f, aeroPos.y + 1.0f), ImVec2(aeroPos.x + aeroSize.x - 1.0f, aeroPos.y + aeroSize.y - 1.0f), IM_COL32(182, 239, 255, 190), 8.0f, 0, 1.0f);
       // Begin handles window resize so this is fine. Do not set m_windowWidth after tabs so that tabs can modify the width
       m_windowWidth = ImGui::GetWindowWidth();
 
-      if (ImGui::Button("Graphics Settings Menu", ImVec2(ImGui::GetContentRegionAvail().x * 0.5f, 0))) {
+      if (aeroActionButton("Graphics Settings Menu", ImVec2(ImGui::GetContentRegionAvail().x * 0.5f, ImGui::GetFrameHeight()))) {
         switchUI = (int) UIType::Basic;
       }
 
@@ -1061,7 +1106,7 @@ namespace dxvk {
             tabItemFlags |= ImGuiTabItemFlags_SetSelected;
             m_triggerTab = kTab_Count;
           }
-          if (ImGui::BeginTabItem(tabNames[n], nullptr, tabItemFlags)) {
+          if (aeroBeginTabItem(tabNames[n], nullptr, tabItemFlags)) {
             const Tabs tab = (Tabs) n;
             switch (tab) {
             case kTab_Rendering:
@@ -3115,7 +3160,40 @@ namespace dxvk {
     style->Colors[ImGuiCol_NavWindowingHighlight] = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
     style->Colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
     style->Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.56f);
-  }
+
+    // VHSify Longhorn / Frutiger Aero: native ImGui controls retain all behavior.
+    style->WindowRounding = 10.0f;
+    style->ChildRounding = 7.0f;
+    style->FrameRounding = 6.0f;
+    style->PopupRounding = 7.0f;
+    style->ScrollbarRounding = 8.0f;
+    style->GrabRounding = 7.0f;
+    style->TabRounding = 7.0f;
+    style->WindowBorderSize = 1.5f;
+    style->FrameBorderSize = 1.0f;
+    style->Colors[ImGuiCol_WindowBg] = ImVec4(0.84f, 0.94f, 0.98f, backgroundAlpha());
+    style->Colors[ImGuiCol_ChildBg] = ImVec4(0.92f, 0.98f, 1.00f, 0.92f);
+    style->Colors[ImGuiCol_PopupBg] = ImVec4(0.93f, 0.98f, 1.00f, 0.98f);
+    style->Colors[ImGuiCol_Text] = ImVec4(0.06f, 0.22f, 0.36f, 1.00f);
+    style->Colors[ImGuiCol_TextDisabled] = ImVec4(0.29f, 0.48f, 0.59f, 1.00f);
+    style->Colors[ImGuiCol_Border] = ImVec4(0.28f, 0.65f, 0.84f, 1.00f);
+    style->Colors[ImGuiCol_FrameBg] = ImVec4(0.96f, 1.00f, 1.00f, 1.00f);
+    style->Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.80f, 0.94f, 1.00f, 1.00f);
+    style->Colors[ImGuiCol_FrameBgActive] = ImVec4(0.67f, 0.87f, 0.97f, 1.00f);
+    style->Colors[ImGuiCol_TitleBg] = ImVec4(0.04f, 0.39f, 0.68f, 1.00f);
+    style->Colors[ImGuiCol_TitleBgActive] = ImVec4(0.03f, 0.52f, 0.80f, 1.00f);
+    style->Colors[ImGuiCol_Button] = ImVec4(0.16f, 0.57f, 0.83f, 1.00f);
+    style->Colors[ImGuiCol_ButtonHovered] = ImVec4(0.28f, 0.72f, 0.94f, 1.00f);
+    style->Colors[ImGuiCol_ButtonActive] = ImVec4(0.03f, 0.38f, 0.67f, 1.00f);
+    style->Colors[ImGuiCol_Header] = ImVec4(0.20f, 0.63f, 0.88f, 0.76f);
+    style->Colors[ImGuiCol_HeaderHovered] = ImVec4(0.31f, 0.76f, 0.96f, 0.88f);
+    style->Colors[ImGuiCol_HeaderActive] = ImVec4(0.09f, 0.48f, 0.75f, 0.92f);
+    style->Colors[ImGuiCol_CheckMark] = ImVec4(0.02f, 0.38f, 0.66f, 1.00f);
+    style->Colors[ImGuiCol_SliderGrab] = ImVec4(0.15f, 0.62f, 0.89f, 1.00f);
+    style->Colors[ImGuiCol_SliderGrabActive] = ImVec4(0.02f, 0.40f, 0.69f, 1.00f);
+    style->Colors[ImGuiCol_Tab] = ImVec4(0.55f, 0.84f, 0.95f, 0.74f);
+    style->Colors[ImGuiCol_TabHovered] = ImVec4(0.37f, 0.76f, 0.95f, 1.00f);
+    style->Colors[ImGuiCol_TabActive] = ImVec4(0.10f, 0.53f, 0.81f, 1.00f);  }
 
   void ImGUI::setLegacyStyle(ImGuiStyle* dst) {
     ImGuiStyle* style = dst ? dst : &ImGui::GetStyle();
@@ -3265,6 +3343,9 @@ namespace dxvk {
       setNvidiaStyle(style);
       break;
     }
+
+    // VHSify Aero is the runtime default, independent of legacy per-game theme state.
+    setToolkitStyle(style);
   }
 
   void ImGUI::showVsyncOptions(bool enableDLFGGuard) {
