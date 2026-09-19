@@ -1,0 +1,128 @@
+/*
+* Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
+*
+* Permission is hereby granted, free of charge, to any person obtaining a
+* copy of this software and associated documentation files (the "Software"),
+* to deal in the Software without restriction, including without limitation
+* the rights to use, copy, modify, merge, publish, distribute, sublicense,
+* and/or sell copies of the Software, and to permit persons to whom the
+* Software is furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+* DEALINGS IN THE SOFTWARE.
+*/
+#pragma once
+
+#include "rtx/pass/sharc/sharc_bindings.slangh"
+#include "rtx/utility/common.slangh"
+
+#if SHARC_UPDATE
+// Radiance and segment weight are recorded between cached vertices and propagated once, in
+// reverse, at path end. The camera prefix never enters the propagation, so no throughput
+// division is needed and a zero-throughput colour channel stays well defined. Constant array
+// indices let the compiler scalarize the small arrays.
+struct SharcUpdateState {
+  uint indices[SHARC_PROPAGATION_DEPTH];
+  vec3 radiance[SHARC_PROPAGATION_DEPTH];
+  vec3 weights[SHARC_PROPAGATION_DEPTH];
+  uint count;
+};
+
+void sharcAccumulateRadiance(inout SharcUpdateState state, vec3 radiance) {
+  [unroll]
+  for (uint i = 0; i < SHARC_PROPAGATION_DEPTH; ++i) {
+    if (state.count == i + 1) {
+      state.radiance[i] += state.weights[i] * radiance;
+    }
+  }
+}
+
+void sharcAccumulateThroughput(inout SharcUpdateState state, vec3 throughput) {
+  [unroll]
+  for (uint i = 0; i < SHARC_PROPAGATION_DEPTH; ++i) {
+    if (state.count == i + 1) {
+      state.weights[i] *= throughput;
+    }
+  }
+}
+
+void sharcInsertVertex(inout SharcUpdateState state, SharcHitData hit, uint portalSpace) {
+  if (state.count >= SHARC_PROPAGATION_DEPTH) {
+    return;
+  }
+
+  SharcParameters p = makeSharcParameters(portalSpace);
+  HashGridKey key;
+  HashGridIndex index;
+  if (!HashGridInsertEntry(p.hashGridData, hit.positionWorld, hit.normalWorld,
+                           p.hashGridParameters, key, index)) {
+    return;
+  }
+
+  [unroll]
+  for (uint i = 0; i < SHARC_PROPAGATION_DEPTH; ++i) {
+    if (state.count == i) {
+      state.indices[i] = index;
+      state.radiance[i] = vec3(0.0f);
+      state.weights[i] = vec3(1.0f);
+    }
+  }
+  ++state.count;
+}
+
+// Seeds the vertex just inserted with lighting already known at insertion and the weight of the
+// segment leaving it. The primary vertex needs both, because the direct pass lit it and sampled
+// its continuation before this stage ran.
+void sharcSeedVertex(inout SharcUpdateState state, vec3 radiance, vec3 weight) {
+  [unroll]
+  for (uint i = 0; i < SHARC_PROPAGATION_DEPTH; ++i) {
+    if (state.count == i + 1) {
+      state.radiance[i] = radiance;
+      state.weights[i] = weight;
+    }
+  }
+}
+
+// The ceiling one deposit into this cell may reach, as a multiple of what the cell already holds.
+// An absolute cap has to sit below the dimmest cell worth keeping, so a value low enough to catch
+// fireflies also caps every cell's mean. Scaling by the cell's own converged value instead leaves a
+// bright cell its headroom while a dark one refuses spikes it could never average away.
+float sharcDepositCeiling(SharcParameters p, uint index) {
+  if (cb.sharcArgs.maxDepositRatio <= 0.0f) {
+    return 0.0f;
+  }
+
+  const SharcVoxelData voxel = SharcGetVoxelData(p.resolvedBuffer, index);
+  // A cell this thin has no mean to scale by, but exempting it would exempt the population that
+  // boils: one deposit is a third or more of the mean a two-sample cell resolves to. Hold those to
+  // the absolute floor instead.
+  if (voxel.accumulatedSampleNum <= float(cb.sharcArgs.minSampleCount)) {
+    return cb.sharcArgs.minDepositCeiling;
+  }
+
+  const float mean = SharcLuma(SharcDecodeRadiance(voxel.accumulatedRadiance, vec3(0.0f, 0.0f, 1.0f)));
+  return max(cb.sharcArgs.maxDepositRatio * mean, cb.sharcArgs.minDepositCeiling);
+}
+
+void sharcFlushVertices(SharcUpdateState state) {
+  SharcParameters p = makeSharcParameters();
+  vec3 radiance = vec3(0.0f);
+
+  [unroll]
+  for (int i = SHARC_PROPAGATION_DEPTH - 1; i >= 0; --i) {
+    if (uint(i) < state.count) {
+      radiance = state.radiance[i] + state.weights[i] * radiance;
+      const vec3 deposit = fireflyFiltering(radiance, sharcDepositCeiling(p, state.indices[i]));
+      SharcAddVoxelData(p, state.indices[i], deposit, vec3(1.0f), vec3(0.0f, 0.0f, 1.0f), 0.0f, 1);
+    }
+  }
+}
+#endif

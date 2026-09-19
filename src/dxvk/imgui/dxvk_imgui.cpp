@@ -75,6 +75,7 @@
 #include "rtx_render/rtx_particle_system.h"
 #include "rtx_render/rtx_point_instancer_system.h"
 #include "rtx_render/rtx_overlay_window.h"
+#include "../rtx_render/rtx_sharc.h"
 
 
 namespace dxvk {
@@ -359,7 +360,11 @@ namespace dxvk {
           "RTX Neural Radiance Cache (NRC). NRC is an AI based world space radiance cache. It is live trained by the path tracer\n"
           "and allows paths to terminate early by looking up the cached value and saving performance.\n"
           "NRC supports infinite bounces and often provides results closer to that of reference than ReSTIR GI\n"
-          "while increasing performance in scenarios where ray paths have 2 or more bounces on average."}
+          "while increasing performance in scenarios where ray paths have 2 or more bounces on average."},
+        {IntegrateIndirectMode::Sharc, "SHARC",
+          "Spatially Hashed Radiance Cache (SHARC). A world space cache of irradiance held in a hash grid,\n"
+          "filled by a sparse update pass that traces one path per screen tile and read by the full resolution\n"
+          "indirect pass, which terminates a path into a cell once that cell has converged."}
     } }
   };
 
@@ -605,6 +610,11 @@ namespace dxvk {
     if (!NeuralRadianceCache::checkIsSupported(device)) {
       // Remove unsupported option
       integrateIndirectModeCombo.removeComboEntry(IntegrateIndirectMode::NeuralRadianceCache);
+    }
+
+    if (!RtxSharc::checkIsSupported(device)) {
+      // Remove unsupported option
+      integrateIndirectModeCombo.removeComboEntry(IntegrateIndirectMode::Sharc);
     }
 
     m_device->vkd()->vkCreateDescriptorPool(m_device->handle(), &pool_info, nullptr, &m_imguiPool);
@@ -3850,6 +3860,14 @@ namespace dxvk {
             ImGui::PushID("Neural Radiance Cache");
             NeuralRadianceCache& nrc = common->metaNeuralRadianceCache();
             nrc.showImguiSettings(*ctx);
+            ImGui::PopID();
+            ImGui::Unindent();
+          }
+        } else if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::Sharc) {
+          if (RemixGui::CollapsingHeader("SHARC", collapsingHeaderClosedFlags)) {
+            ImGui::Indent();
+            ImGui::PushID("SHARC");
+            common->metaSharc().showImguiSettings();
             ImGui::PopID();
             ImGui::Unindent();
           }

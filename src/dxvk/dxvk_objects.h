@@ -85,6 +85,7 @@ namespace dxvk {
   class ImGUI;
   class RtxTextureManager;
   class NeuralRadianceCache;
+  class RtxSharc;
   class DxvkXeSS;
   class SparseRendering;
 
@@ -174,6 +175,10 @@ namespace dxvk {
 
     NeeCachePass& metaNeeCache() {
       return m_neeCache.get();
+    }
+
+    RtxSharc& metaSharc() {
+      return m_sharc.get();
     }
 
     NeuralRadianceCache& metaNeuralRadianceCache() {
@@ -385,6 +390,7 @@ namespace dxvk {
     Active<DemodulatePass>                  m_demodulate;
     Active<NeeCachePass>                    m_neeCache;
     Active<NeuralRadianceCache>             m_neuralRadianceCache;
+    Active<RtxSharc>                        m_sharc;
     Active<DxvkDenoise>                     m_primaryDirectLightDenoiser;
     Active<DxvkDenoise>                     m_primaryIndirectLightDenoiser;
     Active<DxvkDenoise>                     m_primaryCombinedLightDenoiser;

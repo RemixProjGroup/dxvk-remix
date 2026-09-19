@@ -249,6 +249,14 @@
 #define DEBUG_VIEW_NRC_QUERY_NUMBER_OF_BOUNCES 575
 #define DEBUG_VIEW_NRC_QUERY_NUMBER_OF_PATH_SEGMENTS 576
 #define DEBUG_VIEW_NRC_QUERY_NUMBER_OF_INDIRECT_PATH_SEGMENTS 577
+
+#define DEBUG_VIEW_SHARC_QUERY_OUTCOME 580       // green hit, red miss, blue too close, yellow footprint too narrow, grey rejected
+#define DEBUG_VIEW_SHARC_REJECT_REASON 581       // first failing eligibility term, colour-coded
+#define DEBUG_VIEW_SHARC_CACHED_RADIANCE 582     // radiance read from the cache where the path ended on it
+#define DEBUG_VIEW_SHARC_TERMINATION_BOUNCE 583  // bounce at which the cache ended the path, 0 never
+#define DEBUG_VIEW_SHARC_GRID_CELLS 584          // hash-coloured cell at the vertex
+#define DEBUG_VIEW_SHARC_CELL_AGE 585            // R accumulated frames, G stale frames, B sample count
+
 #define DEBUG_VIEW_NRC_IS_OUTSIDE_SCENE_AABB 590
 
 #define DEBUG_VIEW_IS_BAKED_TERRAIN 600

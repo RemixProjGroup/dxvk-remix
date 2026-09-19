@@ -206,11 +206,85 @@
 //!>       UNORDERED_RESOLVE_WBOIT
 
 
+/* SHARC */
+// Dedicated variants keep SHARC descriptors and payload state out of every other shader.
+// The update stage traces inline RayQuery from a ray generation shader; the query stage uses
+// the same TraceRay hit and miss shaders as the ordinary indirect pass.
+
+//!variant integrate_indirect_sharc_update4.rgen
+//!>       RAY_PIPELINE
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_PROPAGATION_DEPTH=4
+//!>       NEE_CACHE_ENABLE=1
+
+//!variant integrate_indirect_sharc_update4_wboit.rgen
+//!>       RAY_PIPELINE
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_PROPAGATION_DEPTH=4
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+
+//!variant integrate_indirect_sharc_update8.rgen
+//!>       RAY_PIPELINE
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_PROPAGATION_DEPTH=8
+//!>       NEE_CACHE_ENABLE=1
+
+//!variant integrate_indirect_sharc_update8_wboit.rgen
+//!>       RAY_PIPELINE
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_PROPAGATION_DEPTH=8
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+
+//!variant integrate_indirect_sharc_query.rgen
+//!>       RT_TRACE_RAY
+//!>       RAY_PIPELINE
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+
+//!variant integrate_indirect_sharc_query_wboit.rgen
+//!>       RT_TRACE_RAY
+//!>       RAY_PIPELINE
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+
+//!variant integrate_indirect_sharc_query_ser.rgen
+//!>       RT_TRACE_RAY
+//!>       RAY_PIPELINE
+//!>       RT_SHADER_EXECUTION_REORDERING
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+
+//!variant integrate_indirect_sharc_query_ser_wboit.rgen
+//!>       RT_TRACE_RAY
+//!>       RAY_PIPELINE
+//!>       RT_SHADER_EXECUTION_REORDERING
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+
 //!end-variants
 
 #define INTEGRATE_INDIRECT
 #define RAB_HAS_PREVIOUS_GBUFFER 1
 #define OPAQUE_MATERIAL_USE_POM 1
+#if ENABLE_SHARC
+// The cache update stage depends on secondary NEE sample stealing: an update path that gathers
+// only what a brute-force secondary bounce finds deposits a far noisier value into a cell, and a
+// cell is a mean, so that noise does not average out per pixel the way a path tracer's does.
+#define RAB_HAS_RTXDI_RESERVOIRS 1
+#endif
+
 // Note: Opacity lighting approximation used in the indirect integration pass due to particle lighting being somewhat
 // important in reflections off shiny surfaces (as without this it can make areas with many particles look weird in reflections).
 #define RESOLVE_OPACITY_LIGHTING_APPROXIMATION 1

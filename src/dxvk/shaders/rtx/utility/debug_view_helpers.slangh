@@ -20,6 +20,9 @@
 * DEALINGS IN THE SOFTWARE.
 */
 #pragma once
+#ifndef SHARC_UPDATE
+#define SHARC_UPDATE 0
+#endif
 
 #include "rtx/utility/debug_view_indices.h"
 #include "rtx/utility/color.slangh"
@@ -31,12 +34,18 @@ vec4 readInDebugView(uvec2 pixelCoordinate)
 
 void storeInDebugView(uvec2 pixelCoordinate, bool value)
 {
+// Cache update paths must not alter the render debug image
+#if !SHARC_UPDATE
   imageStore(DebugView, ivec2(pixelCoordinate), value ? vec4(1.0) : vec4(0.0));
+#endif
 }
 
 void storeInDebugView(uvec2 pixelCoordinate, vec4 value)
 {
+// Cache update paths must not alter the render debug image
+#if !SHARC_UPDATE
   imageStore(DebugView, ivec2(pixelCoordinate), value);
+#endif
 }
 
 void storeInDebugView(uvec2 pixelCoordinate, vec3 value)

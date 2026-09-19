@@ -224,16 +224,85 @@
 //!>       OPAQUE_MATERIAL_USE_POM=1
 //!>       UNORDERED_RESOLVE_WBOIT
 
+/* SHARC */
+// A token in the name means that feature is on.
+
+//!variant integrate_indirect_sharc_query_closesthit.rchit
+//!>       SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK=SURFACE_MATERIAL_RESOLVE_TYPE_OPAQUE_TRANSLUCENT
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+
+//!variant integrate_indirect_sharc_query_closesthit_wboit.rchit
+//!>       SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK=SURFACE_MATERIAL_RESOLVE_TYPE_OPAQUE_TRANSLUCENT
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+
+//!variant integrate_indirect_sharc_query_closesthit_pom.rchit
+//!>       SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK=SURFACE_MATERIAL_RESOLVE_TYPE_OPAQUE_TRANSLUCENT
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+//!>       OPAQUE_MATERIAL_USE_POM=1
+
+//!variant integrate_indirect_sharc_query_closesthit_pom_wboit.rchit
+//!>       SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK=SURFACE_MATERIAL_RESOLVE_TYPE_OPAQUE_TRANSLUCENT
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+//!>       OPAQUE_MATERIAL_USE_POM=1
+//!>       UNORDERED_RESOLVE_WBOIT
+
+//!variant integrate_indirect_sharc_query_closesthit_portals.rchit
+//!>       SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK=SURFACE_MATERIAL_RESOLVE_TYPE_ALL
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+
+//!variant integrate_indirect_sharc_query_closesthit_portals_wboit.rchit
+//!>       SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK=SURFACE_MATERIAL_RESOLVE_TYPE_ALL
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+
+//!variant integrate_indirect_sharc_query_closesthit_portals_pom.rchit
+//!>       SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK=SURFACE_MATERIAL_RESOLVE_TYPE_ALL
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+//!>       OPAQUE_MATERIAL_USE_POM=1
+
+//!variant integrate_indirect_sharc_query_closesthit_portals_pom_wboit.rchit
+//!>       SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK=SURFACE_MATERIAL_RESOLVE_TYPE_ALL
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+//!>       OPAQUE_MATERIAL_USE_POM=1
+//!>       UNORDERED_RESOLVE_WBOIT
+
 //!end-variants
 
 #define RAY_PIPELINE
 #define INTEGRATE_INDIRECT
 #define RAB_HAS_PREVIOUS_GBUFFER 1
 #define RAB_HAS_RTXDI_RESERVOIRS 1
+#if ENABLE_SHARC && !defined(RAB_HAS_RTXDI_RESERVOIRS)
+// A SHARC stage without these loads an empty reservoir, so the steal always fails, and a
+// failed steal skips the NEE cache and RIS fallback below: no shadow ray, no direct light.
+#error "SHARC stages require RAB_HAS_RTXDI_RESERVOIRS."
+#endif
+
 
 // Note: ReSTIR GI Reservoirs are not available with NRC enabled, but 
 // the usage of the reservoirs is gated on ReSTIR GI being enabled
+#if !ENABLE_SHARC
+// ReSTIR GI is a different integrate-indirect mode; its reservoirs hold nothing under SHARC.
 #define RAB_HAS_RESTIR_GI_RESERVOIRS 1
+#endif
+
 // Note: Opacity lighting approximation used in the indirect integration pass due to particle lighting being somewhat
 // important in reflections off shiny surfaces (as without this it can make areas with many particles look weird in reflections).
 #define RESOLVE_OPACITY_LIGHTING_APPROXIMATION 1

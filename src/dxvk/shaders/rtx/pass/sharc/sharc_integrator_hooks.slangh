@@ -1,0 +1,534 @@
+/*
+* Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
+*
+* Permission is hereby granted, free of charge, to any person obtaining a
+* copy of this software and associated documentation files (the "Software"),
+* to deal in the Software without restriction, including without limitation
+* the rights to use, copy, modify, merge, publish, distribute, sublicense,
+* and/or sell copies of the Software, and to permit persons to whom the
+* Software is furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+* DEALINGS IN THE SOFTWARE.
+*/
+#pragma once
+
+// SHARC's contract with the indirect integrator. The bodies live here so that
+// integrator_indirect.slangh carries call sites rather than preprocessor blocks.
+
+#if ENABLE_SHARC
+// Why a resolved vertex is refused, in evaluation order. The first failing term is the one
+// reported, so the debug view and the eligibility test derive from one function and cannot
+// disagree.
+static const uint kSharcRejectNone = 0;
+static const uint kSharcRejectNonOpaque = 1;   // translucent or other non-opaque material
+static const uint kSharcRejectMedium = 2;      // inside a medium, or a medium rides on the path
+static const uint kSharcRejectOpacity = 3;     // opaque material with opacity below 1
+static const uint kSharcRejectSubsurface = 4;  // subsurface diffusion profile material
+static const uint kSharcRejectEmissive = 5;    // emissive radiance above maxEmissiveLuminance
+static const uint kSharcRejectLobe = 6;        // non-diffuse arrival while specular reuse is off
+static const uint kSharcRejectRoughness = 7;   // isotropic roughness below minRoughness
+
+uint sharcRejectReason(bool opaqueMaterial, bool inMedium, OpaqueSurfaceMaterialInteraction sharcMaterial,
+                       vec3 emissiveLight, bool lobeEligible)
+{
+  if (!opaqueMaterial)
+  {
+    return kSharcRejectNonOpaque;
+  }
+  if (inMedium)
+  {
+    return kSharcRejectMedium;
+  }
+  if (sharcMaterial.opacity < 1.0f)
+  {
+    return kSharcRejectOpacity;
+  }
+  if (isSubsurfaceDiffusionProfileMaterial(sharcMaterial))
+  {
+    return kSharcRejectSubsurface;
+  }
+  if (calcBt709Luminance(emissiveLight) > cb.sharcArgs.maxEmissiveLuminance)
+  {
+    return kSharcRejectEmissive;
+  }
+  if (!lobeEligible)
+  {
+    return kSharcRejectLobe;
+  }
+  // The floor guards the cell's own directionality, which does not depend on the lobe that
+  // reached it: a specular arrival is held to the same threshold as a diffuse one, and the
+  // width of the arriving lobe is tested separately, at query time, by sharcFootprintValid.
+  if (sharcMaterial.isotropicRoughness < cb.sharcArgs.minRoughness)
+  {
+    return kSharcRejectRoughness;
+  }
+  return kSharcRejectNone;
+}
+#endif
+
+#if ENABLE_SHARC && SHARC_QUERY
+// The cone-footprint gate for glossy arrivals: by the time the lobe that launched the segment
+// reaches this vertex it must have spread wider than the voxel, or a narrow reflection would be
+// served the cell's isotropic average. alpha is the launching surface's GGX roughness and the
+// length is the whole segment, because cutout, clip and portal re-traces continue the same lobe.
+// A diffuse lobe is as wide as lobes get and is never tested.
+bool sharcFootprintValid(float launchPerceptualRoughness, float segmentLength, float voxelSize)
+{
+  const float clampedRoughness = min(launchPerceptualRoughness, 0.99f);
+  const float alpha = clampedRoughness * clampedRoughness;
+  const float alpha2 = alpha * alpha;
+  const float footprint = segmentLength * sqrt(0.5f * alpha2 / max(1.0f - alpha2, 1e-6f));
+  return footprint > voxelSize;
+}
+
+// cb.debugView is uniform, so a production frame pays one range compare per resolved vertex.
+// The SHARC indices are contiguous so that the one compare covers all of them.
+bool sharcDebugViewActive()
+{
+  return cb.debugView >= DEBUG_VIEW_SHARC_QUERY_OUTCOME && cb.debugView <= DEBUG_VIEW_SHARC_CELL_AGE;
+}
+
+// Per-pixel views show one indirect vertex: ROUND(debugKnob.x) selects it, 0 being the first
+// indirect hit, matching the NRC bounce views.
+bool sharcDebugBounceSelected(uint bounceIteration)
+{
+  return bounceIteration == uint(max(0, int(round(cb.debugKnob.x)))) + 1;
+}
+
+vec3 sharcDebugPalette(uint code)
+{
+  switch (code)
+  {
+  case 1: return vec3(1.0f, 0.0f, 0.0f); // red
+  case 2: return vec3(0.0f, 1.0f, 0.0f); // green
+  case 3: return vec3(0.0f, 0.0f, 1.0f); // blue
+  case 4: return vec3(1.0f, 1.0f, 0.0f); // yellow
+  case 5: return vec3(1.0f, 0.0f, 1.0f); // magenta
+  case 6: return vec3(0.0f, 1.0f, 1.0f); // cyan
+  case 7: return vec3(1.0f, 1.0f, 1.0f); // white
+  case 8: return vec3(0.5f, 0.5f, 0.5f); // grey
+  default: return vec3(0.0f, 0.0f, 0.0f);
+  }
+}
+
+// Views that want every resolved vertex at the selected bounce, eligible or not.
+void sharcDebugVertex(PathState pathState, SurfaceInteraction surfaceInteraction, uint sharcReason)
+{
+  const uvec2 pixel = pathState.pixelCoordinate;
+  switch (cb.debugView)
+  {
+  case DEBUG_VIEW_SHARC_QUERY_OUTCOME:
+    // Grey: rejected before any lookup. Eligible vertices are painted by sharcDebugQuery.
+    if (sharcReason != kSharcRejectNone)
+    {
+      storeInDebugView(pixel, sharcDebugPalette(8));
+    }
+    break;
+  case DEBUG_VIEW_SHARC_REJECT_REASON:
+    // Black eligible, red non-opaque, green medium, blue opacity, yellow subsurface,
+    // magenta emissive, cyan lobe, white roughness.
+    storeInDebugView(pixel, sharcDebugPalette(sharcReason));
+    break;
+  case DEBUG_VIEW_SHARC_GRID_CELLS:
+  case DEBUG_VIEW_SHARC_CELL_AGE:
+  {
+    SharcParameters p = makeSharcParameters(pathState.portalSpace);
+    if (cb.debugView == DEBUG_VIEW_SHARC_GRID_CELLS)
+    {
+      storeInDebugView(pixel, HashGridDebugColoredHash(surfaceInteraction.position, surfaceInteraction.geometryNormal, p.hashGridParameters));
+    }
+    else
+    {
+      const HashGridKey key = HashGridComputeSpatialHash(surfaceInteraction.position, surfaceInteraction.geometryNormal, p.hashGridParameters);
+      HashGridIndex index;
+      uint bucketOffset;
+      if (HashGridFind(p.hashGridData, key, HashGridGetBaseSlot(key, p.hashGridData.capacity), HASH_GRID_HASH_MAP_BUCKET_SIZE, index, bucketOffset))
+      {
+        const SharcVoxelData voxel = SharcGetVoxelData(p.resolvedBuffer, index);
+        // R frames accumulated, G frames since the last sample, B sample count. Absent cells stay black.
+        storeInDebugView(pixel, vec4(float(voxel.accumulatedFrameNum), float(voxel.staleFrameNum), voxel.accumulatedSampleNum, 1.0f));
+      }
+    }
+    break;
+  }
+  default:
+    break;
+  }
+}
+
+// Views fed by the lookup itself.
+void sharcDebugQuery(PathState pathState, bool selectedBounce, bool farEnough, bool footprintOk, bool cacheHit, vec3 cachedRadiance)
+{
+  const uvec2 pixel = pathState.pixelCoordinate;
+  switch (cb.debugView)
+  {
+  case DEBUG_VIEW_SHARC_QUERY_OUTCOME:
+    if (selectedBounce)
+    {
+      // Green hit, blue too close, yellow footprint too narrow, red miss.
+      storeInDebugView(pixel, sharcDebugPalette(cacheHit ? 2u : !farEnough ? 3u : !footprintOk ? 4u : 1u));
+    }
+    break;
+  case DEBUG_VIEW_SHARC_CACHED_RADIANCE:
+    // A hit ends the path, so at most one write per pixel: the radiance actually used.
+    if (cacheHit)
+    {
+      storeInDebugView(pixel, cachedRadiance);
+    }
+    break;
+  case DEBUG_VIEW_SHARC_TERMINATION_BOUNCE:
+    if (cacheHit)
+    {
+      storeInDebugView(pixel, float(pathState.bounceIteration));
+    }
+    break;
+  default:
+    break;
+  }
+}
+#endif
+
+// Called once per secondary segment, before its first trace.
+void sharcOnSegmentBegin(inout PathState pathState)
+{
+#if ENABLE_SHARC && SHARC_QUERY
+  pathState.sharcSegmentDistance = 0.0f;
+#endif
+}
+
+// Called after every resolve leg of a segment, whether resolving stops there or re-traces.
+// Cutouts, clipped geometry, portal quads and teleports each restart segmentHitDistance from the
+// interaction, so on its own that is the last leg rather than the distance from the previous vertex.
+void sharcOnResolveLeg(inout PathState pathState)
+{
+#if ENABLE_SHARC && SHARC_QUERY
+  // Misses carry kMissHitDistance.
+  if (pathState.segmentHitDistance > 0.0f)
+  {
+    pathState.sharcSegmentDistance = pathState.sharcSegmentDistance + pathState.segmentHitDistance;
+  }
+#endif
+}
+
+// Called once the continuation lobe has been sampled at an opaque or translucent vertex, before
+// the next segment is traced. The query at the next vertex gates on the lobe that launched the
+// segment and cannot see this vertex, so what it needs is carried on the path state.
+void sharcOnContinuationSampled(inout PathState pathState, bool opaqueMaterial, uint8_t continuationLobe, float isotropicRoughness)
+{
+#if ENABLE_SHARC && SHARC_QUERY
+  if (!opaqueMaterial)
+  {
+    // Translucent lobes are delta: no footprint, so the gate refuses them at any distance.
+    pathState.sharcLaunchPerceptualRoughness = 0.0f;
+  }
+  else if (continuationLobe != opaqueLobeTypeOpacityTransmission)
+  {
+    // isotropicRoughness is GGX alpha; the gate squares the perceptual value back.
+    pathState.sharcLaunchPerceptualRoughness = sqrt(isotropicRoughness);
+  }
+  // Opacity transmission continues straight through a cutout, so the lobe in flight is still the
+  // one that launched into this vertex and its roughness stays. The segment length restarts here,
+  // which under-states the spread and therefore errs toward refusing a lookup.
+#endif
+}
+
+#if ENABLE_SHARC && SHARC_UPDATE
+// RNG stream for re-sampled first bounces; the per-bounce closest-hit offsets stop well below it.
+static const uint kSharcSkyRetryRngOffset = 240;
+
+// Kensler's cycle-walking permutation (Correlated Multi-Jittered Sampling, 2013): a bijection on
+// [0, count) for any count, seeded by seed. One iteration when count is a power of two, about 1.8
+// on average otherwise; the guard bounds a case that has not needed more than ten.
+uint sharcPermute(uint index, uint count, uint seed)
+{
+  uint w = count - 1;
+  w |= w >> 1; w |= w >> 2; w |= w >> 4; w |= w >> 8; w |= w >> 16;
+  [loop]
+  for (uint guard = 0; guard < 16u; ++guard)
+  {
+    index ^= seed;              index *= 0xe170893du;
+    index ^= seed >> 16;
+    index ^= (index & w) >> 4;
+    index ^= seed >> 8;         index *= 0x0929eb3fu;
+    index ^= seed >> 23;
+    index ^= (index & w) >> 1;  index *= 1u | (seed >> 27);
+                                index *= 0x6935fa69u;
+    index ^= (index & w) >> 11; index *= 0x74dcb303u;
+    index ^= (index & w) >> 2;  index *= 0x9e501cc3u;
+    index ^= (index & w) >> 2;  index *= 0xc860a3dfu;
+    index &= w;
+    index ^= index >> 5;
+    if (index < count)
+    {
+      break;
+    }
+  }
+  // Still in range if the guard expires, so the worst case is one imperfect draw.
+  return (index + seed) % count;
+}
+
+// Which pixel inside its tile this update invocation samples this frame.
+//
+// The dispatch is one thread per tile, so each thread picks a source pixel and over time the tile
+// should see all of them. Permuting per tile keeps the stratification -- every tile visits all
+// tileSize^2 positions exactly once per tileSize^2 frames -- while giving each tile its own order.
+// A shared order instead translates the whole sampling lattice rigidly each frame, which correlates
+// neighbouring tiles and beats against regularly spaced geometry.
+uvec2 sharcTileOffset(uvec2 tile, uint tileSize)
+{
+  uint seed = (tile.x * 73856093u) ^ (tile.y * 19349663u);
+  seed ^= seed >> 15; seed *= 0x2c1b3c6du; seed ^= seed >> 12;
+  const uint positions = tileSize * tileSize;
+  const uint slot = sharcPermute(cb.frameIdx % positions, positions, seed);
+  return uvec2(slot % tileSize, slot / tileSize);
+}
+
+// The primary vertex's eligibility, from the G-buffer words the direct pass decodes, through the
+// one predicate secondary hits use. Only the fields sharcRejectReason reads are filled in.
+uint sharcPrimaryRejectReason(uvec2 pixel, bool inMedium, float perceptualRoughness)
+{
+  const uint data0 = SharedMaterialData0[pixel];
+  const uint data1 = SharedMaterialData1[pixel];
+  const bool opaque = ((data0 >> 30) & surfaceMaterialTypeMask) == surfaceMaterialTypeOpaque;
+  const uint8_t flagsAndType = uint8_t(data0 >> 24);
+  const bool thinFilm = (flagsAndType & OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_USE_THIN_FILM_LAYER) != 0;
+  const vec3 emissive = gammaToLinearFast(vec3(
+    unorm8ToF32(uint8_t(data0 >> 16)), unorm8ToF32(uint8_t(data1 >> 0)), unorm8ToF32(uint8_t(data1 >> 8))))
+    * uint16BitsToF32(uint16_t(data1 >> 16));
+
+  OpaqueSurfaceMaterialInteraction material = (OpaqueSurfaceMaterialInteraction)0;
+  // The G-buffer stores either opacity or thin film thickness in this byte, never both.
+  material.opacity = thinFilm ? 1.0f : float(unorm8ToF16(uint8_t(data0 >> 8)));
+  material.isotropicRoughness = calcRoughness(perceptualRoughness);
+  material.subsurfaceMaterialInteraction.maxSampleRadius = uint8_t(SharedSubsurfaceData[pixel].y >> 8);
+
+  // The camera ray is the arrival: no lobe to classify.
+  return sharcRejectReason(opaque, inMedium, material, emissive, true);
+}
+
+// Called once per update path after its launch state is final and before the first segment is
+// traced. Deposits the primary vertex when SHARC_FLAG_UPDATE_PRIMARY_VERTEX is set: the direct pass
+// lit this surface with RTXDI and sampled its continuation, so the vertex's outgoing radiance is
+// that direct light plus the sampled segment's weight times whatever the path gathers onward, which
+// is the estimator a secondary vertex gets with RTXDI standing in for the secondary NEE. Without it
+// a path whose first bounce exits to the sky inserts nothing at all.
+//
+// A path that will not launch still deposits, carrying the direct light alone. A cell is a mean of
+// its samples rather than a sum, so a first-bounce roulette that terminates the path must land here
+// as a zero-indirect sample: the survivors carry the 1/p compensation, and only with the terminated
+// paths counted does the mean come out at direct + T * L, the pixel's own expectation. The same
+// holds for invalid samples, where the pixel also adds nothing.
+void sharcOnPathStart(inout PathState pathState, uvec2 pixel, GeometryFlags geometryFlags, uint mediumMaterialIndex, float perceptualRoughness)
+{
+  if ((cb.sharcArgs.flags & SHARC_FLAG_UPDATE_PRIMARY_VERTEX) == 0)
+  {
+    return;
+  }
+  // A PSR pixel's G-buffer surface is the replaced one and its throughput carries the mirror or
+  // glass in front; a translucent primary integrates the surface behind it; a view model moves with
+  // the camera. None is a cell a world-space reader wants.
+  if (!geometryFlags.primarySelectedIntegrationSurface || geometryFlags.performedAnyPSR() || geometryFlags.isViewModel)
+  {
+    return;
+  }
+
+  const bool inMedium = mediumMaterialIndex != SURFACE_INDEX_INVALID || geometryFlags.insideMedium;
+  if (sharcPrimaryRejectReason(pixel, inMedium, perceptualRoughness) != kSharcRejectNone)
+  {
+    return;
+  }
+
+  const MinimalSurfaceInteraction primary = minimalSurfaceInteractionReadFromGBuffer(pixel, PrimaryWorldPositionWorldTriangleNormal);
+  // Both lobes, as secondary NEE sums both. The primary's own emission is not in these textures,
+  // which is what the cache requires.
+  const vec3 directLight = PrimaryDirectDiffuseLobeRadianceHitDistance[pixel].xyz + PrimaryDirectSpecularLobeRadianceHitDistance[pixel].xyz;
+  if (!primary.isValid || !isValidValue(directLight))
+  {
+    return;
+  }
+
+  SharcHitData sharcHit = (SharcHitData)0;
+  sharcHit.positionWorld = primary.position;
+  sharcHit.normalWorld = primary.geometryNormal;
+  // The weight of the segment leaving the primary is the launch throughput the direct pass stored:
+  // BSDF times cosine over the lobe and direction pdfs, plus any POM attenuation.
+  const vec3 segmentWeight = pathState.continuePath ? vec3(pathState.throughput) : vec3(0.0f);
+
+  const uint countBefore = pathState.sharcState.count;
+  sharcInsertVertex(pathState.sharcState, sharcHit, pathState.portalSpace);
+  if (pathState.sharcState.count > countBefore)
+  {
+    sharcSeedVertex(pathState.sharcState, directLight, segmentWeight);
+  }
+}
+
+// Called after every traced segment of an update path. A first bounce that exited to the sky
+// inserted nothing beyond the primary, so the path's budget bought no cell sample; re-sample that
+// bounce from a cosine lobe about the primary normal and trace again. What a cell stores does not
+// depend on how a ray reached it, so this changes which cells get samples, not what they hold. The
+// primary's own sample is complete here and is flushed first, so a retry cannot credit it twice.
+void sharcOnSegmentEnd(inout PathState pathState, uvec2 pixel, GeometryFlags geometryFlags,
+  vec3 rayOrigin, float rayConeRadius, uint mediumMaterialIndex, inout uint retriesLeft)
+{
+  // A miss at bounce 1 leaves bounceIteration at 0, integratePathVertex having decremented it on
+  // the miss, with continuePath false; every other outcome leaves it at 1 or more.
+  if (retriesLeft == 0 || pathState.continuePath || pathState.bounceIteration != 0)
+  {
+    return;
+  }
+  // The ray that missed may have teleported first, so its state no longer describes the primary.
+  if (pathState.portalSpace != geometryFlags.portalSpace)
+  {
+    return;
+  }
+
+  const MinimalSurfaceInteraction primary = minimalSurfaceInteractionReadFromGBuffer(pixel, PrimaryWorldPositionWorldTriangleNormal);
+  if (!primary.isValid)
+  {
+    return;
+  }
+
+  --retriesLeft;
+  sharcFlushVertices(pathState.sharcState);
+  pathState.sharcState.count = 0;
+
+  RNG rng = createRNG(pixel, cb.frameIdx, kSharcSkyRetryRngOffset + retriesLeft * 2u);
+  const vec2 u = vec2(getNextSampleBlueNoise(rng), getNextSampleBlueNoise(rng));
+  float solidAnglePdf;
+  const vec3 local = calcCosineHemisphereDirectionSample(u, solidAnglePdf);
+  vec3 tangent, bitangent;
+  calcOrthonormalBasis(primary.geometryNormal, tangent, bitangent);
+
+  // Relaunch from the direct pass's offset origin; the miss may have re-traced through cutouts or
+  // media and left the payload's origin and medium somewhere along the way.
+  pathState.origin = rayOrigin;
+  pathState.direction = normalize(tangent * local.x + bitangent * local.y + primary.geometryNormal * local.z);
+  pathState.coneRadius = rayConeRadius;
+  pathState.mediumMaterialIndex = mediumMaterialIndex;
+  pathState.insideMedium = geometryFlags.insideMedium;
+  pathState.solidAnglePdf = solidAnglePdf;
+  // A cosine lobe is a diffuse gather.
+  pathState.sharcDiffuseArrival = true;
+  pathState.continuePath = true;
+}
+#endif
+
+// The update-stage roughness clamp, called once per resolved vertex after the cache has decided
+// what it thinks of the surface. A cell stores one non-directional radiance value, so a narrow
+// specular lobe is the one thing it cannot represent: every update path reaching a glossy surface
+// from a different direction deposits a different answer and the cell's mean never settles.
+// Roughening the material first makes the deposit describe what the surface would reflect if it
+// were rough, which is a quantity a single value can hold.
+//
+// Separate from sharcRejectReason's minRoughness and ordered after it, so the clamp never feeds
+// query eligibility: eligibility sees the true roughness, and the clamp refuses no lookup and
+// rejects no surface. It changes what a cell holds, not which surfaces have one.
+void sharcClampUpdateRoughness(inout PolymorphicSurfaceMaterialInteraction polymorphicSurfaceMaterialInteraction, uint materialType)
+{
+#if ENABLE_SHARC && SHARC_UPDATE
+  const float roughnessFloor = cb.sharcArgs.updateRoughnessClamp;
+  if (roughnessFloor <= 0.0f || materialType != surfaceMaterialTypeOpaque)
+  {
+    return;
+  }
+
+  OpaqueSurfaceMaterialInteraction material = opaqueSurfaceMaterialInteractionCreate(polymorphicSurfaceMaterialInteraction);
+  // An anisotropic axis can sit below the floor while the isotropic value clears it, so all three
+  // are tested.
+  if (material.isotropicRoughness >= roughnessFloor && all(material.anisotropicRoughness >= vec2(roughnessFloor)))
+  {
+    return;
+  }
+
+  // Raising every axis to the same floor also flattens anisotropy, which the cache cannot
+  // represent either.
+  material.isotropicRoughness = max(material.isotropicRoughness, roughnessFloor);
+  material.anisotropicRoughness = max(material.anisotropicRoughness, vec2(roughnessFloor));
+  polymorphicSurfaceMaterialInteraction = polymorphicSurfaceMaterialInteractionCreateInternal(material);
+#endif
+}
+
+// Called once per resolved opaque vertex, after emissive radiance has been accumulated, since the
+// cache stores reflected lighting and emission must already be live.
+//
+// Returns true when the cache supplied radiance for this vertex and the caller should stop walking
+// the path.
+bool sharcOnResolvedVertex(
+  inout PathState pathState,
+  SurfaceInteraction surfaceInteraction,
+  PolymorphicSurfaceMaterialInteraction polymorphicSurfaceMaterialInteraction,
+  uint materialType,
+  vec3 emissiveLight)
+{
+#if ENABLE_SHARC
+  const OpaqueSurfaceMaterialInteraction sharcMaterial = opaqueSurfaceMaterialInteractionCreate(polymorphicSurfaceMaterialInteraction);
+  const bool allowSpecularPaths = (cb.sharcArgs.flags & SHARC_FLAG_ALLOW_SPECULAR_PATHS) != 0;
+  const uint sharcReason = sharcRejectReason(
+    materialType == surfaceMaterialTypeOpaque,
+    pathState.mediumMaterialIndex != SURFACE_INDEX_INVALID || pathState.insideMedium,
+    sharcMaterial,
+    emissiveLight,
+    pathState.sharcDiffuseArrival || allowSpecularPaths);
+  const bool sharcEligible = sharcReason == kSharcRejectNone;
+
+#if SHARC_QUERY
+  const bool sharcDebugBounce = sharcDebugBounceSelected(pathState.bounceIteration);
+  if (sharcDebugViewActive() && sharcDebugBounce)
+  {
+    sharcDebugVertex(pathState, surfaceInteraction, sharcReason);
+  }
+#endif
+
+  // Portal space is part of the cache key, so a vertex reached through a portal occupies its own
+  // cell rather than polluting the one main-space paths read back. That is what makes insertion
+  // from portal space safe and lets portal-only geometry be cached at all.
+  if (sharcEligible)
+  {
+    SharcParameters sharcParameters = makeSharcParameters(pathState.portalSpace);
+    SharcHitData sharcHit = (SharcHitData)0;
+    sharcHit.positionWorld = surfaceInteraction.position;
+    sharcHit.normalWorld = surfaceInteraction.geometryNormal;
+
+#if SHARC_UPDATE
+    sharcInsertVertex(pathState.sharcState, sharcHit, pathState.portalSpace);
+#elif SHARC_QUERY
+    float voxelSize;
+    const HashGridKey key = HashGridComputeSpatialHashWithVoxelSize(sharcHit.positionWorld, sharcHit.normalWorld, sharcParameters.hashGridParameters, voxelSize);
+    vec3 cachedRadiance = vec3(0.0f);
+    // The voxel diagonal: a vertex closer than this to the previous one may share its cell.
+    const float sharcTooCloseDistance = 1.732051f * voxelSize;
+    const bool farEnough = pathState.segmentHitDistance > sharcTooCloseDistance;
+    // The footprint gate only ever refuses a specular arrival and does not replace the distance
+    // guard above. Above roughly 0.7 perceptual launching roughness the lobe has spread past the
+    // voxel before the segment clears the voxel diagonal, so both tests are kept.
+    const bool footprintOk = pathState.sharcDiffuseArrival
+      || sharcFootprintValid(pathState.sharcLaunchPerceptualRoughness, pathState.sharcSegmentDistance, voxelSize);
+    const bool cacheHit = farEnough && footprintOk
+      && SharcGetCachedRadianceFromHash(sharcParameters, sharcHit, key, cachedRadiance, false)
+      && isValidValue(cachedRadiance);
+
+    if (sharcDebugViewActive())
+    {
+      sharcDebugQuery(pathState, sharcDebugBounce, farEnough, footprintOk, cacheHit, cachedRadiance);
+    }
+
+    if (cacheHit)
+    {
+      accumulateRadiance(pathState, cachedRadiance);
+      pathState.continuePath = false;
+      return true;
+    }
+#endif
+  }
+#endif
+  return false;
+}

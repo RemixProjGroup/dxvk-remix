@@ -36,6 +36,7 @@
 #include "rtx_terrain_baker.h"
 #include "rtx_texture_manager.h"
 #include "rtx_neural_radiance_cache.h"
+#include "rtx_sharc.h"
 #include "rtx_ray_reconstruction.h"
 #include "rtx_xess.h"
 #include "rtx_rtxdi_rayquery.h"
@@ -1291,6 +1292,7 @@ namespace dxvk {
     constants.enableNrc = nrc.isActive();
     constants.allowNrcTraining = NeuralRadianceCache::NrcOptions::trainCache();
     nrc.setRaytraceArgs(constants);
+    m_common->metaSharc().setRaytraceArgs(*this, constants);
 
     m_common->metaNeeCache().setRaytraceArgs(constants, m_resetHistory);
     constants.surfaceCount = getSceneManager().getAccelManager().getSurfaceCount();
