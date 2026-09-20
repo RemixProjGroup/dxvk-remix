@@ -43,13 +43,17 @@ namespace dxvk {
 
     void prewarmShaders(DxvkPipelineManager& pipelineManager) const;
 
-    void dispatch(class RtxContext* ctx, const Resources::RaytracingOutput& rtOutput);
-
-    void dispatchNEE(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput);
+    // Requires current GBuffer, sparse mask, direct-generated rays and NEE cache.
+    // Produces primary indirect lobes and raw radiance retained for secondary demodulation.
+    void dispatchLighting(class RtxContext* ctx, const Resources::RaytracingOutput& rtOutput);
 
     static const char* raytraceModeToString(RaytraceMode raytraceMode);
 
   private:
+    struct AssemblyResources;
+    void dispatch(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput);
+    void dispatchNEE(RtxContext* ctx, const AssemblyResources& resources);
+
     static DxvkRaytracingPipelineShaders getPipelineShaders(const bool useRayQuery, const bool serEnabled, const bool ommEnabled, const bool useNeeCache, const bool includePortals, const bool pomEnabled, const bool nrcEnabled, const bool wboitEnbaled);
     Rc<DxvkShader> getComputeShader(const bool useNeeCache, const bool nrcEnabled, const bool wboitEnabled) const;
     static DxvkRaytracingPipelineShaders getSharcQueryPipelineShaders(const bool serEnabled, const bool ommEnabled, const bool includePortals, const bool pomEnabled, const bool wboitEnabled);

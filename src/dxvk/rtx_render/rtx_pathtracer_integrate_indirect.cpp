@@ -118,7 +118,9 @@
 #include <rtx_shaders/integrate_indirect_miss_nrc_wboit.h>
 #include <rtx_shaders/integrate_indirect_miss_nrc_neeCache_wboit.h>
 
-#include <rtx_shaders/integrate_nee.h>
+#include <rtx_shaders/integrate_nee_plain.h>
+#include <rtx_shaders/integrate_nee_nrc.h>
+#include <rtx_shaders/integrate_nee_restir_gi.h>
 #include <rtx_shaders/visualize_nee.h>
 #include <rtx_shaders/integrate_indirect_sharc_update4.h>
 #include <rtx_shaders/integrate_indirect_sharc_update4_wboit.h>
@@ -306,7 +308,7 @@ namespace dxvk {
     };
 
     class IntegrateNEEShader : public ManagedShader {
-      SHADER_SOURCE(IntegrateNEEShader, VK_SHADER_STAGE_COMPUTE_BIT, integrate_nee)
+      SHADER_SOURCE(IntegrateNEEShader, VK_SHADER_STAGE_COMPUTE_BIT, integrate_nee_nrc)
 
       BINDLESS_ENABLED()
 
@@ -347,6 +349,19 @@ namespace dxvk {
         RW_STRUCTURED_BUFFER(INTEGRATE_NEE_BINDING_NEE_CACHE_SAMPLE)
         RW_TEXTURE2D(INTEGRATE_NEE_BINDING_NEE_CACHE_THREAD_TASK)
       END_PARAMETER()
+    };
+
+    class IntegrateNEEPlainShader : public IntegrateNEEShader {
+    public:
+      static std::vector<dxvk::DxvkResourceSlot> getResourceSlots() {
+        auto slots = IntegrateNEEShader::getResourceSlots();
+        slots.erase(std::remove_if(slots.begin(), slots.end(), [](const auto& slot) {
+          return slot.slot == INTEGRATE_NEE_BINDING_NRC_TRAINING_PATH_VERTICES_INPUT_OUTPUT
+            || slot.slot == INTEGRATE_NEE_BINDING_RESTIR_GI_RESERVOIR_OUTPUT
+            || slot.slot == INTEGRATE_NEE_BINDING_BSDF_FACTOR2_OUTPUT;
+        }), slots.end());
+        return slots;
+      }
     };
 
     class VisualizeNEEShader : public ManagedShader {
@@ -405,6 +420,9 @@ namespace dxvk {
     ScopedCpuProfileZoneN("Indirect Integrate Shader Prewarming");
 
     IntegrateNEEShader::getShader();
+    GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, IntegrateNEEPlainShader, integrate_nee_plain);
+    GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, IntegrateNEEShader, integrate_nee_nrc);
+    GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, IntegrateNEEShader, integrate_nee_restir_gi);
 
     const bool isNrcSupported = NeuralRadianceCache::checkIsSupported(device());
     const bool isOpacityMicromapSupported = OpacityMicromapManager::checkIsOpacityMicromapSupported(*m_device);
@@ -745,74 +763,168 @@ namespace dxvk {
     }
   }
 
-  void DxvkPathtracerIntegrateIndirect::dispatchNEE(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput) {
+  struct DxvkPathtracerIntegrateIndirect::AssemblyResources {
+    // Keep aliased resources as references: view access must occur in binding order.
+    const VkExtent3D& compositeOutputExtent;
+    const Resources::Resource& sharedFlags;
+    const Resources::Resource& sharedMaterialData0;
+    const Resources::Resource& sharedMaterialData1;
+    const Resources::Resource& sharedTextureCoord;
+    const Resources::AliasedResource& sharedSurfaceIndex;
+    const Resources::Resource& sharedSubsurfaceData;
+    const Resources::Resource& sharedSubsurfaceDiffusionProfileData;
+    const Resources::Resource& sparseRenderingActiveLocalPixelCoords;
+    const Resources::Resource& primaryWorldShadingNormal;
+    const Resources::Resource& primaryPerceptualRoughness;
+    const Resources::Resource& primaryHitDistance;
+    const Resources::Resource& primaryAlbedo;
+    const Resources::Resource& primaryViewDirection;
+    const Resources::Resource& primaryConeRadius;
+    const Resources::Resource& primaryPositionError;
+    const Resources::AliasedResource& indirectRadianceHitDistance;
+    const Resources::AliasedResource& primaryBaseReflectivity;
+    const Resources::AliasedResource& primaryIndirectDiffuseRadiance;
+    const Resources::AliasedResource& primaryIndirectSpecularRadiance;
+    const Rc<DxvkBuffer>& neeCache;
+    const Rc<DxvkBuffer>& neeCacheTask;
+    const Rc<DxvkBuffer>& neeCacheSample;
+    const Resources::Resource& neeCacheThreadTask;
+    const VkExtent3D& finalOutputExtent;
+    const Resources::AliasedResource& primaryWorldPosition;
+
+    explicit AssemblyResources(const Resources::RaytracingOutput& rtOutput)
+      : compositeOutputExtent(rtOutput.m_compositeOutputExtent)
+      , sharedFlags(rtOutput.m_sharedFlags)
+      , sharedMaterialData0(rtOutput.m_sharedMaterialData0)
+      , sharedMaterialData1(rtOutput.m_sharedMaterialData1)
+      , sharedTextureCoord(rtOutput.m_sharedTextureCoord)
+      , sharedSurfaceIndex(rtOutput.m_sharedSurfaceIndex)
+      , sharedSubsurfaceData(rtOutput.m_sharedSubsurfaceData)
+      , sharedSubsurfaceDiffusionProfileData(rtOutput.m_sharedSubsurfaceDiffusionProfileData)
+      , sparseRenderingActiveLocalPixelCoords(rtOutput.m_sparseRenderingActiveLocalPixelCoords)
+      , primaryWorldShadingNormal(rtOutput.m_primaryWorldShadingNormal)
+      , primaryPerceptualRoughness(rtOutput.m_primaryPerceptualRoughness)
+      , primaryHitDistance(rtOutput.m_primaryHitDistance)
+      , primaryAlbedo(rtOutput.m_primaryAlbedo)
+      , primaryViewDirection(rtOutput.m_primaryViewDirection)
+      , primaryConeRadius(rtOutput.m_primaryConeRadius)
+      , primaryPositionError(rtOutput.m_primaryPositionError)
+      , indirectRadianceHitDistance(rtOutput.m_indirectRadianceHitDistance)
+      , primaryBaseReflectivity(rtOutput.m_primaryBaseReflectivity)
+      , primaryIndirectDiffuseRadiance(rtOutput.m_primaryIndirectDiffuseRadiance)
+      , primaryIndirectSpecularRadiance(rtOutput.m_primaryIndirectSpecularRadiance)
+      , neeCache(rtOutput.m_neeCache)
+      , neeCacheTask(rtOutput.m_neeCacheTask)
+      , neeCacheSample(rtOutput.m_neeCacheSample)
+      , neeCacheThreadTask(rtOutput.m_neeCacheThreadTask)
+      , finalOutputExtent(rtOutput.m_finalOutputExtent)
+      , primaryWorldPosition(rtOutput.getCurrentPrimaryWorldPositionWorldTriangleNormal()) { }
+  };
+
+  void DxvkPathtracerIntegrateIndirect::dispatchLighting(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput) {
+    {
+      ScopedGpuProfileZone(ctx, "Integrate Indirect Raytracing");
+      ctx->setFramePassStage(RtxFramePassStage::IndirectIntegration);
+
+      // SHARC runs its own update / resolve / query sequence inside dispatch().
+      dispatch(ctx, rtOutput);
+    }
+    ctx->recordGpuStageTiming("IndirectIntegration");
+
+    ctx->setFramePassStage(RtxFramePassStage::NEE_Integration);
+    ctx->bindCommonRayTracingResources(rtOutput);
+    dispatchNEE(ctx, AssemblyResources(rtOutput));
+    ctx->recordGpuStageTiming("IndirectAssembly");
+  }
+
+  void DxvkPathtracerIntegrateIndirect::dispatchNEE(RtxContext* ctx, const AssemblyResources& resources) {
     // Sample triangles in the NEE cache and perform NEE
     // Construct restir input sample
-    const auto rayDims = rtOutput.m_compositeOutputExtent;
+    const auto rayDims = resources.compositeOutputExtent;
     VkExtent3D workgroups = util::computeBlockCount(rayDims, VkExtent3D { INTEGRATE_NEE_THREADS_DISPATCH_WIDTH, INTEGRATE_NEE_THREADS_DISPATCH_HEIGHT, 1 });
     Rc<DxvkBuffer> primitiveIDPrefixSumBuffer = ctx->getSceneManager().getCurrentFramePrimitiveIDPrefixSumBuffer();
     NeuralRadianceCache& nrc = ctx->getCommonObjects()->metaNeuralRadianceCache();
+    DxvkReSTIRGIRayQuery& reSTIRGI = ctx->getCommonObjects()->metaReSTIRGIRayQuery();
+    const bool nrcEnabled = nrc.isActive();
+    const bool restirGiEnabled = reSTIRGI.isActive();
+    const uint32_t debugViewIndex = ctx->getCommonObjects()->metaDebugView().debugViewIdx();
+    const bool visualizeNee = debugViewIndex == DEBUG_VIEW_NEE_CACHE_LIGHT_HISTOGRAM || debugViewIndex == DEBUG_VIEW_NEE_CACHE_HISTOGRAM ||
+      debugViewIndex == DEBUG_VIEW_NEE_CACHE_ACCUMULATE_MAP || debugViewIndex == DEBUG_VIEW_NEE_CACHE_HASH_MAP || debugViewIndex == DEBUG_VIEW_NEE_CACHE_TRIANGLE_CANDIDATE;
 
     ScopedGpuProfileZone(ctx, "Integrate NEE");
     ctx->setFramePassStage(RtxFramePassStage::NEE_Integration);
-    ctx->bindCommonRayTracingResources(rtOutput);
 
     // Inputs
 
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_FLAGS_INPUT, rtOutput.m_sharedFlags.view, nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_MATERIAL_DATA0_INPUT, rtOutput.m_sharedMaterialData0.view, nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_MATERIAL_DATA1_INPUT, rtOutput.m_sharedMaterialData1.view, nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_TEXTURE_COORD_INPUT, rtOutput.m_sharedTextureCoord.view, nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_SURFACE_INDEX_INPUT, rtOutput.m_sharedSurfaceIndex.view(Resources::AccessType::Read), nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_SUBSURFACE_DATA_INPUT, rtOutput.m_sharedSubsurfaceData.view, nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_SUBSURFACE_DIFFUSION_PROFILE_DATA_INPUT, rtOutput.m_sharedSubsurfaceDiffusionProfileData.view, nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_ACTIVE_LOCAL_PIXEL_COORDS_INPUT, rtOutput.m_sparseRenderingActiveLocalPixelCoords.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_FLAGS_INPUT, resources.sharedFlags.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_MATERIAL_DATA0_INPUT, resources.sharedMaterialData0.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_MATERIAL_DATA1_INPUT, resources.sharedMaterialData1.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_TEXTURE_COORD_INPUT, resources.sharedTextureCoord.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_SURFACE_INDEX_INPUT, resources.sharedSurfaceIndex.view(Resources::AccessType::Read), nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_SUBSURFACE_DATA_INPUT, resources.sharedSubsurfaceData.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_SHARED_SUBSURFACE_DIFFUSION_PROFILE_DATA_INPUT, resources.sharedSubsurfaceDiffusionProfileData.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_ACTIVE_LOCAL_PIXEL_COORDS_INPUT, resources.sparseRenderingActiveLocalPixelCoords.view, nullptr);
     ctx->bindResourceView(INTEGRATE_NEE_BINDING_NRC_TRAINING_QUERY_RESERVOIR_INPUT, nrc.getTrainingQueryReservoir().view, nullptr);
 
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_WORLD_SHADING_NORMAL_INPUT, rtOutput.m_primaryWorldShadingNormal.view, nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_PERCEPTUAL_ROUGHNESS_INPUT, rtOutput.m_primaryPerceptualRoughness.view, nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_HIT_DISTANCE_INPUT, rtOutput.m_primaryHitDistance.view, nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_ALBEDO_INPUT, rtOutput.m_primaryAlbedo.view, nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_VIEW_DIRECTION_INPUT, rtOutput.m_primaryViewDirection.view, nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_CONE_RADIUS_INPUT, rtOutput.m_primaryConeRadius.view, nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_WORLD_POSITION_INPUT, rtOutput.getCurrentPrimaryWorldPositionWorldTriangleNormal().view(Resources::AccessType::Read), nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_POSITION_ERROR_INPUT, rtOutput.m_primaryPositionError.view, nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_INDIRECT_RADIANCE_HIT_DISTANCE_INPUT, rtOutput.m_indirectRadianceHitDistance.view(Resources::AccessType::Read), nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_WORLD_SHADING_NORMAL_INPUT, resources.primaryWorldShadingNormal.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_PERCEPTUAL_ROUGHNESS_INPUT, resources.primaryPerceptualRoughness.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_HIT_DISTANCE_INPUT, resources.primaryHitDistance.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_ALBEDO_INPUT, resources.primaryAlbedo.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_VIEW_DIRECTION_INPUT, resources.primaryViewDirection.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_CONE_RADIUS_INPUT, resources.primaryConeRadius.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_WORLD_POSITION_INPUT, resources.primaryWorldPosition.view(Resources::AccessType::Read), nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_POSITION_ERROR_INPUT, resources.primaryPositionError.view, nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_INDIRECT_RADIANCE_HIT_DISTANCE_INPUT, resources.indirectRadianceHitDistance.view(Resources::AccessType::Read), nullptr);
     ctx->bindResourceBuffer(INTEGRATE_NEE_BINDING_PRIMITIVE_ID_PREFIX_SUM_INPUT, DxvkBufferSlice(primitiveIDPrefixSumBuffer, 0, primitiveIDPrefixSumBuffer->info().size));
 
     // Inputs / Outputs
 
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_BASE_REFLECTIVITY_INPUT_OUTPUT, rtOutput.m_primaryBaseReflectivity.view(Resources::AccessType::ReadWrite), nullptr);
-    ctx->bindResourceBuffer(INTEGRATE_NEE_BINDING_NRC_TRAINING_PATH_VERTICES_INPUT_OUTPUT, nrc.getBufferSlice(*ctx, NeuralRadianceCache::ResourceType::TrainingPathVertices));
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_BASE_REFLECTIVITY_INPUT_OUTPUT, resources.primaryBaseReflectivity.view(Resources::AccessType::ReadWrite), nullptr);
+    if (nrcEnabled || restirGiEnabled || visualizeNee) {
+      ctx->bindResourceBuffer(INTEGRATE_NEE_BINDING_NRC_TRAINING_PATH_VERTICES_INPUT_OUTPUT, nrc.getBufferSlice(*ctx, NeuralRadianceCache::ResourceType::TrainingPathVertices));
+    }
 
     // Outputs
 
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_INDIRECT_DIFFUSE_RADIANCE_HIT_DISTANCE_OUTPUT, rtOutput.m_primaryIndirectDiffuseRadiance.view(Resources::AccessType::Write), nullptr);
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_INDIRECT_SPECULAR_RADIANCE_HIT_DISTANCE_OUTPUT, rtOutput.m_primaryIndirectSpecularRadiance.view(Resources::AccessType::Write), nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_INDIRECT_DIFFUSE_RADIANCE_HIT_DISTANCE_OUTPUT, resources.primaryIndirectDiffuseRadiance.view(Resources::AccessType::Write), nullptr);
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_PRIMARY_INDIRECT_SPECULAR_RADIANCE_HIT_DISTANCE_OUTPUT, resources.primaryIndirectSpecularRadiance.view(Resources::AccessType::Write), nullptr);
 
-    const DxvkReSTIRGIRayQuery& restirGI = ctx->getCommonObjects()->metaReSTIRGIRayQuery();
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_BSDF_FACTOR2_OUTPUT, restirGI.getBsdfFactor2().view, nullptr);
+    if (nrcEnabled || restirGiEnabled || visualizeNee) {
+      ctx->bindResourceView(INTEGRATE_NEE_BINDING_BSDF_FACTOR2_OUTPUT, reSTIRGI.getBsdfFactor2().view, nullptr);
+      reSTIRGI.bindIntegrateIndirectNeeResources(*ctx);
+    }
 
-    ctx->bindResourceBuffer(INTEGRATE_NEE_BINDING_NEE_CACHE, DxvkBufferSlice(rtOutput.m_neeCache, 0, rtOutput.m_neeCache->info().size));
-    ctx->bindResourceBuffer(INTEGRATE_NEE_BINDING_NEE_CACHE_TASK, DxvkBufferSlice(rtOutput.m_neeCacheTask, 0, rtOutput.m_neeCacheTask->info().size));
-    ctx->bindResourceBuffer(INTEGRATE_NEE_BINDING_NEE_CACHE_SAMPLE, DxvkBufferSlice(rtOutput.m_neeCacheSample, 0, rtOutput.m_neeCacheSample->info().size));
-    ctx->bindResourceView(INTEGRATE_NEE_BINDING_NEE_CACHE_THREAD_TASK, rtOutput.m_neeCacheThreadTask.view, nullptr);
+    ctx->bindResourceBuffer(INTEGRATE_NEE_BINDING_NEE_CACHE, DxvkBufferSlice(resources.neeCache, 0, resources.neeCache->info().size));
+    ctx->bindResourceBuffer(INTEGRATE_NEE_BINDING_NEE_CACHE_TASK, DxvkBufferSlice(resources.neeCacheTask, 0, resources.neeCacheTask->info().size));
+    ctx->bindResourceBuffer(INTEGRATE_NEE_BINDING_NEE_CACHE_SAMPLE, DxvkBufferSlice(resources.neeCacheSample, 0, resources.neeCacheSample->info().size));
+    ctx->bindResourceView(INTEGRATE_NEE_BINDING_NEE_CACHE_THREAD_TASK, resources.neeCacheThreadTask.view, nullptr);
 
-    // Bind necessary resources for ReSTIR GI
-    DxvkReSTIRGIRayQuery& reSTIRGI = ctx->getCommonObjects()->metaReSTIRGIRayQuery();
-    reSTIRGI.bindIntegrateIndirectNeeResources(*ctx);
-
-    ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, IntegrateNEEShader::getShader());
+    Rc<DxvkShader> integrateNeeShader;
+    if (nrcEnabled && !restirGiEnabled) {
+      integrateNeeShader = GET_SHADER_VARIANT(
+        VK_SHADER_STAGE_COMPUTE_BIT, IntegrateNEEShader, integrate_nee_nrc);
+    } else if (restirGiEnabled && !nrcEnabled) {
+      integrateNeeShader = GET_SHADER_VARIANT(
+        VK_SHADER_STAGE_COMPUTE_BIT, IntegrateNEEShader, integrate_nee_restir_gi);
+    } else if (!nrcEnabled && !restirGiEnabled) {
+      integrateNeeShader = GET_SHADER_VARIANT(
+        VK_SHADER_STAGE_COMPUTE_BIT, IntegrateNEEPlainShader, integrate_nee_plain);
+    } else {
+      // Unreachable: NRC and ReSTIR GI both reduce to integrateIndirectMode, which holds
+      // one value, so they cannot be active together.  The combined variant that used to
+      // serve this branch was removed rather than shipped for a state that cannot occur.
+      assert(false && "NRC and ReSTIR GI cannot both be active");
+      integrateNeeShader = GET_SHADER_VARIANT(
+        VK_SHADER_STAGE_COMPUTE_BIT, IntegrateNEEPlainShader, integrate_nee_plain);
+    }
+    ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, integrateNeeShader);
     ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
 
     // Visualize the nee cache when debug view is chosen.
-    uint32_t debugViewIndex = ctx->getCommonObjects()->metaDebugView().debugViewIdx();
-    if (debugViewIndex == DEBUG_VIEW_NEE_CACHE_LIGHT_HISTOGRAM || debugViewIndex == DEBUG_VIEW_NEE_CACHE_HISTOGRAM ||
-     debugViewIndex == DEBUG_VIEW_NEE_CACHE_ACCUMULATE_MAP || debugViewIndex == DEBUG_VIEW_NEE_CACHE_HASH_MAP || debugViewIndex == DEBUG_VIEW_NEE_CACHE_TRIANGLE_CANDIDATE)
-    {
+    if (visualizeNee) {
       VisualizeNeeArgs args;
       auto mousePos = ImGui::GetMousePos();
-      const VkExtent3D& finalResolution = rtOutput.m_finalOutputExtent;
+      const VkExtent3D& finalResolution = resources.finalOutputExtent;
       args.mouseUV = vec2(mousePos.x / finalResolution.width, mousePos.y / finalResolution.height);
       args.mouseUV.x = std::clamp(args.mouseUV.x, 0.0f, 1.0f);
       args.mouseUV.y = std::clamp(args.mouseUV.y, 0.0f, 1.0f);

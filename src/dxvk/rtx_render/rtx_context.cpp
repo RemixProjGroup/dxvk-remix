@@ -1828,16 +1828,7 @@ namespace dxvk {
     m_common->metaRtxdiRayQuery().dispatchGradient(this, rtOutput);
     recordGpuStageTiming("RTXDIGradients");
 
-    // Integrate indirect
-    {
-      ScopedGpuProfileZone(this, "Integrate Indirect Raytracing");
-      setFramePassStage(RtxFramePassStage::IndirectIntegration);
-      
-      m_common->metaPathtracerIntegrateIndirect().dispatch(this, rtOutput);
-    }
-
-    // Integrate indirect - NEE Cache pass
-    m_common->metaPathtracerIntegrateIndirect().dispatchNEE(this, rtOutput);
+    m_common->metaPathtracerIntegrateIndirect().dispatchLighting(this, rtOutput);
   }
 
   void RtxContext::dispatchPathTracing(const Resources::RaytracingOutput& rtOutput) {
