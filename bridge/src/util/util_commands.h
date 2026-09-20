@@ -40,6 +40,8 @@ namespace Commands {
 
     RemixApi_CreateMaterial,
     RemixApi_DestroyMaterial,
+    RemixApi_CreateTexture,
+    RemixApi_DestroyTexture,
     RemixApi_CreateMesh,
     RemixApi_DestroyMesh,
     RemixApi_DrawInstance,
@@ -49,6 +51,8 @@ namespace Commands {
     RemixApi_SetConfigVariable,
     RemixApi_CreateD3D9,
     RemixApi_RegisterDevice,
+    RemixApi_SetGameValue,
+    RemixApi_GetGameValue,
 
     Bridge_SharedHeap_AddSeg,
     Bridge_SharedHeap_Alloc,
@@ -478,6 +482,8 @@ namespace Commands {
 
     case RemixApi_CreateMaterial: return "RemixApi_CreateMaterial";
     case RemixApi_DestroyMaterial: return "RemixApi_DestroyMaterial";
+    case RemixApi_CreateTexture: return "RemixApi_CreateTexture";
+    case RemixApi_DestroyTexture: return "RemixApi_DestroyTexture";
     case RemixApi_CreateMesh: return "RemixApi_CreateMesh";
     case RemixApi_DestroyMesh: return "RemixApi_DestroyMesh";
     case RemixApi_DrawInstance: return "RemixApi_DrawInstance";
@@ -487,6 +493,8 @@ namespace Commands {
     case RemixApi_SetConfigVariable: return "RemixApi_SetConfigVariable";
     case RemixApi_CreateD3D9: return "RemixApi_CreateD3D9";
     case RemixApi_RegisterDevice: return "RemixApi_RegisterDevice";
+    case RemixApi_SetGameValue: return "RemixApi_SetGameValue";
+    case RemixApi_GetGameValue: return "RemixApi_GetGameValue";
 
     case Bridge_SharedHeap_AddSeg: return "SharedHeap_AddSeg";
     case Bridge_SharedHeap_Alloc: return "SharedHeap_Alloc";

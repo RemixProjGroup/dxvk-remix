@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "rtx_asset_replacer.h"
+#include "rtx_fork_hooks.h"
 #include "rtx_scene_manager.h"
 #include "rtx_opacity_micromap_manager.h"
 #include "dxvk_device.h"
@@ -2543,9 +2544,21 @@ namespace dxvk {
         std::make_shared<const std::vector<Matrix4>>(std::move(state.gpuInstancingTransforms));
     }
 
+    const XXH64_hash_t meshHash = reinterpret_cast<XXH64_hash_t>(state.mesh);
+
+    // Fetch submeshes once: they drive both the replacement path (needs submeshes[0]
+    // as geometry template) and the default iteration path.
     const auto submeshesRef = m_pReplacer->accessExternalMesh(state.mesh);
+    if (submeshesRef == nullptr || submeshesRef->empty()) {
+      Logger::err(str::format("[RTX-Mesh] External mesh has no submeshes: 0x", std::hex, meshHash, std::dec));
+      return;
+    }
     const auto& submeshes = *submeshesRef;
 
+    // Persistence-tracking setup happens before the replacement-lookup early-out
+    // so the same ReplacementInstance can be threaded through both paths:
+    // drawReplacements() requires a non-null instance and uses it to drive
+    // RtInstance reuse across frames for the replacement primitives.
     const XXH64_hash_t identityHash = state.computeExternalDrawIdentityHash();
     const XXH64_hash_t spatialMapHash = spatialMapHashForExternalDrawMesh(state.mesh);
     const Matrix4& xform = state.drawCall.getTransformData().objectToWorld;
@@ -2555,6 +2568,22 @@ namespace dxvk {
     const ReplacementInstance::LookupKey externalKey { identityHash, spatialMapHash, matHash, kEmptyHash, worldPos, xform };
     ReplacementInstance* replacementInstance = m_drawCallTracker.findOrCreateReplacementInstance(externalKey);
     replacementInstance->dirtyFlags.clr(ReplacementInstance::kDynamicFeatureMask);
+
+    if (auto pReplacements = fork_hooks::externalDrawMeshReplacement(*m_pReplacer, meshHash)) {
+      // Copy the DrawCallState so we don't mutate the caller's state. Point geometryData
+      // at submeshes[0] as the replacement geometry template, clear externalMaterial so
+      // the USD replacement material takes precedence, and use a neutral default material
+      // since the replacement will provide its own.
+      DrawCallState replacementDrawCall = state.drawCall;
+      RasterGeometry& replacementGeometry = replacementDrawCall.modifyGeometryData();
+      replacementGeometry = submeshes[0];
+      replacementGeometry.cullMode = state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
+      replacementGeometry.externalMaterial = nullptr;
+
+      MaterialData renderMaterialData(LegacyMaterialData::createDefault());
+      drawReplacements(ctx, &replacementDrawCall, pReplacements, renderMaterialData, replacementInstance);
+      return;
+    }
 
     AxisAlignedBoundingBox geometryBBox;
 
@@ -2567,15 +2596,25 @@ namespace dxvk {
         std::shared_ptr<const RasterGeometry>(submeshesRef, &submeshes[i]));
       state.drawCall.overrideCullMode(state.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT);
 
+      XXH64_hash_t textureHash = 0;
+
       const MaterialData* material = m_pReplacer->accessExternalMaterial(submeshes[i].externalMaterial);
+      // Keeps a USD replacement material alive for the rest of this iteration when one is found.
+      std::shared_ptr<MaterialData> replacementMaterialKeepAlive;
       if (material != nullptr) {
+        replacementMaterialKeepAlive = fork_hooks::externalDrawMaterialReplacement(*m_pReplacer, material);
+
         state.drawCall.modifyMaterialData().setHashOverride(material->getHash());
-      } 
+
+        fork_hooks::externalDrawTextureCategories(material, state.drawCall, textureHash);
+      }
 
       const RtxParticleSystemDesc* pParticles = nullptr;
       if (state.optionalParticleDesc.has_value()) {
         pParticles = &state.optionalParticleDesc.value();
       }
+
+      fork_hooks::externalDrawObjectPicking(*m_device, state.drawCall, textureHash, *this);
 
       RtInstance* existingInstance = (replacementInstance->prims.size() > i)
           ? replacementInstance->prims[i].getInstance() : nullptr;

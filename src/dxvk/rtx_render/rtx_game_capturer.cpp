@@ -30,6 +30,8 @@
 #include "rtx_instance_manager.h"
 #include "rtx_scene_manager.h"
 #include "rtx_materials.h"
+#include "rtx_texture_manager.h"
+#include "rtx_fork_hooks.h"
 
 #include "../dxvk_device.h"
 
@@ -466,14 +468,29 @@ namespace dxvk {
     const BlasEntry* pBlas = rtInstance.getBlas();
     assert(pBlas != nullptr);
     const XXH64_hash_t matHash = rtInstance.getMaterialDataHash();
-    const XXH64_hash_t meshHash = pBlas->input.getHash(RtxOptions::geometryAssetHashRule());
+
+    // For external (API-submitted) meshes, use the original API handle as the hash so
+    // captures and runtime replacement lookups agree on mesh identity. Falling back to
+    // the geometry-data hash for API meshes produces a different hash at capture-time
+    // than at runtime, breaking replacement parity.
+    XXH64_hash_t meshHash = 0;
+    if (pBlas->input.getGeometryData().externalMesh != nullptr) {
+      meshHash = reinterpret_cast<XXH64_hash_t>(pBlas->input.getGeometryData().externalMesh);
+      Logger::info(str::format("[GameCapturer] Using external mesh hash: 0x", std::hex, meshHash, std::dec));
+    } else {
+      meshHash = pBlas->input.getHash(RtxOptions::geometryAssetHashRule());
+    }
     assert(meshHash != 0);
 
     const LegacyMaterialData& material = pBlas->getMaterialData(matHash);
 
-    const bool bIsNewMat = (matHash != 0x0) && (m_pCap->materials.count(matHash) == 0);
+    // For API materials, use the MaterialData hash (what runtime uses for replacement lookup).
+    // For D3D9 materials this equals matHash, but for API-submitted materials the two differ.
+    const XXH64_hash_t materialLookupHash = material.getHash();
+
+    const bool bIsNewMat = (materialLookupHash != 0x0) && (m_pCap->materials.count(materialLookupHash) == 0);
     if (bIsNewMat) {
-      captureMaterial(ctx, material, !rtInstance.surface.alphaState.isFullyOpaque);
+      captureMaterial(ctx, rtInstance, materialLookupHash, material, !rtInstance.surface.alphaState.isFullyOpaque);
     }
 
     bool bIsNewMesh = false;
@@ -484,7 +501,9 @@ namespace dxvk {
       if (bIsNewMesh) {
         m_pCap->meshes[meshHash] = std::make_shared<Mesh>();
         m_pCap->meshes[meshHash]->instanceCount = 0;
-        m_pCap->meshes[meshHash]->matHash = matHash;
+        // Use the lookup hash for USD references so replacements resolve the same
+        // way they do at runtime.
+        m_pCap->meshes[meshHash]->matHash = materialLookupHash;
       }
       instanceNum = m_pCap->meshes[meshHash]->instanceCount++;
     }
@@ -495,38 +514,17 @@ namespace dxvk {
     const XXH64_hash_t instanceId = rtInstance.getId();
     Instance& instance = m_pCap->instances[instanceId];
     instance.meshHash = meshHash;
-    instance.matHash = matHash;
+    // Store the lookup hash, not the BLAS hash, so capture output lines up with
+    // the runtime replacement lookup.
+    instance.matHash = materialLookupHash;
     instance.meshInstNum = instanceNum;
     instance.lssData.firstTime = m_pCap->currentFrameNum;
 
     Logger::debug("[GameCapturer][" + m_pCap->idStr + "][Inst:" + hashToString(instanceId) + "] New");
   }
 
-  void GameCapturer::captureMaterial(const Rc<DxvkContext> ctx, const LegacyMaterialData& materialData, const bool bEnableOpacity) {
-    lss::Material lssMat; // to be populated
-
-    // Resolve material name
-    const std::string matName = dxvk::hashToString(materialData.getHash());
-    lssMat.matName = matName;
-    // Export Textures
-    const std::string albedoTexFilename(matName + lss::ext::dds);
-    m_exporter.dumpImageToFile(ctx, BASE_DIR + lss::commonDirName::texDir,
-                               albedoTexFilename,
-                               materialData.getColorTexture().getImageView()->image());
-    const std::string albedoTexPath = str::format(BASE_DIR + lss::commonDirName::texDir, albedoTexFilename);
-    lssMat.albedoTexPath = albedoTexPath;
-    // Opacity
-    lssMat.enableOpacity = bEnableOpacity;
-    // Collect sampler info
-    const auto& samplerCreateInfo = materialData.getSampler()->info();
-    lssMat.sampler.addrModeU = samplerCreateInfo.addressModeU;
-    lssMat.sampler.addrModeV = samplerCreateInfo.addressModeV;
-    lssMat.sampler.filter = samplerCreateInfo.magFilter;
-    lssMat.sampler.borderColor = samplerCreateInfo.borderColor;
-
-    // Set populated LSS Material in our cache
-    m_pCap->materials[materialData.getHash()].lssData = lssMat;
-    Logger::debug("[GameCapturer][" + m_pCap->idStr + "][Mat:" + matName + "] New");
+  void GameCapturer::captureMaterial(const Rc<DxvkContext> ctx, const RtInstance& rtInstance, const XXH64_hash_t runtimeMaterialHash, const LegacyMaterialData& materialData, const bool bEnableOpacity) {
+    fork_hooks::captureMaterialApiPath(*this, ctx, rtInstance, runtimeMaterialHash, materialData, bEnableOpacity);
   }
 
   void GameCapturer::captureMesh(const Rc<DxvkContext> ctx,
@@ -1039,10 +1037,7 @@ namespace dxvk {
     }
     // Prep global transform
     exportPrep.globalXform = pxr::GfMatrix4d{1.0};
-    const bool bInvX = (!exportPrep.camera.view.bInv) && (exportPrep.camera.proj.bInv || exportPrep.camera.isLHS());
-    const bool bInvY = (!exportPrep.camera.view.bInv) && exportPrep.camera.proj.bInv;
-    const pxr::GfVec3d scale{ bInvX ? -1.0 : 1.0, bInvY ? -1.0 : 1.0, 1.0 };
-    exportPrep.globalXform.SetScale(scale);
+    fork_hooks::captureCoordSystemSkip(exportPrep);
     if(exportPrep.meta.bCorrectBakedTransforms) {
       exportPrep.globalXform.SetTranslateOnly(-exportPrep.stageOrigin);
     }

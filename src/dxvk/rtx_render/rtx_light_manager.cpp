@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <limits>
 
+#include "rtx_fork_hooks.h"
 #include "rtx_light_manager.h"
 #include "rtx_context.h"
 #include "rtx_options.h"
@@ -238,6 +239,8 @@ namespace dxvk {
 
   void LightManager::prepareSceneData(Rc<DxvkContext> ctx, CameraManager const& cameraManager) {
     ScopedCpuProfileZone();
+    // Ensure external light updates/removals are applied before we linearize and draw UI
+    fork_hooks::flushPendingLightMutations(*this);
     // Note: Early outing in this function (via returns) should be done carefully (or not at all ideally) as it may skip important
     // logic such as swapping the current/previous frame light buffer, updating light count information or allocating/updating the
     // light buffer which may cause issues in some cases (or rather already has, which is why this warning exists).
@@ -779,29 +782,25 @@ namespace dxvk {
       m_lightDebugUILock.lock();
     }
     assert(light->getExternallyTrackedLightId() != kInvalidExternallyTrackedLightId && " light passed to updateExternallyTrackedLight is not actually externally tracked.");
-    uint16_t bufferIdx = light->getBufferIdx();
-    uint32_t stableIdentity = light->getStableIdentity();
-    *light = newLight;
-    light->setBufferIdx(bufferIdx);
-    light->setStableIdentity(stableIdentity);
+
+    const uint64_t externalId = light->getExternallyTrackedLightId();
+    fork_hooks::updateLightStaticSleep(light, newLight, m_device, externalId);
   }
 
   void LightManager::addExternalLight(remixapi_LightHandle handle, const RtLight& rtlight) {
     auto found = m_externalLights.find(handle);
     if (found != m_externalLights.end()) {
-      // TODO: warn the user about id collision,
-      //       or just overwriting existing one is fine?
-      uint32_t stableIdentity = found->second.getStableIdentity();
-      found->second = rtlight;
-      found->second.setStableIdentity(stableIdentity);
+      // Existing light - preserve temporal data for static lights
+      fork_hooks::updateLightStaticSleep(
+        &found->second, rtlight, m_device, kInvalidExternallyTrackedLightId);
     } else {
-      m_externalLights.emplace(handle, rtlight);
+      // New light - copy it and set initial frame
+      fork_hooks::setExternalLightEmplace(*this, handle, rtlight);
     }
   }
 
   void LightManager::removeExternalLight(remixapi_LightHandle handle) {
-    m_externalLights.erase(handle);
-    m_externalDomeLights.erase(handle);
+    fork_hooks::disableExternalLightQueue(*this, handle);
   }
 
   bool LightManager::getActiveDomeLight(DomeLight& domeLightOut) {
@@ -850,11 +849,20 @@ namespace dxvk {
   }
 
   void LightManager::addExternalLightInstance(remixapi_LightHandle enabledLight) {
-    if (m_externalLights.find(enabledLight) != m_externalLights.end()) {
-      m_externalActiveLightList.insert(enabledLight);
-    } else if (m_externalDomeLights.find(enabledLight) != m_externalDomeLights.end() && m_externalActiveDomeLight == nullptr) {
-      m_externalActiveDomeLight = enabledLight;
-    }
+    // Queue activation to be applied at frame start
+    m_pendingExternalActiveLights.insert(enabledLight);
+  }
+
+  void LightManager::registerPersistentExternalLight(remixapi_LightHandle handle) {
+    fork_hooks::registerPersistentLight(*this, handle);
+  }
+
+  void LightManager::unregisterPersistentExternalLight(remixapi_LightHandle handle) {
+    fork_hooks::unregisterPersistentLight(*this, handle);
+  }
+
+  void LightManager::queueAutoInstancePersistent() {
+    fork_hooks::queueAutoInstancePersistent(*this);
   }
 
   void LightManager::setRaytraceArgs(RaytraceArgs& raytraceArgs, uint32_t rtxdiInitialLightSamples, uint32_t volumeRISInitialLightSamples, uint32_t risLightSamples) const

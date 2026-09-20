@@ -90,6 +90,7 @@ namespace dxvk {
     : m_sections({
       { "Github Contributors", // Sorted alphabetically by last name
         { "Lorenzo 'King Vulpes' Acevedo IV",
+          "BrunchyChineapple",
           "Quinn 'Binq Adams' Baddams",
           "Samuel 'CR' Bowman'",
           "Alexis 'Sortifal' Bruneteau",
@@ -104,7 +105,8 @@ namespace dxvk {
           "James 'jdswebb' Webb",
           "David 'King David' Wiltos",
           "Dayton 'watbulb'",
-          "Basil 'EliteCombineSoldier'"}},
+          "Basil 'EliteCombineSoldier'",
+          "TheGreatHMMMM"}},
       { "Engineering",
         { "Riley Alston",
           "Carlos Anguiano",

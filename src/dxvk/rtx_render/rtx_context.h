@@ -29,6 +29,7 @@
 
 #include <cstdint>
 #include <chrono>
+#include <optional>
 #include "rtx_options.h"
 
 struct VolumeArgs;
@@ -51,6 +52,13 @@ namespace dxvk {
     uint32_t firstIndex = 0;
     uint32_t vertexOffset = 0;
   };
+
+  // Forward declaration of the fork hook that needs friend access to RtxContext
+  // private members (screen-overlay state). See rtx_fork_hooks.h.
+  class RtxContext;
+  namespace fork_hooks {
+    void dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
+  } // namespace fork_hooks
   /** 
    * \brief RTX context
    * 
@@ -112,6 +120,10 @@ namespace dxvk {
 
     void commitGeometryToRT(const DrawParameters& params, DrawCallState& drawCallState);
     void commitExternalGeometryToRT(std::unique_ptr<ExternalDrawState> state);
+
+    // Queue a pixel buffer to be alpha-composited over the final tone-mapped image in the next frame.
+    // Used by remixapi_DrawScreenOverlay. Ownership of stagingBuffer transfers here.
+    void setScreenOverlayData(Rc<DxvkBuffer> stagingBuffer, uint32_t width, uint32_t height, VkFormat format, float opacity);
 
     static void blitImageHelper(Rc<DxvkContext> ctx, const Rc<DxvkImage>& srcImage, const Rc<DxvkImage>& dstImage, VkFilter filter);
 
@@ -208,6 +220,7 @@ namespace dxvk {
     void dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage);
     void dispatchObjectPicking(Resources::RaytracingOutput& rtOutput, const VkExtent3D& srcExtent, const VkExtent3D& targetExtent);
     void dispatchDLFG();
+    void dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput);
     void updateMetrics(const float gpuIdleTimeMilliseconds) const;
     void rasterizeToSkyMatte(const DrawParameters& params, const DrawCallState& drawCallState);
     void initSkyProbe();
@@ -275,6 +288,22 @@ namespace dxvk {
 
     std::vector<DrawCallState> m_delayedRayTracedSky;
 
+    // Screen overlay state - populated by remixapi_DrawScreenOverlay via setScreenOverlayData,
+    // consumed and cleared by dispatchScreenOverlay once per frame.
+    struct ScreenOverlayFrame {
+      Rc<DxvkBuffer> stagingBuffer;
+      uint32_t width = 0;
+      uint32_t height = 0;
+      VkFormat format = VK_FORMAT_UNDEFINED;
+      float opacity = 1.0f;
+    };
+    std::optional<ScreenOverlayFrame> m_pendingScreenOverlay;
+    Rc<DxvkImage> m_screenOverlayImage;
+    Rc<DxvkImageView> m_screenOverlayView;
+    uint32_t m_screenOverlayWidth = 0;
+    uint32_t m_screenOverlayHeight = 0;
+    VkFormat m_screenOverlayFormat = VK_FORMAT_UNDEFINED;
+
 #ifdef REMIX_DEVELOPMENT
     void queryAvailableResourceAliasing();
     void clearResourceAliasingCache();
@@ -293,5 +322,9 @@ namespace dxvk {
 
     RtxFramePassStage m_currentPassStage = RtxFramePassStage::FrameBegin;
 #endif
+
+    // Grant the fork screen-overlay hook access to the private overlay state above.
+    // See rtx_fork_hooks.h and docs/fork-touchpoints.md.
+    friend void fork_hooks::dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
   };
 } // namespace dxvk

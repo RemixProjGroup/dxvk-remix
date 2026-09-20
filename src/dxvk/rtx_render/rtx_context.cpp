@@ -37,6 +37,7 @@
 #include "rtx_texture_manager.h"
 #include "rtx_neural_radiance_cache.h"
 #include "rtx_sharc.h"
+#include "rtx_fork_hooks.h"
 #include "rtx_ray_reconstruction.h"
 #include "rtx_xess.h"
 #include "rtx_rtxdi_rayquery.h"
@@ -769,6 +770,10 @@ namespace dxvk {
         const bool performSRGBConversion = !captureScreenImage && g_allowSrgbConversionForOutput;
         dispatchSRGBDither(rtOutput, performSRGBConversion);
 
+        // Composite the Remix C API screen overlay after tone mapping and display encoding,
+        // before screenshot capture, so plugin UI is never fed through a post-tonemap pass.
+        dispatchScreenOverlay(rtOutput);
+
         if (captureScreenImage) {
           if (m_common->metaDebugView().debugViewIdx() == DEBUG_VIEW_DISABLED) {
             takeScreenshot("rtxImagePostTonemapping", rtOutput.m_finalOutput.resource(Resources::AccessType::Read).image);
@@ -1023,6 +1028,14 @@ namespace dxvk {
 
   void RtxContext::commitExternalGeometryToRT(std::unique_ptr<ExternalDrawState> state) {
     getSceneManager().submitExternalDraw(this, std::move(state));
+  }
+
+  void RtxContext::setScreenOverlayData(Rc<DxvkBuffer> stagingBuffer, uint32_t width, uint32_t height, VkFormat format, float opacity) {
+    m_pendingScreenOverlay = ScreenOverlayFrame {
+      std::move(stagingBuffer),
+      width, height,
+      format, opacity
+    };
   }
 
   static uint32_t jenkinsHash(uint32_t a) {
@@ -1941,6 +1954,10 @@ namespace dxvk {
     ScopedCpuProfileZone();
 
     m_common->metaSRGBDither().dispatch(this, rtOutput, performSRGBConversion);
+  }
+
+  void RtxContext::dispatchScreenOverlay(Resources::RaytracingOutput& rtOutput) {
+    fork_hooks::dispatchScreenOverlay(*this, rtOutput);
   }
 
   void RtxContext::dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage)  {

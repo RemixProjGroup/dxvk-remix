@@ -28,6 +28,7 @@
 #include "util_circularbuffer.h"
 #include "util_bridge_state.h"
 #include "util_ipcchannel.h"
+#include "util_scopedlock.h"
 #include "util_singleton.h"
 #include "../tracy/tracy.hpp"
 
@@ -89,6 +90,8 @@ class Bridge {
   ASSERT_VALID_BRIDGE_ID(BridgeId);
   using DataT = uint32_t;
 public:
+  using ResponseTransaction = bridge_util::ResponseTransaction;
+
   static void init(
     const std::string baseName,
     const size_t writerChannelMemSize, const size_t writerChannelCmdQueueSize,

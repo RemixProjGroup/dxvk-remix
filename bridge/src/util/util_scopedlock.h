@@ -22,11 +22,31 @@
 #pragma once
 
 #include <type_traits>
+#include <mutex>
 #include "util_common.h"
 
 #include <assert.h>
 
 namespace bridge_util {
+
+  // The client bridge command and response queues are shared by all D3D9
+  // objects. Keep their request/response transactions in the same recursive
+  // serialization domain as the multithreaded-device guard. A recursive lock
+  // is required because a response handler may call back into a device method.
+  inline std::recursive_mutex& getClientBridgeMutex() {
+    static std::recursive_mutex mutex;
+    return mutex;
+  }
+
+  class ResponseTransaction: public NonCopyable {
+  public:
+    ResponseTransaction()
+      : m_lock(getClientBridgeMutex()) {
+    }
+
+  private:
+    std::unique_lock<std::recursive_mutex> m_lock;
+  };
 
   /*
    * Base object of a syncable.

@@ -389,6 +389,7 @@ struct RasterGeometry {
   Future<AxisAlignedBoundingBox> futureBoundingBox;
 
   remixapi_MaterialHandle externalMaterial = nullptr;
+  remixapi_MeshHandle externalMesh = nullptr;
 
   template<uint32_t rule>
   const XXH64_hash_t getHashForRule() const {
@@ -655,6 +656,16 @@ using CategoryFlags = Flags<InstanceCategories>;
 
 #define DECAL_CATEGORY_FLAGS InstanceCategories::DecalStatic, InstanceCategories::DecalDynamic, InstanceCategories::DecalSingleOffset, InstanceCategories::DecalNoOffset
 
+// Forward decl so DrawCallState can friend the fork hook that needs access
+// to private setCategory. See docs/fork-touchpoints.md.
+struct MaterialData;
+struct DrawCallState;
+namespace fork_hooks {
+  void externalDrawTextureCategories(const MaterialData* material,
+                                     DrawCallState& drawCall,
+                                     XXH64_hash_t& textureHash);
+}
+
 struct DrawCallState {
   DrawCallState() = default;
   DrawCallState(const DrawCallState& _input) = default;
@@ -831,6 +842,11 @@ struct DrawCallState {
 private:
   friend struct D3D9Rtx;
   friend struct RemixAPIPrivateAccessor;
+
+  // Fork touchpoint: the external-draw texture-category hook needs access to
+  // private setCategory. See docs/fork-touchpoints.md.
+  friend void fork_hooks::externalDrawTextureCategories(
+    const MaterialData* material, DrawCallState& drawCall, XXH64_hash_t& textureHash);
 
   bool finalizeGeometryHashes();
   void finalizeGeometryBoundingBox();

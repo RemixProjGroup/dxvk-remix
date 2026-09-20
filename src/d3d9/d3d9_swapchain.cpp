@@ -37,6 +37,12 @@
 #include "../dxvk/rtx_render/rtx_dlfg.h"
 // NV-DXVK end
 
+// NV-DXVK start: Remix API. Expose remixapi_AutoInstancePersistentLights for
+// mixed-path consumers that create lights via the C API but present through
+// the native D3D9 path (bypassing remixapi_Present).
+#include <remix/remix_c.h>
+// NV-DXVK end
+
 namespace dxvk {
   // NV-DXVK start: App Controlled FSE
   enum FSEState {
@@ -470,6 +476,12 @@ namespace dxvk {
     // NV-DXVK end
 
     D3D9DeviceLock lock = m_parent->LockDevice();
+    // NV-DXVK start: Remix API. Flush pending C-API light/mesh work once per frame.
+    // This only enqueues into LightManager; the mutations apply at frame start.
+    // Covers mixed-path consumers that create lights via the C API but present
+    // through the native D3D9 COM path (bypassing remixapi_Present).
+    (void)remixapi_AutoInstancePersistentLights();
+    // NV-DXVK end
 
     uint32_t presentInterval = m_presentParams.PresentationInterval;
 

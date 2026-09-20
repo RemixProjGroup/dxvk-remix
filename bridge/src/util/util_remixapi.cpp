@@ -36,6 +36,7 @@ namespace util {
 MaterialHandle::HandleMapT MaterialHandle::s_handleMap;
 MeshHandle::HandleMapT MeshHandle::s_handleMap;
 LightHandle::HandleMapT LightHandle::s_handleMap;
+TextureHandle::HandleMapT TextureHandle::s_handleMap;
 #endif
 }
 }
@@ -736,10 +737,12 @@ void InstanceInfoGpuInstancing::_dtor() {
 // LightInfo //
 ///////////////
 
-static_assert(sizeof(void*) != 8 || sizeof remixapi_LightInfo == 40, "recheck Bridge member list here");
+static_assert(sizeof(void*) != 8 || sizeof remixapi_LightInfo == 48, "recheck Bridge member list here");
 #define LightInfoVars sType, \
                       hash, \
-                      radiance
+                      radiance, \
+                      isDynamic, \
+                      ignoreViewModel
 uint32_t LightInfo::_calcSize() const {
   return fold_helper::calcSize(LightInfoVars);
 }
