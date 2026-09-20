@@ -33,8 +33,9 @@
 #include "dxvk_pipemanager.h"
 #include "dxvk_renderpass.h"
 #include "dxvk_unbound.h"
-// NV-DXVK start: Numos atmosphere
+// NV-DXVK start: Numos atmosphere and precipitation subsystems
 #include "rtx_render/rtx_atmosphere.h"
+#include "rtx_render/rtx_precipitation.h"
 // NV-DXVK end
 #include "rtx_render/rtx_global_volumetrics.h"
 #include "rtx_render/rtx_pathtracer_gbuffer.h"
@@ -184,6 +185,10 @@ namespace dxvk {
 
     NeeCachePass& metaNeeCache() {
       return m_neeCache.get();
+    }
+
+    PrecipitationSystem& metaPrecipitation() {
+      return m_precipitation.get();
     }
 
     RtxSharc& metaSharc() {
@@ -402,6 +407,7 @@ namespace dxvk {
     Active<DemodulatePass>                  m_demodulate;
     Active<NeeCachePass>                    m_neeCache;
     Active<NeuralRadianceCache>             m_neuralRadianceCache;
+    Active<PrecipitationSystem>             m_precipitation;
     Active<RtxSharc>                        m_sharc;
     Active<DxvkDenoise>                     m_primaryDirectLightDenoiser;
     Active<DxvkDenoise>                     m_primaryIndirectLightDenoiser;

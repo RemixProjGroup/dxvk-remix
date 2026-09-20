@@ -20,6 +20,7 @@
 * DEALINGS IN THE SOFTWARE.
 */
 #include "rtx_global_volumetrics.h"
+#include "rtx_weather.h"
 #include "dxvk_device.h"
 #include "rtx_render/rtx_shader_manager.h"
 #include "rtx_composite.h"
@@ -220,11 +221,80 @@ namespace dxvk {
     ImGui::TextUnformatted("Quality Level Preset");
   }
 
+  namespace {
+    void dragFloatWithWeatherOverride(const char* label, RtxOption<float>* opt,
+                                      const float* weatherOverride,
+                                      float speed, float minValue, float maxValue,
+                                      const char* format,
+                                      ImGuiSliderFlags flags = 0) {
+      if (!weatherOverride) {
+        RemixGui::DragFloat(label, opt, speed, minValue, maxValue, format, flags);
+        return;
+      }
+
+      float value = *weatherOverride;
+      ImGui::BeginDisabled(true);
+      RemixGui::DragFloat(label, &value, speed, minValue, maxValue, format, flags);
+      ImGui::EndDisabled();
+    }
+
+    void checkboxWithWeatherOverride(const char* label, RtxOption<bool>* opt,
+                                     const bool* weatherOverride) {
+      if (!weatherOverride) {
+        RemixGui::Checkbox(label, opt);
+        return;
+      }
+
+      bool value = *weatherOverride;
+      ImGui::BeginDisabled(true);
+      ImGui::Checkbox(label, &value);
+      ImGui::EndDisabled();
+    }
+
+    void colorEdit3WithWeatherOverride(const char* label, RtxOption<Vector3>* opt,
+                                       const Vector3* weatherOverride) {
+      if (!weatherOverride) {
+        RemixGui::ColorEdit3(label, opt);
+        return;
+      }
+
+      Vector3 value = *weatherOverride;
+      ImGui::BeginDisabled(true);
+      ImGui::ColorEdit3(label, &value.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+      ImGui::EndDisabled();
+    }
+
+    template <typename T>
+    void dragIntWithWeatherOverride(const char* label, RtxOption<T>* opt,
+                                    const float* weatherOverride,
+                                    float speed, int minValue, int maxValue) {
+      if (!weatherOverride) {
+        RemixGui::DragInt(label, opt, speed, minValue, maxValue);
+        return;
+      }
+
+      int value = static_cast<int>(*weatherOverride + 0.5f);
+      ImGui::BeginDisabled(true);
+      ImGui::DragInt(label, &value, speed, minValue, maxValue);
+      ImGui::EndDisabled();
+    }
+  }
+
   void RtxGlobalVolumetrics::showImguiUserSettings() {
     showPresetMenu();
   }
 
-  void RtxGlobalVolumetrics::showImguiSettings() {
+  void RtxGlobalVolumetrics::showImguiSettings(const WeatherSnapshot* weatherSnapshot) {
+
+#define WEATHER_OVERRIDE_PTR(field) \
+    ((weatherSnapshot && weatherSnapshot->ownership.field) ? &weatherSnapshot->field : nullptr)
+
+    if (weatherSnapshot) {
+      ImGui::TextDisabled(
+        "Weather-owned volumetric controls show the effective blended value "
+        "and are read-only; non-owned controls remain editable.");
+    }
+
     if (RemixGui::CollapsingHeader("Froxel Radiance Cache", ImGuiTreeNodeFlags_DefaultOpen)) {
       ImGui::Indent();
 
@@ -240,7 +310,10 @@ namespace dxvk {
         RemixGui::DragInt("Froxel Depth Slices", &froxelDepthSlicesObject(), 0.1f, 1, UINT16_MAX, "%d", ImGuiSliderFlags_AlwaysClamp);
         RemixGui::DragInt("Max Accumulation Frames", &maxAccumulationFramesObject(), 0.1f, 1, UINT8_MAX, "%d", ImGuiSliderFlags_AlwaysClamp);
         RemixGui::DragFloat("Froxel Depth Slice Distribution Exponent", &froxelDepthSliceDistributionExponentObject(), 0.01f, 0.0f, FLT_MAX, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Froxel Max Distance", &froxelMaxDistanceMetersObject(), 0.25f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        dragFloatWithWeatherOverride(
+            "Froxel Max Distance", &froxelMaxDistanceMetersObject(),
+            WEATHER_OVERRIDE_PTR(froxelMaxDistanceMeters),
+            0.25f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
         RemixGui::DragFloat("Froxel Firefly Filtering Luminance Threshold", &froxelFireflyFilteringLuminanceThresholdObject(), 0.1f, 0.0f, FLT_MAX, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         RemixGui::Checkbox("Per-Portal Volumes", &enableInPortalsObject());
 
@@ -320,28 +393,74 @@ namespace dxvk {
         RemixGui::Checkbox("Show Advanced Material Options", &showAdvanced);
 
         if (showAdvanced) {
-          RemixGui::Checkbox("Enable Translucent Shadows", &enableTranslucentShadowsObject());
-          RemixGui::DragFloat3("Transmittance Color", &transmittanceColorObject(), 0.01f, 0.0f, MaxTransmittanceValue, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-          RemixGui::DragFloat("Transmittance Measurement Distance", &transmittanceMeasurementDistanceMetersObject(), 0.25f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-          RemixGui::DragFloat3("Single Scattering Albedo", &singleScatteringAlbedoObject(), 0.01f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-          RemixGui::DragFloat("Anisotropy", &anisotropyObject(), 0.01f, -.99f, .99f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-          RemixGui::DragFloat("Fog Sun Visibility Gain", &fogSunVisibilityGainObject(), 0.05f, 0.0f, 50.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-          RemixGui::DragFloat("Volumetric Consumer Gain", &volumetricConsumerGainObject(), 0.001f, 0.0f, 5.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
-          RemixGui::DragFloat("Depth Offset", &depthOffsetObject(), 0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          checkboxWithWeatherOverride(
+              "Enable Translucent Shadows", &enableTranslucentShadowsObject(),
+              WEATHER_OVERRIDE_PTR(enableTranslucentShadows));
+          colorEdit3WithWeatherOverride(
+              "Transmittance Color", &transmittanceColorObject(),
+              WEATHER_OVERRIDE_PTR(transmittanceColor));
+          dragFloatWithWeatherOverride(
+              "Transmittance Measurement Distance", &transmittanceMeasurementDistanceMetersObject(),
+              WEATHER_OVERRIDE_PTR(transmittanceMeasurementDistanceMeters),
+              0.25f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          colorEdit3WithWeatherOverride(
+              "Single Scattering Albedo", &singleScatteringAlbedoObject(),
+              WEATHER_OVERRIDE_PTR(singleScatteringAlbedo));
+          dragFloatWithWeatherOverride(
+              "Anisotropy", &anisotropyObject(), WEATHER_OVERRIDE_PTR(volumetricAnisotropy),
+              0.01f, -.99f, .99f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+          dragFloatWithWeatherOverride(
+              "Fog Sun Visibility Gain", &fogSunVisibilityGainObject(),
+              WEATHER_OVERRIDE_PTR(fogSunVisibilityGain),
+              0.05f, 0.0f, 50.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          dragFloatWithWeatherOverride(
+              "Volumetric Consumer Gain", &volumetricConsumerGainObject(),
+              WEATHER_OVERRIDE_PTR(volumetricConsumerGain),
+              0.001f, 0.0f, 5.0f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
+          dragFloatWithWeatherOverride(
+              "Depth Offset", &depthOffsetObject(), WEATHER_OVERRIDE_PTR(depthOffset),
+              0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
           RemixGui::Separator();
 
-          RemixGui::Checkbox("Enable Heterogeneous Fog", &enableHeterogeneousFogObject());
+          checkboxWithWeatherOverride(
+              "Enable Heterogeneous Fog", &enableHeterogeneousFogObject(),
+              WEATHER_OVERRIDE_PTR(enableHeterogeneousFog));
 
-          ImGui::BeginDisabled(!enableHeterogeneousFog());
-          RemixGui::DragFloat("Noise Field Substep Size", &noiseFieldSubStepSizeMetersObject(), 0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-          RemixGui::DragInt("Noise Field Number of Octaves", &noiseFieldOctavesObject(), 0.05f, 1, 8, "%d", ImGuiSliderFlags_AlwaysClamp);
-          RemixGui::DragFloat("Noise Field Time Scale", &noiseFieldTimeScaleObject(), 0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-          RemixGui::DragFloat("Noise Field Density Scale", &noiseFieldDensityScaleObject(), 0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-          RemixGui::DragFloat("Noise Field Density Exponent", &noiseFieldDensityExponentObject(), 0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-          RemixGui::DragFloat("Noise Field Initial Frequency", &noiseFieldInitialFrequencyPerMeterObject(), 0.01f, 0.0f, FLT_MAX, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-          RemixGui::DragFloat("Noise Field Lacunarity", &noiseFieldLacunarityObject(), 0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-          RemixGui::DragFloat("Noise Field Gain", &noiseFieldGainObject(), 0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          const bool effectiveHeterogeneousFog = WEATHER_OVERRIDE_PTR(enableHeterogeneousFog)
+            ? *WEATHER_OVERRIDE_PTR(enableHeterogeneousFog)
+            : enableHeterogeneousFog();
+          ImGui::BeginDisabled(!effectiveHeterogeneousFog);
+          dragFloatWithWeatherOverride(
+              "Noise Field Substep Size", &noiseFieldSubStepSizeMetersObject(),
+              WEATHER_OVERRIDE_PTR(noiseFieldSubStepSizeMeters),
+              0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          dragIntWithWeatherOverride(
+              "Noise Field Number of Octaves", &noiseFieldOctavesObject(),
+              WEATHER_OVERRIDE_PTR(noiseFieldOctaves), 0.05f, 1, 8);
+          dragFloatWithWeatherOverride(
+              "Noise Field Time Scale", &noiseFieldTimeScaleObject(),
+              WEATHER_OVERRIDE_PTR(noiseFieldTimeScale),
+              0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          dragFloatWithWeatherOverride(
+              "Noise Field Density Scale", &noiseFieldDensityScaleObject(),
+              WEATHER_OVERRIDE_PTR(noiseFieldDensityScale),
+              0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          dragFloatWithWeatherOverride(
+              "Noise Field Density Exponent", &noiseFieldDensityExponentObject(),
+              WEATHER_OVERRIDE_PTR(noiseFieldDensityExponent),
+              0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          dragFloatWithWeatherOverride(
+              "Noise Field Initial Frequency", &noiseFieldInitialFrequencyPerMeterObject(),
+              WEATHER_OVERRIDE_PTR(noiseFieldInitialFrequencyPerMeter),
+              0.01f, 0.0f, FLT_MAX, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+          dragFloatWithWeatherOverride(
+              "Noise Field Lacunarity", &noiseFieldLacunarityObject(),
+              WEATHER_OVERRIDE_PTR(noiseFieldLacunarity),
+              0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          dragFloatWithWeatherOverride(
+              "Noise Field Gain", &noiseFieldGainObject(), WEATHER_OVERRIDE_PTR(noiseFieldGain),
+              0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
           ImGui::EndDisabled();
         }
 
@@ -359,28 +478,69 @@ namespace dxvk {
         ImGui::Unindent();
 
         RemixGui::Separator();
-        RemixGui::Checkbox("Enable Legacy Fog Remapping", &enableFogRemapObject());
+        checkboxWithWeatherOverride(
+            "Enable Legacy Fog Remapping", &enableFogRemapObject(),
+            WEATHER_OVERRIDE_PTR(enableFogRemap));
         RemixGui::Separator();
 
-        ImGui::BeginDisabled(!enableFogRemap());
+        const bool effectiveFogRemap = WEATHER_OVERRIDE_PTR(enableFogRemap)
+          ? *WEATHER_OVERRIDE_PTR(enableFogRemap)
+          : enableFogRemap();
+        ImGui::BeginDisabled(!effectiveFogRemap);
         {
           ImGui::Indent();
 
-          RemixGui::Checkbox("Enable Fog Color Remapping", &enableFogColorRemapObject());
+          checkboxWithWeatherOverride(
+              "Enable Fog Color Remapping", &enableFogColorRemapObject(),
+              WEATHER_OVERRIDE_PTR(enableFogColorRemap));
 
-          RemixGui::Checkbox("Enable Fog Max Distance Remapping", &enableFogMaxDistanceRemapObject());
+          checkboxWithWeatherOverride(
+              "Enable Fog Max Distance Remapping", &enableFogMaxDistanceRemapObject(),
+              WEATHER_OVERRIDE_PTR(enableFogMaxDistanceRemap));
 
-          ImGui::BeginDisabled(!enableFogMaxDistanceRemap());
+          const bool effectiveFogMaxDistanceRemap = WEATHER_OVERRIDE_PTR(enableFogMaxDistanceRemap)
+            ? *WEATHER_OVERRIDE_PTR(enableFogMaxDistanceRemap)
+            : enableFogMaxDistanceRemap();
+          ImGui::BeginDisabled(!effectiveFogMaxDistanceRemap);
           {
-            // Use dynamic bounds to prevent min > max configurations
-            RemixGui::DragFloat("Legacy Max Distance Min", &fogRemapMaxDistanceMinMetersObject(), 0.25f, 0.0f, fogRemapMaxDistanceMaxMeters(), "%.2f", ImGuiSliderFlags_AlwaysClamp);
-            RemixGui::DragFloat("Legacy Max Distance Max", &fogRemapMaxDistanceMaxMetersObject(), 0.25f, fogRemapMaxDistanceMinMeters(), FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-            RemixGui::DragFloat("Remapped Transmittance Measurement Distance Min", &fogRemapTransmittanceMeasurementDistanceMinMetersObject(), 0.25f, 0.0f, fogRemapTransmittanceMeasurementDistanceMaxMeters(), "%.2f", ImGuiSliderFlags_AlwaysClamp);
-            RemixGui::DragFloat("Remapped Transmittance Measurement Distance Max", &fogRemapTransmittanceMeasurementDistanceMaxMetersObject(), 0.25f, fogRemapTransmittanceMeasurementDistanceMinMeters(), FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            // Use effective dynamic bounds so the displayed weather values are
+            // internally consistent without writing them back into RtxOptions.
+            const float effectiveLegacyMin = WEATHER_OVERRIDE_PTR(fogRemapMaxDistanceMinMeters)
+              ? *WEATHER_OVERRIDE_PTR(fogRemapMaxDistanceMinMeters)
+              : fogRemapMaxDistanceMinMeters();
+            const float effectiveLegacyMax = WEATHER_OVERRIDE_PTR(fogRemapMaxDistanceMaxMeters)
+              ? *WEATHER_OVERRIDE_PTR(fogRemapMaxDistanceMaxMeters)
+              : fogRemapMaxDistanceMaxMeters();
+            const float effectiveTransMin = WEATHER_OVERRIDE_PTR(fogRemapTransmittanceMeasurementDistanceMinMeters)
+              ? *WEATHER_OVERRIDE_PTR(fogRemapTransmittanceMeasurementDistanceMinMeters)
+              : fogRemapTransmittanceMeasurementDistanceMinMeters();
+            const float effectiveTransMax = WEATHER_OVERRIDE_PTR(fogRemapTransmittanceMeasurementDistanceMaxMeters)
+              ? *WEATHER_OVERRIDE_PTR(fogRemapTransmittanceMeasurementDistanceMaxMeters)
+              : fogRemapTransmittanceMeasurementDistanceMaxMeters();
+
+            dragFloatWithWeatherOverride(
+                "Legacy Max Distance Min", &fogRemapMaxDistanceMinMetersObject(),
+                WEATHER_OVERRIDE_PTR(fogRemapMaxDistanceMinMeters),
+                0.25f, 0.0f, effectiveLegacyMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            dragFloatWithWeatherOverride(
+                "Legacy Max Distance Max", &fogRemapMaxDistanceMaxMetersObject(),
+                WEATHER_OVERRIDE_PTR(fogRemapMaxDistanceMaxMeters),
+                0.25f, effectiveLegacyMin, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            dragFloatWithWeatherOverride(
+                "Remapped Transmittance Measurement Distance Min", &fogRemapTransmittanceMeasurementDistanceMinMetersObject(),
+                WEATHER_OVERRIDE_PTR(fogRemapTransmittanceMeasurementDistanceMinMeters),
+                0.25f, 0.0f, effectiveTransMax, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            dragFloatWithWeatherOverride(
+                "Remapped Transmittance Measurement Distance Max", &fogRemapTransmittanceMeasurementDistanceMaxMetersObject(),
+                WEATHER_OVERRIDE_PTR(fogRemapTransmittanceMeasurementDistanceMaxMeters),
+                0.25f, effectiveTransMin, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
           }
           ImGui::EndDisabled();
 
-          RemixGui::DragFloat("Color Multiscattering Scale", &fogRemapColorMultiscatteringScaleObject(), 0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+          dragFloatWithWeatherOverride(
+              "Color Multiscattering Scale", &fogRemapColorMultiscatteringScaleObject(),
+              WEATHER_OVERRIDE_PTR(fogRemapColorMultiscatteringScale),
+              0.01f, 0.0f, FLT_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
           ImGui::Unindent();
         }
@@ -400,6 +560,8 @@ namespace dxvk {
 
       ImGui::Unindent();
     }
+
+#undef WEATHER_OVERRIDE_PTR
   }
 
   void RtxGlobalVolumetrics::setQualityLevel(const QualityLevel desiredQualityLevel) {
@@ -457,14 +619,16 @@ namespace dxvk {
   }
 
   VolumeArgs RtxGlobalVolumetrics::getVolumeArgs(CameraManager const& cameraManager, FogState const& fogState, bool enablePortalVolumes) const {
-    // Calculate the volumetric parameters from options and the fixed function fog state
+    // Calculate the volumetric parameters from options and the fixed function fog state.
+    // WeatherSnapshot is the per-frame replacement for the old Derived-layer writes.
+    const auto* wx = m_weatherOverride;
 
     // Note: Volumetric transmittance color option is in gamma space, so must be converted to linear for usage in the volumetric system.
-    Vector3 transmittanceColorLinear{ sRGBGammaToLinear(transmittanceColor()) };
+    Vector3 transmittanceColorLinear{ sRGBGammaToLinear(wx ? wx->transmittanceColor : transmittanceColor()) };
 
     // Note: Fall back to usual default in cases such as the "none" D3D fog mode, no fog remapping specified, or invalid values in the fog mode derivation
     // (such as dividing by zero).
-    float transmittanceMeasurementDistance = transmittanceMeasurementDistanceMeters() * RtxOptions::getMeterToWorldUnitScale();
+    float transmittanceMeasurementDistance = (wx ? wx->transmittanceMeasurementDistanceMeters : transmittanceMeasurementDistanceMeters()) * RtxOptions::getMeterToWorldUnitScale();
     Vector3 multiScatteringEstimate = Vector3();
 
     // Check if fog density is below the configurable threshold to determine if physical volumetrics should be used.
@@ -472,14 +636,14 @@ namespace dxvk {
     const bool canUsePhysicalFog = shouldConvertToPhysicalFog(fogState, waterFogDensityThreshold());
 
     if (
-      enableFogRemap() &&
+      (wx ? wx->enableFogRemap : enableFogRemap()) &&
       // Note: Only consider remapping fog if any fixed function fog is actually enabled (not the "none" mode).
       fogState.mode != D3DFOG_NONE &&
       canUsePhysicalFog
     ) {
       // Handle Fog Color remapping
       // Note: This must happen first as max distance remapping will depend on the luminance derived from the color determined here.
-      if (enableFogColorRemap()) {
+      if (wx ? wx->enableFogColorRemap : enableFogColorRemap()) {
         // Note: Legacy fixed function fog color is in gamma space as all the rendering in old games was typically in gamma space, same assumption we make
         // for textures/lights.
         transmittanceColorLinear = sRGBGammaToLinear(fogState.color);
@@ -490,14 +654,14 @@ namespace dxvk {
 
       // Handle Fog Max Distance remapping
 
-      if (enableFogMaxDistanceRemap()) {
+      if (wx ? wx->enableFogMaxDistanceRemap : enableFogMaxDistanceRemap()) {
         // Switch transmittance measurement distance derivation from D3D9 fog based on which fog mode is in use
 
         if (fogState.mode == D3DFOG_LINEAR) {
-          float fogRemapMaxDistanceMin { fogRemapMaxDistanceMinMeters() * RtxOptions::getMeterToWorldUnitScale() };
-          float fogRemapMaxDistanceMax { fogRemapMaxDistanceMaxMeters() * RtxOptions::getMeterToWorldUnitScale() };
-          float fogRemapTransmittanceMeasurementDistanceMin { fogRemapTransmittanceMeasurementDistanceMinMeters() * RtxOptions::getMeterToWorldUnitScale() };
-          float fogRemapTransmittanceMeasurementDistanceMax { fogRemapTransmittanceMeasurementDistanceMaxMeters() * RtxOptions::getMeterToWorldUnitScale() };
+          float fogRemapMaxDistanceMin { (wx ? wx->fogRemapMaxDistanceMinMeters : fogRemapMaxDistanceMinMeters()) * RtxOptions::getMeterToWorldUnitScale() };
+          float fogRemapMaxDistanceMax { (wx ? wx->fogRemapMaxDistanceMaxMeters : fogRemapMaxDistanceMaxMeters()) * RtxOptions::getMeterToWorldUnitScale() };
+          float fogRemapTransmittanceMeasurementDistanceMin { (wx ? wx->fogRemapTransmittanceMeasurementDistanceMinMeters : fogRemapTransmittanceMeasurementDistanceMinMeters()) * RtxOptions::getMeterToWorldUnitScale() };
+          float fogRemapTransmittanceMeasurementDistanceMax { (wx ? wx->fogRemapTransmittanceMeasurementDistanceMaxMeters : fogRemapTransmittanceMeasurementDistanceMaxMeters()) * RtxOptions::getMeterToWorldUnitScale() };
 
           // Note: Ensure the mins and maxes are consistent with each other (swap if inverted).
           if (fogRemapMaxDistanceMin > fogRemapMaxDistanceMax) {
@@ -538,7 +702,7 @@ namespace dxvk {
       }
 
       // Add some "ambient" from the original fog as a constant term applied to fog during preintegration
-      multiScatteringEstimate = fogState.color * fogRemapColorMultiscatteringScale();
+      multiScatteringEstimate = fogState.color * (wx ? wx->fogRemapColorMultiscatteringScale : fogRemapColorMultiscatteringScale());
     }
 
     // Calculate scattering and attenuation coefficients for the volume
@@ -548,7 +712,7 @@ namespace dxvk {
       -log(transmittanceColorLinear.y) / transmittanceMeasurementDistance,
       -log(transmittanceColorLinear.z) / transmittanceMeasurementDistance
     };
-    Vector3 const volumetricScatteringCoefficient{ volumetricAttenuationCoefficient * singleScatteringAlbedo() };
+    Vector3 const volumetricScatteringCoefficient{ volumetricAttenuationCoefficient * (wx ? wx->singleScatteringAlbedo : singleScatteringAlbedo()) };
 
     const RtCamera& mainCamera = cameraManager.getMainCamera();
 
@@ -571,11 +735,11 @@ namespace dxvk {
 
     volumeArgs.maxAccumulationFrames = static_cast<uint16_t>(maxAccumulationFrames());
     volumeArgs.froxelDepthSliceDistributionExponent = froxelDepthSliceDistributionExponent();
-    volumeArgs.froxelMaxDistance = froxelMaxDistanceMeters() * RtxOptions::getMeterToWorldUnitScale();
+    volumeArgs.froxelMaxDistance = (wx ? wx->froxelMaxDistanceMeters : froxelMaxDistanceMeters()) * RtxOptions::getMeterToWorldUnitScale();
     volumeArgs.froxelFireflyFilteringLuminanceThreshold = froxelFireflyFilteringLuminanceThreshold();
     volumeArgs.attenuationCoefficient = volumetricAttenuationCoefficient;
     volumeArgs.enable = enable() && canUsePhysicalFog;
-    volumeArgs.enableTranslucentShadows = volumeArgs.enable && enableTranslucentShadows();
+    volumeArgs.enableTranslucentShadows = volumeArgs.enable && (wx ? wx->enableTranslucentShadows : enableTranslucentShadows());
     volumeArgs.scatteringCoefficient = volumetricScatteringCoefficient;
     volumeArgs.enableVolumeRISInitialVisibility = enableInitialVisibility();
     volumeArgs.enablevisibilityReuse = visibilityReuse();
@@ -593,23 +757,21 @@ namespace dxvk {
     volumeArgs.maxFilteredRadianceU = 1.f - volumeArgs.minFilteredRadianceU;
     volumeArgs.multiScatteringEstimate = multiScatteringEstimate;
     volumeArgs.enableReferenceMode = enableReferenceMode();
-    volumeArgs.volumetricFogAnisotropy = anisotropy();
-    // Numos-only: the skybox path has no atmosphere sun to scale, so both gains read as identity there.
-    volumeArgs.fogSunVisibilityGain = RtxOptions::skyMode() == SkyMode::Numos ? fogSunVisibilityGain() : 1.0f;
-    volumeArgs.volumetricConsumerGain = RtxOptions::skyMode() == SkyMode::Numos ? volumetricConsumerGain() : 1.0f;
+    volumeArgs.volumetricFogAnisotropy = wx ? wx->volumetricAnisotropy : anisotropy();
+    volumeArgs.fogSunVisibilityGain = RtxOptions::skyMode() == SkyMode::Numos ? (wx ? wx->fogSunVisibilityGain : fogSunVisibilityGain()) : 1.0f;
+    volumeArgs.volumetricConsumerGain = RtxOptions::skyMode() == SkyMode::Numos ? (wx ? wx->volumetricConsumerGain : volumetricConsumerGain()) : 1.0f;
 
-    volumeArgs.enableNoiseFieldDensity = enableHeterogeneousFog();
-    volumeArgs.noiseFieldSubStepSize = noiseFieldSubStepSizeMeters() * RtxOptions::getMeterToWorldUnitScale();
-    volumeArgs.noiseFieldOctaves = noiseFieldOctaves();
-    volumeArgs.noiseFieldTimeScale = noiseFieldTimeScale();
-    volumeArgs.noiseFieldDensityScale = noiseFieldDensityScale();
-    volumeArgs.noiseFieldDensityExponent = noiseFieldDensityExponent();
-    volumeArgs.noiseFieldOctaves = noiseFieldOctaves();
-    volumeArgs.noiseFieldInitialFrequency = noiseFieldInitialFrequencyPerMeter() / RtxOptions::getMeterToWorldUnitScale();
-    volumeArgs.noiseFieldLacunarity = noiseFieldLacunarity();
-    volumeArgs.noiseFieldGain = noiseFieldGain();
+    volumeArgs.enableNoiseFieldDensity = wx ? wx->enableHeterogeneousFog : enableHeterogeneousFog();
+    volumeArgs.noiseFieldSubStepSize = (wx ? wx->noiseFieldSubStepSizeMeters : noiseFieldSubStepSizeMeters()) * RtxOptions::getMeterToWorldUnitScale();
+    volumeArgs.noiseFieldOctaves = wx ? static_cast<uint32_t>(wx->noiseFieldOctaves + 0.5f) : noiseFieldOctaves();
+    volumeArgs.noiseFieldTimeScale = wx ? wx->noiseFieldTimeScale : noiseFieldTimeScale();
+    volumeArgs.noiseFieldDensityScale = wx ? wx->noiseFieldDensityScale : noiseFieldDensityScale();
+    volumeArgs.noiseFieldDensityExponent = wx ? wx->noiseFieldDensityExponent : noiseFieldDensityExponent();
+    volumeArgs.noiseFieldInitialFrequency = (wx ? wx->noiseFieldInitialFrequencyPerMeter : noiseFieldInitialFrequencyPerMeter()) / RtxOptions::getMeterToWorldUnitScale();
+    volumeArgs.noiseFieldLacunarity = wx ? wx->noiseFieldLacunarity : noiseFieldLacunarity();
+    volumeArgs.noiseFieldGain = wx ? wx->noiseFieldGain : noiseFieldGain();
 
-    volumeArgs.depthOffset = depthOffset();
+    volumeArgs.depthOffset = wx ? wx->depthOffset : depthOffset();
 
     const float invertedWorld = atmosphereInverted() ? -1.f : 1.f;
     const Vector3 sceneUpDirection = RtxOptions::zUp() ? Vector3(0, 0, invertedWorld) : Vector3(0, invertedWorld, 0);

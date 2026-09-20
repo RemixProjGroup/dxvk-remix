@@ -29,6 +29,7 @@
 #include "rtx/pass/particles/particle_system_binding_indices.h"
 #include <random>
 #include <unordered_map>
+#include <atomic>
 
 namespace dxvk {
   class RtxContext;
@@ -51,6 +52,12 @@ namespace dxvk {
       uint32_t instanceId;
       XXH64_hash_t particleSystemHash;
       uint32_t particleOffset;
+      // Fork: RtInstance::getId() of the emitter, captured at spawn time. instanceId above is a
+      // slot index into InstanceManager::m_instances, and that vector is swap-compacted by
+      // InstanceManager::garbageCollection() - which runs at the top of prepareSceneData, i.e.
+      // AFTER spawnParticles recorded the index and BEFORE writeSpawnContextsToGpu consumes it.
+      // The unique id survives the reindex; see fork_hooks::resolveSpawnEmitterInstance.
+      uint64_t instanceUid;
     };
 
     class ConservativeCounter : public RcObject {
@@ -168,6 +175,28 @@ namespace dxvk {
 
     Rc<DxvkBuffer> m_cb;
 
+    // Fork (2026-07-25): spawn-occlusion diagnostics. The spawn kernel bumps
+    // four counters (rays traced / shelter kills / landing hits / shelter
+    // relocations) into a tiny GPU buffer; each frame the buffer is copied
+    // into one slot of a 10-frames-in-flight host ring (the same delay
+    // contract ConservativeCounter uses) and the oldest slot - guaranteed
+    // retired - is published to the static atomics for the Precipitation dev
+    // panel to read. This exists because the occlusion feature failed silently
+    // on its first in-game test: with these numbers on screen, "no occlusion"
+    // immediately separates into "trace not running" (rays == 0) vs "trace
+    // running but nothing reachable to hit" (rays > 0, hits == 0), which are
+    // entirely different bug classes.
+    static constexpr uint32_t kSpawnTraceStatsCount = 4;
+    static constexpr uint32_t kSpawnTraceStatsFramesInFlight = 10;
+    Rc<DxvkBuffer> m_spawnTraceStatsGpu;
+    Rc<DxvkBuffer> m_spawnTraceStatsHost;
+
+    static std::atomic<uint32_t> s_spawnTraceRays;
+    static std::atomic<uint32_t> s_spawnTraceShelterKills;
+    static std::atomic<uint32_t> s_spawnTraceLandingHits;
+    static std::atomic<uint32_t> s_spawnTraceRelocations;
+    static std::atomic<bool> s_spawnTraceTlasValid;
+
     fast_unordered_cache<std::shared_ptr<ParticleSystem>> m_particleSystems;
     Rc<DxvkBuffer> m_spawnContextsBuffer;
 
@@ -277,10 +306,13 @@ namespace dxvk {
       * \param ctx                Command list to perform any potential allocation clears with.
       * \param desc               Description for the particle system.
       * \param instanceIdx        This is the index into the vector of instances held by instance manager.
+      * \param instanceUid        Fork: RtInstance::getId() of that same instance. The index above does not
+      *                           survive the instance vector being swap-compacted by garbage collection
+      *                           later in the frame; this stable id does.
       * \param drawCallState      The current draw call state referencing material info.
       * \param renderMaterialData The material preference to apply to particle system
       */
-    void spawnParticles(DxvkContext* ctx, const RtxParticleSystemDesc& desc, const uint32_t instanceIdx, const DrawCallState& drawCallState, const MaterialData& overrideMaterial);
+    void spawnParticles(DxvkContext* ctx, const RtxParticleSystemDesc& desc, const uint32_t instanceIdx, const uint64_t instanceUid, const DrawCallState& drawCallState, const MaterialData& overrideMaterial);
 
     /**
       * Issues the draw state (vertex buffer, index buffer) for rendering particles
@@ -300,5 +332,25 @@ namespace dxvk {
       * \param ctx           The RtxContext for issuing GPU commands.
       */
     void simulate(RtxContext* ctx);
+
+    // Fork (2026-07-25): read-only spawn-occlusion diagnostics for dev UI
+    // (see the m_spawnTraceStats* members for why these exist). Values are a
+    // few frames stale by construction - fine for a readout.
+    struct SpawnTraceDiagnostics {
+      uint32_t raysTraced;
+      uint32_t shelterKills;
+      uint32_t landingHits;
+      uint32_t relocations;
+      bool tlasValid;
+    };
+    static SpawnTraceDiagnostics getSpawnTraceDiagnostics() {
+      return SpawnTraceDiagnostics {
+        s_spawnTraceRays.load(std::memory_order_relaxed),
+        s_spawnTraceShelterKills.load(std::memory_order_relaxed),
+        s_spawnTraceLandingHits.load(std::memory_order_relaxed),
+        s_spawnTraceRelocations.load(std::memory_order_relaxed),
+        s_spawnTraceTlasValid.load(std::memory_order_relaxed),
+      };
+    }
   };
 }

@@ -546,6 +546,7 @@ namespace dxvk {
     m_demodulate(device),
     m_neeCache(device),
     m_neuralRadianceCache(device),
+    m_precipitation(device),
     m_sharc(device),
     m_primaryDirectLightDenoiser(device, DenoiserType::DirectLight),
     m_primaryIndirectLightDenoiser(device, DenoiserType::IndirectLight),

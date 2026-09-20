@@ -77,6 +77,9 @@
 #include "rtx_render/rtx_point_instancer_system.h"
 #include "rtx_render/rtx_overlay_window.h"
 #include "rtx_render/rtx_fork_hooks.h"
+// NV-DXVK start: Numos native weather UI
+#include "rtx_render/rtx_weather.h"
+// NV-DXVK end
 #include "../rtx_render/rtx_sharc.h"
 
 
@@ -2946,9 +2949,8 @@ namespace dxvk {
       // NV-DXVK start: Sky appearance and game setup UI
       if (RemixGui::CollapsingHeader("Sky###Sky Tuning", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
-        // The WeatherBlender argument arrives with the weather theme; without one the atmosphere UI
-        // shows its own controls and reports that weather is unavailable.
-        ctx->getCommonObjects()->metaAtmosphere().showImguiSettings(nullptr);
+        ctx->getCommonObjects()->metaAtmosphere().showImguiSettings(
+          ctx->getCommonObjects()->getSceneManager().getWeatherBlender());
         ImGui::Unindent();
       }
       // NV-DXVK end
@@ -3879,7 +3881,11 @@ namespace dxvk {
     if (RemixGui::CollapsingHeader("RTX Volumetrics (Global)", collapsingHeaderClosedFlags)) {
       ImGui::Indent();
 
-      common->metaGlobalVolumetrics().showImguiSettings();
+      // NV-DXVK start: Numos weather-aware volumetrics UI
+      const WeatherBlender* weatherBlender = common->getSceneManager().getWeatherBlender();
+      common->metaGlobalVolumetrics().showImguiSettings(
+        weatherBlender ? weatherBlender->getBlendedSnapshot() : nullptr);
+      // NV-DXVK end
 
       common->metaDustParticles().showImguiSettings();
 

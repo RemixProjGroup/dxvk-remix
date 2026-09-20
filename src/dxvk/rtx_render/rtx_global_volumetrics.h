@@ -29,6 +29,10 @@
 
 namespace dxvk {
 
+// Forward declaration for the weather override pointer (full definition in
+// rtx_weather.h, included only by rtx_global_volumetrics.cpp).
+struct WeatherSnapshot;
+
   class RtxGlobalVolumetrics : public CommonDeviceObject, public RtxPass {
 
   public:
@@ -137,17 +141,17 @@ namespace dxvk {
                args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION("rtx.volumetrics", bool, enableTranslucentShadows, false,
                "Calculate coloured shadows from translucent materials (i.e. glass, water) in volumetric lighting. In engineering terms: include OBJECT_MASK_TRANSLUCENT into volumetric visibility rays.");
-    RTX_OPTION_ARGS("rtx.volumetrics", Vector3, transmittanceColor, Vector3(0.999f, 0.999f, 0.999f),
+    RTX_OPTION_ARGS("rtx.volumetrics", Vector3, transmittanceColor, Vector3(0.995f, 0.995f, 0.995f),
                "The color to use for calculating transmittance measured at a specific distance.\n"
                "Note that this color is assumed to be in sRGB space and gamma encoded as it will be converted to linear for use in volumetrics.",
                args.minValue = Vector3(0.0f, 0.0f, 0.0f), args.maxValue = Vector3(1.0f, 1.0f, 1.0f));
-    RTX_OPTION_ARGS("rtx.volumetrics", float, transmittanceMeasurementDistanceMeters, 200.0f, "The distance the specified transmittance color was measured at. Lower distances indicate a denser medium.  The unit of measurement is meters, respects scene scale.",
+    RTX_OPTION_ARGS("rtx.volumetrics", float, transmittanceMeasurementDistanceMeters, 500.0f, "The distance the specified transmittance color was measured at. Lower distances indicate a denser medium.  The unit of measurement is meters, respects scene scale.",
                     args.minValue = 0.0f);
     RTX_OPTION_ARGS("rtx.volumetrics", Vector3, singleScatteringAlbedo, Vector3(0.999f, 0.999f, 0.999f),
                "The single scattering albedo (otherwise known as the particle albedo) representing the ratio of scattering to absorption.\n"
                "While color-like in many ways this value is assumed to be more of a mathematical albedo (unlike material albedo which is treated more as a color), and is therefore treated as linearly encoded data (not gamma).",
                args.minValue = Vector3(0.0f, 0.0f, 0.0f), args.maxValue = Vector3(1.0f, 1.0f, 1.0f));
-    RTX_OPTION_ARGS("rtx.volumetrics", float, anisotropy, 0.0f, "The anisotropy of the scattering phase function (-1 being backscattering, 0 being isotropic, 1 being forward scattering).",
+    RTX_OPTION_ARGS("rtx.volumetrics", float, anisotropy, 0.05f, "The anisotropy of the scattering phase function (-1 being backscattering, 0 being isotropic, 1 being forward scattering).",
                     args.minValue = -1.0f, args.maxValue = 1.0f);
     RTX_OPTION_ARGS("rtx.volumetrics", float, fogSunVisibilityGain, 1.0f,
                     "Artistic visibility gain applied to the sun's contribution to volumetric fog in-scattering. "
@@ -264,6 +268,18 @@ namespace dxvk {
 
     VolumeArgs getVolumeArgs(CameraManager const& cameraManager, FogState const& fogState, bool enablePortalVolumes) const;
 
+    /**
+     * \brief Set the per-frame weather snapshot override.
+     *
+     * When non-null, getVolumeArgs() reads blended volumetric weather values
+     * from the snapshot instead of the RTX_OPTION getters for every field that
+     * the WeatherBlender can drive. Frame-local: call once per frame before
+     * getVolumeArgs() runs; do NOT cache the pointer across frames.
+     */
+    void applyWeatherOverride(const dxvk::WeatherSnapshot* wx) {
+      m_weatherOverride = wx;
+    }
+
     void dispatch(class RtxContext* ctx, const Resources::RaytracingOutput& rtOutput, uint32_t numActiveFroxelVolumes);
     
     const Resources::Resource& getCurrentVolumeReservoirs() const { return m_volumeReservoirs[0]; }
@@ -277,7 +293,7 @@ namespace dxvk {
 
     void showPresetMenu();
     void showImguiUserSettings();
-    void showImguiSettings();
+    void showImguiSettings(const WeatherSnapshot* weatherSnapshot = nullptr);
 
     void setQualityLevel(const QualityLevel desiredQualityLevel);
     void setPreset(const PresetType desiredPreset);
@@ -298,6 +314,12 @@ namespace dxvk {
     Resources::Resource m_volumeAccumulatedRadianceAge[2];
     bool m_swapTextures = false;
     bool m_rebuildFroxels = false;
+
+    // Per-frame weather snapshot override. Set once per frame
+    // by applyWeatherOverride() (called from rtx_context.cpp before
+    // getVolumeArgs runs). getVolumeArgs() reads the snapshot's fields instead
+    // of the RTX_OPTION getters for every weather-blendable volumetric param.
+    const dxvk::WeatherSnapshot* m_weatherOverride = nullptr;
 
     DxvkRaytracingPipelineShaders getPipelineShaders(bool useRayQuery) const;
 

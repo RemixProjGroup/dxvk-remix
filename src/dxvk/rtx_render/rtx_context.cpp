@@ -79,6 +79,8 @@
 #include "../util/util_fastops.h"
 
 #include "rtx_atmosphere.h"
+#include "rtx_weather.h"
+#include "rtx_precipitation.h"
 
 // Destructor requires the struct definitions
 #include "rtx_sky.h"
@@ -648,6 +650,10 @@ namespace dxvk {
       m_cachedReflexFrameId = cachedReflexFrameId;
 
       beginGpuStageTiming();
+
+      // Submit weather precipitation before prepareSceneData; particle
+      // simulation consumes this frame's spawn contexts there.
+      getCommonObjects()->metaPrecipitation().submit(*this);
 
       // Update all the GPU buffers needed to describe the scene
       getSceneManager().prepareSceneData(this, m_execBarriers);
@@ -1405,7 +1411,14 @@ namespace dxvk {
     constants.viewModelRayTMax = RtxOptions::ViewModel::rangeMeters() * RtxOptions::getMeterToWorldUnitScale();
     constants.roughnessDemodulationOffset = m_common->metaDemodulate().demodulateRoughnessOffset();
     
-    const RtxGlobalVolumetrics& globalVolumetrics = getCommonObjects()->metaGlobalVolumetrics();
+    const WeatherSnapshot* weatherSnapshot = getSceneManager().getWeatherBlender()
+      ? getSceneManager().getWeatherBlender()->getBlendedSnapshot()
+      : nullptr;
+
+    RtxGlobalVolumetrics& globalVolumetrics = getCommonObjects()->metaGlobalVolumetrics();
+    // Weather is transient frame state. Volumetrics and atmosphere consume the
+    // same immutable snapshot; authored RtxOptions remain untouched.
+    globalVolumetrics.applyWeatherOverride(weatherSnapshot);
     constants.volumeArgs = globalVolumetrics.getVolumeArgs(cameraManager, getSceneManager().getFogState(), enablePortalVolumes);
     constants.startInMediumMaterialIndex = getSceneManager().getStartInMediumMaterialIndex();
     OpaqueMaterialOptions::fillShaderParams(constants.opaqueMaterialArgs);
@@ -1433,6 +1446,9 @@ namespace dxvk {
     constants.skyBrightness = RtxOptions::skyBrightness();
 
     constants.skyMode = static_cast<uint32_t>(RtxOptions::skyMode());
+    constants.particleSkyAmbientScale = std::max(
+      weatherSnapshot ? weatherSnapshot->precipitationSkyLight : PrecipitationSystem::skyLight(),
+      0.0f);
 
     const SkyMode currentSkyMode = RtxOptions::skyMode();
     if (currentSkyMode != m_lastSkyMode) {
@@ -1451,11 +1467,13 @@ namespace dxvk {
       m_lastSkyMode = currentSkyMode;
     }
 
-    // The weather snapshot argument arrives with the weather theme; until a blender exists the
-    // atmosphere reads its own options.
+    if (WeatherBlender* weather = getSceneManager().getWeatherBlender()) {
+      weather->update(GlobalTime::get().deltaTime());
+    }
+
     RtxAtmosphere& atmosphere = getCommonObjects()->metaAtmosphere();
     recordGpuStageTiming("RaytraceArgsBeforeAtmosphere");
-    const AtmosphereArgs atmosphereArgs = atmosphere.updateFrame(*this, nullptr, GlobalTime::get().deltaTime());
+    const AtmosphereArgs atmosphereArgs = atmosphere.updateFrame(*this, weatherSnapshot, GlobalTime::get().deltaTime());
     recordGpuStageTiming("AtmosphereFinish");
     if (currentSkyMode == SkyMode::Numos) {
       constants.atmosphereArgs = atmosphereArgs;

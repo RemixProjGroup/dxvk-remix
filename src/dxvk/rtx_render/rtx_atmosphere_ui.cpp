@@ -11,6 +11,7 @@
 #include "rtx_atmosphere.h"
 #include "rtx_imgui.h"
 #include "rtx_options.h"
+#include "rtx_precipitation.h"
 #include "rtx_weather.h"
 #include "rtx/pass/atmosphere/atmosphere_args.h"
 
@@ -1412,12 +1413,11 @@ void RtxAtmosphere::showNightSettings(const WeatherSnapshot* weatherSnapshot) {
 void RtxAtmosphere::showWeatherSettings(WeatherBlender* blender, const WeatherSnapshot* weatherSnapshot) {
   constexpr ImGuiSliderFlags sliderFlags = ImGuiSliderFlags_AlwaysClamp;
 
-  // NV-DXVK start: WeatherBlender::showImguiSettings is defined in rtx_weather.cpp, which lands with
-  // the weather theme. Until then no blender is ever constructed, so this tab shows only the
-  // atmosphere-owned controls below.
-  (void) blender;
-  ImGui::TextWrapped("Weather controls become available when a scene is loaded.");
-  // NV-DXVK end
+  if (blender) {
+    blender->showImguiSettings();
+  } else {
+    ImGui::TextWrapped("Weather controls become available when a scene is loaded.");
+  }
   ImGui::Separator();
   if (ImGui::TreeNode("Lightning")) {
     RemixGui::Checkbox("Enable Lightning", &RtxAtmosphere::lightningEnableObject());
@@ -1468,8 +1468,7 @@ void RtxAtmosphere::showWeatherSettings(WeatherBlender* blender, const WeatherSn
     ImGui::TreePop();
   }
 
-  // NV-DXVK start: PrecipitationSystem::showImguiSettings lands with the weather theme.
-  // NV-DXVK end
+  PrecipitationSystem::showImguiSettings();
 }
 
 void RtxAtmosphere::showSkySetup() {
@@ -1695,10 +1694,10 @@ void RtxAtmosphere::showImguiSettings(WeatherBlender* blender) {
   }
   ImGui::PopID();
 
-  // NV-DXVK start: WeatherBlender::renderEditorWindow (the weather preset editor) lands with the
-  // weather theme; there is no blender to render until then.
-  (void) useNumos;
-  // NV-DXVK end
+  // An open editor must keep rendering when the user visits another sky tab.
+  if (useNumos && blender) {
+    blender->renderEditorWindow();
+  }
 }
 
 } // namespace dxvk

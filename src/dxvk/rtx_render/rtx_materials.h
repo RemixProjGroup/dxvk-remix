@@ -121,6 +121,8 @@ struct RtSurface {
     uint16_t flags0 = 0;
     flags0 |= normalFormat == VK_FORMAT_R32_UINT ? 1 : 0;
     flags0 |= isVertexColorBakedLighting ? (1 << 1) : 0;
+    // flags0 bit 2 freed 2026-06-19 (was isDecalCategory for the removed
+    // cloud-shadow zenith gate). Spare again.
     // NOTE: Spare flags bits here
 
     writeGPUHelper(data, offset, flags0);
@@ -339,6 +341,8 @@ struct RtSurface {
   bool isClipPlaneEnabled = false;
   bool isTextureFactorBlend = false;
   bool isVertexColorBakedLighting = true;
+  // isDecalCategory (fork — 2026-06-18) removed 2026-06-19 with the cloud-shadow
+  // zenith gate that consumed it.
   bool isMotionBlurMaskOut = false;
   bool skipSurfaceInteractionSpritesheetAdjustment = false;
 
@@ -575,7 +579,9 @@ struct RtOpaqueSurfaceMaterial {
     float dlssControlMaskStructuralStrength,
     uint32_t subsurfaceMaterialIndex, bool isRaytracedRenderTarget, bool isHairCard,
     uint16_t samplerFeedbackStamp,
-    uint32_t secondaryTextureIndex = 0
+    uint32_t secondaryTextureIndex = 0,
+    bool albedoTextureIsSrgb = false, bool emissiveTextureIsSrgb = false,
+    bool skyLitParticle = false, bool usesLegacyDefaults = false
   ) :
     m_albedoOpacityTextureIndex{ albedoOpacityTextureIndex }, m_secondaryTextureIndex{secondaryTextureIndex}, m_normalTextureIndex{ normalTextureIndex },
     m_tangentTextureIndex { tangentTextureIndex }, m_heightTextureIndex { heightTextureIndex }, m_roughnessTextureIndex{ roughnessTextureIndex },
@@ -592,7 +598,9 @@ struct RtOpaqueSurfaceMaterial {
     m_dlssControlMaskToneStrength{ dlssControlMaskToneStrength },
     m_dlssControlMaskStructuralStrength{ dlssControlMaskStructuralStrength },
     m_subsurfaceMaterialIndex(subsurfaceMaterialIndex), m_isRaytracedRenderTarget(isRaytracedRenderTarget),
-    m_isHairCard(isHairCard), m_samplerFeedbackStamp{ samplerFeedbackStamp }
+    m_isHairCard(isHairCard), m_samplerFeedbackStamp{ samplerFeedbackStamp },
+    m_albedoTextureIsSrgb{ albedoTextureIsSrgb }, m_emissiveTextureIsSrgb{ emissiveTextureIsSrgb },
+    m_skyLitParticle{ skyLitParticle }, m_usesLegacyDefaults{ usesLegacyDefaults }
   {
     updateCachedData();
     updateCachedHash();
@@ -627,6 +635,25 @@ struct RtOpaqueSurfaceMaterial {
 
     if (m_isHairCard) {
       flags |= OPAQUE_SURFACE_MATERIAL_FLAG_IS_HAIR_CARD;
+    }
+
+    // When the source texture is sRGB-formatted the sampler already linearizes it, so the shader must skip
+    // its own gamma correction for that channel to avoid double linearization.
+    if (m_albedoTextureIsSrgb) {
+      flags |= OPAQUE_SURFACE_MATERIAL_FLAG_ALBEDO_TEXTURE_IS_SRGB;
+    }
+    if (m_emissiveTextureIsSrgb) {
+      flags |= OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_TEXTURE_IS_SRGB;
+    }
+
+    // Fork (2026-07-26): sky-lit particle materials (precipitation) get a sky-ambient
+    // term in the resolver's opacity lighting approximation - see shared_constants.h.
+    if (m_skyLitParticle) {
+      flags |= OPAQUE_SURFACE_MATERIAL_FLAG_SKY_LIT_PARTICLE;
+    }
+
+    if (m_usesLegacyDefaults) {
+      flags |= OPAQUE_SURFACE_MATERIAL_FLAG_USE_LEGACY_DEFAULTS;
     }
 
     float displaceIn = m_displaceIn * getDisplacementInFactor();
@@ -807,7 +834,7 @@ struct RtOpaqueSurfaceMaterial {
 private:
   void updateCachedHash() {
     static_assert(
-      sizeof(*this) == 144,
+      sizeof(*this) == 152,
       "add new member for hashing if needed: add a MEMBER into the struct + add a VALUE into the list-init"
     );
     struct HashStruct {
@@ -838,6 +865,10 @@ private:
       uint32_t isHairCard;                // NOTE: uint32_t to avoid padding
       uint32_t samplerFeedbackStamp;      // NOTE: uint32_t to avoid padding
       uint32_t secondaryTextureIndex;
+      uint32_t albedoTextureIsSrgb;       // NOTE: uint32_t to avoid padding
+      uint32_t emissiveTextureIsSrgb;     // NOTE: uint32_t to avoid padding
+      uint32_t skyLitParticle;            // NOTE: uint32_t to avoid padding
+      uint32_t usesLegacyDefaults;
       // NOTE: There must be NO padding between members, as the struct is used for hashing
     };
     HashStruct hashData = HashStruct{
@@ -868,6 +899,10 @@ private:
       m_isHairCard,
       m_samplerFeedbackStamp,
       m_secondaryTextureIndex,
+      m_albedoTextureIsSrgb,
+      m_emissiveTextureIsSrgb,
+      m_skyLitParticle,
+      m_usesLegacyDefaults,
     };
     m_cachedHash = hashStructByMemory<HashStruct,
       &HashStruct::albedoOpacityTextureIndex,
@@ -896,7 +931,11 @@ private:
       &HashStruct::isRaytracedRenderTarget,
       &HashStruct::isHairCard,
       &HashStruct::samplerFeedbackStamp,
-      &HashStruct::secondaryTextureIndex>(hashData);
+      &HashStruct::secondaryTextureIndex,
+      &HashStruct::albedoTextureIsSrgb,
+      &HashStruct::emissiveTextureIsSrgb,
+      &HashStruct::skyLitParticle,
+      &HashStruct::usesLegacyDefaults>(hashData);
   }
 
   void updateCachedData() {
@@ -953,6 +992,15 @@ private:
 
   bool m_isRaytracedRenderTarget;
   bool m_isHairCard;
+
+  // True if the albedo/emissive source texture uses an sRGB VkFormat (sampler linearizes on read), so the
+  // shader skips its software gamma correction for that channel. Derived from the texture format on the CPU.
+  bool m_albedoTextureIsSrgb;
+  bool m_emissiveTextureIsSrgb;
+
+  // Fork (2026-07-26): sky-ambient term in the resolver's particle lighting approximation.
+  bool m_skyLitParticle;
+  bool m_usesLegacyDefaults;
 
   uint16_t m_samplerFeedbackStamp;
 
@@ -1912,6 +1960,17 @@ private:
 struct MaterialData {
   bool m_ignored = false;
 
+  static MaterialData fromLegacy(const LegacyMaterialData& legacyMaterial);
+
+  bool usesLegacyDefaults() const {
+    return m_usesLegacyDefaults;
+  }
+
+private:
+  bool m_usesLegacyDefaults = false;
+
+public:
+
   using MaterialVariant = std::variant<
     OpaqueMaterialData,
     TranslucentMaterialData,
@@ -1949,7 +2008,9 @@ struct MaterialData {
   }
 
   XXH64_hash_t getHash() const {
-    return std::visit([](auto const& mat) { return mat.getHash(); }, m_data);
+    const XXH64_hash_t hash = std::visit([](auto const& mat) { return mat.getHash(); }, m_data);
+    // Identical authored parameters must not merge legacy and replacement materials in the cache.
+    return m_usesLegacyDefaults ? XXH64(&m_usesLegacyDefaults, sizeof(m_usesLegacyDefaults), hash) : hash;
   }
 
   const Rc<DxvkSampler>& getSamplerOverride() const {

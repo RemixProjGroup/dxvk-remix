@@ -364,6 +364,7 @@ dxvk_src = files([
   'rtx_render/rtx_types.cpp',
   'rtx_render/rtx_types.h',
   'rtx_render/rtx_utils.h',
+  'rtx_render/rtx_weather.cpp',
   'rtx_render/rtx_weather.h',
   'rtx_render/rtx_xess.cpp',
   'rtx_render/rtx_xess.h',
@@ -371,6 +372,9 @@ dxvk_src = files([
   'rtx_render/rtx_system_info.cpp',
   'rtx_render/rtx_system_info.h',
   
+  'rtx_render/rtx_fork_particle_spawn.cpp',
+  'rtx_render/rtx_precipitation.cpp',
+  'rtx_render/rtx_precipitation.h',
   'rtx_render/rtx_particle_system.cpp',
   'rtx_render/rtx_particle_system.h',
 
