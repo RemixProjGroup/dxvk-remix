@@ -2090,25 +2090,17 @@ namespace dxvk {
         rtOutput, GlobalTime::get().deltaTimeMs());
     }
 
-    const bool resetToneMapperHistory = m_resetHistory || getSceneManager().getCamera().isCameraCut();
     setFramePassStage(RtxFramePassStage::ToneMapping);
-    if (RtxOptions::tonemappingMode() == TonemappingMode::Global) {
+    // Operator-only tonemapping (dynamic tone curve removed in the fork's 2026-05-13 refactor).
+    // sRGB conversion + dithering are deferred to dispatchSRGBDither (upstream's post-FX
+    // pipeline refactor), so the tonemapper runs with performSRGBConversion=false and leaves
+    // the image in linear space for the final output pass.
+    {
       DxvkToneMapping& toneMapper = m_common->metaToneMapping();
       toneMapper.dispatch(this,
-        getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER),
         autoExposure.getExposureTexture().view,
         rtOutput,
-        GlobalTime::get().deltaTimeMs(),
-        resetToneMapperHistory,
-        autoExposure.enabled());
-    }
-    DxvkLocalToneMapping& localTonemapper = m_common->metaLocalToneMapping();
-    if (localTonemapper.isActive()) {
-      localTonemapper.dispatch(this,
-        getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
-        autoExposure.getExposureTexture().view,
-        rtOutput,
-        GlobalTime::get().deltaTimeMs(),
+        /* performSRGBConversion */ false,
         autoExposure.enabled());
     }
   }

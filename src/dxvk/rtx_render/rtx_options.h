@@ -129,10 +129,10 @@ namespace dxvk {
     YawRotation
   };
 
-  enum class TonemappingMode : int {
-    Global = 0,
-    Local
-  };
+  // TonemappingMode (Global / Local / Direct) and the dynamic tone curve
+  // were removed in the tonemap refactor (2026-05-13 / 2026-05-15). The
+  // apply pass dispatches the selected operator directly via
+  // RtxForkGlobalTonemap::tonemapOperator.
 
   enum class UIType : int {
     None = 0,
@@ -1183,16 +1183,6 @@ namespace dxvk {
                "A flag controlling if the partial DDS loader should be used, true to enable, false to disable and use GLI instead.\n"
                "Generally this should be always enabled as it allows for simple parsing of DDS header information without loading the entire texture into memory like GLI does to retrieve similar information.\n"
                "Should only be set to false for debugging purposes if the partial DDS loader's logic is suspected to be incorrect to compare against GLI's implementation.");
-
-    RTX_OPTION("rtx", TonemappingMode, tonemappingMode, TonemappingMode::Local,
-               "The tonemapping type to use, 0 for Global, 1 for Local (Default).\n"
-               "Global tonemapping tonemaps the image with respect to global parameters, usually based on statistics about the rendered image as a whole.\n"
-               "Local tonemapping on the other hand uses more spatially-local parameters determined by regions of the rendered image rather than the whole image.\n"
-               "Local tonemapping can result in better preservation of highlights and shadows in scenes with high amounts of dynamic range whereas global tonemapping may have to comprimise between over or underexposure.");
-    RTX_OPTION("rtx", bool, useLegacyACES, true,
-               "Use a luminance-only approximation of ACES that over-saturates the highlights. If false, use a refined ACES transform that converts between color spaces with more precision.");
-    RTX_OPTION("rtx", bool, showLegacyACESOption, false,
-               "Show \'rtx.useLegacyACES\' in the developer menu. Default is OFF, as the non-legacy ACES is currently experimental and the implementation is a subject to change.");
 
     // Capture Options
     //   General

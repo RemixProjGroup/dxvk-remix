@@ -4042,21 +4042,7 @@ namespace dxvk {
         RemixGui::SliderInt("User Brightness", &RtxOptions::userBrightnessObject(), 0, 100, "%d");
         RemixGui::DragFloat("User Brightness EV Range", &RtxOptions::userBrightnessEVRangeObject(), 0.5f, 0.f, 10.f, "%.1f");
         RemixGui::Separator();
-        RemixGui::Combo("Tonemapping Mode", &RtxOptions::tonemappingModeObject(), "Global\0Local\0");
-        if (RtxOptions::tonemappingMode() == TonemappingMode::Global) {
-          common->metaToneMapping().showImguiSettings();
-        } else {
-          common->metaLocalToneMapping().showImguiSettings();
-        }
-        if (RtxOptions::showLegacyACESOption()) {
-          RemixGui::Separator();
-          RemixGui::Checkbox("Use Legacy ACES", &RtxOptions::useLegacyACESObject());
-          if (!RtxOptions::useLegacyACES()) {
-            ImGui::Indent();
-            ImGui::TextWrapped("WARNING: Non-legacy ACES is currently experimental and the implementation is a subject to change.");
-            ImGui::Unindent();
-          }
-        }
+        common->metaToneMapping().showImguiSettings();
       }
 
       if (RemixGui::CollapsingHeader("Post FX", collapsingHeaderClosedFlags))
