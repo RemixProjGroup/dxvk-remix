@@ -859,11 +859,9 @@ namespace dxvk {
       buildInfo.geometryCount = 1;
       buildInfo.pGeometries = blasEntry->buildGeometries.data();
 
-      // Calculate the build sizes for this bucket
-      VkAccelerationStructureBuildSizesInfoKHR sizeInfo {};
-      sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-      m_device->vkd()->vkGetAccelerationStructureBuildSizesKHR(m_device->handle(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                                                               &buildInfo, &blasEntry->buildRanges[0].primitiveCount, &sizeInfo);
+      const auto sizeInfo = blasEntry->buildSizeCache.get(m_device->handle(),
+        m_device->vkd()->vkGetAccelerationStructureBuildSizesKHR,
+        buildInfo, &blasEntry->buildRanges[0].primitiveCount);
 
       // Try to reuse our dynamic BLAS if it exists
       Rc<PooledBlas>& selectedBlas = blasEntry->dynamicBlas;
@@ -901,7 +899,9 @@ namespace dxvk {
         buildInfo.dstAccelerationStructure = selectedBlas->accelStructure->getAccelStructure();
 
         // Allocate a scratch buffer slice
-        const size_t requiredScratchAllocSize = align(sizeInfo.buildScratchSize + m_scratchAlignment, m_scratchAlignment);
+        const VkDeviceSize scratchSize = buildInfo.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
+          ? sizeInfo.updateScratchSize : sizeInfo.buildScratchSize;
+        const size_t requiredScratchAllocSize = align(scratchSize + m_scratchAlignment, m_scratchAlignment);
         buildInfo.scratchData.deviceAddress = totalScratchMemory;
         totalScratchMemory += requiredScratchAllocSize;
 
@@ -1316,7 +1316,9 @@ namespace dxvk {
         selectedBlas->primitiveCounts = bucket->primitiveCounts;
 
         // Allocate a scratch buffer slice
-        const size_t requiredScratchAllocSize = align(sizeInfo.buildScratchSize + m_scratchAlignment, m_scratchAlignment);
+        const VkDeviceSize scratchSize = buildInfo.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
+          ? sizeInfo.updateScratchSize : sizeInfo.buildScratchSize;
+        const size_t requiredScratchAllocSize = align(scratchSize + m_scratchAlignment, m_scratchAlignment);
         buildInfo.scratchData.deviceAddress = totalScratchMemory;
         totalScratchMemory += requiredScratchAllocSize;
 
@@ -1902,7 +1904,8 @@ namespace dxvk {
   void AccelManager::internalBuildTlas(Rc<DxvkContext> ctx, size_t& totalScratchSize) {
     static constexpr const char* names[] = { "TLAS_Opaque", "TLAS_NonOpaque", "TLAS_SSS" };
     ScopedGpuProfileZone(ctx, names[type]);
-    const VkBuildAccelerationStructureFlagsKHR flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR | additionalAccelerationStructureFlags();
+    // TLAS always uses BUILD mode, so it does not need the extra storage for updates.
+    const VkBuildAccelerationStructureFlagsKHR flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR | additionalAccelerationStructureFlags();
 
     const auto& vkd = m_device->vkd();
 
@@ -1934,8 +1937,8 @@ namespace dxvk {
     buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
 
     const uint32_t numInstances = uint32_t(m_mergedInstances[type].size() + m_pointInstancerSlotsPerType[type]);
-    VkAccelerationStructureBuildSizesInfoKHR sizeInfo { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
-    vkd->vkGetAccelerationStructureBuildSizesKHR(vkd->device(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &numInstances, &sizeInfo);
+    const auto sizeInfo = m_tlasSizeCache[type].get(vkd->device(),
+      vkd->vkGetAccelerationStructureBuildSizesKHR, buildInfo, &numInstances);
 
     // Create TLAS
     Tlas& tlas = m_device->getCommon()->getResources().getTLAS(type);

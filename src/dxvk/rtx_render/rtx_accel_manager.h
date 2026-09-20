@@ -224,6 +224,7 @@ private:
   std::vector<uint32_t> m_reorderedSurfacesPrimitiveIDPrefixSum;              // Exclusive prefix sum for this frame's surface primitive count array
   std::vector<uint32_t> m_reorderedSurfacesPrimitiveIDPrefixSumLastFrame;     // Exclusive prefix sum for last frame's surface primitive count array
   std::vector<VkAccelerationStructureInstanceKHR> m_mergedInstances[Tlas::Count];
+  AccelSizeCache m_tlasSizeCache[Tlas::Count];
   std::vector<Rc<PooledBlas>> m_blasPool;
 
   // GPU-driven PointInstancer culling batches, recorded per frame in mergeInstancesIntoBlas

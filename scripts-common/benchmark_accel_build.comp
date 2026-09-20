@@ -1,0 +1,44 @@
+#version 460
+#extension GL_EXT_ray_query : require
+
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0) uniform accelerationStructureEXT scene;
+layout(set = 0, binding = 1, std430) buffer Results { float results[]; };
+layout(push_constant) uniform Args { uint mode; } args;
+
+uint hash(uint value) {
+  value ^= value >> 16;
+  value *= 0x7feb352du;
+  value ^= value >> 15;
+  value *= 0x846ca68bu;
+  return value ^ (value >> 16);
+}
+
+float random(inout uint state) {
+  state = hash(state);
+  return float(state >> 8) * (1.0 / 16777216.0);
+}
+
+void main() {
+  uint index = gl_GlobalInvocationID.x;
+  uint state = index + 1;
+  vec2 pixel = vec2(index % 1024, index / 1024) + 0.5;
+  vec3 origin = vec3(0, -90, 22);
+  vec3 direction = normalize(vec3((pixel.x / 1024.0 - 0.5) * 1.7, 1, (pixel.y / 1024.0 - 0.5) - 0.15));
+  if (args.mode == 1 || args.mode == 2) {
+    origin = vec3(random(state) * 100 - 50, random(state) * 100 - 50, random(state) * 25);
+    direction = normalize(vec3(random(state) * 2 - 1, random(state) * 2 - 1, random(state) * 2 - 1));
+  }
+  uint flags = args.mode == 3 ? 0 : gl_RayFlagsOpaqueEXT;
+  if (args.mode == 1) { flags |= gl_RayFlagsTerminateOnFirstHitEXT; }
+  rayQueryEXT query;
+  rayQueryInitializeEXT(query, scene, flags, 255, origin, 0.001, direction, 300);
+  while (rayQueryProceedEXT(query)) {
+    // Deterministic cutout surrogate; this is not Remix's material evaluator.
+    if ((rayQueryGetIntersectionPrimitiveIndexEXT(query, false) & 3) != 0) {
+      rayQueryConfirmIntersectionEXT(query);
+    }
+  }
+  bool hit = rayQueryGetIntersectionTypeEXT(query, true) != gl_RayQueryCommittedIntersectionNoneEXT;
+  results[index] = args.mode == 1 ? float(hit) : (hit ? rayQueryGetIntersectionTEXT(query, true) : -1.0);
+}

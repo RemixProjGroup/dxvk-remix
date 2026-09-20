@@ -21,6 +21,8 @@
 */
 #pragma once
 
+#include <array>
+
 #include "rtx_utils.h"
 #include "rtx_asset_data.h"
 #include "rtx_constants.h"
@@ -54,6 +56,16 @@ namespace dxvk {
       kVidMem,          // Texture image is in VID memory (either partial, or full mip-chain).
       kFailed           // Texture image to upload or read, or was dropped.
     };
+
+    // Used only by the texture manager's garbage-collection thread.
+    struct MipSizeCache {
+      VkFormat format = VK_FORMAT_UNDEFINED;
+      VkExtent3D extent {};
+      uint32_t layers = 0;
+      uint32_t mipLevels = 0;
+      uint32_t firstMip = 0;
+      std::array<size_t, MAX_MIPS + 1> suffixSizes {};
+    } m_mipSizeCache;
 
     // Stage 1 - Texture initialized, image asset data discovered.
     Rc<AssetData>       m_assetData     = {};

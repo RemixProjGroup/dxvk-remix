@@ -22,6 +22,7 @@
 #pragma once
 
 #include "rtx_constants.h"
+#include "rtx_accel_size_cache.h"
 #include "rtx_utils.h"
 #include "rtx_materials.h"
 #include "rtx_hashing.h"
@@ -938,6 +939,8 @@ struct BlasEntry {
 
   std::vector<VkAccelerationStructureGeometryKHR> buildGeometries;
   std::vector<VkAccelerationStructureBuildRangeInfoKHR> buildRanges;
+
+  AccelSizeCache buildSizeCache;
 
   BlasEntry() = default;
 
