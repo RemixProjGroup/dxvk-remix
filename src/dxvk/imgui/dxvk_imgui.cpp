@@ -807,6 +807,11 @@ namespace dxvk {
         RemixGui::DragFloat("Metallic", &LegacyMaterialDefaults::metallicConstantObject(), 0.01f, 0.0f, 1.f, "%.3f", sliderFlags);
         RemixGui::DragFloat("Anisotropy", &LegacyMaterialDefaults::anisotropyObject(), 0.01f, -1.0f, 1.f, "%.3f", sliderFlags);
 
+        // NV-DXVK start: Fresnel defaults apply only to legacy materials.
+        RemixGui::SliderFloat("Specular Level", &LegacyMaterialDefaults::specularLevelObject(), 0.0f, 1.f, "%.3f", sliderFlags);
+        RemixGui::SliderFloat("Fresnel Grazing (f90)", &LegacyMaterialDefaults::fresnelGrazingObject(), 0.0f, 1.f, "%.3f", sliderFlags);
+        // NV-DXVK end
+
         ImGui::Unindent();
       }
 
@@ -4298,6 +4303,8 @@ namespace dxvk {
       ImGui::Indent();
 
       RemixGui::Checkbox("Use White Material Textures", &RtxOptions::useWhiteMaterialModeObject());
+      RemixGui::Separator();
+      RemixGui::Checkbox("Linearize sRGB Textures", &RtxOptions::linearizeSrgbTexturesObject());
       RemixGui::Separator();
       constexpr float kMipBiasRange = 32;
       RemixGui::DragFloat("Mip LOD Bias", &RtxOptions::nativeMipBiasObject(), 0.01f, -kMipBiasRange, kMipBiasRange, "%.2f", sliderFlags);

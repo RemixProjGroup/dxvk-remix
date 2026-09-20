@@ -499,6 +499,14 @@ struct RtSurface {
 
 struct LegacyMaterialDefaults {
   friend class ImGUI;
+  RTX_OPTION("rtx.legacyMaterial", float, specularLevel, 1.0f,
+             "Scales dielectric base reflectivity (f0) on non-replaced legacy materials [0,1]. "
+             "1 keeps the standard 0.04 reflectivity; 0 removes the normal-incidence dielectric reflection. "
+             "Grazing reflections are controlled separately by Fresnel Grazing. Fully metallic surfaces are unaffected.");
+  RTX_OPTION("rtx.legacyMaterial", float, fresnelGrazing, 1.0f,
+             "Grazing-angle Fresnel reflectivity (f90) for non-replaced legacy materials [0,1]. "
+             "1 keeps standard Schlick Fresnel; lower values reduce the white sheen at glancing angles. "
+             "Replacement materials retain their standard Fresnel response.");
   RTX_OPTION("rtx.legacyMaterial", float, anisotropy, 0.f,
                   "The default roughness anisotropy to use for non-replaced \"legacy\" materials. "
                   "Should be in the range -1 to 1, where 0 is isotropic.");

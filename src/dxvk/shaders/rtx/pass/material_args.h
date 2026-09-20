@@ -42,8 +42,10 @@ struct OpaqueMaterialArgs {
   uint enableThinFilmOverride = 0;
   // Note: This thickness value is normalized on 0-1, predivided by the thinFilmMaxThickness on the CPU.
   float thinFilmNormalizedThicknessOverride = 0.0;
-  uint pad0 = 0;
-  uint pad1 = 0;
+  // NV-DXVK start: Legacy Fresnel controls reuse the existing constant-buffer padding.
+  float legacySpecularLevel = 1.f;
+  float legacyFresnelGrazing = 1.f;
+  // NV-DXVK end
 };
 
 struct TranslucentMaterialArgs {

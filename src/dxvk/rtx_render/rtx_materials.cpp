@@ -193,4 +193,10 @@ template<> RayPortalMaterialData LegacyMaterialData::as() const {
 }
 
 
+MaterialData MaterialData::fromLegacy(const LegacyMaterialData& legacyMaterial) {
+  MaterialData material(legacyMaterial.as<OpaqueMaterialData>());
+  material.m_usesLegacyDefaults = true;
+  return material;
+}
+
 } // namespace dxvk

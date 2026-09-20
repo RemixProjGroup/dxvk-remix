@@ -40,6 +40,20 @@ static const float roughnessThreshold = float(0.001f);
 
 // Opaque Surface Material Interaction Helper Functions
 
+// NV-DXVK start: Replaced materials retain the standard Fresnel response on every shading path.
+float opaqueSurfaceMaterialInteractionGetSpecularLevel(OpaqueSurfaceMaterialInteraction material)
+{
+  return (material.flags & OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_USE_LEGACY_DEFAULTS) != 0 ?
+    cb.opaqueMaterialArgs.legacySpecularLevel : 1.0f;
+}
+
+float opaqueSurfaceMaterialInteractionGetFresnelGrazing(OpaqueSurfaceMaterialInteraction material)
+{
+  return (material.flags & OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_USE_LEGACY_DEFAULTS) != 0 ?
+    cb.opaqueMaterialArgs.legacyFresnelGrazing : 1.0f;
+}
+// NV-DXVK end
+
 #ifdef OPAQUE_MATERIAL_USE_POM
 // Parallax Occlusion Mapping Helper Functions
 // Define a `box` as a region in tangent space that corresponds to a pixel in a mipmap level, with min_z = 0 and max_z equal to the max height in that region.
@@ -533,7 +547,10 @@ void overrideMaterialInteractionForEye(
     opaqueSurfaceMaterialInteraction.anisotropicRoughness
   );
   opaqueSurfaceMaterialInteraction.albedo           = albedoToAdjustedAlbedo(eyeAlbedo, eyeMetallic, eyeOpacity);
-  opaqueSurfaceMaterialInteraction.baseReflectivity = calcBaseReflectivity(eyeAlbedo, eyeMetallic, eyeOpacity);
+  // NV-DXVK start: Material-scoped Fresnel controls.
+  opaqueSurfaceMaterialInteraction.baseReflectivity = calcBaseReflectivity(eyeAlbedo, eyeMetallic, eyeOpacity,
+    opaqueSurfaceMaterialInteractionGetSpecularLevel(opaqueSurfaceMaterialInteraction));
+  // NV-DXVK end
   opaqueSurfaceMaterialInteraction.opacity          = eyeOpacity;
 
   opaqueSurfaceMaterialInteraction.emissiveRadiance =
@@ -551,7 +568,10 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
 {
   OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction;
   // Note: need initialize the flags explicitely to get rid of garbage data.
-  opaqueSurfaceMaterialInteraction.flags = 0;
+  // NV-DXVK start: The existing interaction flag mask preserves this bit through G-buffer serialization.
+  opaqueSurfaceMaterialInteraction.flags = (opaqueSurfaceMaterial.flags & OPAQUE_SURFACE_MATERIAL_FLAG_USE_LEGACY_DEFAULTS) != 0 ?
+    OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_USE_LEGACY_DEFAULTS : 0;
+  // NV-DXVK end
 
   // Create a tangent to world space matrix for future calculations
 
@@ -747,15 +767,24 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
     opacity = 1.f;
   }
   
-  // Note: Gamma correct albedo input (be it from a constant or a texture). Currently assuming all textures are not using sRGB formats which
-  // automatically do this conversion.
-  // Todo: Disable this for when a sRGB texture is the source of the albedo.
-  albedo = gammaToLinear(albedo);
-  
-  // Note: Gamma correct emissive color input (be it from a constant or a texture). Currently assuming all textures are not using sRGB formats which
-  // automatically do this conversion.
-  // Todo: Disable this for when a sRGB texture is the source of the emissive color.
-  emissiveColor = gammaToLinear(emissiveColor);
+  // Note: Gamma correct albedo input (be it from a constant or a texture). Textures using a UNORM format do not have their
+  // sRGB->linear conversion done by the sampler, so we do it here in software. When the albedo comes from a texture that uses
+  // an sRGB VkFormat however, the sampler hardware already linearized it on read, so applying gammaToLinear again would double
+  // linearize it (darkening the result); OPAQUE_SURFACE_MATERIAL_FLAG_ALBEDO_TEXTURE_IS_SRGB (set on the CPU) marks that case.
+  // The albedo constant is always gamma-encoded, so this only skips when the texture was actually the source.
+  const bool albedoAlreadyLinear = albedoOpacityLoaded && (opaqueSurfaceMaterial.flags & OPAQUE_SURFACE_MATERIAL_FLAG_ALBEDO_TEXTURE_IS_SRGB);
+  if (!albedoAlreadyLinear)
+  {
+    albedo = gammaToLinear(albedo);
+  }
+
+  // Note: Same handling as albedo above - skip the software gamma correction when the emissive color came from an sRGB-format
+  // texture that the sampler already linearized (OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_TEXTURE_IS_SRGB).
+  const bool emissiveAlreadyLinear = emissiveColorLoaded && (opaqueSurfaceMaterial.flags & OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_TEXTURE_IS_SRGB);
+  if (!emissiveAlreadyLinear)
+  {
+    emissiveColor = gammaToLinear(emissiveColor);
+  }
   
   // Apply material modifiers/overrides
   albedo = saturate(albedo * cb.opaqueMaterialArgs.albedoScale + cb.opaqueMaterialArgs.albedoBias);
@@ -865,7 +894,10 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
   // Note: Opacity factored into albedo and base reflectivity to ensure NEE and indirect lighting off of objects with opacity properly
   // account for how much light is being transmitted due to the opacity (similar to how Fresnel on glass works).
   opaqueSurfaceMaterialInteraction.albedo = surface.isMatte ? vec3(0) : albedoToAdjustedAlbedo(albedo, metallic, opacity);
-  opaqueSurfaceMaterialInteraction.baseReflectivity = surface.isMatte ? vec3(0) : calcBaseReflectivity(albedo, metallic, opacity);
+  // NV-DXVK start: Material-scoped Fresnel controls.
+  opaqueSurfaceMaterialInteraction.baseReflectivity = surface.isMatte ? vec3(0) :
+    calcBaseReflectivity(albedo, metallic, opacity, opaqueSurfaceMaterialInteractionGetSpecularLevel(opaqueSurfaceMaterialInteraction));
+  // NV-DXVK end
    
   // Note: Roughness loaded from texture is a perceptual roughness value (for optimal encoding), so this works as intended.
   calcRoughness(roughness, opaqueSurfaceMaterial.anisotropy,
@@ -1028,8 +1060,11 @@ bool opaqueSurfaceMaterialInteractionCalcLobeProbability(
   // Note: Albedo and Base Reflectivity already have opacity baked into them which is why opacity does not need to be specified
   // in the albedo approximations below.
   const vec3 albedo = opaqueSurfaceMaterialInteraction.albedo;
+  // NV-DXVK start: Material-scoped Fresnel controls.
   const vec3 fresnel =
-    evalOpaqueSchlickFresnel(opaqueSurfaceMaterialInteraction.baseReflectivity, normalDotOutputDirection);
+    evalOpaqueSchlickFresnel(opaqueSurfaceMaterialInteraction.baseReflectivity, normalDotOutputDirection,
+    opaqueSurfaceMaterialInteractionGetFresnelGrazing(opaqueSurfaceMaterialInteraction));
+  // NV-DXVK end
 
   // Note: I think these should be using a preintegrated albedo calculation (e.g. the EnvBRDF approximation for specular
   // albedo), but I am not 100% sure if that is the intended "ideal" quantity to be using for a lobe's weight (when only the outgoing
@@ -1308,8 +1343,11 @@ SurfaceMaterialInteractionSample opaqueSurfaceMaterialInteractionCalcSpecularRef
 
   // Calculate the throughput of the sample
 
+  // NV-DXVK start: Material-scoped Fresnel controls.
   const vec3 fresnel = evalOpaqueSchlickFresnel(
-    opaqueSurfaceMaterialInteraction.baseReflectivity, outputDirectionDotMicrofacetNormal);
+    opaqueSurfaceMaterialInteraction.baseReflectivity, outputDirectionDotMicrofacetNormal,
+    opaqueSurfaceMaterialInteractionGetFresnelGrazing(opaqueSurfaceMaterialInteraction));
+  // NV-DXVK end
 
   // Todo: Pass in a material mode similar to the resolve mode to control this sort of material simplification option.
 #ifdef OPAQUE_MATERIAL_USE_THIN_FILM
@@ -1423,8 +1461,11 @@ SurfaceMaterialInteractionSample opaqueSurfaceMaterialInteractionCalcDiffuseTran
   const float /* l.h */ inputDirectionDotMicrofacetNormal = -inputDirection.z;
   const float /* o.h */ outputDirectionDotMicrofacetNormal = outputDirection.z;
 
+  // NV-DXVK start: Material-scoped Fresnel controls.
   const vec3 fresnel = evalOpaqueSchlickFresnel(
-    opaqueSurfaceMaterialInteraction.baseReflectivity, outputDirectionDotMicrofacetNormal);
+    opaqueSurfaceMaterialInteraction.baseReflectivity, outputDirectionDotMicrofacetNormal,
+    opaqueSurfaceMaterialInteractionGetFresnelGrazing(opaqueSurfaceMaterialInteraction));
+  // NV-DXVK end
   const vec3 transmissionFresnel = vec3(1.0f, 1.0f, 1.0f) - fresnel;
 
   SurfaceMaterialInteractionSample materialSample;
@@ -1626,8 +1667,11 @@ SurfaceMaterialInteractionPSRSample opaqueSurfaceMaterialInteractionCalcPSRRefle
 
   // Calculate the attenuation of the sample
 
+  // NV-DXVK start: Material-scoped Fresnel controls.
   const vec3 fresnel = evalOpaqueSchlickFresnel(
-    opaqueSurfaceMaterialInteraction.baseReflectivity, outputDirectionDotMicrofacetNormal);
+    opaqueSurfaceMaterialInteraction.baseReflectivity, outputDirectionDotMicrofacetNormal,
+    opaqueSurfaceMaterialInteractionGetFresnelGrazing(opaqueSurfaceMaterialInteraction));
+  // NV-DXVK end
 
   // Todo: Pass in a material mode similar to the resolve mode to control this sort of material simplification option.
 #ifdef OPAQUE_MATERIAL_USE_THIN_FILM
@@ -1873,7 +1917,11 @@ SurfaceMaterialInteractionSplitWeight opaqueSurfaceMaterialInteractionCalcApprox
   }
 
   // Calculate the weight
-  const vec3 fresnel = evalOpaqueSchlickFresnel(opaqueSurfaceMaterialInteraction.baseReflectivity, outputDirectionDotMicrofacetNormal);
+  // NV-DXVK start: Material-scoped Fresnel controls.
+  const vec3 fresnel = evalOpaqueSchlickFresnel(
+    opaqueSurfaceMaterialInteraction.baseReflectivity, outputDirectionDotMicrofacetNormal,
+    opaqueSurfaceMaterialInteractionGetFresnelGrazing(opaqueSurfaceMaterialInteraction));
+  // NV-DXVK end
   const float normalDistributionFunction = evalGGXNormalDistributionIsotropic(opaqueSurfaceMaterialInteraction.isotropicRoughness, normalDotMicrofacetNormal);
   // Note: Actual shadowing/masking (G) function omitted from visibility calculation for a cheaper approximation.
   const float visibility = safePositiveDivide(float(1), float(4) * normalDotInputDirection * normalDotOutputDirection, materialEpsilon);
@@ -1951,8 +1999,11 @@ SurfaceMaterialInteractionSplitWeight opaqueSurfaceMaterialInteractionCalcProjec
 
   // Calculate the weight
 
+  // NV-DXVK start: Material-scoped Fresnel controls.
   const vec3 fresnel = evalOpaqueSchlickFresnel(
-    opaqueSurfaceMaterialInteraction.baseReflectivity, outputDirectionDotMicrofacetNormal);
+    opaqueSurfaceMaterialInteraction.baseReflectivity, outputDirectionDotMicrofacetNormal,
+    opaqueSurfaceMaterialInteractionGetFresnelGrazing(opaqueSurfaceMaterialInteraction));
+  // NV-DXVK end
 
   // Todo: Pass in a material mode similar to the resolve mode to control this sort of material simplification option.
 #ifdef OPAQUE_MATERIAL_USE_THIN_FILM
