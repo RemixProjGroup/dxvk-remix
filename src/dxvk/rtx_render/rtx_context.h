@@ -59,6 +59,11 @@ namespace dxvk {
   class RtxContext;
   namespace fork_hooks {
     void dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
+    bool isFsrUpscalerActive(RtxContext&);
+    void dispatchFsrUpscale(RtxContext&, const Resources::RaytracingOutput&);
+    void dispatchRcasSharpening(RtxContext&, const Resources::RaytracingOutput&);
+    void dispatchFsrFrameGeneration(RtxContext&, const Rc<DxvkImage>& hudLessBackBuffer);
+    void setFsrDownscaleExtent(RtxContext&, const VkExtent3D& upscaleExtent, VkExtent3D& downscaleExtent);
   } // namespace fork_hooks
   /** 
    * \brief RTX context
@@ -186,6 +191,7 @@ namespace dxvk {
       NIS,
       TAAU,
       XeSS,
+      FSR,
       DLSS_RR,
     };
 
@@ -289,7 +295,7 @@ namespace dxvk {
     bool shouldUseNIS() const;
     bool shouldUseTAA() const;
     bool shouldUseXeSS() const;
-    bool shouldUseUpscaler() const { return shouldUseDLSS() || shouldUseNIS() || shouldUseTAA() || shouldUseXeSS(); }
+    bool shouldUseUpscaler() const { return shouldUseDLSS() || shouldUseNIS() || shouldUseTAA() || shouldUseXeSS() || RtxOptions::isFSREnabled(); }
 
     inline static bool s_triggerScreenshot = false;
     inline static bool s_triggerUsdCapture = false;
@@ -361,5 +367,10 @@ namespace dxvk {
     // Grant the fork screen-overlay hook access to the private overlay state above.
     // See rtx_fork_hooks.h and docs/fork-touchpoints.md.
     friend void fork_hooks::dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
+    friend bool fork_hooks::isFsrUpscalerActive(RtxContext&);
+    friend void fork_hooks::dispatchFsrUpscale(RtxContext&, const Resources::RaytracingOutput&);
+    friend void fork_hooks::dispatchRcasSharpening(RtxContext&, const Resources::RaytracingOutput&);
+    friend void fork_hooks::dispatchFsrFrameGeneration(RtxContext&, const Rc<DxvkImage>&);
+    friend void fork_hooks::setFsrDownscaleExtent(RtxContext&, const VkExtent3D&, VkExtent3D&);
   };
 } // namespace dxvk

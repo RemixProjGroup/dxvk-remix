@@ -32,6 +32,9 @@
 #include "rtx_render/rtx_composite.h"
 #include "rtx_render/rtx_debug_view.h"
 #include "rtx_render/rtx_xess.h"
+#include "rtx_render/rtx_fork_fsr.h"
+#include "rtx_render/rtx_fork_fsr_framegen.h"
+#include "rtx_render/rtx_fork_rcas.h"
 
 #include "rtx_render/rtx_sparse_rendering.h"
 
@@ -72,6 +75,16 @@ namespace dxvk {
     if (adapterQueueInfos.present.has_value()) {
       m_queues.present = getQueue(adapterQueueInfos.present->queueFamilyIndex, adapterQueueInfos.present->queueIndex);
     }
+
+    // NV-DXVK start: FSR FG integration
+    if (adapterQueueInfos.imageAcquire.has_value()) {
+      m_queues.imageAcquire = getQueue(adapterQueueInfos.imageAcquire->queueFamilyIndex, adapterQueueInfos.imageAcquire->queueIndex);
+    }
+
+    if (adapterQueueInfos.fsrPresent.has_value()) {
+      m_queues.fsrPresent = getQueue(adapterQueueInfos.fsrPresent->queueFamilyIndex, adapterQueueInfos.fsrPresent->queueIndex);
+    }
+    // NV-DXVK end
 
     if (__DLFG_QUEUE_INFO_CHECK(adapterQueueInfos)) {
       // Note: When DLFG is active a separate queue is used for out of band rendering/presentation, so it should be marked accordingly.
@@ -563,6 +576,9 @@ namespace dxvk {
     m_nis(device),
     m_taa(device),
     m_xess(device),
+    m_fsr(device),
+    m_fsrFrameGen(device),
+    m_rcas(device),
     m_composite(device),
     m_gpuCrash(device),
     m_debug_view(device),
@@ -597,6 +613,7 @@ namespace dxvk {
     m_dlssNeuralRendering.get().onDestroy();
     m_dlss.get().onDestroy();
     m_dlfg.get().onDestroy();
+    m_fsrFrameGen.get().onDestroy();
     // NV-DXVK start: Shut down NGX after releasing its features
     m_device->waitForIdle();
     m_ngxContext.get().shutdown();

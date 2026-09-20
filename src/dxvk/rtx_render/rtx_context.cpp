@@ -276,6 +276,8 @@ namespace dxvk {
         uint32_t recommendedJitterLength = xess.calcRecommendedJitterSequenceLength();
         uint32_t currentJitterLength = RtxOptions::cameraJitterSequenceLength();
       }
+    } else if (RtxOptions::isFSREnabled()) {
+      fork_hooks::setFsrDownscaleExtent(*this, upscaleExtent, downscaleExtent);
     } else if (shouldUseNIS() || shouldUseTAA()) {
       auto resolutionScale = RtxOptions::resolutionScale();
       downscaleExtent.width = uint32_t(std::roundf(upscaleExtent.width * resolutionScale));
@@ -336,6 +338,8 @@ namespace dxvk {
       return InternalUpscaler::DLSS_RR;
     } else if (shouldUseXeSS() && m_common->metaXeSS().isActive()) {
       return InternalUpscaler::XeSS;
+    } else if (fork_hooks::isFsrUpscalerActive(*this)) {
+      return InternalUpscaler::FSR;
     } else if (shouldUseNIS()) {
       return InternalUpscaler::NIS;
     } else if (shouldUseTAA()) {
@@ -430,6 +434,18 @@ namespace dxvk {
     // Release resources when switching upscalers
     m_currentUpscaler = getCurrentFrameUpscaler();
     if (m_currentUpscaler != m_previousUpscaler) {
+      // Say which upscaler actually won (fork -- 2026-09-17). getCurrentFrameUpscaler gates DLSS and
+      // DLSS-RR on isActive(), so an option set to DLSS can still resolve to FSR, NIS or None if NGX
+      // never came up -- and nothing logged the resolved choice, so it had to be inferred from option
+      // defaults. That inference was wrong once already. Log what was chosen, not what was asked for.
+      {
+        static const char* const kUpscalerNames[7] = { "None", "DLSS-SR", "NIS", "TAA-U", "XeSS", "FSR", "DLSS-RR" };
+        const uint32_t idx = static_cast<uint32_t>(m_currentUpscaler);
+        Logger::info(str::format("[RTX] Active upscaler resolved to: ",
+          idx < 7u ? kUpscalerNames[idx] : "?",
+          " (useRayReconstruction=", useRayReconstruction() ? "true" : "false",
+          ", upscalerType option=", static_cast<int>(RtxOptions::upscalerType()), ")"));
+      }
       // Need to wait before the previous frame is executed.
       getDevice()->waitForIdle();
 
@@ -763,6 +779,9 @@ namespace dxvk {
         } else if (m_currentUpscaler == InternalUpscaler::XeSS) {
           m_common->metaAutoExposure().createResources(this);
           dispatchXeSS(rtOutput);
+        } else if (m_currentUpscaler == InternalUpscaler::FSR) {
+          m_common->metaAutoExposure().createResources(this);
+          fork_hooks::dispatchFsrUpscale(*this, rtOutput);
         } else if (m_currentUpscaler == InternalUpscaler::NIS) {
           dispatchNIS(rtOutput);
         } else if (m_currentUpscaler == InternalUpscaler::TAAU){
@@ -777,6 +796,7 @@ namespace dxvk {
             { 0, 0, 0 },
             rtOutput.m_compositeOutputExtent);
         }
+        fork_hooks::dispatchRcasSharpening(*this, rtOutput);
         m_previousUpscaler = m_currentUpscaler;
         recordGpuStageTiming("UpscalingOrRayReconstruction");
 
@@ -828,6 +848,9 @@ namespace dxvk {
         dispatchDebugView(srcImage, rtOutput, captureScreenImage);
 
         dispatchDLFG();
+
+        // Match FSR-3.1 sequencing: configure/prepare frame generation before final game-target blit.
+        fork_hooks::dispatchFsrFrameGeneration(*this, srcImage);
 
         // Blit to the game target
         {

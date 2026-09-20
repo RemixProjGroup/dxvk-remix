@@ -289,6 +289,7 @@ namespace dxvk {
       {UpscalerType::NIS, "NIS"},
       {UpscalerType::TAAU, "TAA-U"},
       {UpscalerType::XeSS, "XeSS"},
+      {UpscalerType::FSR, "FSR"},
   } });
 
   static auto upscalerDLSSCombo = RemixGui::ComboWithKey<UpscalerType>(
@@ -299,6 +300,7 @@ namespace dxvk {
       {UpscalerType::NIS, "NIS"},
       {UpscalerType::TAAU, "TAA-U"},
       {UpscalerType::XeSS, "XeSS"},
+      {UpscalerType::FSR, "FSR"},
   } });
 
   RemixGui::ComboWithKey<DLSSProfile> dlssProfileCombo{
@@ -433,6 +435,7 @@ namespace dxvk {
       { RtxFramePassStage::DLSSNR, "DLSSNR" },
       { RtxFramePassStage::NIS, "NIS" },
       { RtxFramePassStage::XeSS, "XeSS" },
+      { RtxFramePassStage::FSR, "FSR" },
       { RtxFramePassStage::TAA, "TAA" },
       { RtxFramePassStage::DustParticles, "DustParticles" },
       { RtxFramePassStage::Bloom, "Bloom" },
@@ -3311,8 +3314,10 @@ namespace dxvk {
   void ImGUI::showVsyncOptions(bool enableDLFGGuard) {
     // we should never get here without a swapchain, so we must have latched the vsync value already
     assert(RtxOptions::enableVsyncState != EnableVsync::WaitingForImplicitSwapchain);
-    
-    if (enableDLFGGuard && DxvkDLFG::enable()) {
+
+    const bool anyFGActive = enableDLFGGuard && fork_hooks::anyFrameGenerationEnabled();
+
+    if (anyFGActive) {
       ImGui::BeginDisabled();
     }
 
@@ -3331,7 +3336,7 @@ namespace dxvk {
     ImGui::Unindent();
     ImGui::EndDisabled();
     
-    if (enableDLFGGuard && DxvkDLFG::enable()) {
+    if (anyFGActive) {
       ImGui::Indent();
       ImGui::TextWrapped("When Frame Generation is active, V-Sync is automatically disabled.");
       ImGui::Unindent();
@@ -3569,7 +3574,11 @@ namespace dxvk {
         RemixGui::Separator();
       }
 
-      showDLFGOptions(ctx);
+      // NV-DXVK start: fork frame-generation panel (DLSS-G / FSR-FG selector)
+      fork_hooks::showFrameGenerationOptions(ctx,
+        ctx->getCommonObjects()->metaNGXContext().supportsDLFG() &&
+        !ctx->getCommonObjects()->metaDLFG().hasDLFGFailed());
+      // NV-DXVK end
 
       RemixGui::Separator();
 
@@ -3626,7 +3635,11 @@ namespace dxvk {
           ImGui::TextWrapped(str::format("Render Resolution: ", inputWidth, "x", inputHeight).c_str());
         } else if (RtxOptions::upscalerType() == UpscalerType::TAAU) {
         RemixGui::SliderFloat("Resolution scale", &RtxOptions::resolutionScaleObject(), 0.5f, 1.0f);
+      } else if (RtxOptions::upscalerType() == UpscalerType::FSR) {
+        fork_hooks::showFsrUpscalerSettings(ctx);
       }
+
+      fork_hooks::showSharedSharpnessSlider();
 
       RemixGui::Separator();
 

@@ -209,7 +209,7 @@ namespace dxvk {
   float SceneManager::getTotalMipBias() {
     auto& resourceManager = m_device->getCommon()->getResources();
   
-    const bool temporalUpscaling = RtxOptions::isDLSSOrRayReconstructionEnabled() || RtxOptions::isXeSSEnabled() || RtxOptions::isTAAEnabled();
+    const bool temporalUpscaling = RtxOptions::isDLSSOrRayReconstructionEnabled() || RtxOptions::isXeSSEnabled() || RtxOptions::isFSREnabled() || RtxOptions::isTAAEnabled();
     
     float totalUpscaleMipBias = 0.0f;
     
@@ -224,6 +224,8 @@ namespace dxvk {
           float xessMipBias = xess.calcRecommendedMipBias();
           totalUpscaleMipBias += xessMipBias;
         }
+      } else if (RtxOptions::isFSREnabled()) {
+        totalUpscaleMipBias = fork_hooks::fsrUpscalingMipBias(m_device);
       } else {
         // Restore original behavior for DLSS, TAA, and other upscalers
         totalUpscaleMipBias = log2(resourceManager.getUpscaleRatio()) + RtxOptions::upscalingMipBias();
@@ -236,7 +238,7 @@ namespace dxvk {
   float SceneManager::getCalculatedUpscalingMipBias() {
     auto& resourceManager = m_device->getCommon()->getResources();
     
-    const bool temporalUpscaling = RtxOptions::isXeSSEnabled();
+    const bool temporalUpscaling = RtxOptions::isXeSSEnabled() || RtxOptions::isFSREnabled();
     if (!temporalUpscaling) {
       return 0.0f;
     }

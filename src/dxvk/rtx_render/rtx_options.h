@@ -69,7 +69,8 @@ namespace dxvk {
     DLSS,
     NIS,
     TAAU,
-    XeSS
+    XeSS,
+    FSR
   };
 
   enum class GraphicsPreset : int {
@@ -133,6 +134,24 @@ namespace dxvk {
   // were removed in the tonemap refactor (2026-05-13 / 2026-05-15). The
   // apply pass dispatches the selected operator directly via
   // RtxForkGlobalTonemap::tonemapOperator.
+
+  // Frame Generation technology selection. Selecting a backend here *is* the
+  // enable action - there is no separate per-backend enable checkbox in the UI.
+  enum class FrameGenerationType : int {
+    None = 0,    // Frame generation disabled
+    DLSS,        // NVIDIA DLSS Frame Generation (DLSS 3.0/4.0)
+    FSR          // AMD FSR 3 Frame Generation
+  };
+
+  namespace fork_hooks {
+    // Drives DxvkDLFG::enable / DxvkFSRFrameGen::enable from
+    // rtx.frameGenerationType. Wired as that option's onChange handler so the
+    // invariant holds for config files, DXVK_FRAMEGEN_TYPE and the API - not
+    // just while the settings menu happens to be open.
+    // Declared here rather than pulled in from rtx_fork_hooks.h to avoid a
+    // circular include. Implementation in rtx_fork_upscaler_ui.cpp.
+    void applyFrameGenerationType(DxvkDevice* device);
+  } // namespace fork_hooks
 
   enum class UIType : int {
     None = 0,
@@ -521,6 +540,10 @@ namespace dxvk {
                    args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION_ARGS("rtx", UpscalerType, upscalerType, UpscalerType::DLSS, "Upscaling boosts performance with varying degrees of image quality tradeoff depending on the type of upscaler and the quality mode/preset.",
                     args.environment = "DXVK_UPSCALER_TYPE",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx", FrameGenerationType, frameGenerationType, FrameGenerationType::None, "Frame Generation technology to use, and the control that enables it. None = disabled, DLSS = NVIDIA DLSS Frame Generation, FSR = AMD FSR 3 Frame Generation. Setting this drives rtx.dlfg.enable / rtx.fsrfg.enable; you do not set those directly.",
+                    args.environment = "DXVK_FRAMEGEN_TYPE",
+                    args.onChangeCallback = &fork_hooks::applyFrameGenerationType,
                     args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION_ARGS("rtx", bool, enableRayReconstruction, true, "Enables DLSS ray reconstruction, an AI-based denoiser designed for real time ray tracing.",
                     args.environment = "DXVK_RAY_RECONSTRUCTION",
@@ -1460,6 +1483,7 @@ namespace dxvk {
     static bool isNISEnabled() { return upscalerType() == UpscalerType::NIS; }
     static bool isTAAEnabled() { return upscalerType() == UpscalerType::TAAU; }
     static bool isXeSSEnabled() { return upscalerType() == UpscalerType::XeSS; }
+    static bool isFSREnabled() { return upscalerType() == UpscalerType::FSR; }
     
     static float getUniqueObjectDistanceSqr() { return uniqueObjectDistance() * uniqueObjectDistance(); }
     static uint32_t getNumFramesToPutLightsToSleep() { return numFramesToKeepLights() /2; }
