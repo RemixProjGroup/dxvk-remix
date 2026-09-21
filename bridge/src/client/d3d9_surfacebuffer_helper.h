@@ -26,6 +26,7 @@
 #include "util_texture_and_volume.h"
 
 #include <assert.h>
+#include <vector>
 
 using namespace bridge_util;
 
@@ -37,33 +38,43 @@ static HRESULT copyServerSurfaceRawData(Direct3DSurface9_LSS* const pLssSurface,
     Logger::err("getServerSurfaceBufferData() failed with: no response from server.");
     return res;
   }
-  else
-  {
-      res = (HRESULT)DeviceBridge::get_data();
-  }      
+
+  res = (HRESULT) DeviceBridge::get_data();
+  uint32_t width = 0;
+  uint32_t height = 0;
+  D3DFORMAT format = D3DFMT_UNKNOWN;
+  std::vector<uint8_t> data;
 
   if (SUCCEEDED(res)) {
-    uint32_t width = (uint32_t) DeviceBridge::get_data();
-    uint32_t height = (uint32_t) DeviceBridge::get_data();
-    const D3DFORMAT format = (D3DFORMAT) DeviceBridge::get_data();
+    width = (uint32_t) DeviceBridge::get_data();
+    height = (uint32_t) DeviceBridge::get_data();
+    format = (D3DFORMAT) DeviceBridge::get_data();
     void* pData = NULL;
-    size_t pulledSize = DeviceBridge::get_data(&pData);
+    const size_t pulledSize = DeviceBridge::get_data(&pData);
 
-    // Copy data into a surface
-    const size_t rowSize = bridge_util::calcRowSize(width, (D3DFORMAT) format);
-    const size_t numRows = bridge_util::calcStride(height, (D3DFORMAT) format);
+    const size_t rowSize = bridge_util::calcRowSize(width, format);
+    const size_t numRows = bridge_util::calcStride(height, format);
     assert(pulledSize == numRows * rowSize);
+    data.resize(pulledSize);
+    memcpy(data.data(), pData, pulledSize);
+  }
 
+  // Release this response before the local copy is written. UnlockRect() can
+  // push an upload command, so retaining the response while it blocks could
+  // again prevent the server from producing responses.
+  DeviceBridge::pop_front();
+
+  if (SUCCEEDED(res)) {
     // Copying server side render target buffer to client surface
+    const size_t rowSize = bridge_util::calcRowSize(width, format);
     D3DLOCKED_RECT lockedRect;
     res = pLssSurface->LockRect(&lockedRect, NULL, D3DLOCK_DISCARD);
     if (S_OK == res) {
       FOR_EACH_RECT_ROW(lockedRect, height, format,
-        memcpy(ptr, (PBYTE) pData + y * rowSize, rowSize);
+        memcpy(ptr, data.data() + y * rowSize, rowSize);
       );
       res = pLssSurface->UnlockRect();
     }
   }
-  DeviceBridge::pop_front();
   return res;
 }

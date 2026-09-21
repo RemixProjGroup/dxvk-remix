@@ -62,6 +62,7 @@ public:
       auto* const pLssBackBuffer = trackWrapper(new Direct3DSurface9_LSS(pDevice, this, backBufferDesc, true));
 
       setChild(childIdx, pLssBackBuffer);
+      DeviceBridge::ResponseTransaction responseTransaction;
       UID currentUID = 0;
       {
         ClientMessage c(Commands::IDirect3DSwapChain9_GetBackBuffer, getId());
@@ -74,9 +75,10 @@ public:
         const uint32_t timeoutMs = GlobalOptions::getAckTimeout();
         if (Result::Success != DeviceBridge::waitForCommand(Commands::Bridge_Response, timeoutMs, nullptr, true, currentUID)) {
           Logger::err("Direct3DSwapChain9_LSS() failed with : no response from server.");
+        } else {
+          HRESULT res = (HRESULT) DeviceBridge::get_data();
+          DeviceBridge::pop_front();
         }
-        HRESULT res = (HRESULT) DeviceBridge::get_data();
-        DeviceBridge::pop_front();
       }
     }
   }

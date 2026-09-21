@@ -193,6 +193,8 @@ HRESULT Direct3DCubeTexture9_LSS::UnlockRect(D3DCUBEMAP_FACES FaceType, UINT Lev
 HRESULT Direct3DCubeTexture9_LSS::AddDirtyRect(D3DCUBEMAP_FACES FaceType, CONST RECT* pDirtyRect) {
   LogFunctionCall();
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DCubeTexture9_AddDirtyRect, getId());

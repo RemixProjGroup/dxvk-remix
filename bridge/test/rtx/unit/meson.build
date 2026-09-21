@@ -8,7 +8,7 @@ cmd_history_exe = executable(
     include_directories : util_include_path,
     dependencies : util_dep,
     win_subsystem : 'console')
-test('command_history', cmd_history_exe)
+test('command_history', cmd_history_exe, timeout : 5)
 tests += cmd_history_exe
 endif
 

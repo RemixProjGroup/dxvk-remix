@@ -137,6 +137,8 @@ public:
       }
     }
  
+    DeviceBridge::ResponseTransaction responseTransaction;
+
     UID currentUID = 0;
     {
       ClientMessage c(Commands::IDirect3DBaseTexture9_SetAutoGenFilterType, getId());

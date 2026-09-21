@@ -108,6 +108,8 @@ UINT Direct3D9Ex_LSS::GetAdapterCount() {
     return m_adapterCount;
   }
 
+  ModuleBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   // Send command to server and wait for response
   {
@@ -138,6 +140,8 @@ HRESULT Direct3D9Ex_LSS::GetAdapterIdentifier(UINT Adapter, DWORD Flags, D3DADAP
     *pIdentifier = m_adapterIdentifiers[key];
     return S_OK;
   }
+
+  ModuleBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   // Send command to server and wait for response
@@ -176,6 +180,8 @@ UINT Direct3D9Ex_LSS::GetAdapterModeCount(UINT Adapter, D3DFORMAT Format) {
     return m_adapterModeCount[key];
   }
 
+  ModuleBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   // Send command to server and wait for response
   {
@@ -203,6 +209,8 @@ HRESULT Direct3D9Ex_LSS::EnumAdapterModes(UINT Adapter, D3DFORMAT Format, UINT M
     *pMode = m_enumAdapterMode[key];
     return S_OK;
   }
+
+  ModuleBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   // Send command to server and wait for response
@@ -240,6 +248,8 @@ HRESULT Direct3D9Ex_LSS::GetAdapterDisplayMode(UINT Adapter, D3DDISPLAYMODE* pMo
     return S_OK;
   }
 
+  ModuleBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   // Send command to server and wait for response
   {
@@ -271,6 +281,8 @@ HRESULT Direct3D9Ex_LSS::CheckDeviceType(UINT Adapter, D3DDEVTYPE CheckType, D3D
     return  D3DERR_INVALIDCALL;
   }
 
+  ModuleBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   // Send command to server and wait for response
   {
@@ -292,6 +304,8 @@ HRESULT Direct3D9Ex_LSS::CheckDeviceFormat(UINT Adapter, D3DDEVTYPE DeviceType, 
   if (m_adapterCount != 0 && Adapter >= m_adapterCount) {
     return  D3DERR_INVALIDCALL;
   }
+
+  ModuleBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   // Send command to server and wait for response
@@ -318,6 +332,8 @@ HRESULT Direct3D9Ex_LSS::CheckDeviceMultiSampleType(UINT Adapter, D3DDEVTYPE Dev
   if (MultiSampleType > D3DMULTISAMPLE_16_SAMPLES) {
     return  D3DERR_INVALIDCALL;
   }
+
+  ModuleBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   // Send command to server and wait for response
@@ -347,6 +363,8 @@ HRESULT Direct3D9Ex_LSS::CheckDepthStencilMatch(UINT Adapter, D3DDEVTYPE DeviceT
     return  D3DERR_INVALIDCALL;
   }
 
+  ModuleBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   // Send command to server and wait for response
   {
@@ -368,6 +386,8 @@ HRESULT Direct3D9Ex_LSS::CheckDeviceFormatConversion(UINT Adapter, D3DDEVTYPE De
   if (m_adapterCount != 0 && Adapter >= m_adapterCount) {
     return  D3DERR_INVALIDCALL;
   }
+
+  ModuleBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   // Send command to server and wait for response
@@ -400,6 +420,8 @@ HRESULT Direct3D9Ex_LSS::GetDeviceCaps(UINT Adapter, D3DDEVTYPE DeviceType, D3DC
     return S_OK;
   }
 
+  ModuleBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   // Send command to server and wait for response
   {
@@ -426,6 +448,8 @@ HRESULT Direct3D9Ex_LSS::GetDeviceCaps(UINT Adapter, D3DDEVTYPE DeviceType, D3DC
 
 HMONITOR Direct3D9Ex_LSS::GetAdapterMonitor(UINT Adapter) {
   LogFunctionCall();
+
+  ModuleBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   // Send command to server and wait for response
@@ -466,6 +490,7 @@ UINT Direct3D9Ex_LSS::GetAdapterModeCountEx(UINT Adapter, CONST D3DDISPLAYMODEFI
   }
 
   UINT cnt = 0;
+  ModuleBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   // Send command to server and wait for response
   {
@@ -493,6 +518,8 @@ HRESULT Direct3D9Ex_LSS::EnumAdapterModesEx(UINT Adapter, CONST D3DDISPLAYMODEFI
   if (pFilter == nullptr || pMode == nullptr) {
     return  D3DERR_INVALIDCALL;
   }
+
+  ModuleBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   // Send command to server and wait for response
@@ -529,6 +556,8 @@ HRESULT Direct3D9Ex_LSS::GetAdapterDisplayModeEx(UINT Adapter, D3DDISPLAYMODEEX*
   if (pMode == nullptr) {
     return  D3DERR_INVALIDCALL;
   }
+
+  ModuleBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   // Send command to server and wait for response
@@ -585,6 +614,8 @@ HRESULT Direct3D9Ex_LSS::GetAdapterLUID(UINT Adapter, LUID* pLUID) {
   if (pLUID == nullptr) {
     return  D3DERR_INVALIDCALL;
   }
+
+  ModuleBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   // Send command to server and wait for response

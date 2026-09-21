@@ -79,6 +79,8 @@ BaseDirect3DDevice9Ex_LSS::BaseDirect3DDevice9Ex_LSS(const bool bExtended,
   DWORD customBehaviorFlags = createParams.BehaviorFlags | D3DCREATE_NOWINDOWCHANGES;
   InitRamp();
   
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     ClientMessage c(m_ex ? Commands::IDirect3D9Ex_CreateDeviceEx : Commands::IDirect3D9Ex_CreateDevice, getId());

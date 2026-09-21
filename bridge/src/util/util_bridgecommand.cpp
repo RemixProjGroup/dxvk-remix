@@ -151,9 +151,12 @@ DECL_BRIDGE_FUNC(bridge_util::Result, ensureQueueEmpty) {
 }
 
 DECL_BRIDGE_FUNC(bridge_util::Result, waitForCommand, const Commands::D3D9Command& command,
-                                                      DWORD overrideTimeoutMS,
-                                                      std::atomic<bool>* const pbEarlyOutSignal, bool verifyUID, UID uidToVerify) {
+                                                       DWORD overrideTimeoutMS,
+                                                       std::atomic<bool>* const pbEarlyOutSignal, bool verifyUID, UID uidToVerify) {
   ZoneScoped;
+  if (!gbBridgeRunning) {
+    return Result::Failure;
+  }
   DWORD peekTimeoutMS = overrideTimeoutMS > 0 ? overrideTimeoutMS : GlobalOptions::getCommandTimeout();
   uint32_t maxAttempts = GlobalOptions::getCommandRetries();
 #ifdef ENABLE_WAIT_FOR_COMMAND_TRACE
@@ -191,6 +194,11 @@ DECL_BRIDGE_FUNC(bridge_util::Result, waitForCommand, const Commands::D3D9Comman
 #endif
         return Result::Success;
       } else {
+        if (verifyUID && !uidVerified) {
+          Logger::err(format_string("Unexpected bridge response UID %u while waiting for UID %u; disabling bridge to preserve response queue state.", header.pHandle, uidToVerify));
+          gbBridgeRunning = false;
+          return Result::Failure;
+        }
 #if defined(_DEBUG) || defined(DEBUGOPT)
         if (GlobalOptions::getLogAllCommands()) {
           Logger::info(format_string("Different instance of a command detected: %s with UID: %s , Expected: %s with UID: %s. ", Commands::toString(header.command).c_str(), std::to_string(header.pHandle).c_str(),
@@ -246,6 +254,10 @@ DECL_BRIDGE_FUNC(bridge_util::Result, waitForCommand, const Commands::D3D9Comman
   } while (!bEarlyOut &&
             attemptNum++ <= maxAttempts &&
             gbBridgeRunning);
+  if (verifyUID && command == Commands::Bridge_Response && gbBridgeRunning) {
+    Logger::err(format_string("Timed out waiting for bridge response UID %u; disabling bridge to prevent a late response from blocking the response queue.", uidToVerify));
+    gbBridgeRunning = false;
+  }
   return Result::Timeout;
 }
 

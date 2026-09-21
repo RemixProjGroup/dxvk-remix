@@ -173,6 +173,8 @@ UINT Direct3DDevice9Ex_LSS<EnableSync>::GetAvailableTextureMem() {
   ZoneScoped;
   LogFunctionCall();
   
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_GetAvailableTextureMem, getId());
@@ -190,6 +192,8 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::EvictManagedResources() {
   ZoneScoped;
   LogFunctionCall();
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   // Send command to server and wait for response
@@ -224,6 +228,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::GetDirect3D(IDirect3D9** ppD3D9) {
 
 template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::internalGetDeviceCaps(D3DCAPS9* pCaps) {
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_GetDeviceCaps, getId());
@@ -266,6 +271,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::GetDisplayMode(UINT iSwapChain, D3DDI
 
   if (pMode == NULL)
     return D3DERR_INVALIDCALL;
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   {
@@ -310,6 +317,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetCursorProperties(UINT XHotSpot, UI
 
   const auto pLssSurface = bridge_cast<Direct3DSurface9_LSS*>(pCursorBitmap);
   if (pLssSurface) {
+    DeviceBridge::ResponseTransaction responseTransaction;
     UID currentUID = 0;
     {
       ClientMessage c(Commands::IDirect3DDevice9Ex_SetCursorProperties, getId());
@@ -336,6 +344,8 @@ template<bool EnableSync>
 BOOL Direct3DDevice9Ex_LSS<EnableSync>::ShowCursor(BOOL bShow) {
   ZoneScoped;
   LogFunctionCall();
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   {
@@ -364,6 +374,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateAdditionalSwapChain(D3DPRESENT_
   // Insert our own IDirect3DTexture9 interface implementation
   Direct3DSwapChain9_LSS* pLssSwapChain = trackWrapper(new Direct3DSwapChain9_LSS(this, presentationParameters));
   (*ppSwapChain) = pLssSwapChain;
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   {
@@ -427,22 +439,30 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Reset(D3DPRESENT_PARAMETERS* pPresent
     WndProc::unset();
     WndProc::set(getWinProcHwnd());
     // Tell Server to do the Reset
-    size_t currentUID = 0;
     {
-      ClientMessage c(Commands::IDirect3DDevice9Ex_Reset, getId());
-      currentUID = c.get_uid();
-      c.send_data(sizeof(D3DPRESENT_PARAMETERS), &presParam);
-    }
+      DeviceBridge::ResponseTransaction responseTransaction;
+      size_t currentUID = 0;
+      {
+        ClientMessage c(Commands::IDirect3DDevice9Ex_Reset, getId());
+        currentUID = c.get_uid();
+        c.send_data(sizeof(D3DPRESENT_PARAMETERS), &presParam);
+      }
 
-    // Perform an WAIT_FOR_OPTIONAL_SERVER_RESPONSE but don't return since we still have work to do.
-    if (GlobalOptions::getSendAllServerResponses()) {
-      const uint32_t timeoutMs = GlobalOptions::getAckTimeout();
-      if (Result::Success != DeviceBridge::waitForCommand(Commands::Bridge_Response, timeoutMs, nullptr, true, currentUID)) {
-        Logger::err("Direct3DDevice9Ex_LSS::Reset() failed with : no response from server.");
+      // Perform an WAIT_FOR_OPTIONAL_SERVER_RESPONSE but don't return since we still have work to do.
+      if (GlobalOptions::getSendAllServerResponses()) {
+        const uint32_t timeoutMs = GlobalOptions::getAckTimeout();
+        if (Result::Success != DeviceBridge::waitForCommand(Commands::Bridge_Response, timeoutMs, nullptr, true, currentUID)) {
+          Logger::err("Direct3DDevice9Ex_LSS::Reset() failed with : no response from server.");
+          return D3DERR_DEVICELOST;
+        } else {
+          res = (HRESULT) DeviceBridge::get_data();
+          DeviceBridge::pop_front();
+          if (FAILED(res)) {
+            return res;
+          }
+        }
       }
-      res = (HRESULT) DeviceBridge::get_data();
-      DeviceBridge::pop_front();
-      }
+    }
 
     // Reset swapchain and link server backbuffer/depth buffer after the server reset its swapchain, or we will link to the old backbuffer/depth resources
     initImplicitObjects(presParam);
@@ -516,6 +536,8 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetDialogBoxMode(BOOL bEnableDialogs) {
   LogFunctionCall();
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   // Send command to server and wait for response
   {
@@ -569,6 +591,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateTexture(UINT Width, UINT Height
     Levels = CalculateNumMipLevels(Width, Height);
   }
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     const TEXTURE_DESC desc { Width, Height, 1, Levels, Usage, Format, Pool };
@@ -596,6 +620,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVolumeTexture(UINT Width, UINT 
   if (Levels == 0) {
     Levels = CalculateNumMipLevels(Width, Height, Depth);
   }
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   {
@@ -625,6 +651,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateCubeTexture(UINT EdgeLength, UI
     Levels = CalculateNumMipLevels(EdgeLength);
   }
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     const TEXTURE_DESC desc { EdgeLength, EdgeLength, 6, Levels, Usage, Format, Pool };
@@ -652,6 +680,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVertexBuffer(UINT Length, DWORD
   }
 
   const D3DVERTEXBUFFER_DESC desc { D3DFMT_VERTEXDATA, D3DRTYPE_VERTEXBUFFER, Usage, Pool, Length, FVF };
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     auto* const pLssVertexBuffer = trackWrapper(new Direct3DVertexBuffer9_LSS(this, desc));
@@ -679,6 +708,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateIndexBuffer(UINT Length, DWORD 
   }
 
   const D3DINDEXBUFFER_DESC desc { Format, D3DRTYPE_INDEXBUFFER, Usage, Pool, Length };
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     auto* const pLssIndexBuffer = trackWrapper(new Direct3DIndexBuffer9_LSS(this, desc));
@@ -700,6 +730,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateRenderTarget(UINT Width, UINT H
   if (ppSurface == nullptr || Width == 0 || Height == 0) {
     return D3DERR_INVALIDCALL;
   }
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   {
@@ -736,6 +768,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateDepthStencilSurface(UINT Width,
     return D3DERR_INVALIDCALL;
   }
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     D3DSURFACE_DESC desc;
@@ -771,6 +805,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::UpdateSurface(IDirect3DSurface9* pSou
 
   const auto pLssSrcSurface = bridge_cast<Direct3DSurface9_LSS*>(pSourceSurface);
   const auto pLssDestSurface = bridge_cast<Direct3DSurface9_LSS*>(pDestinationSurface);
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_UpdateSurface, getId());
@@ -795,6 +830,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::UpdateTextureImpl(IDirect3DBaseTextur
   auto pLssDestinationTexture = bridge_cast<T*>(pDestinationTexture);
   assert(pLssSourceTexture && "UpdateTexture: unable to cast source texture!");
   assert(pLssDestinationTexture && "UpdateTexture: unable to cast destination texture!");
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_UpdateTexture, getId());
@@ -834,6 +870,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::GetRenderTargetData(IDirect3DSurface9
   const auto pLssSourceSurface = bridge_cast<Direct3DSurface9_LSS*>(pRenderTarget);
   const auto pLssDestinationSurface = bridge_cast<Direct3DSurface9_LSS*>(pDestSurface);
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_GetRenderTargetData, getId());
@@ -856,6 +894,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::GetFrontBufferData(UINT iSwapChain, I
   }
 
   const auto pLssDestinationSurface = bridge_cast<Direct3DSurface9_LSS*>(pDestSurface);
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   {
@@ -884,6 +924,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::StretchRect(IDirect3DSurface9* pSourc
 
   const auto pLssSrcSurface = bridge_cast<Direct3DSurface9_LSS*>(pSourceSurface);
   const auto pLssDstSurface = bridge_cast<Direct3DSurface9_LSS*>(pDestSurface);
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_StretchRect, getId());
@@ -907,6 +948,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::ColorFill(IDirect3DSurface9* pSurface
   }
 
   const auto pLssSurface = bridge_cast<Direct3DSurface9_LSS*>(pSurface);
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_ColorFill, getId());
@@ -926,6 +968,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateOffscreenPlainSurface(UINT Widt
   if (ppSurface == nullptr) {
     return D3DERR_INVALIDCALL;
   }
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   {
@@ -958,6 +1002,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetRenderTarget(DWORD RenderTargetInd
   ZoneScoped;
   LogFunctionCall();
   auto* const pLssRenderTarget = bridge_cast<Direct3DSurface9_LSS*>(pRenderTarget);
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     UID id = 0;
@@ -995,6 +1040,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::GetRenderTarget(DWORD RenderTargetInd
     pLssRenderTarget = bridge_cast<Direct3DSurface9_LSS*>(*m_state.renderTargets[RenderTargetIndex]);
   }
   *ppRenderTarget = pLssRenderTarget;
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   if (pLssRenderTarget) {
     pLssRenderTarget->AddRef();
@@ -1013,6 +1059,7 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetDepthStencilSurface(IDirect3DSurface9* pNewZStencil) {
   ZoneScoped;
   LogFunctionCall();  
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     UID id = 0;
@@ -1043,6 +1090,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::GetDepthStencilSurface(IDirect3DSurfa
   if (ppZStencilSurface == nullptr) {
     return D3DERR_INVALIDCALL;
   }
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   {
@@ -1077,6 +1126,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::BeginScene() {
     remixapi::g_beginSceneCallback();
   }
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_BeginScene, getId());
@@ -1101,6 +1152,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::EndScene() {
     remixapi::g_endSceneCallback();
   }
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_EndScene, getId());
@@ -1120,6 +1173,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::Clear(DWORD Count, CONST D3DRECT* pRe
   if (Count != 0 && pRects == NULL) {
     return D3DERR_INVALIDCALL;
   }
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   {
@@ -1175,6 +1230,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetTransform(D3DTRANSFORMSTATETYPE St
   }
 
   const auto idx = mapXformStateTypeToIdx(State);
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     {
@@ -1265,6 +1321,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetViewport(CONST D3DVIEWPORT9* pView
     return D3DERR_INVALIDCALL;
   }
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     {
@@ -1310,6 +1368,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetMaterial(CONST D3DMATERIAL9* pMate
     return D3DERR_INVALIDCALL;
   }
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     {
@@ -1354,6 +1414,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetLight(DWORD Index, CONST D3DLIGHT9
   if (pLight == nullptr) {
     return D3DERR_INVALIDCALL;
   }
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   {
@@ -1405,6 +1467,8 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::LightEnable(DWORD LightIndex, BOOL bEnable) {
   ZoneScoped;
   LogFunctionCall();
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   {
@@ -1461,6 +1525,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetClipPlane(DWORD Index, CONST float
     return D3DERR_INVALIDCALL;
   }
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     {
@@ -1510,6 +1576,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetRenderState(D3DRENDERSTATETYPE Sta
   ZoneScoped;
   LogFunctionCall();
   
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     {
@@ -1752,6 +1820,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateStateBlock(D3DSTATEBLOCKTYPE Ty
     return D3DERR_INVALIDCALL;
   }
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     
@@ -1785,6 +1855,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::BeginStateBlock() {
     }
     m_stateRecording = trackWrapper(new Direct3DStateBlock9_LSS(this));
   }
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_BeginStateBlock, getId());
@@ -1808,6 +1879,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::EndStateBlock(IDirect3DStateBlock9** 
     return D3DERR_INVALIDCALL;
   }
   (*ppSB) = m_stateRecording;
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   {
@@ -1970,6 +2043,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetTexture(DWORD Stage, IDirect3DBase
       m_state.textureTypes[idx] = type;
     }
   }
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_SetTexture, getId());
@@ -2058,6 +2132,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetTextureStageState(DWORD Stage, D3D
     return D3DERR_INVALIDCALL;
   }
   const auto stageIdx = mapSamplerStageToIdx(Stage);
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     {
@@ -2117,6 +2192,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetSamplerState(DWORD Sampler, D3DSAM
     return D3DERR_INVALIDCALL;
   }
   const auto samplerIdx = mapSamplerStageToIdx(Sampler);
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     {
@@ -2230,6 +2306,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetScissorRect(CONST RECT* pRect) {
     return D3DERR_INVALIDCALL;
   }
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     {
@@ -2276,6 +2354,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetSoftwareVertexProcessing(BOOL bSof
       return D3D_OK;
     m_bSoftwareVtxProcessing = bSoftware;
   }
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_SetSoftwareVertexProcessing, getId());
@@ -2305,6 +2384,7 @@ int Direct3DDevice9Ex_LSS<EnableSync>::GetSoftwareVertexProcessing() {
 template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetNPatchMode(float nSegments) {
   LogFunctionCall();
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     {
@@ -2336,6 +2416,7 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawPrimitive(D3DPRIMITIVETYPE PrimitiveType, UINT StartVertex, UINT PrimitiveCount) {
   ZoneScoped;
   LogFunctionCall();
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_DrawPrimitive, getId());
@@ -2349,6 +2430,7 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitive(D3DPRIMITIVETYPE Type, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount) {
   ZoneScoped;
   LogFunctionCall();
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitive, getId());
@@ -2362,6 +2444,7 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawPrimitiveUP(D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, CONST void* pVertexStreamZeroData, UINT VertexStreamZeroStride) {
   ZoneScoped;
   LogFunctionCall();
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_DrawPrimitiveUP, getId());
@@ -2381,6 +2464,7 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE PrimitiveType, UINT MinIndex, UINT NumVertices, UINT PrimitiveCount, CONST void* pIndexData, D3DFORMAT IndexDataFormat, CONST void* pVertexStreamZeroData, UINT VertexStreamZeroStride) {
   ZoneScoped;
   LogFunctionCall();
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_DrawIndexedPrimitiveUP, getId());
@@ -2414,6 +2498,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::ProcessVertices(UINT SrcStartIndex, U
   const UID destBufferId = (pLssDestBuffer) ? (UID) pLssDestBuffer->getId() : 0;
 
   // Send command to server and wait for response
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_ProcessVertices, getId());
@@ -2433,6 +2518,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVertexDeclaration(CONST D3DVERT
   if (pVertexElements == nullptr || ppDecl == nullptr) {
     return D3DERR_INVALIDCALL;
   }
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     auto* const pLssVtxDecl = trackWrapper(new Direct3DVertexDeclaration9_LSS(this, pVertexElements));
@@ -2464,6 +2550,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexDeclaration(IDirect3DVertexD
 
   auto* const pLssVtxDecl = bridge_cast<Direct3DVertexDeclaration9_LSS*>(pDecl);
   const UID id = (pLssVtxDecl) ? (UID) pLssVtxDecl->getId() : 0;
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     {
@@ -2503,6 +2590,7 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetFVF(DWORD FVF) {
   ZoneScoped;
   LogFunctionCall();
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     {
@@ -2556,6 +2644,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVertexShader(CONST DWORD* pFunc
   uint32_t dataSize = 0;
   pLssVertexShader->GetFunction(nullptr, &dataSize);
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_CreateVertexShader, getId());
@@ -2576,6 +2666,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShader(IDirect3DVertexShader
   // NULL is an allowed value for pShader
   auto* const pLssVertexShader = bridge_cast<Direct3DVertexShader9_LSS*>(pShader);
   const auto id = (pLssVertexShader) ? (uint32_t) pLssVertexShader->getId() : 0;
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     {
@@ -2640,6 +2731,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantF(UINT StartRe
         Vector4fCount);
   }
   if (SUCCEEDED(hresult)) {
+    DeviceBridge::ResponseTransaction responseTransaction;
     UID currentUID = 0;
     SetShaderConst(SetVertexShaderConstantF,
                    StartRegister,
@@ -2693,6 +2785,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantI(UINT StartRe
         Vector4iCount);
   }
   if (SUCCEEDED(hresult)) {
+    DeviceBridge::ResponseTransaction responseTransaction;
     UID currentUID = 0;
     SetShaderConst(SetVertexShaderConstantI,
                    StartRegister,
@@ -2748,6 +2841,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetVertexShaderConstantB(UINT StartRe
   }
 
   if (SUCCEEDED(hresult)) {
+    DeviceBridge::ResponseTransaction responseTransaction;
     UID currentUID = 0;
     SetShaderConst(SetVertexShaderConstantB,
                    StartRegister,
@@ -2787,6 +2881,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetStreamSource(UINT StreamNumber, ID
   LogFunctionCall();
   auto* const pLssStreamData = bridge_cast<Direct3DVertexBuffer9_LSS*>(pStreamData);
   const UID id = (pStreamData) ? (UID) pLssStreamData->getId() : 0;
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     {
@@ -2842,6 +2937,7 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetStreamSourceFreq(UINT StreamNumber, UINT Divider) {
   ZoneScoped;
   LogFunctionCall();
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     {
@@ -2882,6 +2978,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetIndices(IDirect3DIndexBuffer9* pIn
   LogFunctionCall();
   auto* const pLssIndexData = bridge_cast<Direct3DIndexBuffer9_LSS*>(pIndexData);
   const UID id = (pLssIndexData) ? (UID) pLssIndexData->getId() : 0;
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     {
@@ -2949,6 +3046,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreatePixelShader(CONST DWORD* pFunct
   uint32_t dataSize = 0;
   pLssPixelShader->GetFunction(nullptr, &dataSize);
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_CreatePixelShader, getId());
@@ -2975,6 +3074,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetPixelShader(IDirect3DPixelShader9*
       m_state.pixelShader = MakeD3DAutoPtr(pLssPixelShader);
     }
   }
+  DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_SetPixelShader, getId());
@@ -3020,6 +3120,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetPixelShaderConstantF(UINT StartReg
   }
 
   if (SUCCEEDED(hresult)) {
+    DeviceBridge::ResponseTransaction responseTransaction;
     UID currentUID = 0;
     SetShaderConst(SetPixelShaderConstantF,
                    StartRegister,
@@ -3063,6 +3164,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetPixelShaderConstantI(UINT StartReg
     hresult = setShaderConstants<ShaderType::Pixel, ConstantType::Int>(StartRegister, pConstantData, Vector4iCount);
   }
   if (SUCCEEDED(hresult)) {
+    DeviceBridge::ResponseTransaction responseTransaction;
     UID currentUID = 0;
     SetShaderConst(SetPixelShaderConstantI,
                    StartRegister,
@@ -3101,6 +3203,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetPixelShaderConstantB(UINT StartReg
     hresult = setShaderConstants<ShaderType::Pixel, ConstantType::Bool>(StartRegister, pConstantData, BoolCount);
   }
   if (SUCCEEDED(hresult)) {
+    DeviceBridge::ResponseTransaction responseTransaction;
     UID currentUID = 0;
     SetShaderConst(SetPixelShaderConstantB,
                    StartRegister,
@@ -3158,6 +3261,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateQuery(D3DQUERYTYPE Type, IDirec
   auto* const pLssQuery = trackWrapper(new Direct3DQuery9_LSS(this, Type));
   (*ppQuery) = pLssQuery;
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_CreateQuery, getId());
@@ -3171,6 +3276,8 @@ template<bool EnableSync>
 HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetConvolutionMonoKernel(UINT width, UINT height, float* rows, float* columns) {
   ZoneScoped;
   LogFunctionCall();
+
+  DeviceBridge::ResponseTransaction responseTransaction;
 
   UID currentUID = 0;
   // Send command to server and wait for response
@@ -3202,6 +3309,7 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::ComposeRects(IDirect3DSurface9* pSrc,
     const UID idDestRect = (pDstRectDescs) ? (UID) pLssDestRect->getId() : 0;
 
     if (pLssSourceSurface && pLssDestinationSurface) {
+      DeviceBridge::ResponseTransaction responseTransaction;
       UID currentUID = 0;
       {
         ClientMessage c(Commands::IDirect3DDevice9Ex_ComposeRects, getId());
@@ -3307,6 +3415,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CheckDeviceState(HWND hDestinationWin
   ZoneScoped;
   LogFunctionCall();
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   // Send command to server and wait for response
   {
@@ -3345,6 +3455,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateRenderTargetEx(UINT Width, UINT
   Direct3DSurface9_LSS* pLssSurface = trackWrapper(new Direct3DSurface9_LSS(this, desc));
   (*ppSurface) = (IDirect3DSurface9*) pLssSurface;
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     // Add a handle for the surface
@@ -3380,6 +3492,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateOffscreenPlainSurfaceEx(UINT Wi
   Direct3DSurface9_LSS* pLssSurface = trackWrapper(new Direct3DSurface9_LSS(this, desc));
   (*ppSurface) = (IDirect3DSurface9*) pLssSurface;
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     // Add a handle for the surface
@@ -3414,6 +3528,8 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateDepthStencilSurfaceEx(UINT Widt
   Direct3DSurface9_LSS* pLssSurface = trackWrapper(new Direct3DSurface9_LSS(this, desc));
   (*ppSurface) = (IDirect3DSurface9*) pLssSurface;
 
+  DeviceBridge::ResponseTransaction responseTransaction;
+
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_CreateDepthStencilSurfaceEx, getId());
@@ -3440,22 +3556,30 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::ResetEx(D3DPRESENT_PARAMETERS* pPrese
     WndProc::unset();
     WndProc::set(getWinProcHwnd());
     // Tell Server to do the Reset
-    size_t currentUID = 0;
     {
-      ClientMessage c(Commands::IDirect3DDevice9Ex_ResetEx, getId());
-      currentUID = c.get_uid();
-      c.send_data(sizeof(D3DPRESENT_PARAMETERS), &presParam);
-      c.send_data(sizeof(D3DDISPLAYMODEEX), pFullscreenDisplayMode);
-    }
-
-    // Perform an WAIT_FOR_OPTIONAL_SERVER_RESPONSE but don't return since we still have work to do.
-    if (GlobalOptions::getSendAllServerResponses()) {
-      const uint32_t timeoutMs = GlobalOptions::getAckTimeout();
-      if (Result::Success != DeviceBridge::waitForCommand(Commands::Bridge_Response, timeoutMs, nullptr, true, currentUID)) {
-        Logger::err("Direct3DDevice9Ex_LSS::ResetEx() failed with : no response from server.");
+      DeviceBridge::ResponseTransaction responseTransaction;
+      size_t currentUID = 0;
+      {
+        ClientMessage c(Commands::IDirect3DDevice9Ex_ResetEx, getId());
+        currentUID = c.get_uid();
+        c.send_data(sizeof(D3DPRESENT_PARAMETERS), &presParam);
+        c.send_data(sizeof(D3DDISPLAYMODEEX), pFullscreenDisplayMode);
       }
-      res = (HRESULT) DeviceBridge::get_data();
-      DeviceBridge::pop_front();
+
+      // Perform an WAIT_FOR_OPTIONAL_SERVER_RESPONSE but don't return since we still have work to do.
+      if (GlobalOptions::getSendAllServerResponses()) {
+        const uint32_t timeoutMs = GlobalOptions::getAckTimeout();
+        if (Result::Success != DeviceBridge::waitForCommand(Commands::Bridge_Response, timeoutMs, nullptr, true, currentUID)) {
+          Logger::err("Direct3DDevice9Ex_LSS::ResetEx() failed with : no response from server.");
+          return D3DERR_DEVICELOST;
+        } else {
+          res = (HRESULT) DeviceBridge::get_data();
+          DeviceBridge::pop_front();
+          if (FAILED(res)) {
+            return res;
+          }
+        }
+      }
     }
 
     // Reset swapchain and link server backbuffer/depth buffer after the server reset its swapchain, or we will link to the old backbuffer/depth resources
@@ -3476,6 +3600,9 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::GetDisplayModeEx(UINT iSwapChain, D3D
     return D3DERR_INVALIDCALL;
 
   
+  DeviceBridge::ResponseTransaction responseTransaction;
+
+
   UID currentUID = 0;
   {
     ClientMessage c(Commands::IDirect3DDevice9Ex_GetDisplayModeEx, getId());
