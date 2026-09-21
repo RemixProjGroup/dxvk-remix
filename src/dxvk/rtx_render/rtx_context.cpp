@@ -302,8 +302,8 @@ namespace dxvk {
     uint32_t renderSize[] = { downscaleExtent.width, downscaleExtent.height };
     uint32_t displaySize[] = { upscaleExtent.width, upscaleExtent.height };
 
-    DlssNeuralRendering& dlssnr = m_common->metaDlssNeuralRendering();
-    dlssnr.setDlssNeuralRenderingSettings(displaySize);
+    DxvkNeuralUplift& dlssnr = m_common->metaNeuralUplift();
+    dlssnr.setNeuralUpliftSettings(displaySize);
 
     // Set resolution to cameras for jittering
     for (int i = 0; i < CameraType::Count; i++) {
@@ -1390,11 +1390,11 @@ namespace dxvk {
       constants.debugKnob = debugView.debugKnob();
       constants.forceFirstHitInGBufferPass = debugView.showFirstGBufferHit();
       constants.enableDlssNrControlMask =
-        m_common->metaDlssNeuralRendering().useDlssNeuralRendering() &&
-        !DlssNeuralRendering::useAutoMask();
+        m_common->metaNeuralUplift().useNeuralUplift() &&
+        !DxvkNeuralUplift::useAutoMask();
       constants.enableDlssNrVolumetricControlMask =
         constants.enableDlssNrControlMask &&
-        DlssNeuralRendering::enableVolumetricControlMask();
+        DxvkNeuralUplift::enableVolumetricControlMask();
 
       constants.gpuPrintThreadIndex = u16vec2 { kInvalidThreadIndex, kInvalidThreadIndex };
       constants.gpuPrintElementIndex = frameIdx % kMaxFramesInFlight;
@@ -2058,8 +2058,8 @@ namespace dxvk {
   bool RtxContext::dispatchDlssNR(const Resources::RaytracingOutput& rtOutput) {
     ScopedCpuProfileZone();
 
-    auto& dlssNr = m_common->metaDlssNeuralRendering();
-    if (!dlssNr.useDlssNeuralRendering()) {
+    auto& dlssNr = m_common->metaNeuralUplift();
+    if (!dlssNr.useNeuralUplift()) {
       return false;
     }
 

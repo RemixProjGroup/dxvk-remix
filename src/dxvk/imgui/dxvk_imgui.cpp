@@ -3653,14 +3653,18 @@ namespace dxvk {
 
       RemixGui::Checkbox("Allow Full Screen Exclusive?", &RtxOptions::allowFSEObject());
 
-      auto& dlssNeuralRendering = common->metaDlssNeuralRendering();
-      if (dlssNeuralRendering.supportsDlssNeuralRendering()) {
+      // Deliberately not gated on a support query. The driver-core capability parameters are
+      // exactly what is missing on the machines the snippet backend exists to serve, so hiding
+      // the section behind them would hide the fix along with the problem; the panel reports
+      // availability in its own status line instead.
+      {
+        auto& neuralUplift = common->metaNeuralUplift();
         RemixGui::Separator();
 
         if (RemixGui::CollapsingHeader("DLSS 3D-Guided Neural Generation [Experimental]", collapsingHeaderClosedFlags)) {
           ImGui::Indent();
           ImGui::PushID("DLSS 3D-Guided Neural Generation");
-          dlssNeuralRendering.showDlssNeuralRenderingImguiSettings();
+          neuralUplift.showImguiSettings();
           ImGui::PopID();
           ImGui::Unindent();
         }

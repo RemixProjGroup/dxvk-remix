@@ -403,7 +403,7 @@ namespace dxvk {
 
   void Resources::updateDlssNeuralRenderingResources(Rc<DxvkContext>& ctx) {
     const bool resourcesAreNeeded =
-      device()->getCommon()->metaDlssNeuralRendering().useDlssNeuralRendering();
+      device()->getCommon()->metaNeuralUplift().useNeuralUplift();
 
     if (resourcesAreNeeded == m_dlssNeuralRenderingResourcesAllocated) {
       return;

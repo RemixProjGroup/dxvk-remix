@@ -20,7 +20,7 @@
 * DEALINGS IN THE SOFTWARE.
 */
 #include "rtx_tone_mapping.h"
-#include "rtx_dlss_neural_rendering.h"
+#include "rtx_neural_uplift.h"
 #include "dxvk_device.h"
 #include "dxvk_scoped_annotation.h"
 #include "rtx_render/rtx_shader_manager.h"
@@ -172,8 +172,8 @@ namespace dxvk {
   }
 
   void DxvkToneMapping::prewarmShaders(DxvkPipelineManager& pipelineManager) const {
-    const auto& dlssNeuralRendering = m_device->getCommon()->metaDlssNeuralRendering();
-    if (DlssNeuralRendering::enable() && dlssNeuralRendering.supportsDlssNeuralRendering()) {
+    const auto& neuralUplift = m_device->getCommon()->metaNeuralUplift();
+    if (DxvkNeuralUplift::enable() && neuralUplift.isSupported()) {
       FastTonemappingShader::getShader();
       InverseTonemappingShader::getShader();
     }
@@ -220,9 +220,9 @@ namespace dxvk {
     pushArgs.enableAutoExposure = autoExposureEnabled;
     pushArgs.exposureFactor = exp2f(exposureBias() + RtxOptions::calcUserEVBias()); // ev100
     // Highlight recovery (inverse-tonemap only path)
-    pushArgs.enableHighlightRecovery = DlssNeuralRendering::enableHighlightRecovery() ? 1u : 0u;
+    pushArgs.enableHighlightRecovery = DxvkNeuralUplift::enableHighlightRecovery() ? 1u : 0u;
     {
-      const Vector4& t = DlssNeuralRendering::highlightRecoveryThresholds();
+      const Vector4& t = DxvkNeuralUplift::highlightRecoveryThresholds();
       pushArgs.highlightRecoveryThresholds = vec4(t.x, t.y, t.z, t.w);
     }
 

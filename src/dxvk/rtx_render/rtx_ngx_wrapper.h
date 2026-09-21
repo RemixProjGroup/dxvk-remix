@@ -35,6 +35,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <vector>
 #include "../util/rc/util_rc_ptr.h"
 #include "rtx_semaphore.h"
 
@@ -77,6 +79,7 @@ namespace dxvk {
   class NGXRayReconstructionContext;
   class NGXDLFGContext;
   class NGXNeuralRenderingContext;
+  class NGXNeuralUpliftContext;
 
   class NGXContext final {
   public:
@@ -121,10 +124,30 @@ namespace dxvk {
       return m_dlfgNotSupportedReason;
     }
     
+    // Whether a DLSS-NR snippet (nvngx_dlssnr.dll) is deployed next to the runtime, which is the
+    // precondition for the snippet backend (NGXNeuralUpliftContext).
+    //
+    // This is deliberately NOT a capability query. The snippet publishes none of the DLSSNR.*
+    // capability parameters checkDlssNeuralRenderingSupport() asks the driver core for - on a
+    // driver that does not know the feature, that query fails with FAIL_UnsupportedParameter and
+    // no amount of deployed snippet changes it. So this only reports deployment; whether the
+    // feature actually creates is settled by trying, inside NGXNeuralUpliftContext.
+    //
+    // Both of these answer from a one-shot probe held in a function-local static: the render
+    // thread and the developer menu ask independently and asynchronously, and a magic static is
+    // initialized exactly once no matter how many threads arrive together.
+    bool supportsNeuralUpliftSnippet();
+
+    // Empty while a snippet is deployed.
+    const char* getNeuralUpliftSnippetNotSupportedReason();
+
     std::unique_ptr<NGXDLSSContext> createDLSSContext();
     std::unique_ptr<NGXRayReconstructionContext> createRayReconstructionContext();
     std::unique_ptr<NGXDLFGContext> createDLFGContext();
     std::unique_ptr<NGXNeuralRenderingContext> createDlssNeuralRenderingContext();
+    // bypassCallerCheck is threaded in from rtx.neuralUplift.bypassCallerCheck rather than read
+    // here, to keep the wrapper free of the pass's options.
+    std::unique_ptr<NGXNeuralUpliftContext> createNeuralUpliftContext(bool bypassCallerCheck);
     
   private:
     bool initialize();
@@ -402,7 +425,9 @@ namespace dxvk {
       float skinStructureStrength;
     };
 
-    void initialize(Rc<DxvkContext> renderContext, const uint32_t displaySize[2]);
+    // preset is an NVSDK_NGX_DLSSNR_Hint_Render_Preset value, taken as uint32_t so this
+    // declaration does not need the DLSS-NR SDK header (which has no arm64 package).
+    void initialize(Rc<DxvkContext> renderContext, const uint32_t displaySize[2], uint32_t preset);
 
     bool evaluateNeuralRendering(Rc<DxvkContext> renderContext, const NGXNeuralRenderingBuffers& buffers, const NGXNeuralRenderingSettings& settings) const;
 
@@ -425,6 +450,138 @@ namespace dxvk {
   private:
     bool m_initialized = false;
     NVSDK_NGX_Handle* m_neuralRenderingFeature = nullptr;
+  };
+
+  /**
+   * \brief DLSS-NR snippet feature context (the "Snippet" backend)
+   *
+   * Same feature as NGXNeuralRenderingContext, reached a different way.
+   *
+   * NGXNeuralRenderingContext goes through the driver's NGX core (nvngx.dll), which is the
+   * supported route and the one to prefer whenever the driver knows the feature. This context
+   * exists for the case where it does not: the core then publishes none of the DLSSNR.*
+   * capability parameters, NGXContext::checkDlssNeuralRenderingSupport() fails at its first
+   * query, and CreateFeature routed through the core cannot reach the snippet at all.
+   *
+   * So this loads nvngx_dlssnr.dll directly and calls its exports. The parameter block still
+   * comes from the core (via NGXFeatureContext) because NVSDK_NGX_Parameter is a plain virtual
+   * name/value map that the snippet consumes as one.
+   *
+   * Every snippet export refuses with FAIL_PlatformError unless its caller resolves to
+   * nvngx.dll, which is what bypassCallerCheck defeats - see the implementation.
+   */
+  class NGXNeuralUpliftContext final : public NGXFeatureContext {
+  public:
+    // Mirrors NGXNeuralRenderingContext::NGXNeuralRenderingBuffers. Depth, motion vectors and the
+    // control mask are optional here: the snippet treats a missing resource as "not provided"
+    // rather than as an error.
+    struct NGXBuffers {
+      const Resources::Resource* pInColor = nullptr;
+      const Resources::Resource* pOutColor = nullptr;
+      const Resources::Resource* pMotionVectors = nullptr;
+      const Resources::Resource* pDepth = nullptr;
+      const Resources::Resource* pControlMask = nullptr;
+    };
+
+    // Mirrors NGXNeuralRenderingContext::NGXNeuralRenderingSettings so the two backends are
+    // driven from one set of options in DxvkNeuralUplift.
+    struct NGXSettings {
+      bool resetAccumulation = false;
+      float jitterOffset[2] = { 0.0f, 0.0f };
+      // Pixels per axis, matching the DLSS convention.
+      float motionVectorScale[2] = { 1.0f, 1.0f };
+      // Wet/dry blend against the original colour. Below 1.0 the snippet keeps an extra copy.
+      float intensity = 1.0f;
+      // DLSSNR.LocalToneStrength.
+      float toneStrength = 0.3f;
+      // DLSSNR.LocalStructureStrength.
+      float structuralStrength = 0.7f;
+      // DLSSNR.Style; 0..2, the snippet clamps anything higher to 2 rather than ignoring it.
+      uint32_t model = 0;
+      bool useAutoMask = false;
+      float skinStructureStrength = 0.5f;
+    };
+
+    // passCount creates that many independent feature handles rather than one. Each NGX handle
+    // owns its own temporal history inside the snippet, so a single shared handle across N
+    // chained passes is provably wrong: the last pass of frame N writes an N-times-enhanced
+    // image into the one history slot, and frame N+1's first pass reads that back and blends it
+    // with the unenhanced current frame, so the enhancement compounds across frames without
+    // bound. N independent handles give pass k a history that is always "this same pass, last
+    // frame" - a stable enhancement depth.
+    //
+    // preset is an NVSDK_NGX_DLSSNR_Hint_Render_Preset value, taken as uint32_t so this
+    // declaration does not need the DLSS-NR SDK header (which has no arm64 package).
+    void initialize(
+      Rc<DxvkContext> renderContext,
+      const uint32_t displaySize[2],
+      uint32_t preset,
+      uint32_t passCount);
+
+    void releaseNGXFeature() override;
+
+    bool isNeuralUpliftInitialized() const {
+      return m_initialized && !m_features.empty();
+    }
+
+    // False when nvngx_dlssnr.dll could not be found or did not export what is needed; the
+    // context is then inert and initialize()/evaluate() do nothing.
+    bool isLibraryLoaded() const {
+      return m_module != nullptr && m_pfnCreateFeature1 != nullptr && m_pfnEvaluateFeature != nullptr;
+    }
+
+    // Why the context is inert, for the developer menu. Empty when the library loaded.
+    const std::string& notLoadedReason() const {
+      return m_notLoadedReason;
+    }
+
+    // passIndex selects which of the passCount handles created by initialize() this call
+    // evaluates - see the comment there for why there is more than one.
+    bool evaluateNeuralUplift(Rc<DxvkContext> renderContext, const NGXBuffers& buffers,
+                              const NGXSettings& settings, uint32_t passIndex) const;
+
+  public:
+    // note: ctor is public due to make_unique/unique_ptr --- use NGXContext::createNeuralUpliftContext instead
+    NGXNeuralUpliftContext(DxvkDevice* device, bool bypassCallerCheck);
+    ~NGXNeuralUpliftContext() override;
+
+    NGXNeuralUpliftContext(const NGXNeuralUpliftContext&)                = delete;
+    NGXNeuralUpliftContext(NGXNeuralUpliftContext&&) noexcept            = delete;
+    NGXNeuralUpliftContext& operator=(const NGXNeuralUpliftContext&)     = delete;
+    NGXNeuralUpliftContext& operator=(NGXNeuralUpliftContext&&) noexcept = delete;
+
+  private:
+    bool m_initialized = false;
+    bool m_snippetInitialized = false;
+    // One handle per pass - see the comment on initialize(). Sized to the passCount initialize()
+    // was last called with; releaseNGXFeature() empties it.
+    std::vector<NVSDK_NGX_Handle*> m_features;
+    // The loaded nvngx_dlssnr.dll. Spelled void* rather than HMODULE because this header reaches
+    // most of the renderer through dxvk_objects.h, and typing it properly drags in windows.h.
+    void* m_module = nullptr;
+    // Really void**: the snippet's GetModuleFileNameW IAT slot while the caller-check bypass is
+    // installed, kept so the destructor can restore it before the library is unmapped.
+    void* m_callerCheckHookSlot = nullptr;
+    std::string m_notLoadedReason;
+
+    using PFN_CreateFeature1 = NVSDK_NGX_Result (NVSDK_CONV *)(VkDevice, VkCommandBuffer, NVSDK_NGX_Feature, NVSDK_NGX_Parameter*, NVSDK_NGX_Handle**);
+    // Last parameter is really PFN_NVSDK_NGX_ProgressCallback, which lives in the D3D11 and
+    // Vulkan NGX headers rather than the one included here. It is always null at the call site.
+    using PFN_EvaluateFeature = NVSDK_NGX_Result (NVSDK_CONV *)(VkCommandBuffer, const NVSDK_NGX_Handle*, const NVSDK_NGX_Parameter*, void*);
+    using PFN_ReleaseFeature = NVSDK_NGX_Result (NVSDK_CONV *)(NVSDK_NGX_Handle*);
+    // NOTE: this is the non-NGX_SNIPPET_BUILD spelling of Init_Ext2 - (..., GIPA, GDPA,
+    // FeatureCommonInfo*, Version) - not the (..., GIPA, GDPA, Version, Parameters*) one the SDK
+    // header declares under NGX_SNIPPET_BUILD. The shipping nvngx_dlssnr.dll answers to this one;
+    // it is what the fork validated at runtime, and swapping the last two arguments would hand
+    // the snippet a version enum where it expects a parameter block.
+    using PFN_Init_Ext2 = NVSDK_NGX_Result (NVSDK_CONV *)(unsigned long long, const wchar_t*, VkInstance, VkPhysicalDevice, VkDevice, PFN_vkGetInstanceProcAddr, PFN_vkGetDeviceProcAddr, const NVSDK_NGX_FeatureCommonInfo*, NVSDK_NGX_Version);
+    using PFN_Shutdown1 = NVSDK_NGX_Result (NVSDK_CONV *)(VkDevice);
+
+    PFN_CreateFeature1 m_pfnCreateFeature1 = nullptr;
+    PFN_EvaluateFeature m_pfnEvaluateFeature = nullptr;
+    PFN_ReleaseFeature m_pfnReleaseFeature = nullptr;
+    PFN_Init_Ext2 m_pfnInit_Ext2 = nullptr;
+    PFN_Shutdown1 m_pfnShutdown1 = nullptr;
   };
 #endif // NVSDK_NGX_DEFS_H
 }
