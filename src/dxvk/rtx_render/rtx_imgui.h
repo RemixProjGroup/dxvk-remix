@@ -210,7 +210,7 @@ namespace RemixGui {
 
   template <typename T, std::enable_if_t<std::is_integral_v<T> || std::is_enum_v<T>, bool> = true, typename ... Args>
   IMGUI_API bool SliderInt(const char* label, dxvk::RtxOption<T>* rtxOption, Args&& ... args) {
-    IMGUI_RTXOPTION_WIDGET(RemixGui::SliderInt(label, (int*)&value, std::forward<Args>(args)...))
+    IMGUI_RTXOPTION_WIDGET(SliderInt(label, &value, std::forward<Args>(args)...))
   }
 
   
