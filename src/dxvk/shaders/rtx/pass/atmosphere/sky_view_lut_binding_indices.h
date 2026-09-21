@@ -1,0 +1,7 @@
+#pragma once
+
+#define SKY_VIEW_LUT_ATMOSPHERE_ARGS       0
+#define SKY_VIEW_LUT_TRANSMITTANCE_INPUT   1
+#define SKY_VIEW_LUT_MULTISCATTERING_INPUT 2
+#define SKY_VIEW_LUT_SAMPLER               3
+#define SKY_VIEW_LUT_OUTPUT                4

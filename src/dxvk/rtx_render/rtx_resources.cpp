@@ -891,6 +891,24 @@ namespace dxvk {
     return m_skyProbe;
   }
 
+  Resources::Resource Resources::getAtmosphereTransmittanceLut(Rc<DxvkContext> ctx) {
+    // Atmosphere LUTs are managed by RtxAtmosphere class
+    // This method returns the cached resource
+    return m_atmosphereTransmittanceLut;
+  }
+
+  Resources::Resource Resources::getAtmosphereMultiscatteringLut(Rc<DxvkContext> ctx) {
+    // Atmosphere LUTs are managed by RtxAtmosphere class
+    // This method returns the cached resource
+    return m_atmosphereMultiscatteringLut;
+  }
+
+  Resources::Resource Resources::getAtmosphereSkyViewLut(Rc<DxvkContext> ctx) {
+    // Atmosphere LUTs are managed by RtxAtmosphere class
+    // This method returns the cached resource
+    return m_atmosphereSkyViewLut;
+  }
+
   Rc<DxvkImageView> Resources::getCompatibleViewForView(const Rc<DxvkImageView>& view, VkFormat format) {
     // Lazy GC
     static uint32_t lastGCFrame = 0;
@@ -1090,6 +1108,7 @@ namespace dxvk {
     // random access reads where they would be a problem).
     m_raytracingOutput.m_sharedRadianceRG = createImageResource(ctx, "shared radiance RG", m_downscaledExtent, VK_FORMAT_R16G16_SFLOAT);
     m_raytracingOutput.m_sharedRadianceB = createImageResource(ctx, "shared radiance B", m_downscaledExtent, VK_FORMAT_R16_SFLOAT);
+    m_raytracingOutput.m_atmosphereForeground = createImageResource(ctx, "atmosphere foreground", m_downscaledExtent, VK_FORMAT_R16G16B16A16_SFLOAT);
     m_raytracingOutput.m_sharedMaterialData0 = createImageResource(ctx, "shared material data 0", m_downscaledExtent, VK_FORMAT_R32_UINT);
     m_raytracingOutput.m_sharedMaterialData1 = createImageResource(ctx, "shared material data 1", m_downscaledExtent, VK_FORMAT_R32_UINT);
     // Note: This value is isolated rather than being packed with other data (such as the alpha channel combined with the Shared Radiance RGB) so that

@@ -35,6 +35,7 @@
 #include "rtx_imgui.h"
 #include "dxvk_scoped_annotation.h"
 #include "rtx_context.h"
+#include "rtx_atmosphere.h"
 #include "rtx_terrain_baker.h"
 #include "rtx_neural_radiance_cache.h"
 #include "rtx_nrd_context.h"
@@ -137,6 +138,168 @@ namespace dxvk {
                                 "Debug Knob [0]: (rounded down) which texture type to show: \n"
                                 "0: AlbedoOpacity, 1: Normal, 2: Tangent, 3: Height,\n"
                                 "4: Roughness, 5: Metallic, 6: Emissive"},
+
+        {DEBUG_VIEW_CLOUD_SKY_TRANSMITTANCE_LUT, "Atmosphere: Cloud Sky Transmittance LUT",
+                                "Fork diagnostic. Visualizes the 32x16 cloud-occluded sky-ambient\n"
+                                "transmittance LUT baked by cloud_sky_transmittance_lut.comp.slang.\n"
+                                "Stretched to fill the screen; red = full occlusion (thick cumulus),\n"
+                                "black = clear sky in that direction.\n"
+                                "X axis = azimuth [0, 360 deg], Y axis = elevation [-90, +90 deg]\n"
+                                "(bottom half = below horizon, always clear)."},
+        {DEBUG_VIEW_CLOUD_D_SUN, "Atmosphere: Cloud D_sun Voxel Grid",
+                                "Fork diagnostic. Visualizes the Nubis Cubed sun-direction optical-\n"
+                                "depth voxel grid (mid-Z slice). Grayscale: bright = thick cloud\n"
+                                "between voxel and sun, dark = clear sky path. Cumulus cells should\n"
+                                "appear as cellular patterns. Move the sun to verify the pattern\n"
+                                "shifts. Scaling: intensity = saturate(opticalDepth * 0.2)."},
+        {DEBUG_VIEW_CLOUD_D_AMBIENT, "Atmosphere: Cloud D_ambient Voxel Grid",
+                                "Fork diagnostic. Visualizes the Nubis Cubed zenith optical-depth\n"
+                                "voxel grid (mid-Z slice). Expected: mostly uniform brightness\n"
+                                "(zenith path is mostly empty air above the slab); some banding\n"
+                                "where the slab is dense. Scaling: intensity = saturate(opticalDepth * 0.2)."},
+        {DEBUG_VIEW_CLOUD_GROUND_SHADOW_PRODSHAPE, "Atmosphere: Cloud Ground Shadow (Production Call Shape)",
+                                "Fork diagnostic - CRITICAL GATE for the Nubis Cubed cloud-on-terrain\n"
+                                "shadow workstream. Paints sampleCloudGroundShadow_OptionB output at\n"
+                                "each G-buffer pixel using the EXACT per-pixel call shape\n"
+                                "(worldPos, sunDir, args, isZUp) the upcoming NEE wiring will use.\n"
+                                "Grayscale: white = sun unoccluded by clouds, black = full shadow.\n"
+                                "Visual gate: stand on flat terrain at sunset and compare with the\n"
+                                "Cloud D_sun Voxel Grid view (873). Cumulus shadow patches in this\n"
+                                "view should spatially match the D_sun cumulus pattern. If they\n"
+                                "disagree on cumulus position, isZUp handling is mismatched between\n"
+                                "the debug-view call path and the production NEE call path - fix\n"
+                                "before wiring NEE in Task 6."},
+        {DEBUG_VIEW_CLOUD_RENDER_RT, "Atmosphere: Cloud Render RT (Nubis Cubed)",
+                                "Fork diagnostic. Visualizes the Nubis Cubed cloud render RT produced\n"
+                                "by cloud_render.comp.slang (C4 of the 2026-05-12 workstream). Per-\n"
+                                "pixel cloud radiance from the page-137 two-HG-lobe direct term +\n"
+                                "page-142 ambient pow(1 - dim_profile, 0.5) * exp(-D_ambient).\n"
+                                "Visual gate: toggle this debug view off and on with Sky Mode = Physical\n"
+                                "Atmosphere active to inspect the raw cloud render before compositing.\n"
+                                "Expected look: top-bright / bottom-dark cumulus\n"
+                                "gradient, less-flat shadow side, stronger silver lining at backlit\n"
+                                "edges. Tune via the Atmosphere -> Clouds -> Nubis Cubed Lighting\n"
+                                "ImGui block (six magic-constant sliders)."},
+        {DEBUG_VIEW_CLOUD_GROUND_SHADOW_RAW_OD, "Atmosphere: Cloud Ground Shadow RAW OD (Sibling of 875)",
+                                "Fork diagnostic (2026-05-17). Sibling of enum 875: same per-pixel\n"
+                                "call shape but the math stops at the dSunTex.SampleLevel call - NO\n"
+                                "exp(), NO mix(cloudShadowStrength). Exists because 875 paints solid\n"
+                                "white in-game and we need the pre-exp/mix truth.\n"
+                                "Channels:\n"
+                                "  R = saturate(OD * 0.2)   matches 873's vis scale; direct A/B vs bake\n"
+                                "  G = saturate(OD)         raw magnitude; distinguishes amplified-tiny\n"
+                                "                           from actually-visible-sized\n"
+                                "  B = uvw.x at the consumer's lookup position\n"
+                                "Sentinels:\n"
+                                "  magenta = surface above slab; blue = sun below horizon / unreachable\n"
+                                "Discrimination (stand on flat terrain at midday):\n"
+                                "  R uniform AND B uniform   -> SCENE-SCALE bug (every pixel reads same\n"
+                                "                                UVW; fix cloudVoxelGridExtentKm or the\n"
+                                "                                worldPosKm -> UVW conversion)\n"
+                                "  R patterned, matches 873  -> consumer works; exp+mix is killing it\n"
+                                "  R patterned but unrelated -> world-anchoring / slab-bottom bug\n"
+                                "  R dark, G even darker     -> magnitude underflow (bake OD tiny)"},
+        {DEBUG_VIEW_CLOUD_NVDF_SDF, "Atmosphere: Cloud NVDF SDF Slice (Nubis3)",
+                                "Fork diagnostic (Nubis3 conversion Phase A). Horizontal slice of the\n"
+                                "cloud-body signed distance field at height fraction 0.25, one full\n"
+                                "noise-tile period. Screen X = world X, screen Y = world Z.\n"
+                                "  Green band = the zero-crossing iso-line (cloud body outline)\n"
+                                "  Warm ramp  = inside (bright = deep core, saturates ~1.5 km)\n"
+                                "  Cool ramp  = outside (dark = far clear sky, saturates ~4 km)\n"
+                                "Validation gates: bodies read as smooth blobby cells matching the\n"
+                                "placement-map clusters; the green outline is clean (no speckle =\n"
+                                "JFA converged); the pattern is seamless across the tile wrap; and\n"
+                                "dragging Cloud Cell Size re-bakes it live (amortized, ~6 frames)."},
+        {DEBUG_VIEW_CLOUD_SEGMENT_CLASSIFICATION, "Atmosphere: Cloud Segment Classification (World-Space Stage 0)",
+                                "Fork diagnostic (world-space cloud migration, Stage 0, 2026-09-05;\n"
+                                "span math updated Stage 1, same date, to track the one-planet\n"
+                                "geometry fix — see cloudSlabSpan in cloud_march_common.slangh).\n"
+                                "Per-pixel classification of how the PRIMARY ray's cloud slab span\n"
+                                "[tEntry, tExit] relates to the resolved G-buffer surface at distance\n"
+                                "tSurface. The span is computed by DUPLICATING (not calling — and not\n"
+                                "modifying) the exact ray-vs-shell intersection cloudSlabSpan performs\n"
+                                "(cloud_march_common.slangh, ~line 995; called from marchCloudSlab and\n"
+                                "marchEchoDeck) at production's call shape: tMinClamp=0 / tMaxClamp=0,\n"
+                                "i.e. \"march the full reachable span\" — the same 0/0 clamps\n"
+                                "cloud_render.comp.slang and cloud_secondary_lut.comp.slang always pass\n"
+                                "today, and a no-op against cloudSlabSpan's own output regardless.\n"
+                                "  Black   - sky / miss pixel: no resolved surface, nothing to classify.\n"
+                                "  Blue    - ray never reaches the cloud slab (misses the shell entirely,\n"
+                                "            or the reachable span is empty / behind the camera).\n"
+                                "  Yellow  - camera is already inside the slab (the span starts at t=0).\n"
+                                "            Structurally unreachable under a normal config as of Stage 1:\n"
+                                "            the eye's radius from the planet centre is still exactly\n"
+                                "            args.planetRadius (getEyeRadius has no cameraAltitudeKm term\n"
+                                "            until Stage 2), which is always strictly below the slab's\n"
+                                "            base (planetRadius + cloudAltitude) for any positive cloud\n"
+                                "            altitude. Reachable once Stage 2 lets the eye's altitude\n"
+                                "            exceed cloudAltitude (flying up into the deck).\n"
+                                "  Red     - the slab lies entirely beyond the surface (tEntry > tSurface):\n"
+                                "            the resolved geometry fully occludes the cloud.\n"
+                                "  Magenta - the surface sits inside the slab span.\n"
+                                "  Green   - the slab and the camera-to-surface segment overlap (the\n"
+                                "            cloud is fully between the camera and the surface).\n"
+                                "EXPECTED RESULT ON FIRST RUN: red on essentially every pixel that hits\n"
+                                "geometry. This is the correct outcome and the entire point of the view —\n"
+                                "it demonstrates that today's cloud slab is anchored to the camera (the\n"
+                                "base/top shells are centred on a planet sphere directly beneath the\n"
+                                "CAMERA, not beneath true world-space ground) and is consequently\n"
+                                "unreachable by world geometry: the slab sits tens of kilometres out\n"
+                                "along the ray while resolved scene distances are comparatively tiny. Do\n"
+                                "not tune constants to turn this green and do not treat red as a\n"
+                                "regression — green/magenta becoming common is a later migration stage's\n"
+                                "success criterion, not this one's."},
+        {DEBUG_VIEW_CLOUD_CALIBRATION_RINGS, "Atmosphere: Calibration Rings (World-Space Stage 0)",
+                                "Fork diagnostic (world-space cloud migration, Stage 0, 2026-09-05).\n"
+                                "Paints iso-distance rings on resolved geometry at 0.5 / 1 / 2 / 5 km\n"
+                                "from the camera, computed as viewDistance * kmPerWorldUnit where\n"
+                                "kmPerWorldUnit = 1 / args.worldUnitsPerKm — the same conversion the\n"
+                                "cloud-ground-shadow diagnostics (enum 877) already use; no new CB field.\n"
+                                "Purpose: worldUnitsPerKm today is derived from rtx.sceneScale, which\n"
+                                "commit dd515e082 documented as \"not a reliable measurement of the world\n"
+                                "space\". Stand at an in-game landmark whose real-world separation from\n"
+                                "the camera is known, compare where its ring lands, and back out the\n"
+                                "game's true world-units-per-km from the mismatch.\n"
+                                "Bands: 0.5 km = red, 1 km = yellow, 2 km = green, 5 km = blue — each a\n"
+                                "thin bright core fading to its hue at the band edge. Between bands the\n"
+                                "same four colours interpolate as a continuous ramp (fading toward black\n"
+                                "past 5 km) so any pixel's approximate distance reads at a glance, not\n"
+                                "just the exact ring positions. Sky / miss pixels are painted black."},
+        {DEBUG_VIEW_CLOUD_SAMPLE_COUNT, "Atmosphere: Cloud Density Evaluations Per Ray",
+                                "Fork diagnostic (native-scale optimisation, 2026-09-17).\n"
+                                "How many density evaluations each cloud ray performed. The march is\n"
+                                "dominated by density evaluation - lighting measured only ~17% of it -\n"
+                                "so reducing work means reducing these, and this shows where they go.\n"
+                                "WHITE = the evaluation count reached Max Cloud Samples (or Cloud\n"
+                                "Samples at zero spacing). Counts include coarse tail work and layers;\n"
+                                "white alone does not prove budget exhaustion. It highlights where the\n"
+                                "budget may be deciding what these rays see.\n"
+                                "RGB otherwise: Turbo over 0 to the cap - dark blue cheap, cyan low,\n"
+                                "green half, yellow/orange nearly exhausted.\n"
+                                "Alpha: the raw count. Set Output Statistics Mode to Mean to read the\n"
+                                "actual average rather than judging it by colour.\n"
+                                "Reads the depth companion's .w channel, free since the measured-prefix\n"
+                                "experiment was retired; nothing composites it."},
+        {DEBUG_VIEW_CLOUD_DEPTH, "Atmosphere: Cloud Depth Companion (World-Space Stage 4b)",
+                                "Fork diagnostic (world-space cloud migration, Stage 4b, 2026-09-05).\n"
+                                "Visualizes AtmosphereCloudDepth (produced by cloud_render.comp.slang /\n"
+                                "RtxAtmosphere::dispatchCloudScreenPass), point-sampled exactly as\n"
+                                "composite.comp.slang's applyCloudComposite reads it - never bilinear.\n"
+                                "RGB: transmittance-weighted mean cloud depth on the Turbo colormap over\n"
+                                "0-20 km (black = sentinel / no cloud along this ray at all, blue -> green\n"
+                                "-> yellow -> red as mean depth approaches 20 km).\n"
+                                "Alpha: entry distance, RAW km (not normalized - read with the debug\n"
+                                "view's per-channel / statistics tools)."},
+        {DEBUG_VIEW_CLOUD_TRANSMITTANCE_ON_GEOMETRY, "Atmosphere: Cloud Transmittance On Geometry (World-Space Stage 4b)",
+                                "Fork diagnostic (world-space cloud migration, Stage 4b, 2026-09-05).\n"
+                                "Greyscale cloud alpha (1 - AtmosphereCloudRender.a, the same opacity\n"
+                                "convention applyCloudComposite composites with) at pixels that resolved\n"
+                                "an opaque hit. Sky / miss pixels are painted black (same\n"
+                                "cb.nrd.missLinearViewZ exact-sentinel test as enums 880/884).\n"
+                                "White = fully opaque cloud between camera and surface (surface should\n"
+                                "read heavily fogged in the final composite); black = surface not\n"
+                                "fogged (no cloud in front of it along this ray, or a genuine miss)."},
+
         {DEBUG_VIEW_CASCADE_LEVEL, "Terrain: Cascade Level"},
 
         {DEBUG_VIEW_VIRTUAL_HIT_DISTANCE, "Virtual Hit Distance"},
@@ -584,6 +747,12 @@ namespace dxvk {
         TEXTURE2D(DEBUG_VIEW_BINDING_ALTERNATE_DISOCCLUSION_THRESHOLD_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_PREV_WORLD_POSITION_INPUT)
         TEXTURE2D(DEBUG_VIEW_BINDING_SHARED_TERMINATOR_FIX_INPUT)
+        TEXTURE2D(DEBUG_VIEW_BINDING_CLOUD_SKY_TRANSMITTANCE_LUT_INPUT)
+        TEXTURE3D(DEBUG_VIEW_BINDING_CLOUD_D_SUN_INPUT)
+        TEXTURE3D(DEBUG_VIEW_BINDING_CLOUD_D_AMBIENT_INPUT)
+        TEXTURE2D(DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT)
+        TEXTURE3D(DEBUG_VIEW_BINDING_CLOUD_NVDF_SDF_INPUT)
+        TEXTURE2D(DEBUG_VIEW_BINDING_CLOUD_DEPTH_RT_INPUT)
 
         RW_TEXTURE2D(DEBUG_VIEW_BINDING_ACCUMULATED_DEBUG_VIEW_INPUT_OUTPUT)
 
@@ -1197,7 +1366,13 @@ namespace dxvk {
     debugViewArgs.debugKnob = m_debugKnob;
     debugViewArgs.camera = rtOutput.m_raytraceArgs.camera;
     debugViewArgs.volumeArgs = rtOutput.m_raytraceArgs.volumeArgs;
-
+    // Fork: mirror atmosphere + isZUp from RaytraceArgs so cloud
+    // diagnostic debug views (DEBUG_VIEW_CLOUD_GROUND_SHADOW_PRODSHAPE)
+    // can call production atmosphere helpers with the production
+    // call shape. These fields are populated unconditionally - debug
+    // views that don't need them simply ignore the values.
+    debugViewArgs.atmosphereArgs = rtOutput.m_raytraceArgs.atmosphereArgs;
+    debugViewArgs.isZUp = rtOutput.m_raytraceArgs.isZUp;
     if (displayType() == DebugViewDisplayType::Standard) {
       debugViewArgs.pseudoColorMode = pseudoColorMode();
       debugViewArgs.enableAlphaChannelFlag = m_enableAlphaChannel;
@@ -1243,6 +1418,25 @@ namespace dxvk {
       case DEBUG_VIEW_DENOISED_PRIMARY_DIRECT_SPECULAR_RADIANCE:
       case DEBUG_VIEW_DENOISED_PRIMARY_DIRECT_DIFFUSE_HIT_T:
       case DEBUG_VIEW_DENOISED_PRIMARY_DIRECT_SPECULAR_HIT_T:
+      // Fork (world-space cloud migration, Stage 0): these two per-pixel
+      // G-buffer painters need cb.nrd.missLinearViewZ to tell a sky/miss
+      // pixel apart from a real hit (DEBUG_VIEW_CLOUD_CALIBRATION_RINGS
+      // paints miss pixels black). Without this case, debugViewArgs.nrd
+      // would keep the zero-initialized value from its declaration above
+      // when denoiseDirectAndIndirectLightingSeparately() is on, since
+      // neither enum matches any other case in this switch. Mirrors the
+      // primary-direct selection already used for the DENOISED_PRIMARY_
+      // DIRECT_* cases immediately above — same "primary ray" data.
+      case DEBUG_VIEW_CLOUD_SEGMENT_CLASSIFICATION:
+      case DEBUG_VIEW_CLOUD_CALIBRATION_RINGS:
+      // Fork (world-space cloud migration, Stage 4b, 2026-09-05): same reasoning as the two enums
+      // above -- DEBUG_VIEW_CLOUD_TRANSMITTANCE_ON_GEOMETRY needs cb.nrd.missLinearViewZ for its own
+      // isSkyMiss test, and the other two are grouped in for consistency (harmless for the cases
+      // that don't end up reading cb.nrd at all).
+      case DEBUG_VIEW_CLOUD_DEPTH:
+      case DEBUG_VIEW_CLOUD_SAMPLE_COUNT:
+      case DEBUG_VIEW_CLOUD_TRANSMITTANCE_ON_GEOMETRY:
+      case DEBUG_VIEW_CLOUD_REPROJECTION:
         debugViewArgs.nrd = common.metaPrimaryDirectLightDenoiser().getNrdArgs();
         break;
       case DEBUG_VIEW_DENOISED_PRIMARY_INDIRECT_DIFFUSE_RADIANCE:
@@ -1343,6 +1537,55 @@ namespace dxvk {
                       ReplacementMaterialTextureType::Count - 1));
     Resources::Resource terrain = common.getSceneManager().getTerrainBaker().getTerrainTexture(terrainTextureType);
     ctx->bindResourceView(DEBUG_VIEW_BINDING_TERRAIN_INPUT, terrain.view, nullptr);
+
+    // Numos atmosphere diagnostics. Initialize once so all lazily-created
+    // resources are valid before exposing them to the debug view.
+    RtxAtmosphere& atmosphere = common.metaAtmosphere();
+    atmosphere.initialize(ctx);
+
+    Resources::Resource cloudSkyTransLut = atmosphere.getCloudSkyTransmittanceLut();
+    if (cloudSkyTransLut.isValid()) {
+      ctx->bindResourceView(
+        DEBUG_VIEW_BINDING_CLOUD_SKY_TRANSMITTANCE_LUT_INPUT,
+        cloudSkyTransLut.view,
+        nullptr);
+    }
+
+    {
+      const Resources::Resource& cloudDSun = atmosphere.getCloudDSun();
+      if (cloudDSun.isValid()) {
+        ctx->bindResourceView(DEBUG_VIEW_BINDING_CLOUD_D_SUN_INPUT, cloudDSun.view, nullptr);
+      }
+    }
+    {
+      const Resources::Resource& cloudDAmbient = atmosphere.getCloudDAmbient();
+      if (cloudDAmbient.isValid()) {
+        ctx->bindResourceView(DEBUG_VIEW_BINDING_CLOUD_D_AMBIENT_INPUT, cloudDAmbient.view, nullptr);
+      }
+    }
+    {
+      const Resources::Resource& cloudNvdfSdf = atmosphere.getCloudNvdfSdf();
+      if (cloudNvdfSdf.isValid()) {
+        ctx->bindResourceView(DEBUG_VIEW_BINDING_CLOUD_NVDF_SDF_INPUT, cloudNvdfSdf.view, nullptr);
+      }
+    }
+    {
+      const Resources::Resource& cloudRenderRT = atmosphere.getCloudRenderRT();
+      if (cloudRenderRT.isValid()) {
+        ctx->bindResourceView(DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT, cloudRenderRT.view, nullptr);
+      }
+    }
+    // Current cloud depth and density-evaluation diagnostics.
+    {
+      const Resources::Resource& cloudDepthRT = atmosphere.getCloudDepthRT();
+      if (cloudDepthRT.isValid()) {
+        ctx->bindResourceView(DEBUG_VIEW_BINDING_CLOUD_DEPTH_RT_INPUT, cloudDepthRT.view, nullptr);
+      }
+    }
+    // Fork: the post-denoise cumulus shadow factor texture (debug view 878) was
+    // removed 2026-06-19 along with the screen-space cloud-shadow system. The
+    // cloud shadow now folds onto the sun radiance in the NEE; use enum 875/877
+    // (which read the D_sun grid directly) to diagnose cloud-on-terrain shadows.
 
     ctx->bindResourceView(DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT, globalVolumetrics.getPreviousVolumeReservoirs().view, nullptr);
     ctx->bindResourceView(DEBUG_VIEW_BINDING_VOLUME_AGE_INPUT, globalVolumetrics.getCurrentVolumeAccumulatedRadianceAge().view, nullptr);

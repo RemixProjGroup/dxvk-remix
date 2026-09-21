@@ -234,6 +234,7 @@ namespace dxvk
       Resource m_sharedFlags;
       Resource m_sharedRadianceRG;
       Resource m_sharedRadianceB;
+      Resource m_atmosphereForeground;
       AliasedResource m_sharedIntegrationSurfacePdf;
       Resource m_sharedMaterialData0;
       Resource m_sharedMaterialData1;
@@ -405,6 +406,9 @@ namespace dxvk
     Rc<DxvkImageView> getWhiteTexture(Rc<DxvkContext> ctx);
     Resources::Resource getSkyProbe(Rc<DxvkContext> ctx, VkFormat format = VK_FORMAT_UNDEFINED);
     Resources::Resource getSkyMatte(Rc<DxvkContext> ctx, VkFormat format = VK_FORMAT_UNDEFINED);
+    Resources::Resource getAtmosphereTransmittanceLut(Rc<DxvkContext> ctx);
+    Resources::Resource getAtmosphereMultiscatteringLut(Rc<DxvkContext> ctx);
+    Resources::Resource getAtmosphereSkyViewLut(Rc<DxvkContext> ctx);
     Rc<DxvkImageView> getCompatibleViewForView(const Rc<DxvkImageView>& view, VkFormat format);
 
     Rc<DxvkSampler> getSampler(const VkFilter filter, const VkSamplerMipmapMode mipFilter,
@@ -480,6 +484,10 @@ namespace dxvk
 
     Resources::Resource m_skyProbe;
     Resources::Resource m_skyMatte;
+
+    Resources::Resource m_atmosphereTransmittanceLut;
+    Resources::Resource m_atmosphereMultiscatteringLut;
+    Resources::Resource m_atmosphereSkyViewLut;
 
     fast_unordered_cache<Rc<DxvkSampler>> m_samplerCache;
     fast_unordered_cache<std::pair<Rc<DxvkImageView>, uint32_t>> m_viewCache;

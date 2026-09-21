@@ -50,7 +50,12 @@
 
 
 #define COMPACT_ACTIVE_PIXELS_MIN_BINDING  COMPACT_ACTIVE_PIXELS_BINDING_ACTIVE_PIXEL_MASK_INPUT
+#define COMPACT_ACTIVE_PIXELS_MAX_BINDING  COMPACT_ACTIVE_PIXELS_BINDING_ACTIVE_LOCAL_PIXEL_COORDS_OUTPUT
 
 #if COMPACT_ACTIVE_PIXELS_MIN_BINDING <= COMMON_MAX_BINDING
 #error "Increase the base index of G-buffer bindings to avoid overlap with common bindings!"
+#endif
+
+#if COMPACT_ACTIVE_PIXELS_MIN_BINDING <= BINDING_ATMOSPHERE_MAX && COMPACT_ACTIVE_PIXELS_MAX_BINDING >= BINDING_ATMOSPHERE_MIN
+#error "Increase the base index of Compact Active Pixels bindings to avoid overlap with atmosphere common bindings!"
 #endif

@@ -62,6 +62,19 @@
 //!>       NEE_CACHE_ENABLE=1
 //!>       UNORDERED_RESOLVE_WBOIT
 
+
+// Atmosphere variants
+
+
+// NRC
+
+
+// WBOIT
+
+
+// NRC
+
+
 /* SHARC */
 // A token in the name means that feature is on.
 
@@ -92,6 +105,7 @@
 //!>       UNORDERED_RESOLVE_WBOIT
 
 //!end-variants
+#define ATMOSPHERE_AVAILABLE
 
 #define RAY_PIPELINE
 #define INTEGRATE_INDIRECT
@@ -107,7 +121,6 @@
 // ReSTIR GI is a different integrate-indirect mode; its reservoirs hold nothing under SHARC.
 #define RAB_HAS_RESTIR_GI_RESERVOIRS 1
 #endif
-
 // Note: Opacity lighting approximation used in the indirect integration pass due to particle lighting being somewhat
 // important in reflections off shiny surfaces (as without this it can make areas with many particles look weird in reflections).
 #define RESOLVE_OPACITY_LIGHTING_APPROXIMATION 1

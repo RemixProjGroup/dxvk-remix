@@ -36,6 +36,10 @@
 #include "rtx/pass/nrc/nrc_integrator_utilities.slangh"
 #include "rtx/pass/sharc/sharc_integrator_hooks.slangh"
 #include "rtx/pass/sparse_rendering/sparse_rendering.slangh"
+#include "rtx/pass/atmosphere/atmosphere_common.slangh"
+#ifdef ATMOSPHERE_AVAILABLE
+#include "rtx/pass/atmosphere/atmosphere_sky.slangh"
+#endif
 
 // Input specular signal of low roughness material into restir gi
 static const uint kRestirGIAcceptLowRoughnessInput = false;
@@ -73,6 +77,7 @@ PathState pathStateCreateEmpty(GeometryFlags geometryFlags)
 #if ENABLE_SHARC
   pathState.sharcDiffuseArrival = false;
 #endif
+  pathState.skyGatherEligible = false;
   pathState.segmentHitDistance = 0.0;
 
   pathState.rayMask = OBJECT_MASK_ALL | (geometryFlags.objectMask & OBJECT_MASK_ALL_DYNAMIC);
@@ -383,8 +388,22 @@ void integratePathVertex(
     {
       skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, pathState.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
     }
+#ifdef ATMOSPHERE_AVAILABLE
+    else if (cb.skyMode == 1)
+    {
+      // Physical atmosphere mode. Opt into skyIndirectRadianceScale only when the
+      // ray that missed was a diffuse sky gather (set at the previous bounce);
+      // reflections / refractions / cutouts keep physical sky brightness.
+      skyRadiance = evalSkyRadiance(pathState.direction, cb.atmosphereArgs,
+                                     pathState.pixelCoordinate, cb.frameIdx,
+                                     cb.isZUp != 0,
+                                     /*isPrimaryRay=*/ false,
+                                     /*applySkyIndirectRadianceScale=*/ pathState.skyGatherEligible);
+    }
+#endif
     else
     {
+      // Skybox rasterization mode
       skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(pathState.direction, 0);
     }
     
@@ -575,7 +594,6 @@ void integratePathVertex(
     sharcClampUpdateRoughness(polymorphicSurfaceMaterialInteraction, materialType);
 #endif
 
-    
     const bool oldInsideMedium = pathState.insideMedium;
     vec3 continuationThroughput = vec3(1.0);
     uint8_t continuationLobe = 0;
@@ -603,6 +621,18 @@ void integratePathVertex(
       pathState.coneRadius = sampledRay.coneRadius;
       pathState.direction = sampledRay.direction;
       pathState.solidAnglePdf = solidAnglePdf;
+
+      // Classify the lobe that generated this ray for skyIndirectRadianceScale.
+      // Computed here, where materialType is known, so the opaque lobe enum is
+      // only trusted for opaque surfaces â€” translucent (glass/water) lobes use a
+      // different enum and are never eligible, and an opaque alpha-cutout
+      // (opacity transmission) is a straight-through view, also not eligible.
+      // Only a genuine diffuse gather (opaque diffuse reflection / transmission)
+      // opts in.
+      pathState.skyGatherEligible =
+        (materialType == surfaceMaterialTypeOpaque) &&
+        (continuationLobe == opaqueLobeTypeDiffuseReflection ||
+         continuationLobe == opaqueLobeTypeDiffuseTransmission);
     }
     
     // Set the material medium index if a medium was entered or exited
@@ -623,7 +653,6 @@ void integratePathVertex(
     sharcOnContinuationSampled(pathState, isOpaqueMaterial, continuationLobe, opaqueSurfaceMaterialInteraction.isotropicRoughness);
 #endif
 
-    
     // Perform NEE
     
     if (isOpaqueMaterial)
@@ -673,7 +702,6 @@ void integratePathVertex(
           uint customIndex = rayInteraction.isViewModel ? CUSTOM_INDEX_IS_VIEW_MODEL : 0;
     
           // Select and sample a light for NEE via RTXDI
-    
           lightSampleValid = sampleLightRTXDI(
             pixelCoordinate,
             surfaceInteraction,
@@ -712,6 +740,23 @@ void integratePathVertex(
 
 
       lightSample.solidAnglePdf = invSelectionPdf > 0 ? lightSample.solidAnglePdf / invSelectionPdf : 0.0;
+
+      // Cloud-on-terrain shadow on the atmosphere sun (real distant light) for
+      // secondary bounces â€” mirror of the primary path in integrator_direct.slangh.
+      // fork â€” experiment 2026-06-21.
+      if (lightSampleValid && cb.skyMode == 1 && cb.atmosphereArgs.cloudVoxelShadowsEnable != 0u
+          && lightIdx != kInvalidLightIdx)
+      {
+        const DecodedPolymorphicLight cloudShadowLight = decodePolymorphicLight(lights[lightIdx]);
+        if (cloudShadowLight.atmosphereCloudShadowed)
+        {
+          const vec3 dirToSun = normalize(lightSample.position - surfaceInteraction.position);
+          const float cloudT = sampleCloudGroundShadow_OptionB(
+              surfaceInteraction.position, dirToSun, cb.atmosphereArgs, cb.isZUp != 0);
+          lightSample.radiance *= pow(cloudT, cb.atmosphereArgs.cloudShadowFactorStrength);
+        }
+      }
+
       vec3 diffuseLight, specularLight;
       const bool isDiffusionProfileSss = (cb.sssArgs.enableDiffusionProfile && isSubsurfaceDiffusionProfileMaterial(opaqueSurfaceMaterialInteraction));
       evaluateUnshadowedLight(lightSample, opaqueSurfaceMaterialInteraction, rayInteraction, normalize(lightSample.position - surfaceInteraction.position), diffuseLight, specularLight);
@@ -1328,6 +1373,11 @@ void integrateIndirectPath(
   pathState.enableNeeCacheAfterFirstBounce =
     (geometryFlags.performPSRR || NEECache.shouldUseHigherBounceNeeCache(geometryFlags.firstSampledLobeIsSpecular, calcRoughness(firstHitPerceptualRoughness)));
   pathState.gbufferPerceptualRoughness = firstHitPerceptualRoughness;
+  // The first indirect ray inherits its sky-scale eligibility from the primary
+  // surface's first sampled lobe: diffuse (non-specular) gather is eligible.
+  // (firstSampledLobeIsSpecular is the only lobe class available here; an
+  // edge-case first-bounce alpha-cutout would read as eligible, accepted.)
+  pathState.skyGatherEligible = !geometryFlags.firstSampledLobeIsSpecular;
 #if ENABLE_SHARC
   // firstSampledLobeIsSpecular is the only lobe class available here.
   pathState.sharcDiffuseArrival = !geometryFlags.firstSampledLobeIsSpecular;
@@ -1434,7 +1484,6 @@ void integrateIndirectPath(
     // This is done to easily account for the various cases the path vertex function may return on
     // which do not require path extension.
     pathState.continuePath = false;
-
 #if ENABLE_SHARC
     sharcOnSegmentBegin(pathState);
 #endif

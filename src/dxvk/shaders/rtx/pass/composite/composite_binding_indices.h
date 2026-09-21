@@ -50,6 +50,10 @@
 
 #define COMPOSITE_BSDF_FACTOR_INPUT                                 17
 #define COMPOSITE_BSDF_FACTOR2_INPUT                                18
+// Slot 19 was COMPOSITE_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT (fork screen-space
+// cloud shadow). Removed 2026-06-19 when the cloud shadow moved onto the sun
+// term in the NEE; the number is left reserved (no descriptor bound) so the
+// remaining slot numbers stay stable rather than renumbering 20..26.
 
 #define COMPOSITE_VOLUME_FILTERED_RADIANCE_AGE_INPUT                20
 #define COMPOSITE_VOLUME_FILTERED_RADIANCE_Y_INPUT                  21
@@ -62,6 +66,14 @@
 #define COMPOSITE_ACTIVE_PIXEL_MASK_INPUT                           27
 #define COMPOSITE_ACTIVE_LOCAL_PIXEL_COORDS_INPUT                   28
 #define COMPOSITE_PIXEL_SAMPLING_RATE_INPUT                         58
+#define COMPOSITE_ATMOSPHERE_AERIAL_PERSPECTIVE_INPUT               60
+#define COMPOSITE_ATMOSPHERE_AERIAL_PERSPECTIVE_SAMPLER             61
+
+// Current-frame cloud color and depth. Slots 63 and 65-68 are retired.
+#define COMPOSITE_ATMOSPHERE_CLOUD_RENDER_INPUT                     62
+#define COMPOSITE_ATMOSPHERE_CLOUD_DEPTH_INPUT                      64
+#define COMPOSITE_ATMOSPHERE_AERIAL_PERSPECTIVE_LOCAL_INPUT         69
+#define COMPOSITE_ATMOSPHERE_FOREGROUND_INPUT                      70
 
 // Inputs/Outputs
 

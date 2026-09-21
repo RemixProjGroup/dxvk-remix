@@ -33,6 +33,7 @@
 #include "rtx_restir_gi_rayquery.h"
 #include "rtx_debug_view.h"
 #include "rtx_sparse_rendering.h"
+#include "rtx_atmosphere.h"
 
 #include "../util/util_global_time.h"
 
@@ -122,6 +123,15 @@ namespace dxvk {
         TEXTURE2DARRAY(COMPOSITE_BLUE_NOISE_TEXTURE)
         SAMPLER3D(COMPOSITE_VALUE_NOISE_SAMPLER)
         SAMPLER2D(COMPOSITE_SKY_LIGHT_TEXTURE)
+        TEXTURE3D(COMPOSITE_ATMOSPHERE_AERIAL_PERSPECTIVE_INPUT)
+        SAMPLER(COMPOSITE_ATMOSPHERE_AERIAL_PERSPECTIVE_SAMPLER)
+        TEXTURE3D(COMPOSITE_ATMOSPHERE_AERIAL_PERSPECTIVE_LOCAL_INPUT)
+
+        // Cloud composite (fork — 2026-09-05, world-space cloud migration Stage 4b). See
+        // applyCloudComposite in composite.comp.slang / the doc comment on these slots in
+        // composite_binding_indices.h.
+        TEXTURE2D(COMPOSITE_ATMOSPHERE_CLOUD_RENDER_INPUT)
+        TEXTURE2D(COMPOSITE_ATMOSPHERE_CLOUD_DEPTH_INPUT)
 
         RW_TEXTURE2D(COMPOSITE_PRIMARY_ALBEDO_INPUT_OUTPUT)
         RW_TEXTURE2D(COMPOSITE_ACCUMULATED_FINAL_OUTPUT_INPUT_OUTPUT)
@@ -174,6 +184,7 @@ namespace dxvk {
 
     ImGui::BeginDisabled(!enableFog());
     ImGui::Indent();
+    RemixGui::Checkbox("Apply Fog to Sky", &fogApplyToSkyObject());
     RemixGui::DragFloat("Fog Color Scale", &fogColorScaleObject(), 0.01f, 0.0f, 10.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     RemixGui::DragFloat("Max Fog Distance", &maxFogDistanceObject(), 1.f, 0.0f, 0.f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
     ImGui::Unindent();
@@ -316,6 +327,7 @@ namespace dxvk {
     ctx->bindResourceView(COMPOSITE_SHARED_FLAGS_INPUT, rtOutput.m_sharedFlags.view, nullptr);
     ctx->bindResourceView(COMPOSITE_SHARED_RADIANCE_RG_INPUT, rtOutput.m_sharedRadianceRG.view, nullptr);
     ctx->bindResourceView(COMPOSITE_SHARED_RADIANCE_B_INPUT, rtOutput.m_sharedRadianceB.view, nullptr);
+    ctx->bindResourceView(COMPOSITE_ATMOSPHERE_FOREGROUND_INPUT, rtOutput.m_atmosphereForeground.view, nullptr);
     
     ctx->bindResourceView(COMPOSITE_PRIMARY_ATTENUATION_INPUT, rtOutput.m_primaryAttenuation.view, nullptr);
     
@@ -390,6 +402,46 @@ namespace dxvk {
       ctx->bindResourceView(COMPOSITE_SKY_LIGHT_TEXTURE, ctx->getResourceManager().getSkyMatte(ctx).view, nullptr);
     }
 
+    // Aerial perspective volume. Null outside Numos / when the feature is off, where the shader also
+    // skips sampling it (aerialPerspectiveLutSize == 0).
+    RtxAtmosphere& atmosphere = ctx->getCommonObjects()->metaAtmosphere();
+    {
+      const Resources::Resource aerialPerspectiveLut = atmosphere.getAerialPerspectiveLut();
+      const Resources::Resource aerialPerspectiveLocalLut = atmosphere.getAerialPerspectiveLocalLut();
+      const bool aerialPerspectiveActive = RtxOptions::skyMode() == SkyMode::Numos
+        && RtxAtmosphere::aerialPerspective()
+        && aerialPerspectiveLut.isValid();
+
+      ctx->bindResourceSampler(COMPOSITE_ATMOSPHERE_AERIAL_PERSPECTIVE_SAMPLER, linearSampler);
+      ctx->bindResourceView(COMPOSITE_ATMOSPHERE_AERIAL_PERSPECTIVE_INPUT,
+        aerialPerspectiveActive ? aerialPerspectiveLut.view : nullptr, nullptr);
+      // Local light volume, gated identically. The shader reaches it only when
+      // aerialPerspectiveLocalLightCount is non-zero, which the atmosphere zeroes whenever this
+      // volume has not been baked.
+      ctx->bindResourceView(COMPOSITE_ATMOSPHERE_AERIAL_PERSPECTIVE_LOCAL_INPUT,
+        aerialPerspectiveActive && aerialPerspectiveLocalLut.isValid()
+          ? aerialPerspectiveLocalLut.view : nullptr, nullptr);
+    }
+
+    // Cloud composite (fork — 2026-09-05, world-space cloud migration Stage 4b). Binds the SAME
+    // m_cloudRenderRT / m_cloudDepthRT resources RtxAtmosphere::dispatchCloudScreenPass wrote for
+    // THIS frame (called from injectRTX right after dispatchPathTracing, before this composite
+    // dispatch runs) at composite's own descriptor slots — see applyCloudComposite in
+    // composite.comp.slang for why the composite lives here now instead of in evalSkyRadiance.
+    // atmosphere.initialize() is not called here: RtxAtmosphere::bindResources (called earlier, for
+    // the G-buffer pass's common ray-tracing bindings) already initialized these resources.
+    {
+      const Resources::Resource& cloudRenderRT = atmosphere.getCloudRenderRT();
+      if (cloudRenderRT.isValid()) {
+        ctx->bindResourceView(COMPOSITE_ATMOSPHERE_CLOUD_RENDER_INPUT, cloudRenderRT.view, nullptr);
+      }
+      const Resources::Resource& cloudDepthRT = atmosphere.getCloudDepthRT();
+      if (cloudDepthRT.isValid()) {
+        ctx->bindResourceView(COMPOSITE_ATMOSPHERE_CLOUD_DEPTH_INPUT, cloudDepthRT.view, nullptr);
+      }
+
+    }
+
     compositeArgs.camera = sceneManager.getCamera().getShaderConstants();
     compositeArgs.frameIdx = frameIdx;
 
@@ -397,6 +449,7 @@ namespace dxvk {
       const float colorScale = fogColorScale();
       auto& fog = settings.fog;
       compositeArgs.fogMode = fog.mode;
+      compositeArgs.fogApplyToSky = fogApplyToSky();
       compositeArgs.fogColor = { fog.color.x * colorScale, fog.color.y * colorScale, fog.color.z * colorScale };
       // Todo: Scene scale stuff ignored for now because scene scale stuff is not actually functioning properly. Add back in if it's ever fixed.
       // compositeArgs.fogEnd = fog.end * RtxOptions::sceneScale();
@@ -427,6 +480,7 @@ namespace dxvk {
     compositeArgs.enableReSTIRGI = RtxOptions::useReSTIRGI();
     compositeArgs.sparseRenderingArgs = rtOutput.m_raytraceArgs.sparseRenderingArgs;
     compositeArgs.volumeArgs = rtOutput.m_raytraceArgs.volumeArgs;
+    compositeArgs.atmosphereArgs = rtOutput.m_raytraceArgs.atmosphereArgs;
     compositeArgs.useRayReconstruction = ctx->useRayReconstruction();
     compositeArgs.enhanceAlbedo = ctx->useRayReconstruction() && rayReconstruction.enableDetailEnhancement();
     compositeArgs.writeRayReconstructionHitDistance = ctx->useRayReconstruction() ? 1u : 0u;
@@ -491,7 +545,6 @@ namespace dxvk {
 
     compositeArgs.domeLightArgs = domeLightArgs;
     compositeArgs.skyBrightness = RtxOptions::skyBrightness();
-
     const bool sparseRenderingEnabled = rtOutput.m_raytraceArgs.sparseRenderingArgs.mode != SparseRenderingMode::Off;
 
     Rc<DxvkBuffer> cb = getCompositeConstantsBuffer();

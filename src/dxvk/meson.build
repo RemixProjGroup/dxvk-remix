@@ -189,6 +189,9 @@ dxvk_src = files([
   'rtx_render/rtx_asset_package.h',
   'rtx_render/rtx_asset_replacer.cpp',
   'rtx_render/rtx_asset_replacer.h',
+  'rtx_render/rtx_atmosphere.cpp',
+  'rtx_render/rtx_atmosphere.h',
+  'rtx_render/rtx_atmosphere_ui.cpp',
   'rtx_render/rtx_auto_exposure.cpp',
   'rtx_render/rtx_auto_exposure.h',
   'rtx_render/rtx_bindless_resource_manager.cpp',
@@ -361,6 +364,7 @@ dxvk_src = files([
   'rtx_render/rtx_types.cpp',
   'rtx_render/rtx_types.h',
   'rtx_render/rtx_utils.h',
+  'rtx_render/rtx_weather.h',
   'rtx_render/rtx_xess.cpp',
   'rtx_render/rtx_xess.h',
 

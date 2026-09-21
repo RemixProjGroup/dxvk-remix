@@ -29,7 +29,11 @@
 //!variant volume_restir_spatial_resampling.comp
 //!>       VOLUME_RESTIR_MODE=SPATIAL_REUSE
 
+// Atmosphere variants
+
+
 //!end-variants
+#define ATMOSPHERE_AVAILABLE
 
 // Note: Required to enable volumetric radiance scale functionality on this pass to ensure any
 // volumetric ReSTIR operations done with respect to light radiance take it into account (e.g.

@@ -1,0 +1,128 @@
+/*
+* Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
+*
+* Permission is hereby granted, free of charge, to any person obtaining a
+* copy of this software and associated documentation files (the "Software"),
+* to deal in the Software without restriction, including without limitation
+* the rights to use, copy, modify, merge, publish, distribute, sublicense,
+* and/or sell copies of the Software, and to permit persons to whom the
+* Software is furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+* DEALINGS IN THE SOFTWARE.
+*/
+#pragma once
+
+// Local light in-scatter for the aerial perspective volume.
+//
+// What this exists for: the volume already carries the atmosphere's own in-scatter, which is the sun
+// and the multiply-scattered sky. That is everything an outdoor daytime column contains and nothing
+// an interior one does - a lamp, a torch, a muzzle flash and a street light all scatter in exactly
+// the same air and none of them reach this volume. Filling that gap is what lets the volume stand in
+// for the global volumetrics froxel grid rather than merely start where it stops.
+//
+// The structure is clustered forward shading, applied to a volume: the bake's own froxel grid IS a
+// cluster grid (screen-aligned XY, exponential depth), so a cull pass writing a per-cluster light
+// list is the standard construction and the march then touches only the handful of lights that can
+// actually reach the air it is walking through. Cost per step is then set by local light DENSITY,
+// not by the scene's light count, which is what keeps a thousand-light level affordable.
+
+#include "rtx/pass/atmosphere/atmosphere_common.slangh"
+#include "rtx/pass/atmosphere/aerial_perspective_light.h"
+
+// Clusters are indexed [slice][tileY][tileX], slice-major, so one screen tile's whole depth column
+// is contiguous - which is the order the bake walks it in.
+uint aerialPerspectiveLightClusterOffset(uint2 tile, uint slice, uint tilesXY) {
+  const uint cluster = (slice * tilesXY + tile.y) * tilesXY + tile.x;
+  return cluster * AERIAL_PERSPECTIVE_LIGHT_CLUSTER_STRIDE;
+}
+
+// Fraction of this light's radiance that leaves it toward `lightToPointDirection`.
+//
+// Mirrors lightShapingCalcRadialFalloff in rtx/concept/light/light_shaping.slangh, minus the rect
+// cone aspect-ratio scaling: that path is gated on cb.enableLegacyRectLightConeShaping, which this
+// pass has no constant buffer for, and it only ever applies to rect lights whose shaping is derived
+// from their own aspect. Spot cones - the case that actually matters for a volume, because a cone is
+// what produces a visible shaft - use ratio 1 and are reproduced exactly.
+float aerialPerspectiveLightShaping(AerialPerspectiveLight light, vec3 lightToPointDirection) {
+  // A zero axis is the unshaped marker; the CPU side writes it for every light with no shaping.
+  if (all(light.coneAxis == vec3(0.0f))) {
+    return 1.0f;
+  }
+
+  const float cosTheta = dot(light.coneAxis, lightToPointDirection);
+  if (cosTheta < light.cosConeAngle) {
+    return 0.0f;
+  }
+
+  const float softened = smoothstep(light.cosConeAngle, light.cosConeAngle + light.coneSoftness, cosTheta);
+  if (light.focusExponent <= 0.0f) {
+    return softened;
+  }
+
+  const float focused = pow(max(cosTheta, 0.0f), light.focusExponent);
+  return lerp(softened, 1.0f, focused * softened);
+}
+
+// In-scattered radiance from one light toward the camera, at a point on the marched ray.
+//
+// `viewDirection` is the marched ray's direction, pointing AWAY from the camera - the same
+// convention the atmospheric term's cosTheta = dot(rayDir, sunDir) uses, so the two share their
+// phase functions unchanged.
+//
+// The emitter is integrated as a sphere rather than sampled: a volume point has no normal, so the
+// whole of an area light's shape reduces to the solid angle it subtends, and for a sphere that has a
+// closed form. Using it instead of a point-light inverse square is what keeps the term finite as the
+// march passes through a light - 2*pi*(1 - sqrt(1 - (r/d)^2)) saturates at a hemisphere on the
+// surface instead of diverging, which matters here because the near slices are metres thick and a
+// lamp sitting inside one is the common case, not the corner case.
+vec3 aerialPerspectiveLightInScatter(
+  AerialPerspectiveLight light,
+  vec3 worldPosition,
+  vec3 viewDirection,
+  AtmosphereMedium medium,
+  float mieAnisotropy
+) {
+  const vec3 toLight = light.position - worldPosition;
+  const float distanceSq = dot(toLight, toLight);
+
+  // Cull radius is enforced again here rather than trusted from the cluster: a cluster is a bounding
+  // volume, so a light that reaches part of it does not reach all of it, and without this the far
+  // corner of the cluster would take the light's contribution at full strength.
+  if (distanceSq > light.influenceRadius * light.influenceRadius) {
+    return vec3(0.0f);
+  }
+
+  const float distance = sqrt(max(distanceSq, 1e-12f));
+  const vec3 directionToLight = toLight / distance;
+
+  const float shaping = aerialPerspectiveLightShaping(light, -directionToLight);
+  if (shaping <= 0.0f) {
+    return vec3(0.0f);
+  }
+
+  // Solid angle of the emitter sphere as seen from this point, saturating at a hemisphere on its
+  // surface and held there inside it.
+  const float radius = max(light.equivalentRadius, 1e-4f);
+  const float sinThetaSq = saturate(radius * radius / max(distanceSq, radius * radius));
+  const float solidAngle = 2.0f * kPi * (1.0f - sqrt(max(0.0f, 1.0f - sinThetaSq)));
+
+  // Phase weighting, per medium component, exactly as the sun term is weighted. The aerosol lobe
+  // uses the volume's capped anisotropy for the same reason the sun's does: a strongly forward
+  // lobe peaks looking straight into the light, which is also where the air is most likely to be
+  // sitting in the shadow of whatever is hiding it.
+  const float cosTheta = dot(viewDirection, directionToLight);
+  const vec3 scattering =
+    medium.rayleighScattering * rayleighPhase(cosTheta)
+    + medium.mieScattering * hgPhase(cosTheta, mieAnisotropy);
+
+  return light.radiance * (solidAngle * shaping) * scattering;
+}

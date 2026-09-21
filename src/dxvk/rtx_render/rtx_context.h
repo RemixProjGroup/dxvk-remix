@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <chrono>
 #include <optional>
+#include <array>
 #include "rtx_options.h"
 
 struct VolumeArgs;
@@ -169,6 +170,9 @@ namespace dxvk {
 #endif
     }
 
+    // Labels must outlive the delayed query readback.
+    void recordGpuStageTiming(const char* label);
+
   protected:
     virtual void updateComputeShaderResources() override;
     virtual void updateRaytracingShaderResources() override;
@@ -200,6 +204,36 @@ namespace dxvk {
 
     void dispatchVolumetrics(const Resources::RaytracingOutput& rtOutput);
     void dispatchIntegrate(const Resources::RaytracingOutput& rtOutput);
+
+    RTX_OPTION("rtx.profile", bool, gpuStages, false, "Log sampled GPU stage timings every 120 rendered frames. Diagnostic timestamps can affect overlap; disable for performance comparisons.");
+    void beginGpuStageTiming();
+    void endGpuStageTiming();
+    struct GpuStageFrame {
+      std::array<Rc<DxvkGpuQuery>, 64> queries;
+      std::array<const char*, 64> labels = {};
+      uint32_t count = 0;
+      uint32_t frameId = 0;
+      int cloudMode = 0;
+      uint32_t cloudSamples = 0;
+      uint32_t cloudSamplesMax = 0;
+      float cloudSampleSpacingKm = 0.0f;
+      uint32_t cloudScreenPeriod = 1u;
+      bool cloudSunCoherentBlocks = false;
+      bool cloudEmptySpaceAdvance = false;
+      // Captured at the CloudScreen timestamp, after every cloud dispatch has resolved its state.
+      uint32_t cloudSunGridPeriod = 1;
+      uint32_t cloudDomePeriod = 1;
+      uint32_t cloudRenderWidth = 0;
+      uint32_t cloudRenderHeight = 0;
+      uint32_t cloudDetailLod = 0;
+      float cloudDetailLodBias = 0.0f;
+      bool pending = false;
+    };
+    std::array<GpuStageFrame, 4> m_gpuStageFrames;
+    uint32_t m_gpuStageSampleCounter = 0;
+    uint32_t m_gpuStageNextSlot = 0;
+    int m_gpuStageSlot = -1;
+
     void dispatchPathTracing(const Resources::RaytracingOutput& rtOutput);
     void dispatchDemodulate(const Resources::RaytracingOutput& rtOutput);
     void dispatchNeeCache(const Resources::RaytracingOutput& rtOutput);
@@ -248,6 +282,7 @@ namespace dxvk {
     VkFormat m_skyRtColorFormat = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
     VkClearValue m_skyClearValue;
     bool m_skyClearDirty = false;
+    SkyMode m_lastSkyMode = SkyMode::SkyboxRasterization;
 
     bool shouldUseDLSS() const;
     bool shouldUseRayReconstruction() const;

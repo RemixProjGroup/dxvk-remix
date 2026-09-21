@@ -35,13 +35,10 @@ vec4 calculateFog(float viewDistance)
     return vec4(0.0);
   }
 
-  // Hack: Lets the current fog system look fine on maps with a skybox, to be removed once we read fog parameters
-  // properly from the game as they will specify how exactly the fog should look (if its even enabled rather than having
-  // it enabled by default).
-  if (viewDistance > cb.maxFogDistance)
-  {
-    return vec4(0.0);
-  }
+  // NV-DXVK start: Retain accumulated fog beyond its integration distance.
+  // Discarding it here leaves an unfogged band on distant geometry and the sky.
+  viewDistance = clamp(viewDistance, 0.0f, max(cb.maxFogDistance, 0.0f));
+  // NV-DXVK end
 
   // https://docs.microsoft.com/en-us/windows/win32/direct3d9/fog-formulas
 
@@ -49,10 +46,6 @@ vec4 calculateFog(float viewDistance)
 
   if (cb.fogMode == D3DFOG_LINEAR)
   {
-    // Note: Clamp the view distance to the range of the fog effect.
-    // Todo: Add in the min fog distance too potentially as this is currently missing.
-    viewDistance = clamp(viewDistance, 0.0f, cb.maxFogDistance);
-
     f = (cb.fogEnd - viewDistance) * cb.fogScale;
   }
   else if (cb.fogMode == D3DFOG_EXP)

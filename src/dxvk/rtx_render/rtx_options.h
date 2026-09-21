@@ -160,6 +160,11 @@ namespace dxvk {
     CameraPositionAndDepthFlags
   };
 
+  enum class SkyMode : int {
+    SkyboxRasterization = 0,
+    Numos = 1
+  };
+
   enum class EnableVsync : int {
     Off = 0,
     On = 1,
@@ -1259,6 +1264,9 @@ namespace dxvk {
                "instead of being rasterized to the sky cubemap. This fixes a class of bugs where auto-detect misclassifies "
                "world geometry as sky (due to shared camera positions), causing that geometry to become invisible. "
                "Only effective when Sky Auto-Detect and Reproject Sky to Main Camera are both enabled.");
+
+    RTX_OPTION("rtx", SkyMode, skyMode, SkyMode::SkyboxRasterization,
+               "Sky rendering mode. SkyboxRasterization uses traditional skybox rasterization, Numos uses Hillaire atmospheric scattering.");
 
     // TODO (REMIX-656): Remove this once we can transition content to new hash
     RTX_OPTION("rtx", bool, logLegacyHashReplacementMatches, false, "");

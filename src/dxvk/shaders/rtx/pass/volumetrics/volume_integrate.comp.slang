@@ -22,7 +22,11 @@
 
 //!variant volume_integrate_rayquery.comp
 
+// Atmosphere variant
+
+
 //!end-variants
+#define ATMOSPHERE_AVAILABLE
 
 // Note: Required to enable volumetric radiance scale functionality on this pass to affect
 // the integration of lighting in volumetrics. Should be enabled on any pass evaluating lights

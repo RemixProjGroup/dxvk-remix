@@ -57,6 +57,10 @@ RWTexture2D<float2> SharedRadianceRG;
 layout(r16f, binding = GBUFFER_BINDING_SHARED_RADIANCE_B_OUTPUT)
 RWTexture2D<float> SharedRadianceB;
 
+// RGB excludes the sky; W is the nearest contributing transparent depth in kilometres.
+layout(rgba16f, binding = GBUFFER_BINDING_ATMOSPHERE_FOREGROUND_OUTPUT)
+RWTexture2D<float4> AtmosphereForeground;
+
 layout(r16f, binding = GBUFFER_BINDING_SHARED_INTEGRATION_SURFACE_PDF_OUTPUT)
 RWTexture2D<float> SharedIntegrationSurfacePdf;
 

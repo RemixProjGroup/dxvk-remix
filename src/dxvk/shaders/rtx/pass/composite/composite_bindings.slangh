@@ -38,6 +38,8 @@ layout(binding = COMPOSITE_SHARED_RADIANCE_RG_INPUT)
 Texture2D<float2> SharedRadianceRG;
 layout(binding = COMPOSITE_SHARED_RADIANCE_B_INPUT)
 Texture2D<float> SharedRadianceB;
+layout(binding = COMPOSITE_ATMOSPHERE_FOREGROUND_INPUT)
+Texture2D<float4> AtmosphereForeground;
 
 layout(binding = COMPOSITE_PRIMARY_ATTENUATION_INPUT)
 RWTexture2D<uint> PrimaryAttenuation;
@@ -94,6 +96,29 @@ Sampler3D<float4> ValueNoiseSampler;
 
 layout(binding = COMPOSITE_SKY_LIGHT_TEXTURE)
 Sampler2D<float3> SkyLight;
+
+layout(binding = COMPOSITE_ATMOSPHERE_AERIAL_PERSPECTIVE_INPUT)
+Texture3D<float4> AtmosphereAerialPerspectiveLut;
+
+layout(binding = COMPOSITE_ATMOSPHERE_AERIAL_PERSPECTIVE_SAMPLER)
+SamplerState AtmosphereAerialPerspectiveSampler;
+
+// Cloud composite (fork — 2026-09-05, world-space cloud migration Stage 4b). See
+// applyCloudComposite in composite.comp.slang. CompositeCloudRender / CompositeCloudDepth are the
+// SAME m_cloudRenderRT / m_cloudDepthRT resources RtxAtmosphere writes each frame in
+// dispatchCloudScreenPass (called from injectRTX right after dispatchPathTracing) — bound at new
+// slots here because composite has its own descriptor set. Both use exact per-pixel loads.
+layout(binding = COMPOSITE_ATMOSPHERE_CLOUD_RENDER_INPUT)
+Texture2D<float4> CompositeCloudRender;
+layout(binding = COMPOSITE_ATMOSPHERE_CLOUD_DEPTH_INPUT)
+Texture2D<float4> CompositeCloudDepth;
+
+// Scene-light in-scatter through the same volume, in its own texture. Split from the atmospheric
+// term above because the two are applied to different pixels: the sky already contains the
+// atmospheric column, so that one is a primary-hit term only, while nothing in the sky contains a
+// lamp and this one is applied everywhere.
+layout(binding = COMPOSITE_ATMOSPHERE_AERIAL_PERSPECTIVE_LOCAL_INPUT)
+Texture3D<float4> AtmosphereAerialPerspectiveLocalLut;
 
 layout(binding = COMPOSITE_ACTIVE_PIXEL_MASK_INPUT)
 Texture2D<uint> SparseRenderingActivePixelMask;

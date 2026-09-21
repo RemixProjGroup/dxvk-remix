@@ -290,6 +290,95 @@
 #define DEBUG_VIEW_SPARSE_RENDERING_ACTIVE_PIXELS_OUTPUT_SCALE 905
 #define DEBUG_VIEW_SPARSE_RENDERING_ACTIVE_THREADS 910
 
+// Fork: atmosphere / cloud diagnostics
+#define DEBUG_VIEW_CLOUD_SKY_TRANSMITTANCE_LUT 870
+#define DEBUG_VIEW_CLOUD_D_SUN              873
+#define DEBUG_VIEW_CLOUD_D_AMBIENT          874
+// Production-call-shape diagnostic for sampleCloudGroundShadow_OptionB.
+// Paints the helper's output at each G-buffer pixel using the EXACT
+// per-pixel call shape (worldPos, sunDir, args, isZUp) that the upcoming
+// NEE wiring will use. CRITICAL GATE: spatially compare against
+// DEBUG_VIEW_CLOUD_D_SUN (873). If they disagree on cumulus position,
+// isZUp handling is mismatched between debug and production paths.
+#define DEBUG_VIEW_CLOUD_GROUND_SHADOW_PRODSHAPE 875
+// Nubis Cubed 2023 cloud render RT (fork — 2026-05-12, C4). Visualizes the
+// screen-space cloud RT produced by cloud_render.comp.slang. RGB = per-pixel
+// cloud radiance (premultiplied) accumulated through the Nubis Cubed lighting
+// equations. Alpha (view-ray transmittance) is ignored by this debug case.
+#define DEBUG_VIEW_CLOUD_RENDER_RT 876
+// Raw D_sun optical-depth diagnostic at the production NEE call shape
+// (fork — 2026-05-17). Sibling of 875: same per-pixel inputs (G-buffer
+// worldPos + atmosphereArgs.sunDirection + cb.isZUp), but stops at the
+// dSunTex.SampleLevel call — NO exp(), NO mix(cloudShadowStrength). Three
+// signals encoded in RGB so one screenshot discriminates all hypotheses:
+//   R = saturate(OD * 0.2)  — matches 873's vis scale (direct A/B vs bake)
+//   G = saturate(OD)        — raw magnitude (distinguishes amplified-tiny
+//                              from actually-visible-sized)
+//   B = uvw.x from cloudVoxelWorldToUVW — consumer's lookup position
+//                              (uniform B across screen = scene-scale bug)
+// Sentinels: magenta = surface above slab top; blue = sun below horizon
+// or otherwise unreachable. Black would be ambiguous, so we paint instead.
+#define DEBUG_VIEW_CLOUD_GROUND_SHADOW_RAW_OD 877
+// Enum 878 (DEBUG_VIEW_CLOUD_SHADOW_FACTOR_RAW) RETIRED 2026-06-19 with the
+// screen-space cloud-shadow system (it visualized the removed
+// PrimaryCloudShadowFactor texture). The cloud shadow now folds onto the sun
+// radiance in the NEE; use 875/877 (D_sun grid reads) for diagnostics. The
+// number is left burned (not reused) so saved configs referencing 878 fall
+// through to the default view rather than aliasing a new one.
+// Cloud NVDF SDF slice (fork — Nubis3 conversion Phase A). Horizontal slice
+// of the 256x64x256 body signed-distance field at a fixed height fraction:
+// warm gradient inside (negative km), cool gradient outside (positive km),
+// green band at the zero crossing. Primary validation surface for the JFA
+// bake — cloud bodies should read as smooth blobby cells, the green
+// iso-line should trace their outlines, and panning the tile must show no
+// seam at the wrap boundary.
+#define DEBUG_VIEW_CLOUD_NVDF_SDF 879
+
+// Cloud segment classification (fork — world-space cloud migration, Stage 0,
+// 2026-09-05). Per-pixel colour classification of how the PRIMARY ray's
+// cloud slab span relates to the resolved G-buffer surface (blue = ray
+// never meets the slab, red = slab entirely beyond the surface, green =
+// slab/visible-segment overlap, yellow = camera inside the slab, magenta =
+// surface inside the slab). See the full legend and the expected
+// red-almost-everywhere first-run reading in its registration comment in
+// rtx_debug_view.cpp — that reading is the diagnostic working correctly
+// (today's slab is camera-anchored and unreachable by world geometry), not
+// a bug to chase.
+#define DEBUG_VIEW_CLOUD_SEGMENT_CLASSIFICATION 880
+
+// Cloud depth companion (fork — world-space cloud migration Stage 4b, 2026-09-05). Visualizes
+// AtmosphereCloudDepth (r = entry distance km, g = transmittance-weighted mean cloud depth km),
+// point-sampled exactly as composite.comp.slang's applyCloudComposite reads it — never bilinear (see
+// that function's sampleCloudDepthKm). RGB = mean depth on the Turbo colormap over 0-20 km (black =
+// sentinel / no cloud along this ray, blue -> green -> yellow -> red as mean depth approaches 20 km).
+// Alpha = entry distance, RAW km (not normalized — read it with the debug view's per-channel /
+// statistics tools, same convention as the raw-magnitude channel in enum 877).
+#define DEBUG_VIEW_CLOUD_DEPTH 881
+// Cloud transmittance on geometry (fork — world-space cloud migration Stage 4b, 2026-09-05).
+// Greyscale cloud alpha (1 - AtmosphereCloudRender.a, the same opacity convention
+// applyCloudComposite composites with) at pixels that resolved an opaque hit; sky-miss pixels are
+// painted black (mirrors DEBUG_VIEW_CLOUD_CALIBRATION_RINGS' isSkyMiss test — cb.nrd.missLinearViewZ
+// against PrimaryLinearViewZ, current-frame sources only). White = fully opaque cloud between camera
+// and surface, black = surface not fogged (either no cloud in front of it, or a genuine miss).
+#define DEBUG_VIEW_CLOUD_TRANSMITTANCE_ON_GEOMETRY 882
+// Retired cloud reprojection diagnostic; old configs selecting 883 receive black.
+#define DEBUG_VIEW_CLOUD_REPROJECTION 883
+// Cloud density-evaluation count per ray (fork -- 2026-09-17, native-scale optimisation). The march
+// is dominated by density evaluation -- lighting measured ~17% of it -- so the question that chooses
+// every optimisation is where those evaluations go. This is that map.
+#define DEBUG_VIEW_CLOUD_SAMPLE_COUNT 912
+
+// Cloud calibration rings (fork — world-space cloud migration, Stage 0,
+// 2026-09-05). Iso-distance rings painted on resolved geometry at 0.5 / 1 /
+// 2 / 5 km from the camera (viewDistance * kmPerWorldUnit, kmPerWorldUnit =
+// 1 / args.worldUnitsPerKm — no new CB field). Lets the user compare ring
+// placement against known in-game map distances to back out the game's
+// true world-units-per-km, since the current value is derived from
+// rtx.sceneScale (commit dd515e082: "not a reliable measurement of the
+// world space"). See the full legend in its registration comment in
+// rtx_debug_view.cpp.
+#define DEBUG_VIEW_CLOUD_CALIBRATION_RINGS 884
+
 enum class CompositeDebugView : uint32_t {
   Disabled = 0,
   FinalRenderWithMaterialProperties,

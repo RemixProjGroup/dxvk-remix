@@ -33,6 +33,9 @@
 #include "dxvk_pipemanager.h"
 #include "dxvk_renderpass.h"
 #include "dxvk_unbound.h"
+// NV-DXVK start: Numos atmosphere
+#include "rtx_render/rtx_atmosphere.h"
+// NV-DXVK end
 #include "rtx_render/rtx_global_volumetrics.h"
 #include "rtx_render/rtx_pathtracer_gbuffer.h"
 #include "rtx_render/rtx_pathtracer_integrate_direct.h"
@@ -140,6 +143,12 @@ namespace dxvk {
     DxvkMetaPackObjects& metaPack() {
       return m_metaPack.get(m_device);
     }
+
+    // NV-DXVK start: Numos atmosphere
+    RtxAtmosphere& metaAtmosphere() {
+      return m_atmosphere.get();
+    }
+    // NV-DXVK end
 
     RtxGlobalVolumetrics& metaGlobalVolumetrics() {
       return m_globalVolumetrics.get();
@@ -380,6 +389,9 @@ namespace dxvk {
     Rc<GameCapturer>   m_capturer;
 
     // RTX Shaders
+    // NV-DXVK start: Numos atmosphere
+    Active<RtxAtmosphere>                   m_atmosphere;
+    // NV-DXVK end
     Active<RtxGlobalVolumetrics>            m_globalVolumetrics;
     Active<SparseRendering>                 m_sparseRendering;
     Active<DxvkPathtracerGbuffer>           m_pathtracerGbuffer;

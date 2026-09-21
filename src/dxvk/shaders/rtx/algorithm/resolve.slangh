@@ -801,9 +801,11 @@ void resolveVertexUnorderedParticles<
   float pathSelectionProbability,
   inout vec3 radianceAttenuation, inout vec3 emissiveRadiance,
   out uint numInteractions,
-  out int surfaceIndex)
+  out int surfaceIndex,
+  out float nearestContributorDistance)
 {
   surfaceIndex = -1;
+  nearestContributorDistance = floatMax;
 
   const bool separateUnorderedApproximations = packedFlagGet(resolveMode, resolveModeSeparateUnorderedApproximations);
 
@@ -1032,6 +1034,10 @@ void resolveVertexUnorderedParticles<
 
     currentRadianceAttenuation = mix(1.0f, currentRadianceAttenuation, blendFactor);
     currentEmissiveRadiance = mix(vec3(0.0f), currentEmissiveRadiance, blendFactor);
+
+    if (currentRadianceAttenuation < 1.0f || any(currentEmissiveRadiance > 0.0f)) {
+      nearestContributorDistance = min(nearestContributorDistance, accumulatedHitDistance + rayInteraction.hitDistance);
+    }
 
     if (any(currentEmissiveRadiance > 0.0f))
     {

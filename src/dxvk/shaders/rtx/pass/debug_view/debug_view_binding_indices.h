@@ -44,6 +44,43 @@
 #define DEBUG_VIEW_BINDING_INSTRUMENTATION_INPUT                                           15
 #define DEBUG_VIEW_BINDING_TERRAIN_INPUT                                                   17
 
+// Slot 34 is upstream's DEBUG_VIEW_BINDING_SHARED_TERMINATOR_FIX_INPUT. The fork
+// cloud-debug bindings below were moved out of 34-37 to 39-42 on the 2026-06-21
+// upstream sync to avoid colliding with it; they live above the reserved slot 38
+// as a contiguous fork-owned block.
+
+// Fork: per-frame cloud-occluded sky-ambient transmittance LUT (32x16 R16F)
+#define DEBUG_VIEW_BINDING_CLOUD_SKY_TRANSMITTANCE_LUT_INPUT                                39
+
+// Fork: Nubis Cubed cloud voxel grids (D_sun = sun-direction optical depth,
+// D_ambient = zenith optical depth). Sampled by DEBUG_VIEW_CLOUD_D_SUN /
+// DEBUG_VIEW_CLOUD_D_AMBIENT debug views.
+#define DEBUG_VIEW_BINDING_CLOUD_D_SUN_INPUT                                                40
+#define DEBUG_VIEW_BINDING_CLOUD_D_AMBIENT_INPUT                                            41
+
+// Fork: Nubis Cubed screen-space cloud render RT (2026-05-12, C4). Sampled
+// by DEBUG_VIEW_CLOUD_RENDER_RT (enum 876).
+#define DEBUG_VIEW_BINDING_CLOUD_RENDER_RT_INPUT                                            42
+
+// Fork: cloud NVDF body SDF (Nubis3 conversion Phase A; R16F 3D, signed km,
+// texture y = VERTICAL — see cloud_nvdf.h). Sampled by
+// DEBUG_VIEW_CLOUD_NVDF_SDF (enum 879). Extends the contiguous fork-owned
+// cloud-debug block to 39-43.
+#define DEBUG_VIEW_BINDING_CLOUD_NVDF_SDF_INPUT                                             43
+
+// Fork: cloud depth companion (world-space cloud migration Stage 4b, 2026-09-05; RG32F, r = entry
+// distance km, g = transmittance-weighted mean cloud depth km). Sampled (point/Load only, never
+// bilinear) by DEBUG_VIEW_CLOUD_DEPTH (881) and DEBUG_VIEW_CLOUD_REPROJECTION (883). Extends the
+// contiguous fork-owned cloud-debug block to 39-45.
+#define DEBUG_VIEW_BINDING_CLOUD_DEPTH_RT_INPUT                                             44
+
+// Slots 45 and 46 are retired cloud-history inputs.
+
+// Slot 38 was DEBUG_VIEW_BINDING_PRIMARY_CLOUD_SHADOW_FACTOR_INPUT (fork
+// screen-space cloud-shadow texture, debug view 878). Removed 2026-06-19 with
+// the screen-space cloud-shadow system; number left reserved (no descriptor
+// bound).
+
 #define DEBUG_VIEW_BINDING_VOLUME_RESERVOIRS_INPUT                                         19
 #define DEBUG_VIEW_BINDING_VOLUME_AGE_INPUT                                                20
 #define DEBUG_VIEW_BINDING_VOLUME_RADIANCE_Y_INPUT                                         21

@@ -37,6 +37,7 @@
 #include "rtx/pass/volume_args.h"
 #include "rtx/pass/material_args.h"
 #include "rtx/pass/view_distance_args.h"
+#include "rtx/pass/atmosphere/atmosphere_args.h"
 #include "rtx/concept/light/light_types.h"
 #include "rtx/concept/surface/surface_shared.h"
 #include "rtx/algorithm/nee_cache_data.h"
@@ -166,6 +167,7 @@ struct RaytraceArgs {
   SssArgs sssArgs;
   EyeArgs eyeArgs;
   ShadowTerminatorArgs shadowTerminatorArgs;
+  AtmosphereArgs atmosphereArgs;
 
   Camera renderTargetCamera;
 
@@ -380,6 +382,7 @@ struct RaytraceArgs {
   uint enableHeuristicSingleScatteringTransmission;
 
   float skyBrightness;
+  uint skyMode;  // 0 = skybox rasterization, 1 = physical atmosphere
 
   uint isLastCompositeOutputValid;
   uint isZUp; // Note: Indicates if the Z axis is the "up" axis in world space if true, otherwise the Y axis if false.

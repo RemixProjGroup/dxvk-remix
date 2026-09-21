@@ -25,8 +25,8 @@
 	url = https://github.com/KhronosGroup/Vulkan-Headers
 [submodule "submodules/rtxdi"]
 	path = submodules/rtxdi
-	url = https://github.com/NVIDIA-RTX/RTXDI.git
-	branch = remix
+	url = https://github.com/RemixProjGroup/RTXDI
+	branch = remix-plus-20260919
 [submodule "submodules/rtxcr"]
 	path = submodules/rtxcr
 	url = https://github.com/NVIDIA-RTX/RTXCR-Material-Library.git

@@ -88,8 +88,12 @@ namespace dxvk {
     Resources::Resource m_accumulatedFinalOutput;
 
     RTX_OPTION("rtx", bool, enableFog, true, "");
+    RTX_OPTION("rtx", bool, fogApplyToSky, true,
+      "Apply depth-based fog to sky pixels. Disable when the game fog obscures a separately authored sky. Geometry fog is unaffected.");
     RTX_OPTION("rtx", float, fogColorScale, 0.25f, "");
-    RTX_OPTION("rtx", float, maxFogDistance, 65504.f, "");
+    RTX_OPTION("rtx", float, maxFogDistance, 65504.f,
+      "Distance in world units over which depth-based fog accumulates. "
+      "Distant geometry and the sky retain the fog reached at this distance.");
 
     RTX_OPTION("rtx", bool, compositePrimaryDirectDiffuse, true, "Enables direct lightning's diffuse signal for primary surfaces in the final composite.");
     RTX_OPTION("rtx", bool, compositePrimaryDirectSpecular, true, "Enables direct lightning's specular signal for primary surfaces in the final composite.");

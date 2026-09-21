@@ -29,6 +29,10 @@
 #include "rtx/utility/froxel.slangh"
 #include "rtx/utility/gbuffer_helpers.slangh"
 #include "rtx/utility/debug_view_helpers.slangh"
+#include "rtx/pass/atmosphere/atmosphere_common.slangh"
+#ifdef ATMOSPHERE_AVAILABLE
+#include "rtx/pass/atmosphere/atmosphere_sky.slangh"
+#endif
 #include "rtx/concept/camera/camera.slangh"
 #include "rtx/concept/ray/ray.slangh"
 #include "rtx/concept/surface/surface.slangh"
@@ -1755,6 +1759,7 @@ void geometryResolverVertex(
   uint4 decalMemory = 0;
   vec3 decalEmissiveRadiance = vec3(0.0f);
   int surfaceIndex = -1;
+  float nearestContributorDistance;
   resolveVertexUnorderedParticles<
     GBUFFER_RAY_FLAGS>(
     resolveMode, unorderedResolveRay,
@@ -1763,7 +1768,7 @@ void geometryResolverVertex(
     geometryResolverState.pixelCoordinate,
     geometryResolverState.accumulatedRotation, geometryResolverState.accumulatedHitDistance, 1.0f,
     radianceAttenuation, emissiveRadiance,
-    numUnorderedInteractions, surfaceIndex);
+    numUnorderedInteractions, surfaceIndex, nearestContributorDistance);
 
   if (GBUFFER_FEATURE_DEBUG_VIEW && cb.debugView == DEBUG_VIEW_PRIMARY_DECAL_ALBEDO)
   {
@@ -1862,6 +1867,20 @@ void geometryResolverVertex(
 
   // Note: Emissive radiance handled first so objects with opacity do not attenuate themselves.
   geometryResolverState.radiance += emissiveRadiance * geometryResolverState.attenuation;
+  if (cb.skyMode == 1) {
+    vec4 foreground = AtmosphereForeground[geometryResolverState.pixelCoordinate];
+    foreground.rgb = geometryResolverState.radiance;
+    if (nearestContributorDistance < floatMax) {
+      const float depthKm = max(nearestContributorDistance / max(cb.atmosphereArgs.worldUnitsPerKm, 1e-6f), 1e-5f);
+      foreground.w = foreground.w > 0.0f ? min(foreground.w, depthKm) : depthKm;
+    }
+    if (rayInteractionHasHit(rayInteraction) &&
+        (any(emissiveRadiance > 0.0f) || any(radianceAttenuation < 1.0f))) {
+      const float depthKm = max(geometryResolverState.accumulatedHitDistance / max(cb.atmosphereArgs.worldUnitsPerKm, 1e-6f), 1e-5f);
+      foreground.w = foreground.w > 0.0f ? min(foreground.w, depthKm) : depthKm;
+    }
+    AtmosphereForeground[geometryResolverState.pixelCoordinate] = foreground;
+  }
   geometryResolverState.attenuation *= radianceAttenuation;
 
   // Record alpha blend surface when stochastic alpha blend is enabled
@@ -1896,6 +1915,51 @@ void geometryResolverVertex(
   // Output a miss
   if (!rayInteractionHasHit(rayInteraction))
   {
+    // Fork: sky-radiance accumulation on miss. Three paths:
+    //   1. dome-light texture if dome light is active
+    //   2. Hillaire atmosphere (ATMOSPHERE_AVAILABLE-gated) if skyMode == 1
+    //   3. legacy skybox rasterization otherwise (matte or probe, see below)
+    vec3 skyRadiance;
+    if (cb.domeLightArgs.active)
+    {
+      skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
+    }
+#ifdef ATMOSPHERE_AVAILABLE
+    else if (cb.skyMode == 1)
+    {
+      // Primary view ray. Cloudless here (fork — 2026-09-05, world-space cloud migration Stage 4b):
+      // this call used to also pass a motion vector and history resolution so evalSkyRadiance could
+      // read the cloud RT and blend a screen-space temporal history right here, INSIDE
+      // dispatchPathTracing. That composite has moved to composite.comp.slang, which runs after
+      // RtxAtmosphere::dispatchCloudScreenPass has written THIS frame's cloud RT — this call site
+      // runs before that pass even starts, so it could only ever see last frame's march.
+      // isPrimaryRay=true still matters: it keeps this call from falling through to the secondary
+      // dome LUT (wrong ray direction for that LUT's key), so skyRadiance here is the cloudless
+      // sky/atmosphere/stars/moons, with clouds added later.
+      skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+                                     geometryResolverState.pixelCoordinate, cb.frameIdx,
+                                     cb.isZUp != 0,
+                                     /*isPrimaryRay=*/ true);
+    }
+#endif
+    else if (!geometryResolverState.directionAltered)
+    {
+      // Camera ray (never teleported): sample the screen-space sky matte — the
+      // game's own sky raster for this exact pixel. Pixel-exact, unlike the
+      // SkyProbe cubemap whose parameterization has a visible gradient
+      // discontinuity (seam) along cube-face edges.
+      const vec2 screenUV = cameraPixelCoordinateToScreenUV(cb.camera, ivec2(geometryResolverState.pixelCoordinate));
+      skyRadiance = cb.skyBrightness * SkyMatte.SampleLevel(screenUV, 0);
+    }
+    else
+    {
+      // Ray crossed a ray portal — its direction no longer corresponds to the
+      // rasterized view, so only the direction-based probe is valid here.
+      skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
+    }
+
+    geometryResolverState.radiance += skyRadiance * vec3(geometryResolverState.attenuation);
+
     updateNrcOnGBufferMiss(geometryResolverState.pixelCoordinate);
 
     // Note: Always write to primary surface for initial misses,
@@ -1909,6 +1973,21 @@ void geometryResolverVertex(
     {
       PrimaryScreenSpaceMotionVectorDLSSRR[geometryResolverState.pixelCoordinate] = calcMotionVectorForRayMiss(geometryResolverState.pixelCoordinate);
       PrimaryDepthDLSSRR[geometryResolverState.pixelCoordinate] = cb.clearColorDepth;
+      // The normal guide was the one RR input a miss never defined (fork -- 2026-09-17). Every
+      // other buffer in this block, and the sibling roughness zeroed in geometryResolverOutputMiss
+      // under the comment "RR requires zeroed out input guide buffers for misses", is written on
+      // the miss path; PrimaryWorldShadingNormalDLSSRR is written only by the three SURFACE paths
+      // (the material serialize above, the PSR transmission replacement, the material-memory
+      // restore). It is a dedicated unaliased image when RR is on and nothing clears it per frame,
+      // so every sky pixel was handing RR whatever normal last occupied that texel -- a stale
+      // geometry normal that persists until something moves under it, and changes as the camera
+      // sweeps geometry across the sky line. RR is a normal-guided denoiser; a guide that is
+      // garbage at exactly the pixels the clouds live in is not a signal it can filter coherently.
+      //
+      // clearColorNormal, not zero, to match writeMissToGBuffer's own missNormal for the NRD-facing
+      // normal buffer (gbuffer_helpers.slangh) -- a valid unit vector rather than a degenerate one,
+      // and above all the same value every frame, which is the property that was missing.
+      PrimaryWorldShadingNormalDLSSRR[geometryResolverState.pixelCoordinate] = vec4(cb.clearColorNormal, 0.0f);
     }
 
     return;
@@ -2484,15 +2563,25 @@ void geometryPSRResolverVertex(
   }
   else
   {
+    vec3 skyRadiance = vec3(0);
     if (cb.domeLightArgs.active)
     {
-       emissiveRadiance += cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform) * radianceAttenuation;
+      skyRadiance = cb.domeLightArgs.radiance * sampleDomeLightTexture(LinearWrapSampler, ray.direction, cb.domeLightArgs.textureIndex, cb.domeLightArgs.worldToLightTransform);
     }
+#ifdef ATMOSPHERE_AVAILABLE
+    else if (cb.skyMode == 1)
+    {
+      skyRadiance = evalSkyRadiance(ray.direction, cb.atmosphereArgs,
+                                    geometryPSRResolverState.pixelCoordinate, cb.frameIdx,
+                                    cb.isZUp != 0);
+    }
+#endif
     else
     {
-      // Output radiance from sky probe
-       emissiveRadiance += cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0) * radianceAttenuation;
+      skyRadiance = cb.skyBrightness * SkyProbe.SampleLevel(ray.direction, 0);
     }
+    skyRadiance *= calcVolumetricAttenuation(cb.volumeArgs, none, true, 0.0f, ray.origin, ray.direction);
+    emissiveRadiance += skyRadiance * radianceAttenuation;
   }
 
   // Note: Emissive radiance handled first so objects with opacity do not attenuate themselves.
@@ -2867,6 +2956,7 @@ void geometryPSRResolver(inout GeometryPSRResolverState psrResolverState) {
 }
 
 void geometryResolver(ivec2 pixelCoordinate) {
+  AtmosphereForeground[pixelCoordinate] = vec4(0.0f);
   // Initialize Geometry Resolver State
 
   // Note: Acts partially as live state due to some values being carried across both the
