@@ -1729,6 +1729,9 @@ namespace dxvk {
     if (RemixGui::CollapsingHeader("Developer Options", collapsingHeaderFlags)) {
       ImGui::Indent();
       RemixGui::Checkbox("Enable Preserve Path", &RtxOptions::enablePreservePathObject());
+      // NV-DXVK start: Optional UV animation cache optimization
+      RemixGui::Checkbox("Optimize Animated Texture Coordinates", &SceneManager::optimizeAnimatedTexcoordsObject());
+      // NV-DXVK end
       RemixGui::Checkbox("Enable Instance Debugging", &RtxOptions::enableInstanceDebuggingToolsObject());
       RemixGui::Checkbox("Disable Draw Calls Post RTX Injection", &RtxOptions::skipDrawCallsPostRTXInjectionObject());
       RemixGui::Checkbox("Break into Debugger On Press of Key 'B'", &RtxOptions::enableBreakIntoDebuggerOnPressingBObject());

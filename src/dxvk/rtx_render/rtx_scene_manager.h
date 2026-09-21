@@ -134,6 +134,11 @@ namespace fork_hooks {
 // directly for "SceneObject"'s - which are "unique meshes/geometry", which map 1-to-1 with
 // BLAS entries in raytracing terminology.
 class SceneManager : public CommonDeviceObject, public ResourceCache {
+  friend class ImGUI;
+  RTX_OPTION("rtx.geometry", bool, optimizeAnimatedTexcoords, false,
+    "Refresh UV-only animation without a BLAS refit for compatible fixed-function geometry. "
+    "Shader capture, skinning, smooth normals, and active opacity micromaps retain the refit path. "
+    "Disable to use the conservative animation refresh path.");
   // Fork touchpoint: the external-draw object-picking hook needs access to
   // private m_drawCallMeta. Tracked as an inline tweak in
   // docs/fork-touchpoints.md.

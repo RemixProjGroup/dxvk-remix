@@ -124,8 +124,25 @@ namespace dxvk {
     }
   }
 
-  Future<GeometryHashes> D3D9Rtx::computeHash(const RasterGeometry& geoData, const uint32_t maxIndexValue) {
+  Future<GeometryHashes> D3D9Rtx::computeHash(const RasterGeometry& geoData, const uint32_t maxIndexValue, const XXH64_hash_t memoizationKey) {
     ScopedCpuProfileZone();
+
+    if (memoizationKey != 0) {
+      std::lock_guard<dxvk::mutex> lock(m_geometryHashCacheMutex);
+      auto it = m_geometryHashCache.find(memoizationKey);
+      if (it != m_geometryHashCache.end()) {
+        ++m_geometryHashCacheHits;
+
+        // Future is single-consumption - get() clears its task pointer - so a stored Future cannot
+        // be handed out twice. Schedule a task that simply returns the memoized value instead: the
+        // dispatch is kept, but the buffer acquisition and the content hashing are both skipped.
+        const GeometryHashes cachedHashes = it->second;
+        return m_pGeometryWorkers->Schedule([cachedHashes]() -> GeometryHashes {
+          return cachedHashes;
+        });
+      }
+      ++m_geometryHashCacheMisses;
+    }
 
     const uint32_t indexCount = geoData.indexCount;
     const uint32_t vertexCount = geoData.vertexCount;
@@ -183,7 +200,7 @@ namespace dxvk {
       vertexLayoutHash = hashVertexLayout(geoData);
     }
 
-    return m_pGeometryWorkers->Schedule([vertexRegions, indexBufferRef = indexBufferRef.ptr(),
+    return m_pGeometryWorkers->Schedule([this, memoizationKey, vertexRegions, indexBufferRef = indexBufferRef.ptr(),
                                  pIndexData, indexStride, indexDataSize, indexCount,
                                  maxIndexValue, vertexShaderHash, geometryDescriptorHash,
                                  vertexLayoutHash]() -> GeometryHashes {
@@ -212,6 +229,17 @@ namespace dxvk {
       assert(hashes[HashComponents::VertexPosition] != kEmptyHash);
 
       hashes.precombine();
+
+      if (memoizationKey != 0) {
+        std::lock_guard<dxvk::mutex> lock(m_geometryHashCacheMutex);
+        // Bounded so a scene that streams unique geometry indefinitely cannot grow this without
+        // limit. Clearing wholesale is acceptable because a miss only costs the hash we were
+        // computing anyway.
+        if (m_geometryHashCache.size() >= kMaxGeometryHashCacheEntries) {
+          m_geometryHashCache.clear();
+        }
+        m_geometryHashCache[memoizationKey] = hashes;
+      }
 
       return hashes;
     });

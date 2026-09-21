@@ -412,12 +412,15 @@ namespace dxvk {
       ~BufferCacheGuard() { sceneManager.updateBufferCache(pBlas); }
     } bufferCacheGuard { *this, pBlas };
 
+    const bool texcoordsChanged = !isNew &&
+      input.hashes[HashComponents::VertexTexcoord] != inOutGeometry.hashes[HashComponents::VertexTexcoord];
+
     // Determine the optimal object state for this geometry
     if (!isNew) {
       // This is a geometry we've seen before, that requires updating
       //  'inOutGeometry' has valid historical data
       if (input.hashes[HashComponents::Indices] == inOutGeometry.hashes[HashComponents::Indices]) {
-        // Check if the vertex positions have changed, requiring a BVH refit
+        // Position changes require a BVH refit; UV-only changes may reuse the BVH.
         if (input.hashes[HashComponents::VertexPosition] == inOutGeometry.hashes[HashComponents::VertexPosition]
          && input.hashes[HashComponents::VertexShader] == inOutGeometry.hashes[HashComponents::VertexShader]
          && drawCallState.getSkinningState().boneHash == inOutGeometry.lastBoneHash) {
@@ -475,6 +478,33 @@ namespace dxvk {
     const size_t vertexStride = (input.isVertexDataInterleaved() && input.areFormatsGpuFriendly() && !forceNormals)
       ? input.positionBuffer.stride()
       : RtxGeometryUtils::computeOptimalVertexStride(input, forceNormals);
+
+    if (result == ObjectCacheState::kUpdateInstance && texcoordsChanged) {
+      const auto sameLayout = [](const RasterBuffer& source, const RaytraceBuffer& cached) {
+        return source.defined() == cached.defined() && (!source.defined() ||
+          (source.offsetFromSlice() == cached.offsetFromSlice() &&
+           source.stride() == cached.stride() && source.vertexFormat() == cached.vertexFormat()));
+      };
+      // In-place copies must preserve BLAS position addresses and any post-processed vertex data.
+      const bool canRefreshInPlace = optimizeAnimatedTexcoords() &&
+        !drawCallState.usesVertexShader && drawCallState.getSkinningState().numBones == 0 &&
+        input.numBonesPerVertex == 0 && !needsSmoothNormals &&
+        (!m_opacityMicromapManager || !m_opacityMicromapManager->isActive()) &&
+        input.isVertexDataInterleaved() && input.areFormatsGpuFriendly() &&
+        input.vertexCount == output.vertexCount &&
+        output.historyBuffer[0]->info().size == align(vertexStride * input.vertexCount, CACHE_LINE_SIZE) &&
+        sameLayout(input.positionBuffer, output.positionBuffer) &&
+        sameLayout(input.normalBuffer, output.normalBuffer) &&
+        sameLayout(input.texcoordBuffer, output.texcoordBuffer) &&
+        sameLayout(input.color0Buffer, output.color0Buffer);
+
+      if (canRefreshInPlace) {
+        RtxGeometryUtils::cacheVertexDataOnGPU(ctx, input, output);
+        m_instanceManager.notifySceneChanged();
+      } else {
+        result = ObjectCacheState::kUpdateBVH;
+      }
+    }
 
     switch (result) {
       case ObjectCacheState::KBuildBVH: {

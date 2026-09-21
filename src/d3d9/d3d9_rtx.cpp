@@ -581,6 +581,84 @@ namespace dxvk {
     return checkBoundTextureCategory(RtxOptions::uiTextures());
   }
 
+  XXH64_hash_t D3D9Rtx::buildGeometryHashMemoizationKey(const RasterGeometry& geoData,
+                                                        const VertexContext vertexContext[caps::MaxStreams],
+                                                        const IndexContext& indexContext,
+                                                        const uint32_t startIndex,
+                                                        const int vertexIndexOffset,
+                                                        const uint32_t maxIndexValue) const {
+    if (!enableGeometryHashMemoization()) {
+      return 0;
+    }
+
+    // Shader-capture draws are excluded outright. Their vertex positions are produced on the GPU
+    // and their hash folds in vertex shader constants, neither of which passes through the CPU
+    // write-lock that drives remixContentVersion - so a stale entry could not be detected.
+    if (m_parent->UseProgrammableVS()) {
+      return 0;
+    }
+
+    // Inline index data (DrawPrimitiveUP and friends) has no buffer object to version against.
+    const bool isIndexed = indexContext.indexType != VK_INDEX_TYPE_NONE_KHR;
+    if (isIndexed && indexContext.ibo == nullptr) {
+      return 0;
+    }
+
+    XXH64_hash_t key = kEmptyHash;
+
+    // The hash generation rule selects which components are computed at all, so a runtime change to
+    // it must produce a different key.
+    const uint32_t hashRule = RtxOptions::geometryHashGenerationRule().raw();
+    key = XXH3_64bits_withSeed(&hashRule, sizeof(hashRule), key);
+
+    for (uint32_t i = 0; i < caps::MaxStreams; i++) {
+      const VertexContext& stream = vertexContext[i];
+
+      // Every stream participates in the key, including inactive ones: a stream appearing or
+      // disappearing between draws changes which bytes get hashed.
+      struct {
+        const void* vbo;
+        uint64_t contentVersion;
+        uint32_t offset;
+        uint32_t stride;
+        uint32_t canUseBuffer;
+      } streamKey = { stream.pVBO, stream.pVBO ? stream.pVBO->remixContentVersion : 0ull,
+                      stream.offset, stream.stride, stream.canUseBuffer ? 1u : 0u };
+
+      // A stream backed by inline data rather than a buffer object cannot be versioned.
+      if (stream.pVBO == nullptr && stream.stride != 0) {
+        return 0;
+      }
+
+      key = XXH3_64bits_withSeed(&streamKey, sizeof(streamKey), key);
+    }
+
+    struct {
+      const void* ibo;
+      uint64_t iboContentVersion;
+      uint32_t indexType;
+      uint32_t startIndex;
+      uint32_t indexCount;
+      uint32_t vertexCount;
+      uint32_t maxIndexValue;
+      int32_t vertexIndexOffset;
+      uint32_t topology;
+    } drawKey = { indexContext.ibo,
+                  indexContext.ibo ? indexContext.ibo->remixContentVersion : 0ull,
+                  (uint32_t) indexContext.indexType,
+                  startIndex,
+                  geoData.indexCount,
+                  geoData.vertexCount,
+                  maxIndexValue,
+                  vertexIndexOffset,
+                  (uint32_t) geoData.topology };
+
+    key = XXH3_64bits_withSeed(&drawKey, sizeof(drawKey), key);
+
+    // 0 is the sentinel for "not eligible", so never hand it back as a real key.
+    return key == 0 ? 1 : key;
+  }
+
   PrepareDrawFlags D3D9Rtx::internalPrepareDraw(const IndexContext& indexContext, const VertexContext vertexContext[caps::MaxStreams], const DrawContext& drawContext) {
     ScopedCpuProfileZone();
 
@@ -703,7 +781,15 @@ namespace dxvk {
 
     // Copy all the vertices into a staging buffer.  Assign fields of the geoData structure.
     processVertices(vertexContext, vertexIndexOffset, geoData);
-    geoData.futureGeometryHashes = computeHash(geoData, maxOffsetedIndex);
+
+    // Identify every input this draw call's geometry hash is derived from, so an unchanged draw can
+    // reuse the previous result instead of re-hashing identical bytes. Returns 0 when the draw is
+    // not eligible, which forces the original full re-hash.
+    const XXH64_hash_t geometryHashMemoizationKey =
+      buildGeometryHashMemoizationKey(geoData, vertexContext, indexContext, drawContext.StartIndex,
+                                      vertexIndexOffset, maxOffsetedIndex);
+
+    geoData.futureGeometryHashes = computeHash(geoData, maxOffsetedIndex, geometryHashMemoizationKey);
     geoData.futureBoundingBox = computeAxisAlignedBoundingBox(geoData);
     
     // Process skinning data

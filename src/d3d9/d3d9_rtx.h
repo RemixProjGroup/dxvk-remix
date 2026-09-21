@@ -8,6 +8,9 @@
 #include <memory>
 #include <vector>
 #include <optional>
+#include <unordered_map>
+
+#include "../util/thread.h"
 
 namespace dxvk {
   struct D3D9BufferSlice;
@@ -45,6 +48,7 @@ namespace dxvk {
     RTX_OPTION("rtx", bool, useVertexCapturedTexcoords, false, "When enabled, vertex shader output texcoords always override input texcoords from the vertex declaration. Enable for games where the vertex shader applies meaningful UV transformations that should be used for ray tracing (e.g. animated UVs via shader constants).");
     RTX_OPTION("rtx", bool, useWorldMatricesForShaders, true, "When enabled, Remix will utilize the world matrices being passed from the game via D3D9 fixed function API, even when running with shaders.  Sometimes games pass these matrices and they are useful, however for some games they are very unreliable, and should be filtered out.  If you're seeing precision related issues with shader vertex capture, try disabling this setting.");
     RTX_OPTION("rtx", bool, enableIndexBufferMemoization, true, "CPU performance optimization, should generally be enabled.  Will reduce main thread time by caching processIndexBuffer operations and reusing when possible, this will come at the expense of some CPU RAM.");
+    RTX_OPTION("rtx", bool, enableGeometryHashMemoization, false, "CPU performance optimization.  Caches the full vertex/index content hash for a draw call and reuses it while none of the source buffers have been written, instead of re-hashing identical geometry every frame.  Defaults to off: the geometry hash drives all asset replacement matching, so a missed invalidation would mismatch replacements rather than merely cost performance.  Only applies to fixed-function draw calls; shader-capture draws always re-hash.");
     RTX_OPTION("rtx", uint32_t, numGeometryProcessingThreads, 2, "The desired number of CPU threads to dedicate to geometry processing  Will be limited by the number of CPU cores.  There may be some advantage to lowering this number in games which are fairly simple and use a low number of draw calls per frame.  The default was determined by looking at a game with around 2000 draw calls per frame, and with a reasonably high average triangle count per draw.");
 
     // Copy of the parameters issued to D3D9 on DrawXXX
@@ -226,6 +230,14 @@ namespace dxvk {
 
     fast_unordered_cache<Rc<DxvkSampler>> m_samplerCache;
 
+    // Memoized geometry hashes, keyed by buildGeometryHashMemoizationKey(). Written from the
+    // geometry worker threads once a hash completes and read from the main thread, hence the mutex.
+    static constexpr size_t kMaxGeometryHashCacheEntries = 16384;
+    std::unordered_map<XXH64_hash_t, GeometryHashes> m_geometryHashCache;
+    mutable dxvk::mutex m_geometryHashCacheMutex;
+    uint32_t m_geometryHashCacheHits = 0;
+    uint32_t m_geometryHashCacheMisses = 0;
+
     // NOTE: to avoid calculating matrix inverse,
     //       m_seenCameraPositions doesn't contain the actual positions,
     //       but only relative values, see USE_TRUE_CAMERA_POSITION_FOR_COMPARISON
@@ -287,7 +299,18 @@ namespace dxvk {
 
     Future<AxisAlignedBoundingBox> computeAxisAlignedBoundingBox(const RasterGeometry& geoData);
 
-    Future<GeometryHashes> computeHash(const RasterGeometry& geoData, const uint32_t maxIndexValue);
+    // `memoizationKey` identifies the complete set of inputs this hash is derived from. Pass 0 to
+    // force a full re-hash (the behaviour before memoization existed).
+    Future<GeometryHashes> computeHash(const RasterGeometry& geoData, const uint32_t maxIndexValue, const XXH64_hash_t memoizationKey);
+
+    // Builds the memoization key for the current draw call, or returns 0 when this draw is not
+    // eligible for memoization.
+    XXH64_hash_t buildGeometryHashMemoizationKey(const RasterGeometry& geoData,
+                                                 const VertexContext vertexContext[caps::MaxStreams],
+                                                 const IndexContext& indexContext,
+                                                 const uint32_t startIndex,
+                                                 const int vertexIndexOffset,
+                                                 const uint32_t maxIndexValue) const;
 
     void submitActiveDrawCallState();
   };

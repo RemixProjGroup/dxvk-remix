@@ -216,6 +216,12 @@ namespace dxvk {
     };
     using RemixIboMemoizer = MemoryRegionMemoizer<RemixIndexBufferMemoizationData>;
     RemixIboMemoizer remixMemoization;
+
+    // Bumped wherever remixMemoization is invalidated, i.e. on every CPU write-lock of this
+    // buffer. Callers that want to know "has this buffer's content changed since I last looked"
+    // without re-reading it can compare this counter. It intentionally shares the invalidation
+    // hooks of the memoizer above so the two can never disagree about what is stale.
+    uint64_t remixContentVersion = 0;
     // NV-DXVK end
 
   private:
