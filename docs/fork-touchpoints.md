@@ -4118,6 +4118,67 @@ first migrated extension effect and is disabled by default.
 - **`docs/PostProcessingStack.md`** - records the stack topology, ordering
   invariants, and the deferred external-tonemapper ABI decision.
 
+---
+
+## Workstream - HDR depth-of-field post-processing (fork - 2026-08-14)
+
+Depth of Field is a reorderable HDR member of the fork-owned post-processing
+stack. It runs after Bloom and Motion Blur, before tonemapping, and uses a
+single output-resolution gather pass over the render-resolution linear view-Z
+buffer. Blur disc size follows the thin-lens model popularized by CinematicDOF
+([Lee2008]): focal length and aperture f-number are artistic lens parameters,
+so the circle of confusion grows continuously from the focus plane with no
+focus-band edges. The effect is disabled by default and exposes user-layer
+options for manual focus distance, lens parameters, blur radius, and sample
+quality.
+
+- **`src/dxvk/shaders/rtx/pass/post_fx/post_fx.h`** and
+  **`src/dxvk/shaders/rtx/pass/post_fx/post_fx_depth_of_field.comp.slang`** -
+  add the DoF binding/push-constant contract and the native gather-based CoC
+  shader, including far-field miss handling and near-field bleed.
+- **`src/dxvk/rtx_render/rtx_postFx.cpp` / `.h`** - add the managed DoF shader,
+  user options/settings, output-resolution dispatch, linear view-Z sampling,
+  GPU profile label, and intermediate-texture ping-pong copy.
+- **`src/dxvk/rtx_render/rtx_context.cpp` / `.h`** - add the stack dispatch
+  adapter, camera/sampler/frame state, and denoiser miss-linear-view-Z
+  sentinel plumbing.
+- **`src/dxvk/rtx_render/rtx_fork_post_processing.cpp` / `.h`** - register the
+  stable `depth_of_field` effect ID, default HDR ordering, row toggle/settings
+  panel, and dispatch switch entry.
+- **`src/dxvk/imgui/rtx_user_menu.cpp`** - add the quick-menu DoF enable toggle.
+- **`docs/PostProcessingStack.md`** - document the new HDR lane topology,
+  persisted order, and optional-member enumeration.
+- **`RtxOptions.md`** - regenerate the options golden file for the new
+  `rtx.dof.*` user settings.
+
+---
+
+## Workstream - DoF auto-focus (fork - 2026-08-14)
+
+Depth of Field can optionally track a robust focus measurement from the
+path-traced linear view-Z buffer. A small disk of taps around the focus point
+is reduced to a median depth, passed through an optical-power dead zone and
+asymmetric reciprocal-distance smoothing (faster toward near subjects, slower
+toward far), and held steady while the sampled region is pure sky. A one-texel
+GPU state image carries the smoothed distance, resets on camera cuts, and
+drives the shared lens-based circle-of-confusion curve in the existing gather
+pass; manual focus remains unchanged when Auto Focus is disabled.
+
+- **`src/dxvk/shaders/rtx/pass/post_fx/post_fx.h`**,
+  **`src/dxvk/shaders/rtx/pass/post_fx/post_fx_dof_auto_focus.comp.slang`**,
+  and **`src/dxvk/shaders/rtx/pass/post_fx/post_fx_depth_of_field.comp.slang`** -
+  add the auto-focus binding contract, disk-sampled median view-Z measurement,
+  dead-zone and sky-hold hysteresis, reciprocal-distance temporal smoothing,
+  and an optional state-backed focus distance in the gather shader.
+- **`src/dxvk/rtx_render/rtx_postFx.cpp` / `.h`** - add auto-focus options
+  and UI controls, persistent state allocation, GPU dispatch, and the DoF
+  state binding.
+- **`src/dxvk/rtx_render/rtx_context.cpp`** - pass frame delta time and camera
+  history invalidation to the DoF adapter.
+- **`src/dxvk/imgui/rtx_user_menu.cpp`** - add the quick-menu Auto Focus toggle.
+- **`docs/PostProcessingStack.md`** and **`RtxOptions.md`** - document the
+  self-driven focus path and regenerated options.
+
 ### Rebase deltas applied when the stack landed on this branch
 
 - **DLSS-NR stays outside the stack.** `RtxContext::dispatchDlssNR` still runs in
@@ -4135,3 +4196,89 @@ first migrated extension effect and is disabled by default.
 - **`User Brightness` / `User Brightness EV Range`** moved out of the old
   `dxvk_imgui.cpp` Tonemapping header and into the stack's Tonemapping panel; they
   have no other UI surface.
+
+---
+
+## Workstream - Depth of field rework: half-resolution gather (fork - 2026-09-21)
+
+The first depth-of-field implementation cost roughly 20 ms at 2560x1600. It ran
+two unconditional `sampleCount` loops per output pixel, each tap costing a
+filtered `R32_SFLOAT` depth fetch plus a filtered `RGBA16F` colour fetch,
+scattered over a 23.7 px disc with a per-pixel random rotation - so a warp's
+single tap instruction turned into ~32 separate L1 wavefronts, and a perfectly
+in-focus pixel paid the full cost.
+
+Two dispatches become four. **Prepare** halves the resolution with a plain 2x2
+average (energy preserving, deliberately no firefly weighting - this is
+pre-tonemap linear HDR, which is where bokeh highlights come from) and bakes the
+signed normalized circle of confusion into alpha, while reducing a per-tile
+`(max |CoC| radius, max near radius)` in groupshared memory. **Gather** runs at
+half resolution: a tile whose radii are both below one full-resolution pixel
+exits after one fetch, and the rest spend a radius-adaptive golden-angle spiral
+(`~0.8 * r^2` taps, so a 3 px blur costs 8 taps rather than the ceiling) reading
+only the colour+CoC image - signed CoC is monotonic in view depth, so a tap's
+depth ordering is recovered without any depth fetch at all. It emits a defocused
+base layer and a premultiplied near-field layer. **Resolve** recomputes the CoC
+at full resolution, so an in-focus pixel keeps its original texels, and
+composites the two layers with a single `over`. Auto focus is untouched.
+
+Quality changes, beyond the cost: the near field is now a bounded coverage
+estimate (`sum(saturate(R_source - d)) / tapCount`) instead of the unbounded
+`1/area` scatter estimator, whose 0-or-1.4 alpha at 16 taps was the hard
+foreground splat; the centre tap is weighted like any other tap instead of being
+seeded at weight 1, which removes the ~9% sharp ghost sitting on every blurred
+pixel; depth is point sampled, which removes the wrong-CoC ring on every
+silhouette; the full-resolution Kawase blur in the resolve is gone; and
+interleaved gradient noise replaces the `frac(sin(dot()))` hash so the residual
+sampling error averages out under the upsample instead of shimmering.
+
+- **`src/dxvk/shaders/rtx/pass/post_fx/post_fx.h`** - three DoF binding blocks
+  (prepare / gather / resolve), the shared tile and clamp constants, a rewritten
+  `PostFxDepthOfFieldArgs`, padding on `PostFxDofAutoFocusArgs`, and
+  `static_assert`s that every push-constant struct in the header is a whole
+  number of 16 B rows. `POST_FX_DOF_MIN_EFFECTIVE_SAMPLES` is the floor the C++
+  side raises `rtx.dof.sampleCount` to.
+- **`src/dxvk/shaders/rtx/pass/post_fx/post_fx_dof_common.slangh`** - new. The
+  CoC curve, bokeh profile, disc coverage, tap-count heuristic, dither and the
+  point depth fetch, shared by the three passes. The depth and focus-state
+  helpers are behind `POST_FX_DOF_USE_LINEAR_VIEW_Z` /
+  `POST_FX_DOF_USE_FOCUS_STATE`, the way `noise.slangh` guards BlueNoise.
+- **`src/dxvk/shaders/rtx/pass/post_fx/post_fx_dof_prepare.comp.slang`** - new.
+  Half-resolution downsample, CoC bake, groupshared per-tile radius reduction.
+- **`src/dxvk/shaders/rtx/pass/post_fx/post_fx_depth_of_field.comp.slang`** -
+  rewritten as the half-resolution gather.
+- **`src/dxvk/shaders/rtx/pass/post_fx/post_fx_dof_resolve.comp.slang`** -
+  rewritten as the full-resolution composite, with a per-pixel early out.
+- **`src/dxvk/shaders/rtx/pass/post_fx/post_fx_dof_auto_focus.comp.slang`** -
+  deliberately unchanged.
+- **`src/dxvk/rtx_render/rtx_postFx.cpp` / `.h`** - the prepare shader class,
+  rebound parameters on the other two, the four-dispatch `dispatchDof` with its
+  `PostFx DoF Prepare` / `Gather` / `Resolve` profile zones, the lazily created
+  half-resolution working set (three `RGBA16F` half-res images plus a tile
+  image, ~25 MB at 1600p) rebuilt on extent change and released by
+  `releaseDofResources()` when the effect is switched off and from the
+  destructor, and the `rtx.dof.sampleCount` / `maxBlurRadius` clamps.
+- **`RtxOptions.md`** - regenerate for the reworked `rtx.dof.*` descriptions and
+  the `sampleCount` default change.
+
+### Decisions worth knowing
+
+- **`rtx.dof.sampleCount` default 16 -> 96, and the unit changed.** It counts
+  half-resolution taps now and is a ceiling on a radius-adaptive count rather
+  than a fixed per-pixel cost. Because both games this ships to persist
+  `rtx.conf`, honouring a saved `16` literally would silently mean speckled
+  bokeh, so `dispatchDof` also clamps low values up to
+  `POST_FX_DOF_MIN_EFFECTIVE_SAMPLES` (32). A tap integrates about 4 px^2, so N
+  taps fill a disc of radius `sqrt(N / 0.8)` half-resolution pixels without
+  holes: 32 covers a 12.6 full-resolution pixel disc, and costs nothing on
+  smaller radii because the adaptive count is below the ceiling there anyway.
+  `sampleCount = 0` still disables the effect, since `isDofEnabled()` tests it
+  before the clamp is reached. The slider's lower bound is the same 32, so the
+  UI cannot show a number the runtime would silently raise.
+- **`maxBlurRadius` is clamped to 128 output pixels** after the resolution
+  scale, because the gather's tile dilation window is bounded; above that the
+  blur would stop growing while the tiles stopped being conservative. The
+  slider's upper bound moved from 256 to 128 to match.
+- **The resolve writes `m_postFxIntermediateTexture` and copies back**, as
+  `dispatchLensEffects` does, because it now reads `m_finalOutput` as well as
+  writing it and a single `AliasedResource` cannot be both.

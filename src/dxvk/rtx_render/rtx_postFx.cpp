@@ -28,6 +28,10 @@
 #include "rtx/pass/ntsc/ntsc_vhs.h"
 
 #include <rtx_shaders/post_fx.h>
+#include <rtx_shaders/post_fx_dof_auto_focus.h>
+#include <rtx_shaders/post_fx_dof_prepare.h>
+#include <rtx_shaders/post_fx_depth_of_field.h>
+#include <rtx_shaders/post_fx_dof_resolve.h>
 #include <rtx_shaders/ntsc_vhs.h>
 #include <rtx_shaders/post_fx_highlight.h>
 #include <rtx_shaders/post_fx_motion_blur.h>
@@ -90,6 +94,79 @@ namespace dxvk {
 
     PREWARM_SHADER_PIPELINE(PostFxMotionBlurShader);
 
+    class PostFxDofAutoFocusShader : public ManagedShader
+    {
+      SHADER_SOURCE(PostFxDofAutoFocusShader, VK_SHADER_STAGE_COMPUTE_BIT, post_fx_dof_auto_focus)
+
+      PUSH_CONSTANTS(PostFxDofAutoFocusArgs)
+
+      BEGIN_PARAMETER()
+        TEXTURE2D(POST_FX_DOF_AF_PRIMARY_LINEAR_VIEW_Z_INPUT)
+        RW_TEXTURE1D(POST_FX_DOF_AF_FOCUS_STATE_INPUT_OUTPUT)
+      END_PARAMETER()
+    };
+
+    PREWARM_SHADER_PIPELINE(PostFxDofAutoFocusShader);
+
+    // Depth of field runs as four dispatches: auto focus (1x1x1, optional),
+    // prepare (half res colour + circle of confusion + per tile radii), gather
+    // (half res bokeh into a near and a base layer) and resolve (full res
+    // composite).
+    class PostFxDofPrepareShader : public ManagedShader
+    {
+      SHADER_SOURCE(PostFxDofPrepareShader, VK_SHADER_STAGE_COMPUTE_BIT, post_fx_dof_prepare)
+
+      PUSH_CONSTANTS(PostFxDepthOfFieldArgs)
+
+      BEGIN_PARAMETER()
+        TEXTURE2D(POST_FX_DOF_PREPARE_INPUT)
+        TEXTURE2D(POST_FX_DOF_PREPARE_PRIMARY_LINEAR_VIEW_Z_INPUT)
+        RW_TEXTURE2D(POST_FX_DOF_PREPARE_COLOR_COC_OUTPUT)
+        RW_TEXTURE2D(POST_FX_DOF_PREPARE_TILE_OUTPUT)
+        RW_TEXTURE1D_READONLY(POST_FX_DOF_PREPARE_FOCUS_STATE_INPUT)
+        TEXTURE2D(POST_FX_DOF_PREPARE_PRIMARY_SURFACE_FLAGS_INPUT)
+      END_PARAMETER()
+    };
+
+    PREWARM_SHADER_PIPELINE(PostFxDofPrepareShader);
+
+    class PostFxDepthOfFieldShader : public ManagedShader
+    {
+      SHADER_SOURCE(PostFxDepthOfFieldShader, VK_SHADER_STAGE_COMPUTE_BIT, post_fx_depth_of_field)
+
+      PUSH_CONSTANTS(PostFxDepthOfFieldArgs)
+
+      BEGIN_PARAMETER()
+        TEXTURE2D(POST_FX_DOF_COLOR_COC_INPUT)
+        TEXTURE2D(POST_FX_DOF_TILE_INPUT)
+        RW_TEXTURE2D(POST_FX_DOF_NEAR_OUTPUT)
+        RW_TEXTURE2D(POST_FX_DOF_FAR_OUTPUT)
+        SAMPLER(POST_FX_DOF_LINEAR_SAMPLER)
+      END_PARAMETER()
+    };
+
+    PREWARM_SHADER_PIPELINE(PostFxDepthOfFieldShader);
+
+    class PostFxDofResolveShader : public ManagedShader
+    {
+      SHADER_SOURCE(PostFxDofResolveShader, VK_SHADER_STAGE_COMPUTE_BIT, post_fx_dof_resolve)
+
+      PUSH_CONSTANTS(PostFxDepthOfFieldArgs)
+
+      BEGIN_PARAMETER()
+        TEXTURE2D(POST_FX_DOF_RESOLVE_INPUT)
+        TEXTURE2D(POST_FX_DOF_RESOLVE_PRIMARY_LINEAR_VIEW_Z_INPUT)
+        TEXTURE2D(POST_FX_DOF_RESOLVE_NEAR_INPUT)
+        TEXTURE2D(POST_FX_DOF_RESOLVE_FAR_INPUT)
+        RW_TEXTURE2D(POST_FX_DOF_RESOLVE_OUTPUT)
+        SAMPLER(POST_FX_DOF_RESOLVE_LINEAR_SAMPLER)
+        RW_TEXTURE1D_READONLY(POST_FX_DOF_RESOLVE_FOCUS_STATE_INPUT)
+        TEXTURE2D(POST_FX_DOF_RESOLVE_PRIMARY_SURFACE_FLAGS_INPUT)
+      END_PARAMETER()
+    };
+
+    PREWARM_SHADER_PIPELINE(PostFxDofResolveShader);
+
     class PostFxMotionBlurPrefilterShader : public ManagedShader
     {
       SHADER_SOURCE(PostFxMotionBlurPrefilterShader, VK_SHADER_STAGE_COMPUTE_BIT, post_fx_motion_blur_prefilter)
@@ -128,6 +205,7 @@ namespace dxvk {
 
   DxvkPostFx::~DxvkPostFx()
   {
+    releaseDofResources();
   }
 
   void DxvkPostFx::showNtscImguiSettings() {
@@ -158,6 +236,77 @@ namespace dxvk {
     RemixGui::DragFloat("Motion Blur Minimum Velocity Threshold (unit: pixel)", &motionBlurMinimumVelocityThresholdInPixelObject(), 0.01f, 0.01f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
     RemixGui::DragFloat("Motion Blur Dynamic Deduction", &motionBlurDynamicDeductionObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     RemixGui::DragFloat("Motion Blur Jitter Strength", &motionBlurJitterStrengthObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+  }
+
+  void DxvkPostFx::showDofImguiSettings() {
+    if (!isDofEnabled()) {
+      return;
+    }
+
+    // The shipped defaults are a 100 mm f/2.8 portrait lens that racks focus
+    // over roughly two seconds. That is the right starting point for taking a
+    // picture and the wrong one for playing: the f^2/N term alone is 3571
+    // against 219 for a 35 mm f/5.6, so the defaults put about sixteen times
+    // more blur on the same shot. Neither set is more correct than the other,
+    // so both are one click away rather than one being baked in.
+    if (ImGui::Button("Cinematic Preset")) {
+      focalLengthObject().setDeferred(100.0f);
+      fNumberObject().setDeferred(2.8f);
+      autoFocusTauObject().setDeferred(0.25f);
+      autoFocusFarTauScaleObject().setDeferred(3.0f);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("100 mm f/2.8, slow rack focus. Shallow and deliberate; built for photography.");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Gameplay Preset")) {
+      focalLengthObject().setDeferred(35.0f);
+      fNumberObject().setDeferred(5.6f);
+      autoFocusEnableObject().setDeferred(true);
+      autoFocusTauObject().setDeferred(0.08f);
+      autoFocusFarTauScaleObject().setDeferred(1.0f);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("35 mm f/5.6, auto focus on and quick to settle. Subtle enough to play with.");
+    }
+
+    ImGui::Separator();
+
+    RemixGui::Checkbox("Auto Focus", &autoFocusEnableObject());
+    if (autoFocusEnable()) {
+      ImGui::Indent();
+      RemixGui::DragFloat("Auto Focus Tau (s)", &autoFocusTauObject(), 0.01f, 0.01f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Auto Focus Far Tau Scale", &autoFocusFarTauScaleObject(), 0.1f, 1.0f, 10.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Auto Focus Dead Zone", &autoFocusDeadZoneObject(), 0.005f, 0.0f, 0.5f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Auto Focus Region Radius", &autoFocusRegionRadiusObject(), 0.001f, 0.0f, 0.25f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Auto Focus Point X", &autoFocusPointXObject(), 0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Auto Focus Point Y", &autoFocusPointYObject(), 0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Auto Focus Offset (world units)", &autoFocusOffsetObject(), 0.1f, -10000.0f, 10000.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+      ImGui::Unindent();
+    } else {
+      RemixGui::DragFloat("Focus Distance (world units)", &focusDistanceObject(), 0.1f, 0.0f, 10000.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    }
+
+    RemixGui::DragFloat("Focal Length (mm)", &focalLengthObject(), 1.0f, 10.0f, 300.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("Aperture (f-number)", &fNumberObject(), 0.1f, 1.0f, 22.0f, "f/%.1f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::Checkbox("Keep View Model Sharp", &excludeViewModelObject());
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("The weapon and hands sit centimetres from the lens, so a real lens buries them. Uncheck to frame a shot with the weapon defocused in the foreground.");
+    }
+
+    // The gather clamps the blur radius to POST_FX_DOF_MAX_GATHER_RADIUS_HALF * 2
+    // full resolution pixels, which is what keeps its tile dilation sound, so the
+    // slider stops where the effect does rather than above it.
+    RemixGui::DragFloat("Maximum Blur Radius (pixels at 1080p)", &maxBlurRadiusObject(), 0.5f, 0.0f, POST_FX_DOF_MAX_GATHER_RADIUS_HALF * 2.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("Bokeh Rim Emphasis", &bokehMinIntensityObject(), 0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("Bokeh Reconstruction Strength", &bokehFilterStrengthObject(), 0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    // Only does anything while an upscaler is running: at native resolution the
+    // edge-aware path collapses to the same single depth texel the point sample
+    // reads. Exposed mainly so the two can be compared side by side.
+    RemixGui::Checkbox("Edge Aware Depth Upsample", &edgeAwareUpsampleObject());
+    // Lower bound is the same floor dispatchDof clamps to, so the slider cannot
+    // show a number the runtime will silently raise.
+    RemixGui::DragInt("Depth of Field Sample Count", &sampleCountObject(), 1.0f, POST_FX_DOF_MIN_EFFECTIVE_SAMPLES, POST_FX_DOF_MAX_SAMPLES, "%d", ImGuiSliderFlags_AlwaysClamp);
   }
 
   void DxvkPostFx::showLensEffectsImguiSettings() {
@@ -415,6 +564,258 @@ namespace dxvk {
       { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
       { 0, 0, 0 },
       inputSize);
+  }
+
+  void DxvkPostFx::dispatchDof(
+    Rc<RtxContext> ctx,
+    Rc<DxvkSampler> linearSampler,
+    const uvec2& mainCameraResolution,
+    const uint32_t frameIdx,
+    const float missLinearViewZ,
+    const Resources::RaytracingOutput& rtOutput,
+    const float frameTimeMilliseconds,
+    const bool cameraCutDetected)
+  {
+    if (!enable()) {
+      return;
+    }
+    if (!isDofEnabled()) {
+      // Keep the state reset armed so enabling DoF/Auto Focus cannot consume
+      // stale state from a previous scene or an unwritten first frame.
+      m_dofFocusStateReset = true;
+      // ~25 MB of half resolution working set at 1600p; there is no reason to
+      // hold it while the effect is switched off.
+      releaseDofResources();
+      return;
+    }
+
+    if (!m_dofFocusState.isValid()) {
+      DxvkImageCreateInfo desc;
+      desc.type = VK_IMAGE_TYPE_1D;
+      desc.flags = 0;
+      desc.sampleCount = VK_SAMPLE_COUNT_1_BIT;
+      desc.numLayers = 1;
+      desc.mipLevels = 1;
+      desc.stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+      desc.access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+      desc.tiling = VK_IMAGE_TILING_OPTIMAL;
+      desc.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+      desc.extent = VkExtent3D { 1, 1, 1 };
+
+      DxvkImageViewCreateInfo viewInfo;
+      viewInfo.type = VK_IMAGE_VIEW_TYPE_1D;
+      viewInfo.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+      viewInfo.minLevel = 0;
+      viewInfo.numLevels = 1;
+      viewInfo.minLayer = 0;
+      viewInfo.numLayers = 1;
+      viewInfo.format = desc.format = VK_FORMAT_R32_SFLOAT;
+      viewInfo.usage = desc.usage = VK_IMAGE_USAGE_STORAGE_BIT;
+
+      m_dofFocusState.image = ctx->getDevice()->createImage(
+        desc,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        DxvkMemoryStats::Category::RTXRenderTarget,
+        "dof auto focus state");
+      m_dofFocusState.view = ctx->getDevice()->createImageView(m_dofFocusState.image, viewInfo);
+      ctx->changeImageLayout(m_dofFocusState.image, VK_IMAGE_LAYOUT_GENERAL);
+      m_dofFocusStateReset = true;
+    }
+
+    ScopedGpuProfileZone(ctx, "PostFx Depth of Field");
+    ctx->setFramePassStage(RtxFramePassStage::PostFX);
+
+    const Resources::Resource& inOutColorTexture = rtOutput.m_finalOutput.resource(Resources::AccessType::ReadWrite);
+    const VkExtent3D& inputSize = inOutColorTexture.image->info().extent;
+    const VkExtent3D& linearViewZSize = rtOutput.m_primaryLinearViewZ.image->info().extent;
+
+    const VkExtent3D halfExtent = {
+      std::max(util::ceilDivide(inputSize.width, 2u), 1u),
+      std::max(util::ceilDivide(inputSize.height, 2u), 1u),
+      1u
+    };
+
+    if (!m_dofHalfColorCoC.isValid()
+        || m_dofHalfExtent.width != halfExtent.width
+        || m_dofHalfExtent.height != halfExtent.height) {
+      const VkExtent3D tileExtent = {
+        std::max(util::ceilDivide(halfExtent.width, (uint32_t) POST_FX_DOF_TILE_SIZE), 1u),
+        std::max(util::ceilDivide(halfExtent.height, (uint32_t) POST_FX_DOF_TILE_SIZE), 1u),
+        1u
+      };
+
+      // DxvkPostFx is not an RtxPass and so has no createTargetResource resize
+      // hook: the working set is created on demand and rebuilt when the output
+      // extent changes, the same way m_dofFocusState above is. Assigning over the
+      // old Resource drops the last reference the pass holds; the command list
+      // keeps the images alive until the frame that used them retires.
+      releaseDofResources();
+      Rc<DxvkContext> baseCtx = ctx;
+      m_dofHalfColorCoC = Resources::createImageResource(baseCtx, "dof half color coc", halfExtent, VK_FORMAT_R16G16B16A16_SFLOAT);
+      m_dofHalfNear     = Resources::createImageResource(baseCtx, "dof half near",      halfExtent, VK_FORMAT_R16G16B16A16_SFLOAT);
+      m_dofHalfFar      = Resources::createImageResource(baseCtx, "dof half far",       halfExtent, VK_FORMAT_R16G16B16A16_SFLOAT);
+      m_dofTile         = Resources::createImageResource(baseCtx, "dof tile",           tileExtent, VK_FORMAT_R16G16B16A16_SFLOAT);
+      m_dofHalfExtent = halfExtent;
+    }
+
+    // Blur radius that a normalized circle of confusion of 1 maps to, in full
+    // resolution pixels. The gather's tile classification can only dilate over
+    // POST_FX_DOF_MAX_TILE_REACH tiles, so the radius has to be clamped to what
+    // that window covers; the shader applies the identical clamp and the two must
+    // not drift apart.
+    const float resolutionScale = (float) inputSize.height / 1080.0f;
+    const float maxGatherRadius = std::min(
+      std::max(maxBlurRadius(), 0.0f) * resolutionScale,
+      POST_FX_DOF_MAX_GATHER_RADIUS_HALF * 2.0f);
+    const float maxGatherRadiusHalf = maxGatherRadius * 0.5f;
+
+    // ceil(maxGatherRadiusHalf / POST_FX_DOF_TILE_SIZE), clamped. Written as a
+    // loop so it needs no <cmath> and is obviously bounded.
+    uint32_t tileReach = 0;
+    while (tileReach < (uint32_t) POST_FX_DOF_MAX_TILE_REACH
+           && (float) (tileReach * POST_FX_DOF_TILE_SIZE) < maxGatherRadiusHalf) {
+      ++tileReach;
+    }
+
+    PostFxDepthOfFieldArgs args = {};
+    args.imageSize = { (uint) inputSize.width, (uint) inputSize.height };
+    args.invImageSize = { 1.0f / (float) inputSize.width, 1.0f / (float) inputSize.height };
+    args.halfImageSize = { (uint) halfExtent.width, (uint) halfExtent.height };
+    args.invHalfImageSize = { 1.0f / (float) halfExtent.width, 1.0f / (float) halfExtent.height };
+    args.linearViewZSize = { (uint) linearViewZSize.width, (uint) linearViewZSize.height };
+    // Full resolution pixel index -> render resolution linear view Z texel.
+    args.inputOverOutputViewSize = float2((float) mainCameraResolution.x * args.invImageSize.x,
+                                         (float) mainCameraResolution.y * args.invImageSize.y);
+    args.focusDistance = focusDistance();
+    args.focalLength = std::max(focalLength(), 1.0f);
+    args.apertureTerm = args.focalLength * args.focalLength / std::max(fNumber(), 0.1f);
+    // 1 meter == scale world units == 1000 mm, so 1 world unit == 1000 / scale mm.
+    args.worldUnitToMm = 1000.0f / std::max(RtxOptions::getMeterToWorldUnitScale(), 1e-4f);
+    // Project millimeters of CoC through the 24 mm full-frame sensor height into pixels.
+    args.sensorToPixels = (float) inputSize.height / 24.0f;
+    args.missLinearViewZ = missLinearViewZ;
+    args.maxGatherRadius = maxGatherRadius;
+    args.maxGatherRadiusHalf = maxGatherRadiusHalf;
+    // The unit of rtx.dof.sampleCount changed with the half resolution gather, so
+    // a number saved by an older build is not comparable and a small one would now
+    // mean speckled bokeh rather than the quality it asked for. Clamp low values
+    // up to POST_FX_DOF_MIN_EFFECTIVE_SAMPLES; the ceiling is the shader's own
+    // hang guard and is applied on both sides. sampleCount() == 0 never reaches
+    // here: isDofEnabled() has already turned the whole effect off.
+    args.sampleCount = std::min(std::max(sampleCount(), (uint) POST_FX_DOF_MIN_EFFECTIVE_SAMPLES),
+                                (uint) POST_FX_DOF_MAX_SAMPLES);
+    args.frameIdx = frameIdx;
+    args.autoFocusEnabled = isDofAutoFocusEnabled() ? 1 : 0;
+    args.tileReach = tileReach;
+    args.autoFocusOffset = autoFocusOffset();
+    args.bokehMinIntensity = bokehMinIntensity();
+    args.bokehFilterStrength = bokehFilterStrength();
+    args.edgeAwareUpsample = edgeAwareUpsample() ? 1u : 0u;
+    args.excludeViewModel = excludeViewModel() ? 1u : 0u;
+
+    ctx->setPushConstantBank(DxvkPushConstantBank::RTX);
+
+    if (isDofAutoFocusEnabled()) {
+      ScopedGpuProfileZone(ctx, "PostFx DoF Auto Focus");
+
+      PostFxDofAutoFocusArgs autoFocusArgs = {};
+      autoFocusArgs.focusPoint = { autoFocusPointX(), autoFocusPointY() };
+      autoFocusArgs.missLinearViewZ = missLinearViewZ;
+      const float fallbackMs = RtxOptions::timeDeltaBetweenFrames() > 0.0f
+        ? RtxOptions::timeDeltaBetweenFrames()
+        : 16.6f;
+      const float effectiveFrameTimeMs = frameTimeMilliseconds > 0.0f
+        ? frameTimeMilliseconds
+        : fallbackMs;
+      autoFocusArgs.deltaTimeSecs = effectiveFrameTimeMs * 0.001f;
+      autoFocusArgs.tauSeconds = autoFocusTau();
+      autoFocusArgs.forceReset = (m_dofFocusStateReset || cameraCutDetected) ? 1 : 0;
+      autoFocusArgs.regionRadius = autoFocusRegionRadius();
+      autoFocusArgs.deadZone = autoFocusDeadZone();
+      autoFocusArgs.farTauScale = autoFocusFarTauScale();
+
+      ctx->pushConstants(0, sizeof(autoFocusArgs), &autoFocusArgs);
+      ctx->bindResourceView(POST_FX_DOF_AF_PRIMARY_LINEAR_VIEW_Z_INPUT, rtOutput.m_primaryLinearViewZ.view, nullptr);
+      ctx->bindResourceView(POST_FX_DOF_AF_FOCUS_STATE_INPUT_OUTPUT, m_dofFocusState.view, nullptr);
+      ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, PostFxDofAutoFocusShader::getShader());
+      ctx->dispatch(1, 1, 1);
+    }
+
+    ctx->pushConstants(0, sizeof(args), &args);
+
+    const VkExtent3D halfWorkgroups = util::computeBlockCount(
+      halfExtent, VkExtent3D { POST_FX_DOF_TILE_SIZE, POST_FX_DOF_TILE_SIZE, 1 });
+    const VkExtent3D fullWorkgroups = util::computeBlockCount(
+      inputSize, VkExtent3D { POST_FX_TILE_SIZE, POST_FX_TILE_SIZE, 1 });
+
+    // Pass 1: half resolution colour + circle of confusion, plus the per tile
+    // blur radii the gather classifies with.
+    {
+      ScopedGpuProfileZone(ctx, "PostFx DoF Prepare");
+      ctx->bindResourceView(POST_FX_DOF_PREPARE_INPUT, inOutColorTexture.view, nullptr);
+      ctx->bindResourceView(POST_FX_DOF_PREPARE_PRIMARY_LINEAR_VIEW_Z_INPUT, rtOutput.m_primaryLinearViewZ.view, nullptr);
+      ctx->bindResourceView(POST_FX_DOF_PREPARE_COLOR_COC_OUTPUT, m_dofHalfColorCoC.view, nullptr);
+      ctx->bindResourceView(POST_FX_DOF_PREPARE_TILE_OUTPUT, m_dofTile.view, nullptr);
+      ctx->bindResourceView(POST_FX_DOF_PREPARE_FOCUS_STATE_INPUT, m_dofFocusState.view, nullptr);
+      // The unfiltered flags, not the dilated copy motion blur builds for
+      // itself: this wants the exact view model silhouette.
+      ctx->bindResourceView(POST_FX_DOF_PREPARE_PRIMARY_SURFACE_FLAGS_INPUT, rtOutput.m_primarySurfaceFlags.view, nullptr);
+      ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, PostFxDofPrepareShader::getShader());
+      ctx->dispatch(halfWorkgroups.width, halfWorkgroups.height, halfWorkgroups.depth);
+    }
+
+    // Pass 2: half resolution bokeh gather into the near and base layers.
+    {
+      ScopedGpuProfileZone(ctx, "PostFx DoF Gather");
+      ctx->bindResourceView(POST_FX_DOF_COLOR_COC_INPUT, m_dofHalfColorCoC.view, nullptr);
+      ctx->bindResourceView(POST_FX_DOF_TILE_INPUT, m_dofTile.view, nullptr);
+      ctx->bindResourceView(POST_FX_DOF_NEAR_OUTPUT, m_dofHalfNear.view, nullptr);
+      ctx->bindResourceView(POST_FX_DOF_FAR_OUTPUT, m_dofHalfFar.view, nullptr);
+      ctx->bindResourceSampler(POST_FX_DOF_LINEAR_SAMPLER, linearSampler);
+      ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, PostFxDepthOfFieldShader::getShader());
+      ctx->dispatch(halfWorkgroups.width, halfWorkgroups.height, halfWorkgroups.depth);
+    }
+
+    // Pass 3: full resolution composite. m_finalOutput is a single
+    // AliasedResource, so its Read and Write views are the same image and it
+    // cannot be both source and destination of one dispatch; write to the post FX
+    // intermediate and copy back, exactly as dispatchLensEffects does.
+    // m_postFxIntermediateTexture aliases the DLSS-NR input on this branch, so the
+    // Write claim here is what takes ownership of that memory.
+    {
+      ScopedGpuProfileZone(ctx, "PostFx DoF Resolve");
+      ctx->bindResourceView(POST_FX_DOF_RESOLVE_INPUT, inOutColorTexture.view, nullptr);
+      ctx->bindResourceView(POST_FX_DOF_RESOLVE_PRIMARY_LINEAR_VIEW_Z_INPUT, rtOutput.m_primaryLinearViewZ.view, nullptr);
+      ctx->bindResourceView(POST_FX_DOF_RESOLVE_NEAR_INPUT, m_dofHalfNear.view, nullptr);
+      ctx->bindResourceView(POST_FX_DOF_RESOLVE_FAR_INPUT, m_dofHalfFar.view, nullptr);
+      ctx->bindResourceView(POST_FX_DOF_RESOLVE_OUTPUT, rtOutput.m_postFxIntermediateTexture.view(Resources::AccessType::Write), nullptr);
+      ctx->bindResourceSampler(POST_FX_DOF_RESOLVE_LINEAR_SAMPLER, linearSampler);
+      ctx->bindResourceView(POST_FX_DOF_RESOLVE_FOCUS_STATE_INPUT, m_dofFocusState.view, nullptr);
+      ctx->bindResourceView(POST_FX_DOF_RESOLVE_PRIMARY_SURFACE_FLAGS_INPUT, rtOutput.m_primarySurfaceFlags.view, nullptr);
+      ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, PostFxDofResolveShader::getShader());
+      ctx->dispatch(fullWorkgroups.width, fullWorkgroups.height, fullWorkgroups.depth);
+    }
+
+    ctx->copyImage(
+      inOutColorTexture.image,
+      { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+      { 0, 0, 0 },
+      rtOutput.m_postFxIntermediateTexture.image(Resources::AccessType::Read),
+      { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+      { 0, 0, 0 },
+      inputSize);
+
+    // Keep reset armed while Auto Focus is disabled so the next enable starts
+    // from the current target instead of blending from stale state.
+    m_dofFocusStateReset = !isDofAutoFocusEnabled();
+  }
+
+  void DxvkPostFx::releaseDofResources() {
+    m_dofHalfColorCoC.reset();
+    m_dofHalfNear.reset();
+    m_dofHalfFar.reset();
+    m_dofTile.reset();
+    m_dofHalfExtent = { 0, 0, 0 };
   }
 
   void DxvkPostFx::dispatchNtsc(

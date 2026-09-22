@@ -12,7 +12,7 @@ then runs through these lanes:
 
 ```text
 HDR lane                 display lane                 terminal lane
-Bloom -> Motion Blur -> Tonemapping -> NTSC/VHS -> Lens Effects -> sRGB + Dither
+Bloom -> Motion Blur -> Depth of Field -> Tonemapping -> NTSC/VHS -> Lens Effects -> sRGB + Dither
                          HDR/display boundary          final image
 ```
 
@@ -22,16 +22,21 @@ display-space effects, gamma conversion, and dithering. The `sRGB + Dither`
 member is always terminal. Screen overlays, debug views, and capture handling
 remain outside the stack at their existing frame stages.
 
-The first migration preserves the existing backend behavior and adds NTSC/VHS
-as a display-space effect, disabled by default. Its dispatch position remains
-inside the ordered stack without moving either fixed color-domain anchor.
+The stack preserves the existing backend behavior and adds NTSC/VHS as a
+display-space effect plus Depth of Field as an HDR effect, both disabled by
+default. Depth of Field can optionally track a median-filtered screen-space
+view-Z measurement sampled around a configurable focus point and drive the
+lens-based (focal length and f-number) circle of confusion,
+while retaining the original artistic manual-focus path. Their
+dispatch positions remain inside the ordered stack without moving either
+fixed color-domain anchor.
 
 ## Ordering and persistence
 
 `rtx.postfx.stackOrder` stores comma-separated stable IDs:
 
 ```text
-bloom,motion_blur,tonemapping,ntsc_vhs,lens_effects,srgb_dither
+bloom,motion_blur,depth_of_field,tonemapping,ntsc_vhs,lens_effects,srgb_dither
 ```
 
 The resolver parses the saved value, removes duplicates and unknown IDs, and
@@ -42,8 +47,9 @@ fixed anchor. The developer menu exposes drag-and-drop only between reorderable
 effects in the same domain and provides a reset-to-default action.
 
 The legacy `rtx.postfx.enable` option is the global switch shown above the
-stack. It disables optional stack members (Bloom, Motion Blur, NTSC/VHS, and
-Lens Effects) while leaving tonemapping and the terminal sRGB/dither conversion
+stack. It disables optional stack members (Bloom, Motion Blur, Depth of Field,
+NTSC/VHS, and Lens Effects) while leaving tonemapping and the terminal
+sRGB/dither conversion
 running as output-format anchors. Each optional member has its own row toggle;
 Lens Effects also retains separate Chromatic Aberration and Vignette toggles in
 its expanded settings.
@@ -83,8 +89,8 @@ logic without merging the whole renderer implementation.
 
 The stack does not change a public Remix API or the on-disk ABI of existing
 effect options. Existing Bloom, motion-blur, tonemapping/color-grading,
-post-FX, and sRGB/dither options remain valid; only the new stack order and
-NTSC/VHS options are additional configuration.
+post-FX, and sRGB/dither options remain valid; only the new stack order,
+NTSC/VHS options, and Depth of Field options are additional configuration.
 
 ## Verification contract
 

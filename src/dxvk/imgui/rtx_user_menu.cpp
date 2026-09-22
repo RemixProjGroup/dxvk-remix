@@ -618,6 +618,10 @@ namespace dxvk {
         ImGui::BeginDisabled(!postFx.enable());
 
         RemixGui::Checkbox("Enable Motion Blur", &postFx.enableMotionBlurObject());
+        // NV-DXVK start: fork depth-of-field quick setting
+        RemixGui::Checkbox("Enable Depth of Field", &postFx.dofEnableObject());
+        RemixGui::Checkbox("DoF Auto Focus", &postFx.autoFocusEnableObject());
+        // NV-DXVK end
         RemixGui::Checkbox("Enable Chromatic Aberration", &postFx.enableChromaticAberrationObject());
         RemixGui::Checkbox("Enable Vignette", &postFx.enableVignetteObject());
 

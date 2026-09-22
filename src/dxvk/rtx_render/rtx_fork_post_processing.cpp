@@ -18,7 +18,7 @@ namespace dxvk {
 
   namespace {
     constexpr size_t kInvalidIndex = static_cast<size_t>(-1);
-    constexpr size_t kEffectCount = 6;
+    constexpr size_t kEffectCount = 7;
 
     bool inlineOptionCheckbox(const char* id, RtxOption<bool>* option) {
       bool value = option->get();
@@ -42,6 +42,7 @@ namespace dxvk {
     static constexpr std::array<EffectDescriptor, kEffectCount> descriptors = {{
       { EffectId::Bloom,       "Bloom",          "bloom",        EffectDomain::HDR,      true  },
       { EffectId::MotionBlur,  "Motion Blur",    "motion_blur",  EffectDomain::HDR,      true  },
+      { EffectId::DepthOfField, "Depth of Field", "depth_of_field", EffectDomain::HDR,    true  },
       { EffectId::Tonemapping, "Tonemapping",    "tonemapping",  EffectDomain::HDR,      false },
       { EffectId::NtscVhs,     "NTSC / VHS",     "ntsc_vhs",     EffectDomain::Display, true  },
       { EffectId::LensEffects, "Lens Effects",   "lens_effects", EffectDomain::Display,  true  },
@@ -55,6 +56,7 @@ namespace dxvk {
     return {
       EffectId::Bloom,
       EffectId::MotionBlur,
+      EffectId::DepthOfField,
       EffectId::Tonemapping,
       EffectId::NtscVhs,
       EffectId::LensEffects,
@@ -202,6 +204,9 @@ namespace dxvk {
       case EffectId::MotionBlur:
         ctx->dispatchPostFxMotionBlur(rtOutput);
         break;
+      case EffectId::DepthOfField:
+        ctx->dispatchPostFxDof(rtOutput);
+        break;
       case EffectId::Tonemapping:
         // Explicitly forwarded, never defaulted: false here means DLSS-NR
         // already ran auto exposure for this frame.
@@ -246,6 +251,9 @@ namespace dxvk {
         break;
       case EffectId::MotionBlur:
         enabledOption = &postFx.enableMotionBlurObject();
+        break;
+      case EffectId::DepthOfField:
+        enabledOption = &postFx.dofEnableObject();
         break;
       case EffectId::Tonemapping:
         enabledOption = &common->metaToneMapping().tonemappingEnabledObject();
@@ -334,6 +342,9 @@ namespace dxvk {
           break;
         case EffectId::MotionBlur:
           postFx.showMotionBlurImguiSettings();
+          break;
+        case EffectId::DepthOfField:
+          postFx.showDofImguiSettings();
           break;
         case EffectId::Tonemapping:
           common->metaAutoExposure().showImguiSettings();

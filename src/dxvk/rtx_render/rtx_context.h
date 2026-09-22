@@ -261,6 +261,7 @@ namespace dxvk {
     void dispatchToneMapping(const Resources::RaytracingOutput& rtOutput, bool updateAutoExposure = true);
     void dispatchBloom(const Resources::RaytracingOutput& rtOutput);
     void dispatchPostFxMotionBlur(Resources::RaytracingOutput& rtOutput);
+    void dispatchPostFxDof(Resources::RaytracingOutput& rtOutput);
     void dispatchPostFxNtsc(Resources::RaytracingOutput& rtOutput);
     void dispatchPostFxLensEffects(Resources::RaytracingOutput& rtOutput);
     void dispatchSRGBDither(const Resources::RaytracingOutput& rtOutput, bool performSRGBConversion);

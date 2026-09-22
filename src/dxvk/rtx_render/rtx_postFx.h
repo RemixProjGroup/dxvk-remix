@@ -51,6 +51,18 @@ namespace dxvk {
       const Resources::RaytracingOutput& rtOutput,
       const bool cameraCutDetected);
 
+    // Depth of field phase. Runs before tonemapping while the image is still
+    // in linear HDR space and reads the render-resolution linear view-Z.
+    void dispatchDof(
+      Rc<RtxContext> ctx,
+      Rc<DxvkSampler> linearSampler,
+      const uvec2& mainCameraResolution,
+      const uint32_t frameIdx,
+      const float missLinearViewZ,
+      const Resources::RaytracingOutput& rtOutput,
+      const float frameTimeMilliseconds,
+      const bool cameraCutDetected);
+
     // Lens effects phase (chromatic aberration + vignette). Runs after tonemapping
     // so it operates on post-tonemap LDR data — these are display-space lens artifacts.
     // Reads and writes m_finalOutput in place.
@@ -83,11 +95,14 @@ namespace dxvk {
 
     void showImguiSettings();
     void showMotionBlurImguiSettings();
+    void showDofImguiSettings();
     void showLensEffectsImguiSettings();
     void showNtscImguiSettings();
 
     inline bool isPostFxEnabled() const { return enable(); }
     inline bool isMotionBlurEnabled() const { return enable() && enableMotionBlur() && motionBlurSampleCount() > 0 && exposureFraction() > 0.0f; }
+    inline bool isDofEnabled() const { return enable() && dofEnable() && sampleCount() > 0; }
+    inline bool isDofAutoFocusEnabled() const { return isDofEnabled() && autoFocusEnable(); }
     inline bool isChromaticAberrationEnabled() const { return enable() && enableLensEffects() && enableChromaticAberration() && chromaticAberrationAmount() > 0.0f; }
     inline bool isVignetteEnabled() const { return enable() && enableLensEffects() && enableVignette() && vignetteIntensity() > 0.0f; }
 
@@ -105,6 +120,63 @@ namespace dxvk {
                     args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION("rtx.postfx", bool, desaturateOthersOnHighlight, true, "If true, desaturare all objects that are not highlighted.");
 
+    RTX_OPTION_ARGS("rtx.dof", bool, dofEnable, false,
+                    "Enable the depth-of-field effect.",
+                    args.environment = "RTX_DOF_ENABLE",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", bool, autoFocusEnable, false,
+                    "Measure and smoothly track the depth-of-field focus distance from the screen.",
+                    args.environment = "RTX_DOF_AUTO_FOCUS_ENABLE",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", float, autoFocusTau, 0.25f,
+                    "Auto-focus smoothing time constant in seconds when focus moves to a nearer distance.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", float, autoFocusFarTauScale, 3.0f,
+                    "Multiplier applied to the auto-focus smoothing time constant when focus moves to a farther distance.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", float, autoFocusDeadZone, 0.03f,
+                    "Relative optical-power change below which auto-focus holds the current focus distance.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", float, autoFocusRegionRadius, 0.02f,
+                    "Normalized radius (fraction of the smaller image dimension) of the disk sampled around the auto-focus point.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", float, autoFocusPointX, 0.5f,
+                    "Normalized horizontal screen position used for auto-focus.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", float, autoFocusPointY, 0.5f,
+                    "Normalized vertical screen position used for auto-focus.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", float, autoFocusOffset, 0.0f,
+                    "World-unit offset added to the measured auto-focus distance.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", float, focusDistance, 5.0f,
+                    "Manual depth-of-field focus distance in world units.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", float, focalLength, 100.0f,
+                    "Lens focal length in millimeters. Longer lenses produce a shallower depth of field.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", float, fNumber, 2.8f,
+                    "Lens aperture f-number. Higher values deepen the depth of field, lower values produce more blur.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", float, maxBlurRadius, 16.0f,
+                    "Maximum blur radius in pixels at 1080p. Scaled by the output height, then clamped to 128 output pixels: the half-resolution gather classifies tiles over a bounded window and a larger radius would leave square patches of missing blur. The clamp therefore binds at 128 here at 1080p, around 86 at 1600p and around 59 at 2160p.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", float, bokehMinIntensity, 1.0f,
+                    "Intensity of the centre of the bokeh disc relative to its rim. 0: strongest rim emphasis (optical-vignetting look), 1: even disc.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", float, bokehFilterStrength, 0.25f,
+                    "Width of the reconstruction tent used when the half resolution bokeh layers are upsampled. 0: plain bilinear, 1: a full half-resolution texel.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", bool, edgeAwareUpsample, true,
+                    "Align the depth-of-field blur boundary to the upscaled colour edge. Depth only exists at render resolution and the effect runs after the upscale, so without this the boundary is quantized to the render grid and stair-steps along silhouettes whenever DLSS or another upscaler is active. Costs three extra depth fetches per pixel, plus four colour fetches on the pixels where the blur boundary actually falls. At native resolution the two paths are identical, so this is only worth turning off to A/B the difference.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", bool, excludeViewModel, true,
+                    "Keep the view model - the player's weapon and hands - sharp. The view model is drawn a few centimetres from the lens, so a physically correct thin lens gives it the largest circle of confusion in the frame and splatters its near field across much of the screen. Holding it at zero blur radius also takes it out of the per-tile radii the gather budgets from, so this normally costs nothing and often gives time back. Turn it off to frame a shot with the weapon deliberately defocused in the foreground.",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.dof", uint, sampleCount, 96,
+                    "Maximum number of half-resolution bokeh gather taps per layer. The gather scales the tap count with the blur radius and stops at this ceiling, so it is a quality ceiling rather than a fixed per-pixel cost. Values between 1 and 31 are raised to 32 before the gather runs: the unit of this setting changed when the gather moved to half resolution, so a smaller number saved by an older build would produce speckled bokeh rather than the quality it originally asked for. 0 still disables the effect entirely.",
+                    args.flags = RtxOptionFlags::UserSetting);
+
     RTX_OPTION_ARGS("rtx.ntsc", bool, ntscEnable, false,
                     "Enable the NTSC/VHS composite look.",
                     args.environment = "RTX_NTSC_ENABLE",
@@ -121,6 +193,20 @@ namespace dxvk {
   private:
     Rc<vk::DeviceFn> m_vkd;
     Rc<DxvkBuffer> m_highlightingValues;
+    Resources::Resource m_dofFocusState;
+    // Half resolution depth-of-field working set. DxvkPostFx is not an RtxPass,
+    // so it has no createTargetResource/releaseTargetResource hook: these are
+    // created on demand in dispatchDof, rebuilt when the output extent changes,
+    // and released by releaseDofResources() when depth of field is switched off
+    // and from the destructor.
+    Resources::Resource m_dofHalfColorCoC;   // rgb = colour, a = signed normalized CoC
+    Resources::Resource m_dofHalfNear;       // premultiplied near field layer
+    Resources::Resource m_dofHalfFar;        // defocused base layer
+    Resources::Resource m_dofTile;           // rg = (max |CoC| radius, max near radius)
+    VkExtent3D m_dofHalfExtent = { 0, 0, 0 };
+    bool m_dofFocusStateReset = true;
+
+    void releaseDofResources();
 
     RTX_OPTION("rtx.postfx", bool,  enableMotionBlurNoiseSample, true, "Enable random distance sampling for every step along the motion vector. The random pattern is generated with interleaved gradient noise.");
     RTX_OPTION("rtx.postfx", bool,  enableMotionBlurEmissive, true, "Enable Motion Blur for Emissive surfaces. Disable this when the motion blur on emissive surfaces cause severe artifacts.");
