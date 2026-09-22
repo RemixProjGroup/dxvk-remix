@@ -70,6 +70,7 @@ namespace dxvk {
     void prewarmShaders(DxvkPipelineManager& pipelineManager) const;
 
     void showImguiSettings();
+    void showEffectSettings();
 
   private:
     void dispatchApplyToneMapping(

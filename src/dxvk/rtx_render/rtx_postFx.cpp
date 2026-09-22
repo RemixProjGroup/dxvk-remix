@@ -25,8 +25,10 @@
 #include "dxvk_scoped_annotation.h"
 #include "rtx_render/rtx_shader_manager.h"
 #include "rtx/pass/post_fx/post_fx.h"
+#include "rtx/pass/ntsc/ntsc_vhs.h"
 
 #include <rtx_shaders/post_fx.h>
+#include <rtx_shaders/ntsc_vhs.h>
 #include <rtx_shaders/post_fx_highlight.h>
 #include <rtx_shaders/post_fx_motion_blur.h>
 #include <rtx_shaders/post_fx_motion_blur_prefilter.h>
@@ -53,6 +55,20 @@ namespace dxvk {
     };
 
     PREWARM_SHADER_PIPELINE(PostFxShader);
+
+    class NtscVhsShader : public ManagedShader
+    {
+      SHADER_SOURCE(NtscVhsShader, VK_SHADER_STAGE_COMPUTE_BIT, ntsc_vhs)
+
+      PUSH_CONSTANTS(NtscVhsArgs)
+
+      BEGIN_PARAMETER()
+        SAMPLER2D(NTSC_VHS_INPUT)
+        RW_TEXTURE2D(NTSC_VHS_OUTPUT)
+      END_PARAMETER()
+    };
+
+    PREWARM_SHADER_PIPELINE(NtscVhsShader);
 
     class PostFxMotionBlurShader : public ManagedShader
     {
@@ -114,35 +130,61 @@ namespace dxvk {
   {
   }
 
-  void DxvkPostFx::showImguiSettings()
-  {
+  void DxvkPostFx::showNtscImguiSettings() {
+    if (!enable() || !ntscEnable()) {
+      return;
+    }
+
+    RemixGui::DragFloat("VHS Luma Bandwidth (MHz)", &ntscLumaBWObject(), 0.01f, 0.25f, 6.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("VHS Color Bandwidth (kHz)", &ntscColorBWObject(), 1.0f, 50.0f, 1000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("VHS Ringing", &ntscRingingObject(), 0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("VHS Luma Noise", &ntscLumaNoiseObject(), 0.001f, 0.0f, 0.25f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("VHS Dropout Rate", &ntscTapeDropoutRateObject(), 0.01f, 0.0f, 10.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("VHS Dropout Length (us)", &ntscTapeDropoutLengthObject(), 0.1f, 1.0f, 100.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("VHS Head Smear", &ntscHeadSmearObject(), 0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("VHS Tape Trail", &ntscTapeTrailObject(), 0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+  }
+
+  void DxvkPostFx::showMotionBlurImguiSettings() {
+    if (!enableMotionBlur()) {
+      return;
+    }
+
+    RemixGui::Checkbox("Motion Blur Noise Sample Enabled", &enableMotionBlurNoiseSampleObject());
+    RemixGui::Checkbox("Motion Blur Emissive Surface Enabled", &enableMotionBlurEmissiveObject());
+    RemixGui::DragInt("Motion Blur Sample Count", &motionBlurSampleCountObject(), 0.1f, 1, 10, "%d", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("Exposure Fraction", &exposureFractionObject(), 0.01f, 0.01f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("Blur Diameter Fraction", &blurDiameterFractionObject(), 0.001f, 0.001f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("Motion Blur Minimum Velocity Threshold (unit: pixel)", &motionBlurMinimumVelocityThresholdInPixelObject(), 0.01f, 0.01f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("Motion Blur Dynamic Deduction", &motionBlurDynamicDeductionObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("Motion Blur Jitter Strength", &motionBlurJitterStrengthObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+  }
+
+  void DxvkPostFx::showLensEffectsImguiSettings() {
+    RemixGui::Checkbox("Chromatic Aberration Enabled", &enableChromaticAberrationObject());
+    if (enableChromaticAberration()) {
+      RemixGui::DragFloat("Fringe Intensity", &chromaticAberrationAmountObject(), 0.01f, 0.0f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Fringe Center Attenuation Amount", &chromaticCenterAttenuationAmountObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    }
+
+    RemixGui::Checkbox("Vignette Enabled", &enableVignetteObject());
+    if (enableVignette()) {
+      RemixGui::DragFloat("Vignette Intensity", &vignetteIntensityObject(), 0.01f, 0.0f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Vignette Radius", &vignetteRadiusObject(), 0.001f, 0.0f, 1.4f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+      RemixGui::DragFloat("Vignette Softness", &vignetteSoftnessObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    }
+  }
+
+  void DxvkPostFx::showImguiSettings() {
     RemixGui::Checkbox("Post Effect Enabled", &enableObject());
-    if (enable())
-    {
+
+    if (enable()) {
       RemixGui::Checkbox("Motion Blur Enabled", &enableMotionBlurObject());
-      if (enableMotionBlur()) {
-        RemixGui::Checkbox("Motion Blur Noise Sample Enabled", &enableMotionBlurNoiseSampleObject());
-        RemixGui::Checkbox("Motion Blur Emissive Surface Enabled", &enableMotionBlurEmissiveObject());
-        RemixGui::DragInt("Motion Blur Sample Count", &motionBlurSampleCountObject(), 0.1f, 1, 10, "%d", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Exposure Fraction", &exposureFractionObject(), 0.01f, 0.01f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Blur Diameter Fraction", &blurDiameterFractionObject(), 0.001f, 0.001f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Motion Blur Minimum Velocity Threshold (unit: pixel)", &motionBlurMinimumVelocityThresholdInPixelObject(), 0.01f, 0.01f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Motion Blur Dynamic Deduction", &motionBlurDynamicDeductionObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Motion Blur Jitter Strength", &motionBlurJitterStrengthObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-      }
-
-      RemixGui::Checkbox("Chromatic Aberration Enabled", &enableChromaticAberrationObject());
-      if (enableChromaticAberration()) {
-        RemixGui::DragFloat("Fringe Intensity", &chromaticAberrationAmountObject(), 0.01f, 0.0f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Fringe Center Attenuation Amount", &chromaticCenterAttenuationAmountObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-      }
-
-      RemixGui::Checkbox("Vignette Enabled", &enableVignetteObject());
-      if (enableVignette()) {
-        RemixGui::DragFloat("Vignette Intensity", &vignetteIntensityObject(), 0.01f, 0.0f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Vignette Radius", &vignetteRadiusObject(), 0.001f, 0.0f, 1.4f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-        RemixGui::DragFloat("Vignette Softness", &vignetteSoftnessObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-      }
+      showMotionBlurImguiSettings();
+      RemixGui::Checkbox("Lens Effects Enabled", &enableLensEffectsObject());
+      showLensEffectsImguiSettings();
+      RemixGui::Checkbox("NTSC / VHS Enabled", &ntscEnableObject());
+      showNtscImguiSettings();
     }
   }
 
@@ -373,6 +415,96 @@ namespace dxvk {
       { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
       { 0, 0, 0 },
       inputSize);
+  }
+
+  void DxvkPostFx::dispatchNtsc(
+    Rc<RtxContext> ctx,
+    Rc<DxvkSampler> linearSampler,
+    const uvec2& mainCameraResolution,
+    const Resources::RaytracingOutput& rtOutput)
+  {
+    (void)mainCameraResolution;
+    if (!ntscEnable()) {
+      return;
+    }
+
+    ScopedGpuProfileZone(ctx, "NTSC VHS");
+    ctx->setFramePassStage(RtxFramePassStage::PostFX);
+
+    const Resources::Resource& inOutColorTexture = rtOutput.m_finalOutput.resource(Resources::AccessType::ReadWrite);
+    const VkExtent3D& inputSize = inOutColorTexture.image->info().extent;
+    const VkExtent3D workgroups = util::computeBlockCount(inputSize, VkExtent3D { NTSC_VHS_TILE_SIZE, NTSC_VHS_TILE_SIZE, 1 });
+
+    NtscVhsArgs args = {};
+    args.imageSize = { (uint)inputSize.width, (uint)inputSize.height };
+    args.invImageSize = { 1.0f / (float)inputSize.width, 1.0f / (float)inputSize.height };
+    // Integer NTSC counters, computed here rather than in the shader. The tape
+    // hashes need fine per-step variation in their key, and a float frame
+    // number stops providing it once the session has run for a while, which is
+    // what previously froze the noise, smear and dropout patterns. Integer
+    // millisecond math is exact for over a year of uptime.
+    //
+    // These are also the single source of truth for time: the shader used to
+    // add a wall-clock term and a render frame index together, advancing the
+    // key at roughly twice the intended rate. Locking both counters to the
+    // broadcast rates keeps the look frame-rate independent, as a tape should
+    // be, and keeps it working when rtx.rngSeedWithFrameIndex pins the caller's
+    // frame index to zero.
+    const uint64_t absoluteTimeMs = GlobalTime::get().absoluteTimeMs();
+    args.frameIndex = (uint32_t)((absoluteTimeMs * 2997ull) / 100000ull);  // 29.97 Hz
+    args.fieldIndex = (uint32_t)((absoluteTimeMs * 5994ull) / 100000ull);  // 59.94 Hz
+    args.lumaBW = ntscLumaBW();
+    args.colorBW = ntscColorBW();
+    args.ringing = ntscRinging();
+    args.lumaNoise = ntscLumaNoise();
+    args.dropoutRate = ntscTapeDropoutRate();
+    args.dropoutLengthUs = ntscTapeDropoutLength();
+    args.headSmear = ntscHeadSmear();
+    args.tapeTrail = ntscTapeTrail();
+
+    ctx->setPushConstantBank(DxvkPushConstantBank::RTX);
+
+    // Pass 0: VHS bandwidth reduction and luma-only playback ringing.
+    // m_postFxIntermediateTexture is an AliasedResource on this branch (it shares
+    // memory with the DLSS-NR input), so each ping-pong pass has to claim it with
+    // the access type it actually uses. This pass writes it, taking ownership away
+    // from whoever held the aliased memory last.
+    args.pass = 0;
+    ctx->pushConstants(0, sizeof(args), &args);
+    ctx->bindResourceView(NTSC_VHS_INPUT, rtOutput.m_finalOutput.view(Resources::AccessType::Read), nullptr);
+    ctx->bindResourceSampler(NTSC_VHS_INPUT, linearSampler);
+    ctx->bindResourceView(NTSC_VHS_OUTPUT, rtOutput.m_postFxIntermediateTexture.view(Resources::AccessType::Write), nullptr);
+    ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, NtscVhsShader::getShader());
+    ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
+
+    // Pass 1: worn-head smear followed by band-limited tape noise.
+    // Reads back what pass 0 just wrote, so the Read claim is legal.
+    args.pass = 1;
+    ctx->pushConstants(0, sizeof(args), &args);
+    ctx->bindResourceView(NTSC_VHS_INPUT, rtOutput.m_postFxIntermediateTexture.view(Resources::AccessType::Read), nullptr);
+    ctx->bindResourceSampler(NTSC_VHS_INPUT, linearSampler);
+    ctx->bindResourceView(NTSC_VHS_OUTPUT, rtOutput.m_finalOutput.view(Resources::AccessType::Write), nullptr);
+    ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, NtscVhsShader::getShader());
+    ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
+
+    // Pass 2: dropout compensation samples the completed prior-line result.
+    args.pass = 2;
+    ctx->pushConstants(0, sizeof(args), &args);
+    ctx->bindResourceView(NTSC_VHS_INPUT, rtOutput.m_finalOutput.view(Resources::AccessType::Read), nullptr);
+    ctx->bindResourceSampler(NTSC_VHS_INPUT, linearSampler);
+    ctx->bindResourceView(NTSC_VHS_OUTPUT, rtOutput.m_postFxIntermediateTexture.view(Resources::AccessType::Write), nullptr);
+    ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, NtscVhsShader::getShader());
+    ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
+
+    // Pass 3: causal luma trail, then convert the display-space signal back
+    // to linear RGB for any later display-space stack member.
+    args.pass = 3;
+    ctx->pushConstants(0, sizeof(args), &args);
+    ctx->bindResourceView(NTSC_VHS_INPUT, rtOutput.m_postFxIntermediateTexture.view(Resources::AccessType::Read), nullptr);
+    ctx->bindResourceSampler(NTSC_VHS_INPUT, linearSampler);
+    ctx->bindResourceView(NTSC_VHS_OUTPUT, rtOutput.m_finalOutput.view(Resources::AccessType::Write), nullptr);
+    ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, NtscVhsShader::getShader());
+    ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
   }
 
   namespace {

@@ -70,6 +70,23 @@ namespace dxvk {
 
   namespace fork_hooks {
 
+    // Dispatches the fork-owned post-processing stack. The stack preserves
+    // the HDR/display-space boundary while allowing compatible effects to be
+    // reordered through the developer UI.
+    // updateAutoExposure is forwarded to RtxContext::dispatchToneMapping; the
+    // frame renderer passes false when DLSS-NR already dispatched auto-exposure
+    // this frame. It has no default so a caller cannot silently skip it.
+    // Implementation in rtx_fork_post_processing.cpp.
+    void dispatchPostProcessingStack(
+      Rc<RtxContext> ctx,
+      Resources::RaytracingOutput& rtOutput,
+      bool performSRGBConversion,
+      bool updateAutoExposure);
+
+    // Draws the ordered post-processing stack UI and the existing effect
+    // settings beneath it.
+    // Implementation in rtx_fork_post_processing.cpp.
+    void showPostProcessingStackSettings(const Rc<DxvkContext>& ctx);
 
     // Checks for a USD mesh/light replacement keyed on the API mesh handle hash.
     // Returns the replacement bucket if one exists, null otherwise.

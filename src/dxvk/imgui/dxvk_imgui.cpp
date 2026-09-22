@@ -4056,25 +4056,7 @@ namespace dxvk {
           common->metaTAA().showImguiSettings();
       }
 
-      if (RemixGui::CollapsingHeader("Bloom", collapsingHeaderClosedFlags))
-        common->metaBloom().showImguiSettings();
-
-      if (RemixGui::CollapsingHeader("Auto Exposure", collapsingHeaderClosedFlags))
-        common->metaAutoExposure().showImguiSettings();
-
-      if (RemixGui::CollapsingHeader("Tonemapping", collapsingHeaderClosedFlags))
-      {
-        RemixGui::SliderInt("User Brightness", &RtxOptions::userBrightnessObject(), 0, 100, "%d");
-        RemixGui::DragFloat("User Brightness EV Range", &RtxOptions::userBrightnessEVRangeObject(), 0.5f, 0.f, 10.f, "%.1f");
-        RemixGui::Separator();
-        common->metaToneMapping().showImguiSettings();
-      }
-
-      if (RemixGui::CollapsingHeader("Post FX", collapsingHeaderClosedFlags))
-        common->metaPostFx().showImguiSettings();
-
-      if (RemixGui::CollapsingHeader("sRGB + Dither", collapsingHeaderClosedFlags))
-        common->metaSRGBDither().showImguiSettings();
+      fork_hooks::showPostProcessingStackSettings(ctx);
 
       ImGui::Unindent();
     }

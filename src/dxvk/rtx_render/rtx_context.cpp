@@ -803,25 +803,23 @@ namespace dxvk {
         RtxDustParticles& dust = m_common->metaDustParticles();
         dust.simulateAndDraw(this, m_state, rtOutput);
 
+        // DLSS-NR deliberately stays outside the ordered post-processing stack:
+        // it is an upscaling-adjacent denoiser rather than a reorderable post
+        // effect, it must observe linear HDR before any stack member runs, it
+        // performs its own auto-exposure dispatch internally, and it must not be
+        // gated by the stack's "Post FX Enabled" switch.
         const bool dlssNrEnabled = dispatchDlssNR(rtOutput);
-
-        dispatchBloom(rtOutput);
-
-        // Motion blur runs before tonemapping while the image is still in linear HDR space.
-        dispatchPostFxMotionBlur(rtOutput);
-
-        dispatchToneMapping(rtOutput, !dlssNrEnabled);
-
-        // Lens effects (chromatic aberration, vignette) run AFTER tonemapping. They are
-        // display-space artifacts so they operate on post-tonemap LDR data.
-        dispatchPostFxLensEffects(rtOutput);
 
         // Final output pass converts the linear post-tonemap LDR image to sRGB and applies
         // dithering as the very last step. SRGB conversion is suppressed for screenshot
         // captures (WAR for TREX-553: NVTT implicitly applies sRGB during dds->png conversion
         // for 16bit float formats).
         const bool performSRGBConversion = !captureScreenImage && g_allowSrgbConversionForOutput;
-        dispatchSRGBDither(rtOutput, performSRGBConversion);
+        // !dlssNrEnabled is forwarded to dispatchToneMapping's updateAutoExposure
+        // parameter: DLSS-NR already dispatched auto exposure above, so the
+        // tonemapper must not dispatch it a second time.
+        fork_hooks::dispatchPostProcessingStack(
+          this, rtOutput, performSRGBConversion, /* updateAutoExposure */ !dlssNrEnabled);
 
         // Composite the Remix C API screen overlay after tone mapping and display encoding,
         // before screenshot capture, so plugin UI is never fed through a post-tonemap pass.
@@ -2152,6 +2150,17 @@ namespace dxvk {
       RtxOptions::rngSeedWithFrameIndex() ? m_device->getCurrentFrameId() : 0,
       rtOutput,
       mainCamera.isViewHistoryInvalidated(m_device->getCurrentFrameId()));
+  }
+
+  void RtxContext::dispatchPostFxNtsc(Resources::RaytracingOutput& rtOutput) {
+    ScopedCpuProfileZone();
+    DxvkPostFx& postFx = m_common->metaPostFx();
+    const RtCamera& mainCamera = getSceneManager().getCamera();
+
+    postFx.dispatchNtsc(this,
+      getResourceManager().getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE),
+      mainCamera.getShaderConstants().resolution,
+      rtOutput);
   }
 
   void RtxContext::dispatchPostFxLensEffects(Resources::RaytracingOutput& rtOutput) {

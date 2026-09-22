@@ -57,7 +57,13 @@ namespace dxvk {
   // Forward declaration of the fork hook that needs friend access to RtxContext
   // private members (screen-overlay state). See rtx_fork_hooks.h.
   class RtxContext;
+  class RtxPostProcessingStack;
   namespace fork_hooks {
+    void dispatchPostProcessingStack(
+      Rc<RtxContext> ctx,
+      Resources::RaytracingOutput& rtOutput,
+      bool performSRGBConversion,
+      bool updateAutoExposure);
     void dispatchScreenOverlay(RtxContext&, Resources::RaytracingOutput&);
     bool isFsrUpscalerActive(RtxContext&);
     void dispatchFsrUpscale(RtxContext&, const Resources::RaytracingOutput&);
@@ -255,6 +261,7 @@ namespace dxvk {
     void dispatchToneMapping(const Resources::RaytracingOutput& rtOutput, bool updateAutoExposure = true);
     void dispatchBloom(const Resources::RaytracingOutput& rtOutput);
     void dispatchPostFxMotionBlur(Resources::RaytracingOutput& rtOutput);
+    void dispatchPostFxNtsc(Resources::RaytracingOutput& rtOutput);
     void dispatchPostFxLensEffects(Resources::RaytracingOutput& rtOutput);
     void dispatchSRGBDither(const Resources::RaytracingOutput& rtOutput, bool performSRGBConversion);
     void dispatchDebugView(Rc<DxvkImage>& srcImage, const Resources::RaytracingOutput& rtOutput, bool captureScreenImage);
@@ -370,6 +377,7 @@ namespace dxvk {
     friend bool fork_hooks::isFsrUpscalerActive(RtxContext&);
     friend void fork_hooks::dispatchFsrUpscale(RtxContext&, const Resources::RaytracingOutput&);
     friend void fork_hooks::dispatchRcasSharpening(RtxContext&, const Resources::RaytracingOutput&);
+    friend class RtxPostProcessingStack;
     friend void fork_hooks::dispatchFsrFrameGeneration(RtxContext&, const Rc<DxvkImage>&);
     friend void fork_hooks::setFsrDownscaleExtent(RtxContext&, const VkExtent3D&, VkExtent3D&);
   };

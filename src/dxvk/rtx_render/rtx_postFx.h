@@ -61,6 +61,19 @@ namespace dxvk {
       const uint32_t frameIdx,
       const Resources::RaytracingOutput& rtOutput);
 
+    // NTSC/VHS composite. Runs after tonemapping and writes the processed
+    // display-space result back to m_finalOutput.
+    //
+    // No frame index parameter on purpose: the tape model keys its random
+    // streams off integer NTSC frame/field counters derived from GlobalTime, so
+    // the look is frame-rate independent and does not freeze when the caller's
+    // frame index is pinned to zero by rtx.rngSeedWithFrameIndex.
+    void dispatchNtsc(
+      Rc<RtxContext> ctx,
+      Rc<DxvkSampler> linearSampler,
+      const uvec2& mainCameraResolution,
+      const Resources::RaytracingOutput& rtOutput);
+
     void dispatchHighlighting(
       Rc<RtxContext> ctx,
       const Resources::RaytracingOutput& rtOutput,
@@ -69,23 +82,41 @@ namespace dxvk {
       HighlightColor color);
 
     void showImguiSettings();
+    void showMotionBlurImguiSettings();
+    void showLensEffectsImguiSettings();
+    void showNtscImguiSettings();
 
     inline bool isPostFxEnabled() const { return enable(); }
     inline bool isMotionBlurEnabled() const { return enable() && enableMotionBlur() && motionBlurSampleCount() > 0 && exposureFraction() > 0.0f; }
-    inline bool isChromaticAberrationEnabled() const { return enable() && enableChromaticAberration() && chromaticAberrationAmount() > 0.0f; }
-    inline bool isVignetteEnabled() const { return enable() && enableVignette() && vignetteIntensity() > 0.0f; }
+    inline bool isChromaticAberrationEnabled() const { return enable() && enableLensEffects() && enableChromaticAberration() && chromaticAberrationAmount() > 0.0f; }
+    inline bool isVignetteEnabled() const { return enable() && enableLensEffects() && enableVignette() && vignetteIntensity() > 0.0f; }
 
-    RTX_OPTION_ARGS("rtx.postfx", bool, enable, true, "Enables post-processing effects.",
+    RTX_OPTION_ARGS("rtx.postfx", bool, enable, true, "Enables optional post-processing effects in the stack.",
                     args.environment = "RTX_POST_FX_ENABLE",
                     args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION_ARGS("rtx.postfx", bool, enableMotionBlur, true, "Enables motion blur post-processing effect.",
                     args.environment = "RTX_POST_FX_MOTION_BLUR_ENABLE",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION_ARGS("rtx.postfx", bool, enableLensEffects, true, "Enables lens post-processing effects.",
                     args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION_ARGS("rtx.postfx", bool, enableChromaticAberration, true, "Enables chromatic aberration post-processing effect.",
                     args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION_ARGS("rtx.postfx", bool, enableVignette, true, "Enables vignette post-processing effect.",
                     args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION("rtx.postfx", bool, desaturateOthersOnHighlight, true, "If true, desaturare all objects that are not highlighted.");
+
+    RTX_OPTION_ARGS("rtx.ntsc", bool, ntscEnable, false,
+                    "Enable the NTSC/VHS composite look.",
+                    args.environment = "RTX_NTSC_ENABLE",
+                    args.flags = RtxOptionFlags::UserSetting);
+    RTX_OPTION("rtx.ntsc", float, ntscLumaBW, 3.00f, "VHS luma bandwidth in MHz (SP~3.0, EP~1.6).");
+    RTX_OPTION("rtx.ntsc", float, ntscColorBW, 425.00f, "VHS color-under bandwidth in kHz.");
+    RTX_OPTION("rtx.ntsc", float, ntscRinging, 0.30f, "VHS playback edge-ringing gain.");
+    RTX_OPTION("rtx.ntsc", float, ntscLumaNoise, 0.025f, "Luminance-dependent VHS tape noise amplitude.");
+    RTX_OPTION("rtx.ntsc", float, ntscTapeDropoutRate, 0.50f, "Average VHS tape dropouts per 480-line frame.");
+    RTX_OPTION("rtx.ntsc", float, ntscTapeDropoutLength, 15.0f, "Average VHS dropout length in microseconds.");
+    RTX_OPTION("rtx.ntsc", float, ntscHeadSmear, 0.175f, "Worn-head symmetric luma smear strength.");
+    RTX_OPTION("rtx.ntsc", float, ntscTapeTrail, 0.675f, "Causal rightward luma trail strength, 0..1.");
 
   private:
     Rc<vk::DeviceFn> m_vkd;

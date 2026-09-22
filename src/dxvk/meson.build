@@ -243,6 +243,8 @@ dxvk_src = files([
   'rtx_render/rtx_fork_overlay.cpp',
   'rtx_render/rtx_fork_rcas.cpp',
   'rtx_render/rtx_fork_rcas.h',
+  'rtx_render/rtx_fork_post_processing.cpp',
+  'rtx_render/rtx_fork_post_processing.h',
   'rtx_render/rtx_fork_submit.cpp',
   'rtx_render/rtx_fork_tonemap.cpp',
   'rtx_render/rtx_fork_tonemap.h',

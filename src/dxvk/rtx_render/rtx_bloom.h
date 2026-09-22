@@ -46,6 +46,7 @@ namespace dxvk {
       const Resources::Resource& inOutColorBuffer);
 
     void showImguiSettings();
+    void showEffectSettings();
 
   private:
     void dispatchDownsampleStep(
