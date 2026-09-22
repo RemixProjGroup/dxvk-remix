@@ -1,10 +1,13 @@
-//! remixfx id = scene_buffer_inspector
-//! remixfx name = Scene Buffer Inspector
-//! remixfx domain = display
-//! remixfx enabled = false
-//! remixfx parameter = view,int,0,0,11,1,Buffer View
-//! remixfx parameter = scale,float,10.0,0.01,1000.0,0.01,View Scale
-//! remixfx parameter = source_mix,float,0.0,0.0,1.0,0.01,Source Mix
+//! remixfx effect.id      = scene_buffer_inspector
+//! remixfx effect.name    = Scene Buffer Inspector
+//! remixfx effect.domain  = display
+//! remixfx effect.enabled = false
+//! remixfx param.view         = int 0 [0..11]
+//! remixfx param.view.label   = Buffer View
+//! remixfx param.view.items   = Linear Depth | Projected Depth | Motion | World Normal | Albedo | Roughness | Surface Flags | Object Picking | Cone Radius | Blue Noise | Exposure | Focus State
+//! remixfx param.scale        = float 10.0 [0.01..1000] step 0.01
+//! remixfx param.scale.label  = View Scale
+//! remixfx param.source_mix   = float 0.0 [0..1] step 0.01
 
 #include "remixfx_bindings.slangh"
 
@@ -72,9 +75,9 @@ void main(uint2 pixel : SV_DispatchThreadID) {
 
   const float2 uv = (float2(pixel) + 0.5f) * cb.invImageSize;
   const float4 source = InputColor.SampleLevel(uv, 0.0f);
-  const int view = clamp(int(round(cb.parameterValues[0].x)), 0, 11);
-  const float viewScale = max(cb.parameterValues[0].y, 1e-4f);
-  const float sourceMix = saturate(cb.parameterValues[0].z);
+  const int view = clamp(remixFxParamInt(0), 0, 11);
+  const float viewScale = max(remixFxParam(1), 1e-4f);
+  const float sourceMix = saturate(remixFxParam(2));
   const uint requiredInput = requiredInputForView(view);
   const bool inputAvailable = remixFxHasInput(requiredInput)
     && (view != 11 || remixFxHasInput(REMIXFX_INPUT_LINEAR_DEPTH));
@@ -155,7 +158,8 @@ void main(uint2 pixel : SV_DispatchThreadID) {
 
   // These checks also exercise the output-size and parameter-count ABI fields.
   const bool frameContractValid = all(remixFxFrame.outputSize == cb.imageSize)
-    && cb.parameterValueCount >= 3u;
+    && all(cb.dispatchSize == cb.imageSize)
+    && remixFxParams.valueCount >= 3u;
   if (!frameContractValid && pixel.x < 12u && pixel.y < 12u) {
     diagnostic = float3(1.0f, 0.0f, 0.0f);
   }

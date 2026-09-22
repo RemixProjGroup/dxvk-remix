@@ -1,11 +1,15 @@
-//! remixfx id = camera_data_diagnostic
-//! remixfx name = Camera Data Diagnostic
-//! remixfx domain = display
-//! remixfx enabled = false
-//! remixfx parameter = view,int,0,0,5,1,Diagnostic View
-//! remixfx parameter = error_gain,float,1000.0,1.0,100000.0,1.0,Error Gain
-//! remixfx parameter = grid_spacing,float,1.0,0.01,100.0,0.01,Grid Spacing (meters)
-//! remixfx parameter = source_mix,float,0.0,0.0,1.0,0.01,Source Mix
+//! remixfx effect.id      = camera_data_diagnostic
+//! remixfx effect.name    = Camera Data Diagnostic
+//! remixfx effect.domain  = display
+//! remixfx effect.enabled = false
+//! remixfx param.view               = int 0 [0..5]
+//! remixfx param.view.label         = Diagnostic View
+//! remixfx param.view.items         = Current Matrices | Previous Matrices | Translated World | Reprojection | Scalar Frame Data | World Reconstruction
+//! remixfx param.error_gain         = float 1000.0 [1..100000] step 1
+//! remixfx param.error_gain.tooltip = Amplifies matrix round-trip error so a close result stays black.
+//! remixfx param.grid_spacing       = float 1.0 [0.01..100] step 0.01
+//! remixfx param.grid_spacing.label = Grid Spacing (meters)
+//! remixfx param.source_mix         = float 0.0 [0..1] step 0.01
 
 #include "remixfx_bindings.slangh"
 
@@ -59,10 +63,10 @@ void main(uint2 pixel : SV_DispatchThreadID) {
 
   const float2 uv = (float2(pixel) + 0.5f) * cb.invImageSize;
   const float4 source = InputColor.SampleLevel(uv, 0.0f);
-  const int view = clamp(int(round(cb.parameterValues[0].x)), 0, 5);
-  const float errorGain = cb.parameterValues[0].y;
-  const float gridSpacing = cb.parameterValues[0].z;
-  const float sourceMix = saturate(cb.parameterValues[0].w);
+  const int view = clamp(remixFxParamInt(0), 0, 5);
+  const float errorGain = remixFxParam(1);
+  const float gridSpacing = remixFxParam(2);
+  const float sourceMix = saturate(remixFxParam(3));
   const bool hasDepth = remixFxHasInput(REMIXFX_INPUT_LINEAR_DEPTH);
   const bool hasProjectedDepth = remixFxHasInput(REMIXFX_INPUT_PROJECTED_DEPTH);
 
@@ -201,7 +205,7 @@ void main(uint2 pixel : SV_DispatchThreadID) {
       homogeneousPoint(worldPosition), gridSpacing, remixFxFrame.meterToWorldScale);
   }
 
-  if (cb.parameterValueCount < 4u && pixel.x < 12u && pixel.y < 12u) {
+  if (remixFxParams.valueCount < 4u && pixel.x < 12u && pixel.y < 12u) {
     diagnostic = float3(1.0f, 0.0f, 0.0f);
   }
   OutputColor[pixel] = float4(lerp(diagnostic, source.rgb, sourceMix), source.a);

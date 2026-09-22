@@ -71,7 +71,13 @@ namespace dxvk {
     static std::vector<EffectEntry> defaultOrder();
     static std::vector<EffectEntry> resolvedOrder();
     static size_t findEffect(const std::vector<EffectEntry>& order, const std::string& configId);
+    static std::vector<std::string> storedOrderTokens();
+    static std::vector<std::string> configIds(const std::vector<EffectEntry>& order);
     static std::string serializeOrder(const std::vector<EffectEntry>& order);
+    // What a reorder writes back. The plain serializer states the stack the
+    // runtime can currently see, which is not the same thing as the stack the
+    // user arranged.
+    static std::string serializeOrderPreservingUnloaded(const std::vector<EffectEntry>& order);
     static bool moveEffect(std::vector<EffectEntry>& order, size_t from, size_t to);
     static bool canMove(const std::vector<EffectEntry>& order, size_t from, size_t to);
     static EffectEntry effectFromConfig(const std::string& configId, bool& valid);

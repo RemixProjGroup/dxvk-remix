@@ -1,11 +1,14 @@
-//! remixfx id = focus_peaking
-//! remixfx name = Focus Peaking
-//! remixfx domain = display
-//! remixfx enabled = false
-//! remixfx parameter = peak_color,color3,0.05 1.0 0.2,0.0,1.0,0.01,Peak Color
-//! remixfx parameter = strength,float,0.8,0.0,2.0,0.01,Strength
-//! remixfx parameter = focus_band,float,0.04,0.001,0.5,0.001,Relative Focus Band
-//! remixfx parameter = edge_threshold,float,0.02,0.001,0.5,0.001,Edge Threshold
+//! remixfx effect.id      = focus_peaking
+//! remixfx effect.name    = Focus Peaking
+//! remixfx effect.domain  = display
+//! remixfx effect.enabled = false
+//! remixfx param.peak_color            = color3 0.05 1.0 0.2
+//! remixfx param.strength              = float 0.8 [0..2] step 0.01
+//! remixfx param.focus_band            = float 0.04 [0.001..0.5] step 0.001
+//! remixfx param.focus_band.label      = Relative Focus Band
+//! remixfx param.focus_band.tooltip    = Depth window around the focus plane, as a fraction of the focus distance.
+//! remixfx param.edge_threshold        = float 0.02 [0.001..0.5] step 0.001
+//! remixfx param.edge_threshold.label  = Edge Threshold
 
 #include "remixfx_bindings.slangh"
 
@@ -29,10 +32,10 @@ void main(uint2 pixel : SV_DispatchThreadID) {
     return;
   }
 
-  const float3 peakColor = cb.parameterValues[0].xyz;
-  const float strength = cb.parameterValues[0].w;
-  const float focusBand = cb.parameterValues[1].x;
-  const float edgeThreshold = cb.parameterValues[1].y;
+  const float3 peakColor = remixFxParam3(0);
+  const float strength = remixFxParam(3);
+  const float focusBand = remixFxParam(4);
+  const float edgeThreshold = remixFxParam(5);
   const float focusDistance = remixFxHasInput(REMIXFX_INPUT_FOCUS_STATE)
     ? RemixFxFocusState[0] + remixFxFrame.autoFocusOffset
     : remixFxFrame.manualFocusDistance;

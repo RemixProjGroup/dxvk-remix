@@ -31,7 +31,14 @@ endforeach
 
 tests = []
 exe = executable('test_external_effect_manifest', files('test_external_effect_manifest.cpp'), include_directories : test_include_path, dependencies : [ test_unit_deps, d3d9_dep ], link_with: [ d3d9_dll, dxvk_lib ], win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
-test('test_external_effect_manifest', exe, env: test_env)
+# The sample effects are handed in so they are parsed as part of the test: they
+# are the worked documentation for the format, and one that stopped loading
+# would otherwise only be noticed by whoever copied it.
+test('test_external_effect_manifest', exe, env: test_env, args: [ join_paths(global_src_root_norm, 'examples', 'remixfx') ])
+tests += exe
+
+exe = executable('test_external_effect_image', files('test_external_effect_image.cpp'), include_directories : test_include_path, dependencies : [ test_unit_deps, d3d9_dep ], link_with: [ d3d9_dll, dxvk_lib ], win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_external_effect_image', exe, env: test_env)
 tests += exe
 
 exe = executable('fastop_minmax',  files('test_fastop_minmax.cpp'),  dependencies : test_unit_deps, win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])

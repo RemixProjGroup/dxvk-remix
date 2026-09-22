@@ -23,11 +23,20 @@ static const uint REMIXFX_SURFACE_MASK_OUT = 1u << 3;
 struct RemixFxArgs {
   uint2 imageSize;
   float2 invImageSize;
+  // Extent this dispatch covers. Equal to imageSize for a single-pass effect.
+  uint2 dispatchSize;
   float timeSeconds;
   uint frameIndex;
-  uint parameterValueCount;
+  uint passIndex;
   uint padding;
-  float4 parameterValues[14];
+};
+
+struct RemixFxParameters {
+  // Components are densely packed in declaration order, so a float3 can start
+  // at any component and straddle a float4. Use the accessors below rather
+  // than swizzling a row directly.
+  float4 values[256];
+  uint valueCount;
 };
 
 struct RemixFxFrameData {
@@ -63,7 +72,16 @@ struct RemixFxFrameData {
   float manualFocusDistance;
   float autoFocusOffset;
   uint autoFocusEnabled;
-  uint padding;
+  // Non-zero on the first frame after this effect's textures were allocated or
+  // resized, after it was switched on, and after a reload. Anything that
+  // accumulates into a 'persist' texture has to start over when it is set, or
+  // it accumulates onto whatever the allocation happened to leave behind.
+  uint historyInvalid;
+  // The camera jumped. Separate from historyInvalid on purpose: a temporal
+  // blur wants to drop its history across a cut, an auto exposure ramp may
+  // want to keep it, and only the effect knows which it is.
+  uint cameraCut;
+  uint padding[3];
 };
 
 layout(binding = 0)
@@ -117,8 +135,63 @@ RWTexture1D<float> RemixFxFocusState;
 [[vk::binding(16)]]
 Texture2D<float> RemixFxProjectedDepth;
 
+[[vk::binding(18)]]
+ConstantBuffer<RemixFxParameters> remixFxParams;
+
+// Textures an effect declares with '//! remixfx texture.<name> = ...'. The
+// runtime passes each one's index in as REMIXFX_TEX_<name> on the compiler
+// command line, so a declaration reads:
+//
+//   REMIXFX_READ(REMIXFX_TEX_halfColor)  Texture2D<float4> HalfColor;
+//   REMIXFX_WRITE(REMIXFX_TEX_halfColor) RWTexture2D<float4> HalfColorOut;
+//
+// A read binding is a sampled image; pair it with RemixFxSceneSampler or
+// RemixFxSceneLinearSampler. A write binding is storage, and storage is
+// readable, so a texture one thread both loads and stores needs only 'write'.
+// Declaring one of these without the matching 'read'/'write' in the manifest
+// is a load error rather than an unbound descriptor.
+//
+// A texture declared with '//! remixfx texture.<name>.file = <path>' is the
+// one exception, and it is the same macro with a different type:
+//
+//   REMIXFX_READ(REMIXFX_TEX_lut) Sampler2D<float4> Lut;
+//
+// Sampler2D rather than Texture2D, because a file texture's slot is a combined
+// image sampler. Its address mode is declared in the manifest, next to the
+// path, rather than chosen here - a grain plate is meaningless clamped and a
+// lookup table is meaningless wrapped, and that is a fact about the image, not
+// about the line that reads it. So the runtime supplies the sampler with the
+// image and there is none to name at the call site. File textures are
+// read-only: listing one under 'write' is a load error. Filtering is linear.
+#define REMIXFX_READ(n) [[vk::binding(32 + (n))]]
+#define REMIXFX_WRITE(n) [[vk::binding(48 + (n))]]
+
 layout(push_constant)
 ConstantBuffer<RemixFxArgs> cb;
+
+float remixFxParam(uint index) {
+  return remixFxParams.values[index >> 2u][index & 3u];
+}
+
+float2 remixFxParam2(uint index) {
+  return float2(remixFxParam(index), remixFxParam(index + 1u));
+}
+
+float3 remixFxParam3(uint index) {
+  return float3(remixFxParam(index), remixFxParam(index + 1u), remixFxParam(index + 2u));
+}
+
+float4 remixFxParam4(uint index) {
+  return float4(remixFxParam3(index), remixFxParam(index + 3u));
+}
+
+int remixFxParamInt(uint index) {
+  return int(round(remixFxParam(index)));
+}
+
+bool remixFxParamBool(uint index) {
+  return remixFxParam(index) >= 0.5f;
+}
 
 bool remixFxHasInput(uint inputFlag) {
   return (remixFxFrame.availableInputs & inputFlag) != 0;
@@ -182,6 +255,328 @@ float remixFxLoadConeRadius(float2 uv) {
 
 float remixFxLoadProjectedDepth(float2 uv) {
   return RemixFxProjectedDepth.Load(int3(remixFxScenePixel(uv), 0));
+}
+
+// ---------------------------------------------------------------------------
+// Edge-aware scene sampling
+//
+// Every helper above maps an output pixel onto the single render resolution
+// texel containing it. The G-buffers live at render resolution and an effect
+// runs after the upscale, so with DLSS or any other upscaler active that
+// mapping is a nearest-neighbour fetch off a coarser grid: what it reads is
+// quantized to the render grid, and anything derived from it stair-steps along
+// every silhouette. Measured on a hard depth step at DLSS Quality, the edge
+// that mapping reports wanders up to 2.2 output pixels from where the colour
+// underneath says the silhouette actually is; at Ultra Performance, 3.6.
+//
+// The helpers below close that gap the same way rtx.dof.edgeAwareUpsample does
+// inside the built-in depth of field. Both forms point sample each of the four
+// render resolution texels bracketing an output pixel - a *filtered* G-buffer
+// value belongs to no surface, and that is as true of a normal or a flag as it
+// is of a depth - and then decide between those four using the output
+// resolution colour, which is the only antialiased signal a post process has.
+// The weight of a texel is its bilinear coverage of this pixel times a range
+// term that collapses any neighbour whose colour puts it on the far side of a
+// silhouette.
+//
+// There are two forms, because there are two kinds of quantity:
+//
+//   remixFxSelectSceneValue   picks one of the four. Use it for anything read
+//                             straight out of a G-buffer, where a weighted
+//                             mean would invent a value no surface has.
+//   remixFxResolveSceneValue  takes the weighted mean. Use it for a quantity
+//                             the effect derived per texel and that is
+//                             continuous by construction: a 0..1 mask, an edge
+//                             strength, a blend factor.
+//
+// Both short circuit before touching the guide when the four values already
+// agree, which is the interior of every surface in the frame and so most of
+// its area. At native resolution the footprint collapses to one texel and both
+// return exactly what remixFxScenePixel() would have read, bit for bit.
+// ---------------------------------------------------------------------------
+
+// Sharpness of the range term, applied to a squared relative colour distance.
+// A distance of 0.25, which is a clear silhouette, drops a neighbour to about
+// an eighth of its spatial weight; at 0.5 it is gone entirely, which is what
+// snaps the decision onto the colour edge. Smooth shading sits below 0.05,
+// where the term is within 8% of 1 and the whole thing degenerates to the
+// plain bilinear coverage that removes stair-steps on a gradient. Same
+// constant, for the same reasons, as kDofGuideSharpness in the built-in depth
+// of field.
+static const float kRemixFxGuideSharpness = 32.0f;
+
+// A texel fraction this close to a boundary is snapped to it. Render and
+// output extents are equal only to within float rounding once a uv has been
+// through a reciprocal - the reciprocal of a resolution is not a dyadic
+// rational - so without this snap every pixel of a native resolution frame
+// would leak a weight of order 1e-4 onto the wrong texel, and a pixel landing
+// on the low side of the rounding would floor into the texel below. With it a
+// 1:1 ratio reproduces remixFxScenePixel() exactly.
+static const float kRemixFxTexelSnap = 1e-3f;
+static const float kRemixFxTexelSnapScale = 1.0f / (1.0f - 2.0f * kRemixFxTexelSnap);
+
+struct RemixFxSceneFootprint {
+  // Top left of the 2x2 block of render resolution texels whose footprints can
+  // cover this output pixel. Not yet clamped - use remixFxFootprintTexel().
+  int2 baseTexel;
+  // Bilinear coverage of this pixel by each texel, in the order
+  // (0,0) (1,0) (0,1) (1,1). Zero for a texel this pixel does not touch.
+  float4 spatial;
+  // Index of the largest spatial weight: the texel remixFxScenePixel() would
+  // have returned on its own, and the fallback whenever the guide cannot
+  // decide.
+  uint nearest;
+  // The footprint is a single texel, so no guide can change the answer and its
+  // colour fetches are skipped. True for every pixel of a native resolution
+  // frame.
+  bool collapsed;
+};
+
+// The 2x2 render resolution footprint of one output pixel. Reads no textures.
+RemixFxSceneFootprint remixFxSceneFootprint(float2 uv) {
+  // Continuous position of this pixel's centre in render resolution texel
+  // space - the same mapping remixFxScenePixel() uses, before it truncates.
+  const float2 basePos = uv * float2(remixFxFrame.renderSize) - 0.5f;
+  const float2 baseFloor = floor(basePos);
+  const float2 texelFrac = saturate(
+    (basePos - baseFloor - kRemixFxTexelSnap) * kRemixFxTexelSnapScale);
+
+  RemixFxSceneFootprint footprint;
+  footprint.baseTexel = int2(baseFloor);
+  footprint.spatial = float4(
+    (1.0f - texelFrac.x) * (1.0f - texelFrac.y),
+    texelFrac.x * (1.0f - texelFrac.y),
+    (1.0f - texelFrac.x) * texelFrac.y,
+    texelFrac.x * texelFrac.y);
+  footprint.nearest = (texelFrac.x >= 0.5f ? 1u : 0u) + (texelFrac.y >= 0.5f ? 2u : 0u);
+  // Each fraction snapped to exactly 0 or 1, so one weight is 1 and the other
+  // three are 0. Testing the fractions rather than the products keeps that
+  // exact rather than within an epsilon.
+  footprint.collapsed = all(min(texelFrac, 1.0f - texelFrac) <= 0.0f);
+  return footprint;
+}
+
+// Texel `index` of the footprint, clamped to the G-buffer.
+int2 remixFxFootprintTexel(RemixFxSceneFootprint footprint, uint index) {
+  return clamp(
+    footprint.baseTexel + int2(int(index & 1u), int(index >> 1u)),
+    int2(0, 0),
+    int2(remixFxFrame.renderSize) - 1);
+}
+
+// Scale free distance between two colours, in 0..1.
+//
+// The numerator is the luminance of the difference rather than the difference
+// of luminances, so a hue change at matched brightness still reads as an edge.
+// The denominator makes a 20% step the same distance in a dim interior as in a
+// bright sky, which matters because an HDR-domain effect sees whatever linear
+// scale the game happened to author. Both terms use the same weights, so the
+// ratio cannot exceed 1.
+float remixFxGuideDistance(float3 a, float3 b) {
+  const float3 lumaWeights = float3(0.2126f, 0.7152f, 0.0722f);
+  const float difference = dot(abs(a - b), lumaWeights);
+  const float magnitude = dot(abs(a) + abs(b), lumaWeights);
+  return saturate(difference / max(magnitude, 1e-4f));
+}
+
+// Colour of the output pixel under one render resolution texel's centre. That
+// pixel is upscaled and antialiased, so it is the true silhouette the decision
+// has to line up with. InputColor is bound with a linear sampler, so the uv is
+// snapped to the pixel's centre: the guide has to be one pixel's colour and
+// not a blend of two, or the range term would be comparing against a colour no
+// surface in the frame has.
+float3 remixFxGuideColor(int2 texel, float2 invOutputSize) {
+  const float2 texelUv = (float2(texel) + 0.5f) * remixFxFrame.invRenderSize;
+  const uint2 outputPixel = min(
+    uint2(texelUv * float2(remixFxFrame.outputSize)),
+    remixFxFrame.outputSize - 1u);
+  return InputColor.SampleLevel((float2(outputPixel) + 0.5f) * invOutputSize, 0.0f).rgb;
+}
+
+// Spatial coverage times the colour range term, for all four texels. Costs
+// five colour fetches, so call it only once the values are known to disagree.
+float4 remixFxSceneGuideWeights(RemixFxSceneFootprint footprint, float2 uv) {
+  const float2 invOutputSize = 1.0f / float2(remixFxFrame.outputSize);
+  const float3 centerColor = InputColor.SampleLevel(uv, 0.0f).rgb;
+
+  float4 weights = float4(0.0f, 0.0f, 0.0f, 0.0f);
+  [unroll]
+  for (uint i = 0u; i < 4u; ++i) {
+    if (footprint.spatial[i] > 0.0f) {
+      const float guideDistance = remixFxGuideDistance(
+        centerColor,
+        remixFxGuideColor(remixFxFootprintTexel(footprint, i), invOutputSize));
+      weights[i] = footprint.spatial[i] * exp(-kRemixFxGuideSharpness * guideDistance * guideDistance);
+    }
+  }
+
+  // Degenerate guide: a sub-pixel feature or an isolated highlight whose
+  // colour matches none of the four neighbours collapses every weight at once.
+  // Fall back to the plain bilinear coverage, whose maximum is still the texel
+  // remixFxScenePixel() would have picked.
+  return dot(weights, float4(1.0f, 1.0f, 1.0f, 1.0f)) > 1e-6f ? weights : footprint.spatial;
+}
+
+// Index of the texel the output pixel's colour says this pixel belongs to.
+uint remixFxSelectSceneTexelIndex(RemixFxSceneFootprint footprint, float2 uv) {
+  if (footprint.collapsed) {
+    return footprint.nearest;
+  }
+
+  const float4 weights = remixFxSceneGuideWeights(footprint, uv);
+  uint best = 0u;
+  float bestWeight = -1.0f;
+  [unroll]
+  for (uint i = 0u; i < 4u; ++i) {
+    if (weights[i] > bestWeight) {
+      bestWeight = weights[i];
+      best = i;
+    }
+  }
+  return best;
+}
+
+// Drop-in replacement for remixFxScenePixel(): the render resolution texel an
+// output pixel belongs to, chosen by the upscaled colour rather than by the
+// render grid. Any G-buffer can be read through it -
+//
+//   RemixFxAlbedo.Load(int3(remixFxScenePixelEdgeAware(uv), 0))
+//
+// - but it cannot know what the caller is about to read, so it has no value to
+// short circuit on and pays the guide on every pixel of an upscaled frame.
+// Where the value is a float, prefer remixFxSelectSceneValue() below, which
+// does short circuit.
+uint2 remixFxScenePixelEdgeAware(float2 uv) {
+  const RemixFxSceneFootprint footprint = remixFxSceneFootprint(uv);
+  return uint2(remixFxFootprintTexel(footprint, remixFxSelectSceneTexelIndex(footprint, uv)));
+}
+
+// Point sample of whichever of four already-fetched values belongs to the
+// surface this output pixel sits on. The result is always one of the four
+// exactly, never a mixture.
+float remixFxSelectSceneValue(RemixFxSceneFootprint footprint, float2 uv, float4 values) {
+  float lowest = values.x;
+  float highest = values.x;
+  float bestSpatial = -1.0f;
+  float nearestValue = values.x;
+
+  [unroll]
+  for (uint i = 0u; i < 4u; ++i) {
+    if (footprint.spatial[i] > 0.0f) {
+      lowest = min(lowest, values[i]);
+      highest = max(highest, values[i]);
+      if (footprint.spatial[i] > bestSpatial) {
+        bestSpatial = footprint.spatial[i];
+        nearestValue = values[i];
+      }
+    }
+  }
+
+  // Every neighbour that can contribute already agrees, so no guide can change
+  // the answer and its five colour fetches are skipped.
+  if (highest <= lowest) {
+    return nearestValue;
+  }
+
+  const float4 weights = remixFxSceneGuideWeights(footprint, uv);
+  float bestWeight = -1.0f;
+  float chosen = nearestValue;
+  [unroll]
+  for (uint j = 0u; j < 4u; ++j) {
+    if (weights[j] > bestWeight) {
+      bestWeight = weights[j];
+      chosen = values[j];
+    }
+  }
+  return chosen;
+}
+
+// Weighted mean of four already-fetched values. Only for a quantity that is
+// continuous across a silhouette by construction - one the effect derived per
+// texel, such as a 0..1 mask or an edge strength. Passing a raw depth or a
+// normal component here puts back exactly the interpolated-across-a-silhouette
+// value that remixFxSelectSceneValue() exists to avoid.
+float remixFxResolveSceneValue(RemixFxSceneFootprint footprint, float2 uv, float4 values) {
+  float lowest = values.x;
+  float highest = values.x;
+  float bestSpatial = -1.0f;
+  float nearestValue = values.x;
+
+  [unroll]
+  for (uint i = 0u; i < 4u; ++i) {
+    if (footprint.spatial[i] > 0.0f) {
+      lowest = min(lowest, values[i]);
+      highest = max(highest, values[i]);
+      if (footprint.spatial[i] > bestSpatial) {
+        bestSpatial = footprint.spatial[i];
+        nearestValue = values[i];
+      }
+    }
+  }
+
+  if (highest <= lowest) {
+    return nearestValue;
+  }
+
+  const float4 weights = remixFxSceneGuideWeights(footprint, uv);
+  const float total = dot(weights, float4(1.0f, 1.0f, 1.0f, 1.0f));
+  return total > 1e-6f ? dot(weights, values) / total : nearestValue;
+}
+
+// Linear view depth of the surface this output pixel sits on. Still signed:
+// take abs() for a distance, exactly as with remixFxLoadLinearDepth().
+float remixFxLoadLinearDepthEdgeAware(float2 uv) {
+  const RemixFxSceneFootprint footprint = remixFxSceneFootprint(uv);
+  float4 depths;
+  [unroll]
+  for (uint i = 0u; i < 4u; ++i) {
+    depths[i] = RemixFxLinearDepth.Load(int3(remixFxFootprintTexel(footprint, i), 0));
+  }
+  return remixFxSelectSceneValue(footprint, uv, depths);
+}
+
+// World shading normal of the surface this output pixel sits on. The packed
+// words are compared rather than the decoded vectors, so the short circuit
+// costs four integer loads and not one decode on the interior of a flat
+// surface.
+float3 remixFxLoadWorldNormalEdgeAware(float2 uv) {
+  const RemixFxSceneFootprint footprint = remixFxSceneFootprint(uv);
+  uint4 packed;
+  [unroll]
+  for (uint i = 0u; i < 4u; ++i) {
+    packed[i] = RemixFxPackedWorldNormal.Load(int3(remixFxFootprintTexel(footprint, i), 0));
+  }
+
+  float bestSpatial = -1.0f;
+  uint nearestPacked = packed.x;
+  [unroll]
+  for (uint j = 0u; j < 4u; ++j) {
+    if (footprint.spatial[j] > bestSpatial) {
+      bestSpatial = footprint.spatial[j];
+      nearestPacked = packed[j];
+    }
+  }
+
+  bool agreed = true;
+  [unroll]
+  for (uint k = 0u; k < 4u; ++k) {
+    if (footprint.spatial[k] > 0.0f && packed[k] != nearestPacked) {
+      agreed = false;
+    }
+  }
+  if (agreed) {
+    return remixFxDecodeWorldNormal(nearestPacked);
+  }
+
+  const uint best = remixFxSelectSceneTexelIndex(footprint, uv);
+  uint chosen = nearestPacked;
+  [unroll]
+  for (uint m = 0u; m < 4u; ++m) {
+    if (m == best) {
+      chosen = packed[m];
+    }
+  }
+  return remixFxDecodeWorldNormal(chosen);
 }
 
 float remixFxBlueNoise(uint2 pixel, uint dimensionOffset = 0u) {

@@ -229,6 +229,8 @@ dxvk_src = files([
   'rtx_render/rtx_dust_particles.h',
   'rtx_render/rtx_env.cpp',
   'rtx_render/rtx_env.h',
+  'rtx_render/rtx_external_effect_image.cpp',
+  'rtx_render/rtx_external_effect_image.h',
   'rtx_render/rtx_external_effect_manifest.cpp',
   'rtx_render/rtx_external_effect_manifest.h',
   'rtx_render/rtx_external_effects.cpp',

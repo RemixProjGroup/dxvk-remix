@@ -21,6 +21,18 @@ namespace dxvk {
   namespace {
     constexpr size_t kInvalidIndex = static_cast<size_t>(-1);
     constexpr size_t kEffectCount = 7;
+    constexpr const char* kExternalPrefix = "external:";
+
+    std::string joinConfigIds(const std::vector<std::string>& ids) {
+      std::string result;
+      for (const std::string& id : ids) {
+        if (!result.empty()) {
+          result += ",";
+        }
+        result += id;
+      }
+      return result;
+    }
 
     // Drag handle drawn from the draw list rather than written as text: the
     // menu fonts are not guaranteed to carry a grip glyph, and a Button
@@ -168,7 +180,6 @@ namespace dxvk {
       }
     }
 
-    constexpr const char* kExternalPrefix = "external:";
     if (configId.rfind(kExternalPrefix, 0) == 0) {
       const std::string id = configId.substr(std::char_traits<char>::length(kExternalPrefix));
       if (RtxExternalEffects::instance().hasEffect(id)) {
@@ -181,14 +192,27 @@ namespace dxvk {
     return {};
   }
 
-  std::vector<RtxPostProcessingStack::EffectEntry> RtxPostProcessingStack::resolvedOrder() {
-    std::vector<EffectEntry> parsedOrder;
+  std::vector<std::string> RtxPostProcessingStack::storedOrderTokens() {
+    std::vector<std::string> tokens;
     std::stringstream stream(stackOrder());
     std::string token;
 
     while (std::getline(stream, token, ',')) {
+      const std::string trimmed = trim(token);
+      if (!trimmed.empty()) {
+        tokens.push_back(trimmed);
+      }
+    }
+
+    return tokens;
+  }
+
+  std::vector<RtxPostProcessingStack::EffectEntry> RtxPostProcessingStack::resolvedOrder() {
+    std::vector<EffectEntry> parsedOrder;
+
+    for (const std::string& token : storedOrderTokens()) {
       bool valid = false;
-      const EffectEntry entry = effectFromConfig(trim(token), valid);
+      const EffectEntry entry = effectFromConfig(token, valid);
       if (valid && findEffect(parsedOrder, configId(entry)) == kInvalidIndex) {
         parsedOrder.push_back(entry);
       }
@@ -231,15 +255,70 @@ namespace dxvk {
     return result;
   }
 
-  std::string RtxPostProcessingStack::serializeOrder(const std::vector<EffectEntry>& order) {
-    std::string result;
+  std::vector<std::string> RtxPostProcessingStack::configIds(
+    const std::vector<EffectEntry>& order) {
+    std::vector<std::string> ids;
+    ids.reserve(order.size());
     for (const EffectEntry& entry : order) {
-      if (!result.empty()) {
-        result += ",";
-      }
-      result += configId(entry);
+      ids.push_back(configId(entry));
     }
-    return result;
+    return ids;
+  }
+
+  std::string RtxPostProcessingStack::serializeOrder(const std::vector<EffectEntry>& order) {
+    return joinConfigIds(configIds(order));
+  }
+
+  // serializeOrder, plus every stored token resolvedOrder() could not turn
+  // into an entry. External effects are discovered and compiled on a worker,
+  // so for the first second of a session - and for as long as a shader file is
+  // moved away, failing to parse, or being edited - the stack the panel can
+  // show is a subset of the stack the user saved. Writing that subset back is
+  // what deletes an effect from an order somebody arranged by hand, and having
+  // it reappear at the end when it loads is not the order they arranged.
+  //
+  // A missing effect is put back after the stored token it followed, because
+  // that is the only position information there is: an unloaded effect has no
+  // domain to sort it into, and defaulting one would move it across the
+  // tonemapping boundary rather than leave it where the user left it. The
+  // anchor is the nearest preceding token that survived, so an effect that
+  // followed one being dragged elsewhere follows it there - the best guess
+  // available when the two are adjacent and only one of them can be moved.
+  std::string RtxPostProcessingStack::serializeOrderPreservingUnloaded(
+    const std::vector<EffectEntry>& order) {
+    std::vector<std::string> ids = configIds(order);
+    const std::vector<std::string> stored = storedOrderTokens();
+
+    for (size_t i = 0; i < stored.size(); i++) {
+      bool valid = false;
+      effectFromConfig(stored[i], valid);
+      if (valid || std::find(ids.begin(), ids.end(), stored[i]) != ids.end()) {
+        continue;
+      }
+      // Only an external id is carried. It names a file that exists and is
+      // merely absent right now; an unrecognised built-in name is a typo or a
+      // leftover from another build, and keeping one forever would make the
+      // option impossible to clean up by using the panel.
+      const size_t prefixLength = std::char_traits<char>::length(kExternalPrefix);
+      if (stored[i].rfind(kExternalPrefix, 0) != 0
+       || !isValidRtxExternalEffectId(stored[i].substr(prefixLength))) {
+        continue;
+      }
+
+      size_t position = 0;
+      for (size_t j = i; j-- > 0;) {
+        const auto anchor = std::find(ids.begin(), ids.end(), stored[j]);
+        if (anchor != ids.end()) {
+          position = static_cast<size_t>(anchor - ids.begin()) + 1;
+          break;
+        }
+      }
+      // A token restored here anchors the next one, which is what keeps a run
+      // of unloaded effects in the order they were written.
+      ids.insert(ids.begin() + position, stored[i]);
+    }
+
+    return joinConfigIds(ids);
   }
 
   bool RtxPostProcessingStack::canMove(
@@ -276,6 +355,11 @@ namespace dxvk {
     bool updateAutoExposure) {
     ScopedCpuProfileZone();
     RtxExternalEffects::instance().ensureLoaded(ctx->getDevice().ptr());
+    // Here rather than inside ensureLoaded, and above the loop rather than in
+    // it: this is where a finished recompile is swapped in, and doing that
+    // between two dispatches of one effect would leave half a frame bound
+    // against a layout the other half no longer has.
+    RtxExternalEffects::instance().pumpHotReload(ctx->getDevice().ptr());
 
     // The legacy post-FX option is now the stack's global optional-effect
     // switch. Tonemapping and the terminal sRGB/dither conversion remain
@@ -371,6 +455,10 @@ namespace dxvk {
     RemixGui::Checkbox("Post FX Enabled", &postFx.enableObject());
     ImGui::SameLine();
     if (ImGui::Button("Reset to Default Order")) {
+      // The plain serializer, deliberately: a reset clears external effects
+      // out of the stored order as well, and resolvedOrder() appends each one
+      // back at the end as it loads. That is the same answer for an effect
+      // that is loaded and one that is not, which is what a reset should give.
       stackOrderObject().setDeferred(serializeOrder(defaultOrder()));
     }
 
@@ -553,7 +641,7 @@ namespace dxvk {
             const std::string sourceConfigId(static_cast<const char*>(payload->Data));
             const size_t sourceIndex = findEffect(order, sourceConfigId);
             if (sourceIndex != kInvalidIndex && moveEffect(order, sourceIndex, index)) {
-              stackOrderObject().setDeferred(serializeOrder(order));
+              stackOrderObject().setDeferred(serializeOrderPreservingUnloaded(order));
             }
           }
         }

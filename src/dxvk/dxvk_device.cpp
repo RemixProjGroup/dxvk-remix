@@ -35,6 +35,7 @@
 #include "rtx_render/rtx_fork_fsr.h"
 #include "rtx_render/rtx_fork_fsr_framegen.h"
 #include "rtx_render/rtx_fork_rcas.h"
+#include "rtx_render/rtx_external_effects.h"
 
 #include "rtx_render/rtx_sparse_rendering.h"
 
@@ -155,6 +156,11 @@ namespace dxvk {
 
     // NV-DXVK start: RTX initializer
     m_objects.getRtxInitializer().release();
+    // RemixFX effects hang off a process lifetime singleton, so the images and
+    // shaders they own are the only device resources with no owner that dies
+    // alongside the device. Released here, after waitForIdle, for the same
+    // reason everything else in this destructor is.
+    RtxExternalEffects::instance().onDestroyDevice(this);
     // NV-DXVK end
 
 #ifdef TRACY_ENABLE

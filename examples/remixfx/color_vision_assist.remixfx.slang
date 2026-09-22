@@ -1,29 +1,16 @@
-//! remixfx id = color_vision_assist
-//! remixfx name = Color Vision Assist
-//! remixfx domain = display
-//! remixfx enabled = false
-//! remixfx parameter = mode,int,0,0,2,1,Mode (0 Deutan, 1 Protan, 2 Tritan)
-//! remixfx parameter = strength,float,0.75,0.0,1.0,0.01,Strength
-//! remixfx parameter = simulate,bool,false,0,1,1,Simulation Preview
+//! remixfx effect.id      = color_vision_assist
+//! remixfx effect.name    = Color Vision Assist
+//! remixfx effect.domain  = display
+//! remixfx effect.enabled = false
+//! remixfx param.mode            = int 0 [0..2]
+//! remixfx param.mode.items      = Deutan | Protan | Tritan
+//! remixfx param.mode.tooltip    = Which colour vision deficiency to correct for.
+//! remixfx param.strength        = float 0.75 [0..1] step 0.01
+//! remixfx param.simulate        = bool false
+//! remixfx param.simulate.label  = Simulation Preview
+//! remixfx param.simulate.tooltip = Shows what the deficiency looks like instead of correcting for it.
 
-struct RemixFxArgs {
-  uint2 imageSize;
-  float2 invImageSize;
-  float timeSeconds;
-  uint frameIndex;
-  uint parameterValueCount;
-  uint padding;
-  float4 parameterValues[14];
-};
-
-layout(binding = 0)
-Sampler2D<float4> InputColor;
-
-layout(binding = 1)
-RWTexture2D<float4> OutputColor;
-
-layout(push_constant)
-ConstantBuffer<RemixFxArgs> cb;
+#include "remixfx_bindings.slangh"
 
 float3 simulateDeutan(float3 color) {
   return float3(
@@ -55,9 +42,9 @@ void main(uint2 pixel : SV_DispatchThreadID) {
 
   const float2 uv = (float2(pixel) + 0.5f) * cb.invImageSize;
   const float4 source = InputColor.SampleLevel(uv, 0.0f);
-  const int mode = int(round(cb.parameterValues[0].x));
-  const float strength = cb.parameterValues[0].y;
-  const bool simulationPreview = cb.parameterValues[0].z >= 0.5f;
+  const int mode = remixFxParamInt(0);
+  const float strength = remixFxParam(1);
+  const bool simulationPreview = remixFxParamBool(2);
 
   float3 simulated;
   if (mode == 1) {
