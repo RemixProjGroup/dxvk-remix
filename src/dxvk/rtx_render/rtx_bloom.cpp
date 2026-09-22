@@ -83,13 +83,6 @@ namespace dxvk {
   DxvkBloom::~DxvkBloom()  {
   }
 
-  void DxvkBloom::showImguiSettings() {
-    RemixGui::Checkbox("Bloom Enabled", &enableObject());
-    ImGui::Indent();
-    showEffectSettings();
-    ImGui::Unindent();
-  }
-
   void DxvkBloom::showEffectSettings() {
     RemixGui::DragFloat("Intensity##bloom", &burnIntensityObject(), 0.05f, 0.f, 5.f, "%.2f");
     RemixGui::DragFloat("Threshold##bloom", &luminanceThresholdObject(), 0.05f, 0.f, 100.f, "%.2f");

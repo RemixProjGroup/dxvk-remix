@@ -85,33 +85,31 @@ namespace dxvk {
 
   DxvkToneMapping::~DxvkToneMapping() { }
 
-  void DxvkToneMapping::showImguiSettings() {
-    RemixGui::Checkbox("Tonemapping Enabled", &tonemappingEnabledObject());
-    showEffectSettings();
-  }
-
   void DxvkToneMapping::showEffectSettings() {
     RemixGui::DragFloat("Global Exposure", &exposureBiasObject(), 0.01f, -4.f, 4.f);
 
+    // Grey the dependent controls rather than removing them: the enable toggles
+    // sit on the stack row header, so hiding the body made an expanded but
+    // disabled section collapse to an empty indent.
     RemixGui::Checkbox("Color Grading Enabled", &colorGradingEnabledObject());
-    if (colorGradingEnabled()) {
-      ImGui::Indent();
-      RemixGui::DragFloat("Contrast", &contrastObject(), 0.01f, 0.f, 1.f);
-      RemixGui::DragFloat("Saturation", &saturationObject(), 0.01f, 0.f, 1.f);
-      RemixGui::DragFloat3("Color Balance", &colorBalanceObject(), 0.01f, 0.f, 1.f);
-      RemixGui::Separator();
-      ImGui::Unindent();
-    }
+    ImGui::Indent();
+    ImGui::BeginDisabled(!colorGradingEnabled());
+    RemixGui::DragFloat("Contrast", &contrastObject(), 0.01f, 0.f, 1.f);
+    RemixGui::DragFloat("Saturation", &saturationObject(), 0.01f, 0.f, 1.f);
+    RemixGui::DragFloat3("Color Balance", &colorBalanceObject(), 0.01f, 0.f, 1.f);
+    ImGui::EndDisabled();
+    RemixGui::Separator();
+    ImGui::Unindent();
 
-    if (tonemappingEnabled()) {
-      ImGui::Indent();
-      fork_hooks::showTonemapOperatorUI();
+    ImGui::Indent();
+    ImGui::BeginDisabled(!tonemappingEnabled());
+    fork_hooks::showTonemapOperatorUI();
 
-      RemixGui::Combo("Dither Mode", &ditherModeObject(), "Disabled\0Spatial\0Spatial + Temporal\0");
+    RemixGui::Combo("Dither Mode", &ditherModeObject(), "Disabled\0Spatial\0Spatial + Temporal\0");
+    ImGui::EndDisabled();
 
-      RemixGui::Separator();
-      ImGui::Unindent();
-    }
+    RemixGui::Separator();
+    ImGui::Unindent();
   }
 
   void DxvkToneMapping::dispatchApplyToneMapping(

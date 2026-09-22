@@ -842,7 +842,7 @@ initializer list and can't be lifted into a separate TU.
 
 ## src/dxvk/rtx_render/rtx_tone_mapping.cpp
 
-- **Hook calls** at `DxvkToneMapping::dispatchApplyToneMapping` (args-population) and `DxvkToneMapping::showImguiSettings` (ImGui panel) → `fork_hooks::populateTonemapOperatorArgs` + `fork_hooks::showTonemapOperatorUI` in `rtx_fork_tonemap.cpp`.
+- **Hook calls** at `DxvkToneMapping::dispatchApplyToneMapping` (args-population) and `DxvkToneMapping::showEffectSettings` (ImGui panel) → `fork_hooks::populateTonemapOperatorArgs` + `fork_hooks::showTonemapOperatorUI` in `rtx_fork_tonemap.cpp`.
   *Routes global tonemap through the fork operator dispatcher.*
 
 ---
@@ -4229,6 +4229,39 @@ the last good shader on failure.
 - **`User Brightness` / `User Brightness EV Range`** moved out of the old
   `dxvk_imgui.cpp` Tonemapping header and into the stack's Tonemapping panel; they
   have no other UI surface.
+
+### Panel restructure (2026-09-21)
+
+The first cut of the panel was one flat ordered list with the master switch
+above it, which read as though `rtx.postfx.enable` turned off everything below
+- tonemapping included. The panel is now grouped by what the switch governs:
+
+- **`src/dxvk/rtx_render/rtx_fork_post_processing.cpp`** - "Always Active"
+  (Tonemapping, sRGB + Dither, Auto Exposure) and "Optional Effects" (the master
+  switch plus the HDR and Display lanes, captioned per lane instead of suffixed
+  `[HDR]` / `[Display]` per row), with "External Effect Files" as its own
+  section. Rows share one renderer: a draw-list drag grip for reorderable
+  members, a dimmed rail for anchors, `ImGuiTreeNodeFlags_Framed` headers, and
+  the local `inlineOptionCheckbox` helper replaced by `RemixGui::CheckboxNoLabel`.
+  Ordering and per-effect configuration stay editable while the master switch is
+  off, because they are saved state rather than runtime state.
+- **`src/dxvk/rtx_render/rtx_gui_widgets.cpp` / `.h`** and
+  **`src/dxvk/rtx_render/rtx_imgui.cpp` / `.h`** - add
+  `RemixGui::CheckboxNoLabel` (raw `bool*` and `RtxOption<bool>*` forms) for
+  compact inline rows, and give `RemixGui::DragFloat4` the
+  `SetNextItemWidth(GetRowFieldWidth())` its siblings already had.
+- **`src/dxvk/rtx_render/rtx_postFx.cpp` / `.h`**,
+  **`rtx_bloom.cpp` / `.h`**, **`rtx_tone_mapping.cpp` / `.h`** - delete the
+  three `showImguiSettings()` wrappers the stack made unreachable, and replace
+  the sub-panels' early returns with `BeginDisabled`, so expanding a disabled
+  effect greys its controls instead of showing an empty indent. The Depth of
+  Field panel deliberately gates on `enable() && dofEnable()` rather than
+  `isDofEnabled()`, which also requires `sampleCount() > 0` and would lock out
+  the slider needed to recover from a zero count.
+- **`src/dxvk/rtx_render/rtx_external_effects.cpp`** - external parameters go
+  through `RemixGui` instead of raw ImGui, and vector parameters now pass their
+  declared bounds with `ImGuiSliderFlags_AlwaysClamp` instead of dragging
+  unbounded and snapping back on the post-edit clamp.
 
 ---
 

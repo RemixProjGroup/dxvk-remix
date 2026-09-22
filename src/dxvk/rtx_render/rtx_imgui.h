@@ -92,6 +92,11 @@ namespace RemixGui {
   IMGUI_API void TextCentered(const char* fmt, ...);
   IMGUI_API void TextWrappedCentered(const char* fmt, ...);
   IMGUI_API bool Checkbox(const char* label, dxvk::RtxOption<bool>* rtxOption);
+  // Label-less variant for compact inline rows. Same option plumbing and
+  // tooltip as the labeled version; it skips RtxOptionUxWrapper because the
+  // hover background and the reset-to-default lane both need a full-width row
+  // to lay out against, which an inline row does not have.
+  IMGUI_API bool CheckboxNoLabel(const char* id, dxvk::RtxOption<bool>* rtxOption, float boxScale = .9f);
   IMGUI_API bool ListBox(const char* label, int* current_item, const std::pair<const char*, const char*> items[], int items_count, int height_in_items = -1);
   IMGUI_API bool ListBox(const char* label, int* current_item, bool (*items_getter)(void* data, int idx, const char** out_text, const char** out_tooltip), void* data, int items_count, int height_in_items = -1);
 

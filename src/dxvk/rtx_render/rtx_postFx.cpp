@@ -209,9 +209,10 @@ namespace dxvk {
   }
 
   void DxvkPostFx::showNtscImguiSettings() {
-    if (!enable() || !ntscEnable()) {
-      return;
-    }
+    // Grey the controls rather than returning early. The enable toggle lives on
+    // the stack row's header, so an early return left anyone who expanded a
+    // disabled effect looking at an empty indent.
+    ImGui::BeginDisabled(!enable() || !ntscEnable());
 
     RemixGui::DragFloat("VHS Luma Bandwidth (MHz)", &ntscLumaBWObject(), 0.01f, 0.25f, 6.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
     RemixGui::DragFloat("VHS Color Bandwidth (kHz)", &ntscColorBWObject(), 1.0f, 50.0f, 1000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
@@ -221,12 +222,12 @@ namespace dxvk {
     RemixGui::DragFloat("VHS Dropout Length (us)", &ntscTapeDropoutLengthObject(), 0.1f, 1.0f, 100.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
     RemixGui::DragFloat("VHS Head Smear", &ntscHeadSmearObject(), 0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
     RemixGui::DragFloat("VHS Tape Trail", &ntscTapeTrailObject(), 0.01f, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+
+    ImGui::EndDisabled();
   }
 
   void DxvkPostFx::showMotionBlurImguiSettings() {
-    if (!enableMotionBlur()) {
-      return;
-    }
+    ImGui::BeginDisabled(!enable() || !enableMotionBlur());
 
     RemixGui::Checkbox("Motion Blur Noise Sample Enabled", &enableMotionBlurNoiseSampleObject());
     RemixGui::Checkbox("Motion Blur Emissive Surface Enabled", &enableMotionBlurEmissiveObject());
@@ -236,12 +237,15 @@ namespace dxvk {
     RemixGui::DragFloat("Motion Blur Minimum Velocity Threshold (unit: pixel)", &motionBlurMinimumVelocityThresholdInPixelObject(), 0.01f, 0.01f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
     RemixGui::DragFloat("Motion Blur Dynamic Deduction", &motionBlurDynamicDeductionObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     RemixGui::DragFloat("Motion Blur Jitter Strength", &motionBlurJitterStrengthObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+
+    ImGui::EndDisabled();
   }
 
   void DxvkPostFx::showDofImguiSettings() {
-    if (!isDofEnabled()) {
-      return;
-    }
+    // Deliberately not isDofEnabled(): that also requires sampleCount() > 0,
+    // and greying the panel on it would lock out the one control that can
+    // bring the sample count back above zero.
+    ImGui::BeginDisabled(!enable() || !dofEnable());
 
     // The shipped defaults are a 100 mm f/2.8 portrait lens that racks focus
     // over roughly two seconds. That is the right starting point for taking a
@@ -307,34 +311,27 @@ namespace dxvk {
     // Lower bound is the same floor dispatchDof clamps to, so the slider cannot
     // show a number the runtime will silently raise.
     RemixGui::DragInt("Depth of Field Sample Count", &sampleCountObject(), 1.0f, POST_FX_DOF_MIN_EFFECTIVE_SAMPLES, POST_FX_DOF_MAX_SAMPLES, "%d", ImGuiSliderFlags_AlwaysClamp);
+
+    ImGui::EndDisabled();
   }
 
   void DxvkPostFx::showLensEffectsImguiSettings() {
+    const bool lensEffectsActive = enable() && enableLensEffects();
+
+    ImGui::BeginDisabled(!lensEffectsActive);
     RemixGui::Checkbox("Chromatic Aberration Enabled", &enableChromaticAberrationObject());
-    if (enableChromaticAberration()) {
-      RemixGui::DragFloat("Fringe Intensity", &chromaticAberrationAmountObject(), 0.01f, 0.0f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("Fringe Center Attenuation Amount", &chromaticCenterAttenuationAmountObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-    }
+    ImGui::BeginDisabled(!enableChromaticAberration());
+    RemixGui::DragFloat("Fringe Intensity", &chromaticAberrationAmountObject(), 0.01f, 0.0f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("Fringe Center Attenuation Amount", &chromaticCenterAttenuationAmountObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::EndDisabled();
 
     RemixGui::Checkbox("Vignette Enabled", &enableVignetteObject());
-    if (enableVignette()) {
-      RemixGui::DragFloat("Vignette Intensity", &vignetteIntensityObject(), 0.01f, 0.0f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("Vignette Radius", &vignetteRadiusObject(), 0.001f, 0.0f, 1.4f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-      RemixGui::DragFloat("Vignette Softness", &vignetteSoftnessObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-    }
-  }
-
-  void DxvkPostFx::showImguiSettings() {
-    RemixGui::Checkbox("Post Effect Enabled", &enableObject());
-
-    if (enable()) {
-      RemixGui::Checkbox("Motion Blur Enabled", &enableMotionBlurObject());
-      showMotionBlurImguiSettings();
-      RemixGui::Checkbox("Lens Effects Enabled", &enableLensEffectsObject());
-      showLensEffectsImguiSettings();
-      RemixGui::Checkbox("NTSC / VHS Enabled", &ntscEnableObject());
-      showNtscImguiSettings();
-    }
+    ImGui::BeginDisabled(!enableVignette());
+    RemixGui::DragFloat("Vignette Intensity", &vignetteIntensityObject(), 0.01f, 0.0f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("Vignette Radius", &vignetteRadiusObject(), 0.001f, 0.0f, 1.4f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    RemixGui::DragFloat("Vignette Softness", &vignetteSoftnessObject(), 0.001f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
   }
 
   void dispatchMotionBlurPrefilterPass(

@@ -217,6 +217,23 @@ namespace RemixGui {
     IMGUI_RTXOPTION_WIDGET(Checkbox(label, &value, 0.9f))
   }
 
+  bool CheckboxNoLabel(const char* id, dxvk::RtxOption<bool>* rtxOption, float boxScale) {
+    bool value = rtxOption->get();
+    const bool changed = RemixGui::CheckboxNoLabel(id, &value, boxScale);
+
+    if (changed) {
+      CheckRtxOptionPopups(rtxOption);
+      rtxOption->setDeferred(value);
+    }
+
+    if (ImGui::IsItemHovered()) {
+      const std::string tooltip = RemixGui::BuildRtxOptionTooltip(rtxOption);
+      RemixGui::SetTooltipUnformatted(tooltip.c_str());
+    }
+
+    return changed;
+  }
+
   static bool Items_PairGetter(void* data, int idx, const char** out_text, const char** out_tooltip) {
     std::pair<const char*, const char*>* items = reinterpret_cast<std::pair<const char*, const char*>*>(data);
     if (out_text) {

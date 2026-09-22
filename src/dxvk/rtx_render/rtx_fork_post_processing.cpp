@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <sstream>
 
 #include "dxvk_objects.h"
@@ -21,21 +22,57 @@ namespace dxvk {
     constexpr size_t kInvalidIndex = static_cast<size_t>(-1);
     constexpr size_t kEffectCount = 7;
 
-    bool inlineOptionCheckbox(const char* id, RtxOption<bool>* option) {
-      bool value = option->get();
-      const bool changed = ImGui::Checkbox(id, &value);
+    // Drag handle drawn from the draw list rather than written as text: the
+    // menu fonts are not guaranteed to carry a grip glyph, and a Button
+    // labelled "::" reads as a leftover debug placeholder.
+    void drawDragGrip(const ImVec2& boxMin, const ImVec2& boxMax, ImU32 color) {
+      ImDrawList* drawList = ImGui::GetWindowDrawList();
+      const float fontSize = ImGui::GetFontSize();
+      const float radius = ImMax(1.0f, ImFloor(fontSize * 0.09f));
+      const float stepX = ImMax(2.0f, ImFloor(fontSize * 0.28f));
+      const float stepY = ImMax(2.0f, ImFloor(fontSize * 0.28f));
+      const ImVec2 center((boxMin.x + boxMax.x) * 0.5f, (boxMin.y + boxMax.y) * 0.5f);
 
-      if (changed) {
-        RemixGui::CheckRtxOptionPopups(option);
-        option->setDeferred(value);
+      for (int row = -1; row <= 1; row++) {
+        for (int column = 0; column < 2; column++) {
+          const ImVec2 dot(
+            center.x + (column == 0 ? -stepX : stepX) * 0.5f,
+            center.y + stepY * static_cast<float>(row));
+          drawList->AddCircleFilled(dot, radius, color);
+        }
+      }
+    }
+
+    // Anchors get a dimmed static rail instead of a disabled button. A button
+    // that can never respond invites a click that does nothing; a mark does
+    // not, and it still reads as "this row is pinned".
+    void drawAnchorMark(const ImVec2& boxMin, const ImVec2& boxMax, ImU32 color) {
+      ImDrawList* drawList = ImGui::GetWindowDrawList();
+      const float fontSize = ImGui::GetFontSize();
+      const float halfWidth = ImMax(2.0f, ImFloor(fontSize * 0.30f));
+      const float halfHeight = ImMax(1.0f, ImFloor(fontSize * 0.07f));
+      const ImVec2 center((boxMin.x + boxMax.x) * 0.5f, (boxMin.y + boxMax.y) * 0.5f);
+
+      drawList->AddRectFilled(
+        ImVec2(center.x - halfWidth, center.y - halfHeight),
+        ImVec2(center.x + halfWidth, center.y + halfHeight), color);
+    }
+
+    // The search box filters the *view* only. It deliberately has no access to
+    // the stored order, so no amount of typing can change what the pipeline
+    // runs or what gets serialized back into rtx.postfx.stackOrder.
+    bool matchesFilter(const std::string& text, const std::string& filter) {
+      if (filter.empty()) {
+        return true;
       }
 
-      if (ImGui::IsItemHovered()) {
-        const std::string tooltip = RemixGui::BuildRtxOptionTooltip(option);
-        RemixGui::SetTooltipUnformatted(tooltip.c_str());
-      }
-
-      return changed;
+      const auto match = std::search(
+        text.begin(), text.end(), filter.begin(), filter.end(),
+        [](char lhs, char rhs) {
+          return std::tolower(static_cast<unsigned char>(lhs))
+              == std::tolower(static_cast<unsigned char>(rhs));
+        });
+      return match != text.end();
     }
   }
 
@@ -294,26 +331,100 @@ namespace dxvk {
     auto& externalEffects = RtxExternalEffects::instance();
     externalEffects.ensureLoaded(ctx->getDevice().ptr());
 
+    // The panel is a list plus one settings pane, not a tree. Expanding a row
+    // in place made every row below it jump down the screen, which is exactly
+    // the thing you do not want while comparing two effects; a fixed-height
+    // list means the row you are reading never moves when you click it.
+    //
+    // What the old three-group split carried is kept as captions inside the
+    // single list: "Post FX Enabled" skips the optional members and leaves
+    // tonemapping and the terminal sRGB/dither conversion running, because
+    // dropping either would change the format of the image handed to the
+    // display, and the two anchors say so themselves via their pinned handle
+    // and their disabled, permanently checked box.
+    const bool optionalEffectsEnabled = postFx.enable();
+    std::vector<EffectEntry> order = resolvedOrder();
+
+    // Auto Exposure is not a color-chain stack member - it measures the image
+    // and feeds tonemapping - but it still wants a row and a settings panel
+    // like everything else. It borrows a pseudo config id that the registry can
+    // never produce: the built-in table is a fixed seven entries with no such
+    // name, and every external id carries an "external:" prefix. That keeps the
+    // selection one plain string rather than a string plus an "is this the odd
+    // one out" flag.
+    constexpr const char* kAutoExposureId = "auto_exposure";
+
+    // Selection is keyed by config id and never by index. Drag-and-drop
+    // rewrites the order underneath this panel, so a remembered index would
+    // quietly start addressing a different effect, while an id either resolves
+    // to the same effect or to nothing at all. Function-local statics because
+    // this is a singleton panel drawn from one call site and both values are
+    // pure view state - routing them through RTX_OPTION would persist a search
+    // box into rtx.conf.
+    static std::string s_selectedEffectId;
+    static char s_filterText[64] = {};
+
+    // --- Global controls ---------------------------------------------------
+    // Outside the scrolling child on purpose: the master switch and the order
+    // reset act on the whole stack, so having to scroll a list to reach them
+    // would be backwards.
     RemixGui::Checkbox("Post FX Enabled", &postFx.enableObject());
-    if (ImGui::TreeNodeEx("External Effect Files", ImGuiTreeNodeFlags_DefaultOpen)) {
-      externalEffects.showGlobalSettings(ctx->getDevice().ptr());
-      ImGui::TreePop();
+    ImGui::SameLine();
+    if (ImGui::Button("Reset to Default Order")) {
+      stackOrderObject().setDeferred(serializeOrder(defaultOrder()));
     }
-    ImGui::TextDisabled("Drag the grip to reorder effects within the same color domain.");
+
+    ImGui::TextWrapped(
+      "Effects run top to bottom. \"Post FX Enabled\" is the master switch for the optional "
+      "effects only - tonemapping and the terminal sRGB/dither conversion keep running either "
+      "way, and ordering stays editable while the master switch is off.");
+    if (!optionalEffectsEnabled) {
+      ImGui::TextDisabled("Post FX Enabled is off, so only the always-on stages are running.");
+    }
+
     ImGui::Spacing();
 
-    std::vector<EffectEntry> order = resolvedOrder();
-    for (size_t i = 0; i < order.size(); i++) {
-      const EffectEntry& entry = order[i];
-      const EffectDomain effectDomain = domain(entry);
+    // --- Filter ------------------------------------------------------------
+    // Drawn before the filter string is sampled so a keystroke takes effect on
+    // the frame it was typed rather than the one after it.
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##search", "Search effects...", s_filterText, sizeof(s_filterText));
+
+    const std::string filter(s_filterText);
+    const bool filterActive = !filter.empty();
+
+    if (filterActive) {
+      ImGui::TextDisabled("Search is active - drag to reorder is disabled. Clear the box to reorder.");
+    } else {
+      ImGui::TextDisabled("Drag a grip to reorder effects inside their own group.");
+    }
+
+    // An effect can vanish between frames when an external effect file is
+    // removed, so a stale selection falls back to the head of the pipeline.
+    // resolvedOrder() always emits the two anchors, so order[0] exists.
+    if (s_selectedEffectId != kAutoExposureId
+     && findEffect(order, s_selectedEffectId) == kInvalidIndex) {
+      s_selectedEffectId = configId(order[0]);
+    }
+
+    // Shared row renderer. Anchors and optional effects differ only in the
+    // handle mark and the dimming, which is exactly the difference the master
+    // switch makes. "Governed by the master switch" and "reorderable" turn out
+    // to be the same question asked twice - dispatch() skips precisely the rows
+    // that are not the two fixed anchors - so the row no longer has to be told
+    // which group it was drawn from.
+    auto showEffectRow = [&](size_t index) {
+      const EffectEntry& entry = order[index];
       const bool effectReorderable = reorderable(entry);
       const std::string effectConfigId = configId(entry);
       const std::string effectName = name(entry);
-      const char* domainName = effectDomain == EffectDomain::HDR
-        ? "HDR"
-        : effectDomain == EffectDomain::Display
-          ? "Display"
-          : "Terminal";
+      const bool effectRunning = !effectReorderable || optionalEffectsEnabled;
+
+      // Filtering hides rows and nothing else: `order` is untouched, so the
+      // reorder payload logic below still sees the real stack.
+      if (!matchesFilter(effectName, filter)) {
+        return;
+      }
 
       ImGui::PushID(effectConfigId.c_str());
 
@@ -354,32 +465,46 @@ namespace dxvk {
 
       ImGui::BeginGroup();
 
-      const ImVec2 dragHandleSize(42.0f, ImGui::GetFrameHeight());
+      const float handleExtent = ImGui::GetFrameHeight();
+      const ImVec2 handleMin = ImGui::GetCursorScreenPos();
+      const ImVec2 handleMax(handleMin.x + handleExtent, handleMin.y + handleExtent);
+      ImGui::InvisibleButton("##handle", ImVec2(handleExtent, handleExtent));
+      const bool handleHovered = ImGui::IsItemHovered();
+
       if (effectReorderable) {
-        ImGui::Button("::##drag", dragHandleSize);
-        if (ImGui::IsItemHovered()) {
-          ImGui::SetTooltip("Drag to reorder %s effects", domainName);
+        // A filtered list is not the real list: the row visually above a
+        // dragged row is not the row it would land beside in the stored order,
+        // so "drop it here" has no honest answer. The gesture is refused
+        // outright rather than guessed at, and the grip stops advertising
+        // itself as a handle so the refusal is visible before the click.
+        const bool dragAllowed = !filterActive;
+        drawDragGrip(handleMin, handleMax,
+                     ImGui::GetColorU32(dragAllowed && handleHovered ? ImGuiCol_Text : ImGuiCol_TextDisabled));
+        if (handleHovered) {
+          ImGui::SetTooltip(dragAllowed
+            ? "Drag to reorder within this group"
+            : "Clear the search box to reorder effects");
         }
 
-        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoPreviewTooltip)) {
+        // Ordering is configuration, not runtime state, so it stays editable
+        // even when the master switch is off.
+        if (dragAllowed && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoPreviewTooltip)) {
           ImGui::SetDragDropPayload(
             "RTX_POSTFX_EFFECT_ID", effectConfigId.c_str(), effectConfigId.size() + 1);
           ImGui::Text("Move %s", effectName.c_str());
           ImGui::EndDragDropSource();
         }
       } else {
-        ImGui::BeginDisabled();
-        ImGui::Button("LOCK##drag", dragHandleSize);
-        ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-          ImGui::SetTooltip("Fixed pipeline anchor");
+        drawAnchorMark(handleMin, handleMax, ImGui::GetColorU32(ImGuiCol_TextDisabled));
+        if (handleHovered) {
+          ImGui::SetTooltip("Fixed pipeline stage: it cannot be moved or switched off");
         }
       }
 
       ImGui::SameLine();
       if (entry.external) {
         bool enabled = externalInfo.enabled;
-        if (ImGui::Checkbox("##enabled", &enabled)) {
+        if (RemixGui::CheckboxNoLabel("##enabled", &enabled)) {
           externalEffects.setEffectEnabled(entry.externalId, enabled);
         }
         if (!externalInfo.ready && ImGui::IsItemHovered()) {
@@ -387,38 +512,47 @@ namespace dxvk {
         }
         ImGui::SameLine();
       } else if (enabledOption != nullptr) {
-        inlineOptionCheckbox("##enabled", enabledOption);
+        RemixGui::CheckboxNoLabel("##enabled", enabledOption);
         ImGui::SameLine();
       } else {
         bool required = true;
         ImGui::BeginDisabled();
-        ImGui::Checkbox("##required", &required);
+        RemixGui::CheckboxNoLabel("##required", &required);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-          ImGui::SetTooltip("Required terminal conversion");
+          ImGui::SetTooltip("Always on: this conversion defines the output format");
         }
         ImGui::SameLine();
       }
 
-      const std::string headerLabel = effectName + "  [" + domainName + "]";
-      const ImGuiTreeNodeFlags headerFlags = ImGuiTreeNodeFlags_SpanAvailWidth
-        | ImGuiTreeNodeFlags_FramePadding
-        | ImGuiTreeNodeFlags_OpenOnArrow
-        | ImGuiTreeNodeFlags_OpenOnDoubleClick;
-      const bool showEffectSettings = ImGui::TreeNodeEx("##settings", headerFlags, "%s", headerLabel.c_str());
+      // Domain is carried by the caption above the row, so the label is just
+      // the effect's name. The label is painted by hand instead of being handed
+      // to Selectable because effect names come out of external manifest files
+      // and ImGui would swallow the rest of any name containing "##".
+      const ImVec2 labelMin = ImGui::GetCursorScreenPos();
+      const float rowHeight = ImGui::GetFrameHeight();
+      if (ImGui::Selectable("##row", s_selectedEffectId == effectConfigId,
+                            ImGuiSelectableFlags_None, ImVec2(0.0f, rowHeight))) {
+        s_selectedEffectId = effectConfigId;
+      }
+      ImGui::GetWindowDrawList()->AddText(
+        ImVec2(labelMin.x + ImGui::GetStyle().FramePadding.x,
+               labelMin.y + (rowHeight - ImGui::GetFontSize()) * 0.5f),
+        ImGui::GetColorU32(effectRunning ? ImGuiCol_Text : ImGuiCol_TextDisabled),
+        effectName.c_str());
 
       ImGui::EndGroup();
 
       // The whole compact row is a generous drop target. Payloads identify an
       // effect, not a transient row index, and are applied only on delivery so
       // hovering cannot repeatedly reshuffle the stack.
-      if (effectReorderable && ImGui::BeginDragDropTarget()) {
+      if (effectReorderable && !filterActive && ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("RTX_POSTFX_EFFECT_ID")) {
           if (payload->IsDelivery() && payload->DataSize > 1
            && static_cast<const char*>(payload->Data)[payload->DataSize - 1] == '\0') {
             const std::string sourceConfigId(static_cast<const char*>(payload->Data));
             const size_t sourceIndex = findEffect(order, sourceConfigId);
-            if (sourceIndex != kInvalidIndex && moveEffect(order, sourceIndex, i)) {
+            if (sourceIndex != kInvalidIndex && moveEffect(order, sourceIndex, index)) {
               stackOrderObject().setDeferred(serializeOrder(order));
             }
           }
@@ -426,50 +560,198 @@ namespace dxvk {
         ImGui::EndDragDropTarget();
       }
 
-      if (showEffectSettings) {
-        ImGui::Indent();
-        if (entry.external) {
-          externalEffects.showEffectSettings(entry.externalId);
-        } else {
-          switch (entry.builtInId) {
-          case EffectId::Bloom:
-            common->metaBloom().showEffectSettings();
-            break;
-          case EffectId::MotionBlur:
-            postFx.showMotionBlurImguiSettings();
-            break;
-          case EffectId::DepthOfField:
-            postFx.showDofImguiSettings();
-            break;
-          case EffectId::Tonemapping:
-            common->metaAutoExposure().showImguiSettings();
-            // Carried over from the pre-stack Tonemapping header in
-            // dxvk_imgui.cpp; these two fork options have no other UI surface.
-            RemixGui::SliderInt("User Brightness", &RtxOptions::userBrightnessObject(), 0, 100, "%d");
-            RemixGui::DragFloat("User Brightness EV Range", &RtxOptions::userBrightnessEVRangeObject(), 0.5f, 0.f, 10.f, "%.1f");
-            RemixGui::Separator();
-            common->metaToneMapping().showEffectSettings();
-            break;
-          case EffectId::NtscVhs:
-            postFx.showNtscImguiSettings();
-            break;
-          case EffectId::LensEffects:
-            postFx.showLensEffectsImguiSettings();
-            break;
-          case EffectId::SRGBDither:
-            common->metaSRGBDither().showImguiSettings();
-            break;
-          }
-        }
-        ImGui::Unindent();
-        ImGui::TreePop();
+      ImGui::PopID();
+    };
+
+    // The same dispatch the expandable rows used to run, lifted out unchanged
+    // and driven by the selection instead of by a per-row tree node.
+    auto showEntrySettings = [&](const EffectEntry& entry) {
+      if (entry.external) {
+        externalEffects.showEffectSettings(entry.externalId);
+        return;
       }
 
+      switch (entry.builtInId) {
+      case EffectId::Bloom:
+        common->metaBloom().showEffectSettings();
+        break;
+      case EffectId::MotionBlur:
+        postFx.showMotionBlurImguiSettings();
+        break;
+      case EffectId::DepthOfField:
+        postFx.showDofImguiSettings();
+        break;
+      case EffectId::Tonemapping:
+        // Carried over from the pre-stack Tonemapping header in
+        // dxvk_imgui.cpp; these two fork options have no other UI surface.
+        RemixGui::SliderInt("User Brightness", &RtxOptions::userBrightnessObject(), 0, 100, "%d");
+        RemixGui::DragFloat("User Brightness EV Range", &RtxOptions::userBrightnessEVRangeObject(), 0.5f, 0.f, 10.f, "%.1f");
+        RemixGui::Separator();
+        common->metaToneMapping().showEffectSettings();
+        break;
+      case EffectId::NtscVhs:
+        postFx.showNtscImguiSettings();
+        break;
+      case EffectId::LensEffects:
+        postFx.showLensEffectsImguiSettings();
+        break;
+      case EffectId::SRGBDither:
+        common->metaSRGBDither().showImguiSettings();
+        break;
+      }
+    };
+
+    // These name the image a lane operates on, not the stage it sits beside.
+    // The older wording used tonemapping as the landmark, which read fine while
+    // each lane lived under its own header but is self-referential in one flat
+    // list: Tonemapping is itself an HDR-domain anchor, so it would appear under
+    // "runs before tonemapping".
+    auto domainCaption = [](EffectDomain effectDomain) -> const char* {
+      switch (effectDomain) {
+      case EffectDomain::HDR:      return "HDR - operates on the pre-tonemap image";
+      case EffectDomain::Display:  return "Display - operates on the tonemapped image";
+      case EffectDomain::Terminal: return "Terminal - runs last";
+      }
+      return "Other";
+    };
+
+    // Auto Exposure keeps a row of its own shape: the pinned handle the other
+    // always-on stages get, and a spacer where a membership checkbox would sit,
+    // because its on/off switch is a parameter of its own panel rather than a
+    // stack toggle. It is drawn immediately above Tonemapping, the stage whose
+    // exposure it measures, instead of being buried inside the Tonemapping
+    // panel where nobody would look for it.
+    auto showAutoExposureRow = [&]() {
+      if (!matchesFilter("Auto Exposure", filter)) {
+        return;
+      }
+
+      ImGui::PushID(kAutoExposureId);
+      ImGui::BeginGroup();
+
+      const float handleExtent = ImGui::GetFrameHeight();
+      const ImVec2 handleMin = ImGui::GetCursorScreenPos();
+      ImGui::InvisibleButton("##handle", ImVec2(handleExtent, handleExtent));
+      const bool handleHovered = ImGui::IsItemHovered();
+      drawAnchorMark(handleMin, ImVec2(handleMin.x + handleExtent, handleMin.y + handleExtent),
+                     ImGui::GetColorU32(ImGuiCol_TextDisabled));
+      if (handleHovered) {
+        ImGui::SetTooltip("Measures scene brightness for tonemapping; not a reorderable stack stage");
+      }
+
+      ImGui::SameLine();
+      ImGui::Dummy(ImVec2(handleExtent, handleExtent));
+      ImGui::SameLine();
+
+      const ImVec2 labelMin = ImGui::GetCursorScreenPos();
+      if (ImGui::Selectable("##row", s_selectedEffectId == kAutoExposureId,
+                            ImGuiSelectableFlags_None, ImVec2(0.0f, handleExtent))) {
+        s_selectedEffectId = kAutoExposureId;
+      }
+      ImGui::GetWindowDrawList()->AddText(
+        ImVec2(labelMin.x + ImGui::GetStyle().FramePadding.x,
+               labelMin.y + (handleExtent - ImGui::GetFontSize()) * 0.5f),
+        ImGui::GetColorU32(ImGuiCol_Text), "Auto Exposure");
+
+      ImGui::EndGroup();
       ImGui::PopID();
+    };
+
+    // A caption is only worth printing when something under it survived the
+    // filter, so each lane is looked ahead over before it is announced.
+    // resolvedOrder() emits every lane contiguously, which is what makes the
+    // scan terminate at the first row of the next lane.
+    auto laneHasVisibleRow = [&](size_t start, EffectDomain lane) {
+      for (size_t i = start; i < order.size() && domain(order[i]) == lane; i++) {
+        if (matchesFilter(name(order[i]), filter)) {
+          return true;
+        }
+      }
+      return lane == EffectDomain::HDR && matchesFilter("Auto Exposure", filter);
+    };
+
+    // --- Effect list -------------------------------------------------------
+    // A fixed-height child, not a window splitter: this panel is drawn inside a
+    // CollapsingHeader in a flowing settings window, so there is no window
+    // height to split against. Sized in rows so it follows the menu font.
+    ImGui::BeginChild("##effectList", ImVec2(0.0f, ImGui::GetFrameHeightWithSpacing() * 14.0f), true);
+
+    // One pass over the resolved order, emitting a caption whenever the lane
+    // changes. Iterating the order itself rather than asking for two known
+    // domains means a row can never be dropped by a domain the captions did not
+    // anticipate. The always-on anchors stay inline in their pipeline position
+    // instead of being hoisted into a group of their own; their pinned handle
+    // and their disabled, permanently checked box already say they are fixed.
+    bool wroteAnyRow = false;
+    bool wroteAnyCaption = false;
+    EffectDomain previousDomain = EffectDomain::HDR;
+
+    for (size_t i = 0; i < order.size(); i++) {
+      const EffectDomain rowDomain = domain(order[i]);
+      if ((!wroteAnyCaption || rowDomain != previousDomain) && laneHasVisibleRow(i, rowDomain)) {
+        if (wroteAnyCaption) {
+          ImGui::Spacing();
+        }
+        ImGui::TextDisabled("%s", domainCaption(rowDomain));
+        previousDomain = rowDomain;
+        wroteAnyCaption = true;
+      }
+
+      if (!order[i].external && order[i].builtInId == EffectId::Tonemapping) {
+        showAutoExposureRow();
+      }
+
+      if (matchesFilter(name(order[i]), filter)) {
+        wroteAnyRow = true;
+      }
+      showEffectRow(i);
     }
 
-    if (ImGui::Button("Reset to Default Order")) {
-      stackOrderObject().setDeferred(serializeOrder(defaultOrder()));
+    if (!wroteAnyRow && !matchesFilter("Auto Exposure", filter)) {
+      ImGui::TextDisabled("No effects match the search.");
+    }
+
+    ImGui::EndChild();
+
+    // --- Settings for the selected row -------------------------------------
+    // One pane for whatever is selected, rather than a panel per row: the list
+    // above keeps its height no matter what is open here.
+    RemixGui::Separator();
+
+    if (s_selectedEffectId == kAutoExposureId) {
+      ImGui::Text("Auto Exposure");
+      ImGui::Spacing();
+      common->metaAutoExposure().showImguiSettings();
+    } else {
+      // Re-resolved rather than remembered from the fallback above, because a
+      // drop delivered while drawing the list has already reordered `order` by
+      // this point - another reason the selection is an id and not an index.
+      const size_t selectedIndex = findEffect(order, s_selectedEffectId);
+      if (selectedIndex != kInvalidIndex) {
+        const EffectEntry& selected = order[selectedIndex];
+
+        // The same PushID scope the expandable rows used, so the option widgets
+        // below keep the ids they already had.
+        ImGui::PushID(s_selectedEffectId.c_str());
+        ImGui::Text("%s", name(selected).c_str());
+        if (reorderable(selected) && !optionalEffectsEnabled) {
+          ImGui::TextDisabled("Not running: Post FX Enabled is off.");
+        }
+        ImGui::Spacing();
+        showEntrySettings(selected);
+        ImGui::PopID();
+      }
+    }
+
+    // --- External effect files ---------------------------------------------
+    // Below the settings pane and outside it: this is loader configuration for
+    // the whole effect directory, not a parameter of whichever effect happens
+    // to be selected.
+    RemixGui::Separator();
+    if (RemixGui::CollapsingHeader("External Effect Files")) {
+      ImGui::Indent();
+      externalEffects.showGlobalSettings(ctx->getDevice().ptr());
+      ImGui::Unindent();
     }
 
     ImGui::Separator();

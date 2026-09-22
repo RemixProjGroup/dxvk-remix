@@ -69,7 +69,6 @@ namespace dxvk {
     // so only the apply-tonemapping shader needs prewarming.
     void prewarmShaders(DxvkPipelineManager& pipelineManager) const;
 
-    void showImguiSettings();
     void showEffectSettings();
 
   private:

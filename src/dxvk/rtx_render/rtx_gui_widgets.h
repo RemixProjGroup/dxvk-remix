@@ -225,6 +225,11 @@ namespace RemixGui {
   
   bool Checkbox(const char* label, bool* v, float boxScale = .9f);
 
+  // Label-less checkbox: draws the box only, with no label column and no field
+  // row, for compact inline rows where the caller renders the name itself (a
+  // stack header row, a table cell). 'id' is only an ImGui identity string.
+  bool CheckboxNoLabel(const char* id, bool* v, float boxScale = .9f);
+
   // Labeled rows are laid out as [label text | control]. This fixes the pixel width of the left column where the label string is drawn (and clipped); it does not set the width of the checkbox, slider, or other control, which uses the rest of the row. Without a push, that label column defaults to ~50% of the row.
   void PushLabelColumnFixedWidth(float labelColumnWidthPixels);
   void PopLabelColumnFixedWidth();

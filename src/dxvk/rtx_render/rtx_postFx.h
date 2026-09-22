@@ -93,7 +93,6 @@ namespace dxvk {
       const std::optional<Vector2i>& pixelToHighlight,
       HighlightColor color);
 
-    void showImguiSettings();
     void showMotionBlurImguiSettings();
     void showDofImguiSettings();
     void showLensEffectsImguiSettings();
@@ -179,7 +178,7 @@ namespace dxvk {
                     args.flags = RtxOptionFlags::UserSetting);
 
     RTX_OPTION_ARGS("rtx.ntsc", bool, ntscEnable, false,
-                    "Enable the NTSC/VHS composite look.",
+                    "Enable the NTSC/VHS composite look. Expensive: four full-resolution compute passes that together take roughly 200 filter taps per pixel, most of them evaluating a cosine, so expect a noticeable frame-time cost at high resolutions.",
                     args.environment = "RTX_NTSC_ENABLE",
                     args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION("rtx.ntsc", float, ntscLumaBW, 3.00f, "VHS luma bandwidth in MHz (SP~3.0, EP~1.6).");

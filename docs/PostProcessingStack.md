@@ -46,13 +46,37 @@ HDR effect behind tonemapping, move a display effect into HDR, or move either
 fixed anchor. The developer menu exposes drag-and-drop only between reorderable
 effects in the same domain and provides a reset-to-default action.
 
-The legacy `rtx.postfx.enable` option is the global switch shown above the
-stack. It disables optional stack members (Bloom, Motion Blur, Depth of Field,
-NTSC/VHS, and Lens Effects) while leaving tonemapping and the terminal
-sRGB/dither conversion
-running as output-format anchors. Each optional member has its own row toggle;
-Lens Effects also retains separate Chromatic Aberration and Vignette toggles in
-its expanded settings.
+The legacy `rtx.postfx.enable` option is the global switch for the optional
+members (Bloom, Motion Blur, Depth of Field, NTSC/VHS, Lens Effects, and any
+external effects). Tonemapping and the terminal sRGB/dither conversion keep
+running regardless, because skipping either would change the output format.
+Each optional member also has its own row toggle; Lens Effects retains separate
+Chromatic Aberration and Vignette toggles in its expanded settings.
+
+## Developer-menu layout
+
+The panel is grouped by what the master switch governs, not by pipeline
+position, because a single flat list gave no way to tell the two apart and
+users read the switch as turning off everything below it:
+
+```text
+Always Active     Tonemapping, sRGB + Dither, Auto Exposure
+Optional Effects  [Post FX Enabled]
+                    HDR     - Bloom, Motion Blur, Depth of Field, [external HDR]
+                    Display - NTSC/VHS, Lens Effects, [external display]
+External Effect Files
+```
+
+Anchors carry a dimmed rail instead of a drag grip and cannot be moved or
+switched off. Auto Exposure is not a color-chain member - it measures the image
+and feeds tonemapping - but it always runs and is its own subsystem, so it keeps
+a top-level row rather than living inside the Tonemapping node.
+
+Rows stay interactive when the master switch is off: ordering and per-effect
+configuration are saved state, not runtime state, so only the effect names dim
+and an explicit status line says nothing in that section is running. Inside an
+expanded effect, controls whose precondition is unmet are greyed rather than
+removed, so a disabled effect never expands to an empty indent.
 
 The descriptor table in
 `src/dxvk/rtx_render/rtx_fork_post_processing.h/.cpp` is the registration point

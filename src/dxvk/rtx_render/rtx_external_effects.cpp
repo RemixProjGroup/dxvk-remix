@@ -816,6 +816,12 @@ namespace dxvk {
     }
     ImGui::TextDisabled("%s", effect->sourcePath.u8string().c_str());
 
+    // These go through RemixGui rather than raw ImGui so external parameters
+    // get the same label column, row hover and formatting as every built-in
+    // option row. The manifest guarantees min <= max for each component, so the
+    // declared bounds can be handed straight to the widget with AlwaysClamp:
+    // the drag then stops at the limit instead of overshooting and snapping
+    // back on the post-edit clamp below.
     bool changed = false;
     for (const RtxExternalEffectParameter& parameter : effect->manifest.parameters) {
       float* values = effect->values.data() + parameter.valueOffset;
@@ -825,7 +831,7 @@ namespace dxvk {
       switch (parameter.type) {
       case RtxExternalEffectParameterType::Bool: {
         bool value = values[0] >= 0.5f;
-        if (ImGui::Checkbox(parameter.name.c_str(), &value)) {
+        if (RemixGui::Checkbox(parameter.name.c_str(), &value)) {
           values[0] = value ? 1.0f : 0.0f;
           parameterChanged = true;
         }
@@ -833,43 +839,48 @@ namespace dxvk {
       }
       case RtxExternalEffectParameterType::Int: {
         int value = static_cast<int>(std::lround(values[0]));
-        if (ImGui::DragInt(
+        if (RemixGui::DragInt(
               parameter.name.c_str(), &value,
               std::max(1.0f, parameter.step),
               static_cast<int>(parameter.minValues[0]),
-              static_cast<int>(parameter.maxValues[0]))) {
+              static_cast<int>(parameter.maxValues[0]),
+              "%d", ImGuiSliderFlags_AlwaysClamp)) {
           values[0] = static_cast<float>(value);
           parameterChanged = true;
         }
         break;
       }
       case RtxExternalEffectParameterType::Float:
-        parameterChanged |= ImGui::DragFloat(
+        parameterChanged |= RemixGui::DragFloat(
           parameter.name.c_str(), values, parameter.step,
-          parameter.minValues[0], parameter.maxValues[0]);
+          parameter.minValues[0], parameter.maxValues[0],
+          "%.3f", ImGuiSliderFlags_AlwaysClamp);
         break;
       case RtxExternalEffectParameterType::Float2:
-        parameterChanged |= ImGui::DragFloat2(
+        parameterChanged |= RemixGui::DragFloat2(
           parameter.name.c_str(), values, parameter.step,
-          0.0f, 0.0f);
+          parameter.minValues[0], parameter.maxValues[0],
+          "%.3f", ImGuiSliderFlags_AlwaysClamp);
         break;
       case RtxExternalEffectParameterType::Float3:
-        parameterChanged |= ImGui::DragFloat3(
+        parameterChanged |= RemixGui::DragFloat3(
           parameter.name.c_str(), values, parameter.step,
-          0.0f, 0.0f);
+          parameter.minValues[0], parameter.maxValues[0],
+          "%.3f", ImGuiSliderFlags_AlwaysClamp);
         break;
       case RtxExternalEffectParameterType::Float4:
-        parameterChanged |= ImGui::DragFloat4(
+        parameterChanged |= RemixGui::DragFloat4(
           parameter.name.c_str(), values, parameter.step,
-          0.0f, 0.0f);
+          parameter.minValues[0], parameter.maxValues[0],
+          "%.3f", ImGuiSliderFlags_AlwaysClamp);
         break;
       case RtxExternalEffectParameterType::Color3:
-        parameterChanged |= ImGui::ColorEdit3(
+        parameterChanged |= RemixGui::ColorEdit3(
           parameter.name.c_str(), values,
           ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float);
         break;
       case RtxExternalEffectParameterType::Color4:
-        parameterChanged |= ImGui::ColorEdit4(
+        parameterChanged |= RemixGui::ColorEdit4(
           parameter.name.c_str(), values,
           ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float);
         break;
@@ -878,6 +889,8 @@ namespace dxvk {
       ImGui::PopID();
 
       if (parameterChanged) {
+        // Still clamp per component: a vector parameter may declare different
+        // bounds per component, and the color editors carry no bounds at all.
         for (uint32_t i = 0; i < parameter.valueCount; i++) {
           values[i] = std::clamp(values[i], parameter.minValues[i], parameter.maxValues[i]);
         }

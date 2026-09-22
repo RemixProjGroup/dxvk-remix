@@ -346,6 +346,17 @@ namespace RemixGui {
     return changed;
   }
 
+  bool CheckboxNoLabel(const char* id, bool* v, float boxScale /*=.9f*/) {
+    if (shouldSkip()) {
+      return false;
+    }
+
+    PushID(id);
+    const bool changed = checkboxCore("##v", v, boxScale);
+    PopID();
+    return changed;
+  }
+
   static void RenderArrowChevron(ImDrawList* draw_list, ImVec2 pos, ImU32 col, ImGuiDir dir, float scale) {
     const float h = draw_list->_Data->FontSize * 1.0f;
     const float r = h * 0.45f * scale;
@@ -614,6 +625,7 @@ namespace RemixGui {
 
   bool DragFloat4(const char* label, float v[4], float vSpeed, float vMin, float vMax, const char* format, ImGuiSliderFlags flags) {
     return withLabeledRow(label, [&]() {
+      SetNextItemWidth(GetRowFieldWidth());
       return ImGui::DragScalarN("##v", ImGuiDataType_Float, v, 4, vSpeed, &vMin, &vMax, format, flags);
     });
   }
