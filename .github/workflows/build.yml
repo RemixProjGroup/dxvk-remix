@@ -45,9 +45,14 @@ jobs:
     - name: Install Pillow for FAST-noise embedder
       run: pip install pillow
 
-    - name: Fetch pinned DLSS / NGX DLL bundle
-      shell: pwsh
-      run: .\scripts\update-dlss-dlls.ps1
+    # The pinned DLSS / NGX bundle step is deliberately absent. This branch
+    # takes upstream's DLSS, Ray Reconstruction, DLFG and NGX wrapper wholesale,
+    # so scripts/update-dlss-dlls.ps1, scripts/dlss-pins.json and the
+    # dlss_override/ mechanism they populate are all disabled here; meson reads
+    # the NGX DLLs straight from the packman package instead. The step survived
+    # the re-authoring while the script it calls did not, which is what broke
+    # every build on this branch. Restore all four together if the override is
+    # ever wanted back - the step alone downloads 75 MB that meson never reads.
 
     - name: Build
       shell: pwsh
