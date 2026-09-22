@@ -62,6 +62,7 @@ tests/rtx/*
 !tests/rtx/unit/
 tests/rtx/unit/*
 !tests/rtx/unit/test_external_effect_manifest.cpp
+!tests/rtx/unit/test_external_effect_image.cpp
 
 # Per-contributor auto-deploy targets, dot-sourced by scripts/build.ps1
 /scripts/auto-deploy.local.ps1
