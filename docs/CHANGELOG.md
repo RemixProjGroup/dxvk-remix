@@ -30,6 +30,12 @@ Entry format:
 
 ## 2026-10-30
 
+### D3D9 performance guide
+A new guide for people who make or tune mods for D3D9 games without the Remix API: how to find what limits the frame, what the presets and costly features do, the bridge's frame latency settings, content authoring, and how to read the `[Perf]`, `[D3D9v2]`, `[VramBudget]` and `[AccelMem]` lines.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [D3D9-Performance.md](D3D9-Performance.md)
+
 ### Remix API performance guide
 A new guide for plugin and host developers: how to get the best CPU and GPU performance from an integration, with the measured costs, and how to read the performance logs.
 - Options: none.

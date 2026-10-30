@@ -198,6 +198,8 @@ keeps every setting as you set it.
   host path.
 - [Remix API performance guide](docs/RemixApi-Performance.md): getting the best CPU and GPU performance from an
   integration, and how to measure it.
+- [D3D9 performance guide](docs/D3D9-Performance.md): what to set and how to author content for D3D9 games and mods that
+  do not use the Remix API, and how to read the performance logs.
 - [Remix API changelog](documentation/RemixApiChangelog.md) and the [Remix Plus changelog](docs/CHANGELOG.md).
 - [Remix Sky API](docs/RemixSkyAPI.md): weather presets, game weather and the NUMOS settings.
 - [RemixFX post-processing effects](docs/RemixFx.md) and the [post-processing stack](docs/PostProcessingStack.md).
