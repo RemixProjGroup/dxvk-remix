@@ -30,6 +30,12 @@ Entry format:
 
 ## 2026-10-30
 
+### Remix API performance guide
+A new guide for plugin and host developers: how to get the best CPU and GPU performance from an integration, with the measured costs, and how to read the performance logs.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApi-Performance.md](RemixApi-Performance.md)
+
 ### Sparse rendering: sampling rate scaled by render resolution
 From upstream `e14940d58`: the graphics presets set a sampling rate at a reference render resolution (4K with DLSS Auto) and an exponent, and the rate scales with the actual render resolution, so low render resolutions keep more of their pixels and high ones skip more. Sparse rendering turns off when the scaled rate exceeds `rtx.sparseRendering.maxSamplingRate` (0.75), and a quality slider tunes the rate around the scaled value. The presets use upstream's tuning one level down, since the High preset runs upstream's Ultra path settings: High 0.357 with exponent 0.69 (upstream Ultra), Medium 0.228 with 0.83 (upstream High), Low 0.125 with 0.83 (upstream Medium). The stochastic alpha blend neighbor search can be sparse-aware (more iterations at lower rates, no radius growth at inactive pixels), which High and Medium enable, and it can average up to 4 matching neighbors.
 - Options: added `rtx.sparseRendering.enableAdaptiveSamplingRate`, `samplingRateResolutionExponent` (0.69), `quality` (0.5), `maxSamplingRate` (0.75), `enableSparseAwareAlphaBlendSearch`, and `rtx.stochasticAlphaBlendAverageSearchMatches` (default off). `rtx.sparseRendering.samplingRate` default 1.0 → 0.357. The High, Medium and Low presets set enableAdaptiveSamplingRate, samplingRate, samplingRateResolutionExponent and enableSparseAwareAlphaBlendSearch.
