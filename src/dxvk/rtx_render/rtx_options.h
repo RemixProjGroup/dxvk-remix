@@ -1569,7 +1569,8 @@ namespace dxvk {
       if (cellSize > 0.f) {
         return cellSize;
       }
-      return autoCellSize() ? 58.5f * getMeterToWorldUnitScale() : 0.f;
+      // The floor keeps a very small scene scale from giving each merged instance its own cell.
+      return autoCellSize() ? std::max(58.5f * getMeterToWorldUnitScale(), 16.f) : 0.f;
     }
     RTX_OPTION("rtx", bool, batchBlasInputBarriers, true,
                "Reduces CPU cost: records the memory barriers for BLAS build inputs once per frame, before the builds, "

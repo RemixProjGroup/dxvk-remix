@@ -4234,7 +4234,7 @@ namespace dxvk {
         lastOn = true;
 
         RemixGui::Checkbox("Minimize BLAS Merging##livetrace", &RtxOptions::minimizeBlasMergingObject());
-        RemixGui::DragFloat("Merged BLAS World Cell Size (0 = off)##livetrace", &RtxOptions::mergedBucketCellSizeObject(), 64.f, 0.f, 1000000.f, "%.0f");
+        RemixGui::DragFloat("Merged BLAS World Cell Size (0 = auto)##livetrace", &RtxOptions::mergedBucketCellSizeObject(), 64.f, 0.f, 1000000.f, "%.0f");
         RemixGui::Checkbox("Fast-Trace Flags for Static Merged BLAS##livetrace", &RtxOptions::preferFastTraceForStaticMergedBlasObject());
         if (ImGui::Button("Reset Averages##livetrace")) {
           RtxPerfLog::resetLiveTrace(frameId, 0);
@@ -4949,7 +4949,7 @@ namespace dxvk {
         RemixGui::DragInt("Own BLAS for Chronically Dirty Geometry After N Frames (0 = off)", &RtxOptions::ownBlasForChronicallyDirtyFramesObject(), 1.f, 0, 1000);
         RemixGui::DragInt("Chronically Dirty Geometry: Keep Own BLAS for N Frames", &RtxOptions::ownBlasChronicallyDirtyHoldFramesObject(), 1.f, 1, 100000);
         RemixGui::DragInt("Max Prims per Merged BLAS Bucket (0 = unlimited)", &RtxOptions::maxPrimsPerMergedBucketObject(), 1024.f, 0, 16777216);
-        RemixGui::DragFloat("Merged BLAS World Cell Size (0 = off)", &RtxOptions::mergedBucketCellSizeObject(), 64.f, 0.f, 1000000.f, "%.0f");
+        RemixGui::DragFloat("Merged BLAS World Cell Size (0 = auto)", &RtxOptions::mergedBucketCellSizeObject(), 64.f, 0.f, 1000000.f, "%.0f");
         RemixGui::Checkbox("Auto Cell Size from Scene Scale (when size is 0)", &RtxOptions::autoCellSizeObject());
         ImGui::TextDisabled("Effective cell size: %.1f", RtxOptions::effectiveMergedBucketCellSize());
         RemixGui::DragInt("Static Clusters: Young Instance Frames", &RtxOptions::clusterYoungFramesObject(), 1.f, 0, 1000);
