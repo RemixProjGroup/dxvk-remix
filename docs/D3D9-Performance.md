@@ -2,7 +2,7 @@
 
 This guide is for people who make or tune Remix Plus mods for D3D9 games that do not use the Remix API. You work with
 `rtx.conf`, the Alt+X developer menu and replacement assets (USD mods), and you do not write engine code. It says what
-to set and how to author content for the best CPU and GPU performance, and what each choice costs.
+to set and how 1to author content for the best CPU and GPU performance, and what each choice costs.
 
 If you write a game plugin or host against the Remix API, read the [Remix API performance
 guide](RemixApi-Performance.md) instead. For a full list of options, see [`RtxOptions.md`](../RtxOptions.md).

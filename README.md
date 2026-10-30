@@ -178,7 +178,7 @@ GPUs with 8 GB of video memory or less get one step lower (Low at the bottom).
 | **Light bounces** | 1 to 4 | 1 to 4 | 0 to 2 | 0 to 2 |
 | **Indirect lighting** (NVIDIA: SHaRC; other GPUs: ReSTIR GI) | Ultra cache update | High cache update, about half the cost of Ultra | Medium | Medium |
 | **Separate direct and indirect denoising** | On | On | Off | Off |
-| **Sparse rendering** (with Ray Reconstruction on) | Off: full image quality | 60% of pixels traced | 50% | about 36% |
+| **Sparse rendering** (with Ray Reconstruction on) | Off: full image quality | A share of pixels traced, set by the preset and render resolution; off when it would be close to full rate | Fewer pixels | Fewest pixels |
 | **Volumetrics** | Ultra | Ultra | Medium | Low |
 | **Relief displacement quality** | High | High | Medium | Low |
 | **Particles and blended surfaces in reflections and bounces** | On | On | Off | Off |
