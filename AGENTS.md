@@ -58,10 +58,9 @@ Each workflow has one skill file. Claude Code loads `.claude/skills/` and `.agen
 ## Git
 
 - Branch names follow [`docs/BRANCHING.md`](docs/BRANCHING.md).
-- Ask before pushing anywhere public.
 - No force pushes. If a push is rejected as non-fast-forward, stop and investigate.
 - Do not skip hooks (`--no-verify`) unless asked.
-- Commit messages carry the rationale for a change (see Comments). AI co-author trailers are allowed.
+- Commit messages carry the rationale for a change (see Comments).
 
 ## Changelog
 
