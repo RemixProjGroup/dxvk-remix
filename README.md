@@ -4,6 +4,9 @@
 
 **Path tracing for classic games, with a physically based sky, faster scenes and a Remix API built for modern game integrations.**
 
+[![Support me on Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20me-72A4F2?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/J3J3BCC3L)
+[![Support me on Patreon](https://img.shields.io/badge/Patreon-Support%20me-F96854?style=for-the-badge&logo=patreon&logoColor=white)](https://www.patreon.com/c/sparkles1)
+
 Remix Plus is a community fork of NVIDIA RTX Remix
 ([`dxvk-remix`](https://github.com/NVIDIAGameWorks/dxvk-remix)), the runtime that path-traces classic games.
 It is created and led by [Kim2091](https://github.com/Kim2091). Like `dxvk-remix`, it is built on
