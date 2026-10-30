@@ -5,7 +5,8 @@ This guide is for developers who write a game plugin or host against the Remix A
 the best CPU and GPU performance from an integration: what to do, why it helps, and what it costs when you do not.
 
 For the calls themselves, see [`RemixApi.md`](RemixApi.md). For moving an existing integration step by step, see
-[`api-host-path-migration.md`](api-host-path-migration.md) and [`RemixApi-Migration.md`](RemixApi-Migration.md).
+[`api-host-path-migration.md`](api-host-path-migration.md) and [`RemixApi-Migration.md`](RemixApi-Migration.md). For D3D9
+games and mods that do not use the API, see the [D3D9 performance guide](D3D9-Performance.md).
 
 **About the numbers.** Every number here was measured on an RTX 5080 Laptop. Unless noted, the scenes are two
 open-world scenes from an API host. **Scene A** has about 220 lights. **Scene B** has about 100 lights, about 600
