@@ -196,6 +196,11 @@ keeps every setting as you set it.
   what to rebuild, and the traps.
 - [Host path performance guide](docs/api-host-path-migration.md): moving a game to retained instances and the D3D11
   host path.
+- [Remix API performance guide](https://github.com/RemixProjGroup/dxvk-remix/blob/dev/docs/RemixApi-Performance.md):
+  getting the best CPU and GPU performance from an integration, and how to measure it. Written for the `dev` branch.
+- [D3D9 performance guide](https://github.com/RemixProjGroup/dxvk-remix/blob/dev/docs/D3D9-Performance.md): what to set
+  and how to author content for D3D9 games and mods that do not use the Remix API, and how to read the performance logs.
+  Written for the `dev` branch.
 - [Remix API changelog](documentation/RemixApiChangelog.md) and the [Remix Plus changelog](docs/CHANGELOG.md).
 - [Remix Sky API](docs/RemixSkyAPI.md): weather presets, game weather and the NUMOS settings.
 - [RemixFX post-processing effects](docs/RemixFx.md) and the [post-processing stack](docs/PostProcessingStack.md).
