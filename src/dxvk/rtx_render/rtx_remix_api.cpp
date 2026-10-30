@@ -75,6 +75,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -204,6 +205,8 @@ namespace {
   // The bones the vertices of each live skinned mesh name (its highest blend index plus one), guarded by s_mutex.
   // An instance of the mesh that sends fewer bones gets the rest as identity (SkinningDesc::usedBones).
   std::unordered_map<remixapi_MeshHandle, uint32_t> s_meshBones;
+  // The description digest of each material created through the API and not destroyed yet, guarded by s_mutex.
+  std::unordered_map<remixapi_MaterialHandle, uint64_t> s_liveMaterials;
   // Track handles that were updated or created this frame to prevent re-adding after deletion in the same frame
   std::unordered_set<remixapi_LightHandle> s_handlesDeletedThisFrame;
   // Sticky: set once any external (C-API) light is registered. Used to gate the
@@ -1150,6 +1153,124 @@ namespace {
     });
   }
 
+  // Returns a hash of everything a material's conversion and asset key read from its description.
+  // A field that the conversion reads must be added here, or a change of only that field is dropped as a repeat.
+  uint64_t materialDigest(const remixapi_MaterialInfo& info) {
+    XXH64_hash_t digest = 0;
+    const auto bytes = [&digest](const void* data, size_t size) {
+      if (size != 0) {
+        digest = XXH64(data, size, digest);
+      }
+    };
+    const auto pod = [&bytes](const auto& value) { bytes(&value, sizeof(value)); };
+    const auto path = [&bytes, &pod](remixapi_Path value) {
+      const size_t length = value != nullptr ? std::wcslen(value) : 0;
+      pod(length);
+      bytes(value, length * sizeof(wchar_t));
+    };
+
+    path(info.albedoTexture);
+    path(info.normalTexture);
+    path(info.tangentTexture);
+    path(info.emissiveTexture);
+    pod(info.emissiveIntensity);
+    pod(info.emissiveColorConstant);
+    pod(info.spriteSheetRow);
+    pod(info.spriteSheetCol);
+    pod(info.spriteSheetFps);
+    pod(info.filterMode);
+    pod(info.wrapModeU);
+    pod(info.wrapModeV);
+
+    // The sType of each extension keeps a missing extension apart from one that holds the same bytes.
+    // The version checks match the conversion, because older hosts pass shorter structs.
+    if (auto opaque = pnext::find<remixapi_MaterialInfoOpaqueEXT>(&info)) {
+      pod(opaque->sType);
+      path(opaque->roughnessTexture);
+      path(opaque->metallicTexture);
+      pod(opaque->anisotropy);
+      pod(opaque->albedoConstant);
+      pod(opaque->opacityConstant);
+      pod(opaque->roughnessConstant);
+      pod(opaque->metallicConstant);
+      pod(opaque->thinFilmThickness_hasvalue);
+      pod(opaque->thinFilmThickness_value);
+      pod(opaque->alphaIsThinFilmThickness);
+      path(opaque->heightTexture);
+      pod(opaque->displaceIn);
+      pod(opaque->useDrawCallAlphaState);
+      pod(opaque->blendType_hasvalue);
+      pod(opaque->blendType_value);
+      pod(opaque->invertedBlend);
+      pod(opaque->alphaTestType);
+      pod(opaque->alphaReferenceValue);
+      if (s_apiVersion >= REMIXAPI_VERSION_MAKE(0, 4, 2)) {
+        pod(opaque->displaceOut);
+      }
+      if (s_apiVersion >= REMIXAPI_VERSION_MAKE(0, 1000, 1)) {
+        pod(opaque->enableDlssControlMask);
+        pod(opaque->dlssControlMaskIntensity);
+        pod(opaque->dlssControlMaskToneStrength);
+        pod(opaque->dlssControlMaskStructuralStrength);
+      }
+      if (auto subsurface = pnext::find<remixapi_MaterialInfoOpaqueSubsurfaceEXT>(&info)) {
+        pod(subsurface->sType);
+        path(subsurface->subsurfaceTransmittanceTexture);
+        path(subsurface->subsurfaceThicknessTexture);
+        path(subsurface->subsurfaceSingleScatteringAlbedoTexture);
+        pod(subsurface->subsurfaceTransmittanceColor);
+        pod(subsurface->subsurfaceMeasurementDistance);
+        pod(subsurface->subsurfaceSingleScatteringAlbedo);
+        pod(subsurface->subsurfaceVolumetricAnisotropy);
+        pod(subsurface->subsurfaceDiffusionProfile);
+        pod(subsurface->subsurfaceRadius);
+        pod(subsurface->subsurfaceRadiusScale);
+        pod(subsurface->subsurfaceMaxSampleRadius);
+        if (s_apiVersion >= REMIXAPI_VERSION_MAKE(0, 5, 1)) {
+          path(subsurface->subsurfaceRadiusTexture);
+        }
+      }
+      if (auto specGloss = pnext::find<remixapi_MaterialInfoOpaqueSpecGlossEXT>(&info)) {
+        pod(specGloss->sType);
+        pod(specGloss->roughnessEncoding);
+        pod(specGloss->metalStrength);
+        pod(specGloss->specularMetalLow);
+        pod(specGloss->specularMetalHigh);
+        pod(specGloss->metalAlbedoLuminanceMax);
+        pod(specGloss->specularTint);
+      }
+      if (auto albedoTint = pnext::find<remixapi_MaterialInfoOpaqueAlbedoTintEXT>(&info)) {
+        pod(albedoTint->sType);
+        pod(albedoTint->albedoTint);
+      }
+    } else if (auto translucent = pnext::find<remixapi_MaterialInfoTranslucentEXT>(&info)) {
+      pod(translucent->sType);
+      path(translucent->transmittanceTexture);
+      pod(translucent->refractiveIndex);
+      pod(translucent->transmittanceColor);
+      pod(translucent->transmittanceMeasurementDistance);
+      pod(translucent->thinWallThickness_hasvalue);
+      pod(translucent->thinWallThickness_value);
+      pod(translucent->useDiffuseLayer);
+    } else if (auto portal = pnext::find<remixapi_MaterialInfoPortalEXT>(&info)) {
+      pod(portal->sType);
+      pod(portal->rayPortalIndex);
+      pod(portal->rotationSpeed);
+    }
+
+    if (const remixapi_AssetKeyEXT* assetKey = findAssetKey(info.pNext)) {
+      pod(assetKey->sType);
+      pod(assetKey->key);
+      if (assetKey->aliases_values != nullptr) {
+        bytes(assetKey->aliases_values, assetKey->aliases_count * sizeof(uint64_t));
+      }
+      if (assetKey->assetName != nullptr) {
+        bytes(assetKey->assetName, std::strlen(assetKey->assetName));
+      }
+    }
+    return digest;
+  }
+
   remixapi_ErrorCode REMIXAPI_CALL remixapi_CreateMaterial(
     const remixapi_MaterialInfo* info,
     remixapi_MaterialHandle* out_handle) {
@@ -1168,9 +1289,20 @@ namespace {
       return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
     }
 
+    const uint64_t digest = materialDigest(*info);
+
     // async load
     {
     std::lock_guard lock { s_mutex };
+
+    // A repeat of the live description returns here, so the material's users do not rebuild.
+    auto [live, isNew] = s_liveMaterials.try_emplace(handle, digest);
+    if (!isNew && live->second == digest) {
+      *out_handle = handle;
+      return REMIXAPI_ERROR_CODE_SUCCESS;
+    }
+    live->second = digest;
+
     remixDevice->EmitCs([cHandle = handle,
                          cMaterialData = convert::toRtMaterialWithoutTexturePreload(*info),
                          cPreloadSrc = convert::makePreloadSource(*info)](dxvk::DxvkContext* ctx) {
@@ -1197,6 +1329,7 @@ namespace {
     const dxvk::perf::ApiScope perfApiScope { dxvk::perf::Api::DestroyMaterial, 1 }; // rtx.profile.detailedLogging
     if (auto remixDevice = tryAsDxvk()) {
       std::lock_guard lock { s_mutex };
+      s_liveMaterials.erase(handle);
       // Retained commands queued before this call apply first.
       remixDevice->EmitCs([cHandle = handle, cBound = sceneCommandsIssued(remixDevice)](dxvk::DxvkContext* ctx) {
         static_cast<dxvk::RtxContext*>(ctx)->drainSceneCommands(cBound);
@@ -2112,8 +2245,7 @@ namespace {
     REMIX_FORK_RECORD(CreateTexture, info, out_handle);
     const dxvk::perf::ApiScope perfApiScope { dxvk::perf::Api::CreateTexture, 1 }; // rtx.profile.detailedLogging
     dxvk::RemixApiDevice* remixDevice = tryAsDxvk();
-    std::lock_guard lock { s_mutex };
-    return dxvk::fork_hooks::createTexture(remixDevice, info, out_handle);
+    return dxvk::fork_hooks::createTexture(remixDevice, s_mutex, info, out_handle);
   }
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_DestroyTexture(
@@ -3272,11 +3404,12 @@ namespace dxvk {
 
     void registerDevice(std::unique_ptr<RemixApiDevice> device, uint32_t outputWidth, uint32_t outputHeight) {
       {
-        // A new device starts with no registered meshes. Forgetting live handles is always
-        // safe: the worst case is a repeated create the CS then drops.
+        // A new device starts with no registered meshes or materials. Forgetting live handles is always
+        // safe: the worst case is a repeated create that runs in full.
         std::lock_guard lock { s_mutex };
         s_liveMeshHandles.clear();
         s_meshBones.clear();
+        s_liveMaterials.clear();
       }
       s_dxvkDevice = std::move(device);
       g_dxvkDeviceNative = s_dxvkDevice->GetDXVKDevice().ptr();
@@ -3384,6 +3517,7 @@ namespace dxvk {
       }
       s_liveMeshHandles.clear();
       s_meshBones.clear();
+      s_liveMaterials.clear();
       s_dxvkDevice = create();
       g_dxvkDeviceNative = s_dxvkDevice->GetDXVKDevice().ptr();
       ApiRecorder::onDeviceRegistered(true, 0, 0);

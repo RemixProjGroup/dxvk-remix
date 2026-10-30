@@ -263,6 +263,7 @@ namespace fork_hooks {
 
   remixapi_ErrorCode createTexture(
       RemixApiDevice*         remixDevice,
+      dxvk::mutex&            apiMutex,
       const remixapi_TextureInfo* info,
       remixapi_TextureHandle*  out_handle) {
     if (!remixDevice) {
@@ -385,6 +386,7 @@ namespace fork_hooks {
       return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
     }
 
+    std::lock_guard apiLock { apiMutex };
     auto devLock = remixDevice->LockDevice();
 
     remixDevice->EmitCs([

@@ -30,6 +30,12 @@ Entry format:
 
 ## 2026-10-30
 
+### Remix API: repeated materials, identical transforms and the texture lock
+`CreateMaterial` with a live hash and an identical description now returns before the conversion, so the material's retained users do not rebuild. With different data it now replaces the material, which was ignored before although its users rebuilt. An identical transform in `UpdateRetainedInstances` now changes nothing, where it paid for a matrix inverse and left the instance off the preserve path with no settle queued. `CreateTexture` holds the API mutex only to queue the upload, not while it creates the image and staging buffer and copies the data. The merged BLAS cell size is now derived from `rtx.sceneScale` by default, because without a cell size API hosts get overlapping merged BLASes. It also applies to D3D9 games, where the traced result is the same.
+- Options: default flipped `rtx.accel.autoCellSize` → true.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApi-Performance.md](RemixApi-Performance.md)
+
 ### Remix API performance guide
 A new guide for plugin and host developers: how to get the best CPU and GPU performance from an integration, with the measured costs, and how to read the performance logs.
 - Options: none.

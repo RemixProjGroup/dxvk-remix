@@ -106,12 +106,12 @@ An unchanged instance costs almost nothing, so the guide to retained performance
 | :-- | :-- | :-- |
 | Nothing | Nothing for that instance | About 0 |
 | `UpdateRetainedInstances` with a new transform | Moves the instance in place. It settles on the next frame. | Small. A small mesh in a merged BLAS also dirties its bucket (below). |
-| The same, with an identical transform | Recomputes the normal matrix and marks the instance updated, but counts no move | Small, but paid per call. Do not send it. |
+| The same, with an identical transform | Nothing for that instance | One queued command and a compare. Do not send it if you can avoid it. |
 | Two moves of one instance before one `DrawRetainedInstances` | The second is not a plain move, so the instance rebuilds | One full entry rebuild |
 | A move that flips the transform's mirroring | The instance rebuilds | One full entry rebuild |
 | `UpdateRetainedInstances` with a visibility change | Sets the TLAS state, under the hidden policy (below) | The first toggle rebuilds a merged bucket |
 | `UpdateRetainedInstance` (whole description) | Queues a rebuild, reusing its instances where it can | One full entry rebuild |
-| A mesh refresh, or `CreateMaterial` / `DestroyMaterial` of a material it uses | Rebuilds every entry that uses the asset | One rebuild per user |
+| A mesh refresh, `DestroyMaterial`, or `CreateMaterial` with changed data for a material it uses | Rebuilds every entry that uses the asset | One rebuild per user |
 | `DrawRetainedInstances` with another origin | Moves every instance | Scene-wide (see [Origin shifts](#origin-shifts)) |
 | A cleared texture cache, including `RequestTextureVramFree` | Every retained entry takes its full path | Scene-wide, for one frame |
 | `SetConfigVariable` changing an option that invalidates draw translation, such as `rtx.enableAlphaTest` | Every retained entry takes its full path | Scene-wide, for one frame |
@@ -177,7 +177,7 @@ one bucket, so doors and props that move often are better as larger or shared me
 Merged clusters are worth keeping. In scene B, merged clusters cost 23.58 ms of GPU time against 26.5 ms with a BLAS
 per mesh.
 
-**Set a merged BLAS cell size.** The runtime forms merged BLASes as stable clusters per cell, and a change rebuilds its
+**Keep a merged BLAS cell size.** The runtime forms merged BLASes as stable clusters per cell, and a change rebuilds its
 whole cluster. Without a cell size, buckets take instances in table order from the whole world, so merged BLASes
 overlap, the TLAS cannot cull them, and all static instances of a TLAS class share one cluster. Clusters with a cell
 size set are the largest GPU win we measured for scene layout: they stopped the scene fragmenting over a session (968
@@ -185,13 +185,13 @@ merged BLASes against 158 after a fresh build), which measured −1.4 to −1.77
 on a 22.4 ms frame in scene A.
 
 ```ini
-# rtx.conf: derives about 58.5 m in your world units from rtx.sceneScale.
+# rtx.conf: on by default, derives about 58.5 m in your world units from rtx.sceneScale.
 rtx.accel.autoCellSize = True
 # Or set the cell size yourself, in world units. At 100 units per meter:
 # rtx.mergedBucketCellSize = 5850.0
 ```
 
-Both are off by default. Set `rtx.sceneScale` correctly first if you use the automatic size.
+The automatic size is only as good as `rtx.sceneScale`, so set that correctly.
 
 ### Repeated objects
 
@@ -263,10 +263,10 @@ never waits for the GPU: the runtime keeps a resource until no frame in flight u
 
 ## 4. Materials and textures
 
-**Create each material once.** Keep your own table from material hash to handle, and check it first. There is no skip
-for repeats as there is for meshes. A repeated `CreateMaterial` with a live hash pays for its conversion and is then
-ignored on the render thread, with a log line, but it still counts as a changed asset, so **every retained entry that
-uses the material rebuilds**. Never call it per frame or per draw.
+**Create each material once.** Keep your own table from material hash to handle, and check it first. A repeated
+`CreateMaterial` with a live hash and an identical description hashes the description and returns, with no other work,
+so it is safe but not free. With different data, including a different asset key, it replaces the material, and
+**every retained entry that uses the material rebuilds**. Do not change a material per frame or per draw.
 
 **Use stable hashes.** The handle is your `info->hash`. An unstable hash means new assets every session, and mods stop
 matching. Add `remixapi_AssetKeyEXT` for a key that survives content changes.
@@ -293,9 +293,9 @@ place when they can. The old path's texture copies cost 2.0-2.6 GB in an open-wo
   (`rtx.opacityMicromap.rebakeOnTextureChange`).
 - Prepare on the thread of the immediate context, outside deferred recording.
 
-**`CreateTexture` holds the API lock.** It creates the image and staging buffer under the API mutex on the calling
-thread, so other threads' API calls wait for it. Do bulk texture creation at load time, or spread it out. Prefer a D3D11
-import where you can.
+**`CreateTexture` runs on your thread.** It creates the image and staging buffer and copies your data on the calling
+thread, and takes the API mutex only to queue the upload, so other threads' API calls do not wait for that work. Do bulk
+texture creation at load time, or spread it out. Prefer a D3D11 import where you can.
 
 **Texture file paths resolve on the render thread.** A material's file path textures are found and queued on the
 render thread when the material is created. Many new file-based materials in one frame land there together.
@@ -370,9 +370,10 @@ Keep the expensive part of your scene work off the render thread and off your ho
 | `DrawInstance` | Any, but the order of your calls is the frame's order | Conversion outside the lock, then the API mutex and device lock per call |
 | `CreateMesh` | Any | Allocates and copies, with locks |
 | `CreateMeshBatched` | Any | Copies, then the API mutex to queue |
-| `CreateMaterial`, `CreateLight`, `DrawLightInstance` | Any | API mutex and device lock per call |
+| `CreateMaterial` | Any | API mutex per call, and the device lock unless the description repeats the live one |
+| `CreateLight`, `DrawLightInstance` | Any | API mutex and device lock per call |
 | `CreateLightBatched`, `UpdateLightDefinition`, `DestroyLight` | Any | API mutex to queue |
-| `CreateTexture` | Any | Whole image setup under the API mutex |
+| `CreateTexture` | Any | Image setup without locks, then the API mutex and device lock to queue the upload |
 | `SetConfigVariable` | Any | API mutex and option lock |
 | `GetMemoryPressure`, `RequestVramCompaction`, `RequestTextureVramFree`, host settings | Any | Atomic or no lock |
 | `PrepareD3D11TextureEx` | The immediate-context thread, outside deferred recording | |
@@ -551,7 +552,7 @@ One test showed 312-352 calls per interval taking 144-341 ms, up to 35 ms each, 
 - [ ] Skinned, view-model and short-lived objects use `DrawInstance`, drawn every frame they exist.
 - [ ] Transforms, visibility and lights are sent only when their bits changed, in one batch per frame.
 - [ ] Nothing is hidden just for being off screen.
-- [ ] `rtx.accel.autoCellSize` or `rtx.mergedBucketCellSize` is set.
+- [ ] `rtx.sceneScale` is correct, so `rtx.accel.autoCellSize` picks a suitable cell size, or `rtx.mergedBucketCellSize` is set.
 - [ ] One mesh per unique geometry, created with `CreateMeshBatched`, under a per-frame budget.
 - [ ] Deforming meshes use `remixapi_MeshInfoRefreshGeometryEXT`.
 - [ ] Each material is created once. Nothing calls `CreateMaterial` per frame.
@@ -575,7 +576,7 @@ Most of these came from real integrations. The rest follow from the code.
 | Two moves per instance per frame | The instance rebuilds | Send the final transform once |
 | Destroy and create when objects return to view | Stutter, micromap re-bakes, memory churn | One handle for the object's life |
 | One mesh handle per placement | VRAM and build time scale with placements | One mesh per unique geometry and material |
-| Calling `CreateMaterial` repeatedly with a live hash | Retained users rebuild; log lines | Keep a hash-to-handle table |
+| Calling `CreateMaterial` with changing data for a live hash | Retained users rebuild | Change a material only when its data really changes |
 | Re-creating a mesh hash to change it | The update never appears | `remixapi_MeshInfoRefreshGeometryEXT` |
 | A host check that compares only textures before re-sending | Rebuilt geometry is dropped, and stale level-of-detail blocks show through full-detail walls | Treat changed geometry as a change |
 | Creating thousands of meshes in one frame | One long render-thread frame | A per-frame budget |
@@ -592,7 +593,4 @@ valuable of these later. Until then, follow the advice above. It stays correct i
 
 | Today | What may change | Until then |
 |---|---|---|
-| `CreateMaterial` with a hash that is already live does the full conversion and rebuilds every retained object that uses the material | A repeated create with the same data could be skipped, as repeated mesh creates can be | Create each material once and reuse its handle |
-| No merged BLAS cell size is set by default, so an API host gets overlapping merged BLASes | A cell size could become the default | Set `rtx.accel.autoCellSize` or `rtx.mergedBucketCellSize` |
 | `RequestTextureVramFree` rebuilds every retained entry | The rebuild could be limited to what the request frees | Call it only at scene turnover |
-| `CreateTexture` holds the API lock while it creates the image, so other threads' API calls wait | The lock could be held for less of that work | Create textures in batches, away from time-critical API calls |
