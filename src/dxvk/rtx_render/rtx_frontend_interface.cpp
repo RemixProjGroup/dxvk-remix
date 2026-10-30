@@ -384,6 +384,7 @@ namespace dxvk {
       stats.resets = taken.resets;
       stats.jumps = taken.jumps;
       stats.maxMotion = taken.maxMotion;
+      stats.topologyRebuilds = taken.topologyRebuilds;
       return stats;
     }
 

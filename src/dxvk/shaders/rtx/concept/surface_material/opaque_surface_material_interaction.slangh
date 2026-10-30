@@ -702,7 +702,6 @@ void opaqueSurfaceMaterialApplyTextureOperations(
   Surface surface,
   inout SurfaceInteraction surfaceInteraction,
   inout vec3 albedo,
-  inout vec3 emissiveColor,
   inout float opacity,
   inout float emissiveBlendOverrideInfluence)
 {
@@ -736,14 +735,6 @@ void opaqueSurfaceMaterialApplyTextureOperations(
       albedo *= tFactor.rgb;
     }
 
-    // Fixed function texture stage setting (emissive)
-    chooseTextureArgument(textureArg1, surface.textureColorArg1Source, emissiveColor, surfaceInteraction.vertexColor.rgb, tFactor.rgb, vec3(1.0));
-    chooseTextureArgument(textureArg2, surface.textureColorArg2Source, emissiveColor, surfaceInteraction.vertexColor.rgb, tFactor.rgb, vec3(1.0));
-    chooseTextureOperationColor(emissiveColor, surface.textureColorOperation, textureArg1, textureArg2);
-    if (surface.isTextureFactorBlend) {
-      emissiveColor *= tFactor.rgb;
-    }
-
     // Adjust opacity via texture operations.
     // Fixed function texture stage state for alpha channel
 
@@ -760,6 +751,25 @@ void opaqueSurfaceMaterialApplyTextureOperations(
   if (opaqueSurfaceMaterial.flags & OPAQUE_SURFACE_MATERIAL_FLAG_IGNORE_ALPHA_CHANNEL)
   {
     opacity = 1.f;
+  }
+}
+
+// The fixed function color stage applied to the emissive color. It reads the vertex color that
+// opaqueSurfaceMaterialApplyTextureOperations normalized, so it runs after that function.
+void opaqueSurfaceMaterialApplyEmissiveTextureOperations(
+  Surface surface,
+  SurfaceInteraction surfaceInteraction,
+  inout vec3 emissiveColor)
+{
+  const vec4 tFactor = unorm4x8ToFloat4x32(surface.tFactor).bgra;
+
+  vec3 textureArg1 = vec3(1.0);
+  vec3 textureArg2 = vec3(1.0);
+  chooseTextureArgument(textureArg1, surface.textureColorArg1Source, emissiveColor, surfaceInteraction.vertexColor.rgb, tFactor.rgb, vec3(1.0));
+  chooseTextureArgument(textureArg2, surface.textureColorArg2Source, emissiveColor, surfaceInteraction.vertexColor.rgb, tFactor.rgb, vec3(1.0));
+  chooseTextureOperationColor(emissiveColor, surface.textureColorOperation, textureArg1, textureArg2);
+  if (surface.isTextureFactorBlend) {
+    emissiveColor *= tFactor.rgb;
   }
 }
 
@@ -787,10 +797,9 @@ float opaqueSurfaceMaterialInteractionCalcOpacity(
   opaqueSurfaceMaterialLoadAlbedoOpacity(opaqueSurfaceMaterial, thinFilmEnabled, albedoOpacityLoaded, albedoOpacitySample,
     albedo, opacity, thinFilmThickness);
 
-  vec3 emissiveColor = vec3(0.0f);
   float emissiveBlendOverrideInfluence = float(1.0f);
   opaqueSurfaceMaterialApplyTextureOperations(opaqueSurfaceMaterial, surface, surfaceInteraction,
-    albedo, emissiveColor, opacity, emissiveBlendOverrideInfluence);
+    albedo, opacity, emissiveBlendOverrideInfluence);
 
   return opacity;
 }
@@ -875,7 +884,6 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
   vec4 tangentSample;
   vec4 roughnessSample;
   vec4 metallicSample;
-  vec4 emissiveColorSample;
 
   const bool albedoOpacityLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.albedoOpacityTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, albedoOpacitySample, materialLodBias);
   const bool normalLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.normalTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, normalSample, materialLodBias);
@@ -900,17 +908,7 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
   const bool tangentLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.tangentTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, tangentSample, materialLodBias);
   const bool roughnessLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.roughnessTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, roughnessSample, materialLodBias);
   const bool metallicLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.metallicTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, metallicSample, materialLodBias);
-  const bool emissiveColorLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.emissiveColorTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, emissiveColorSample, materialLodBias);
-  
-  // Load Emissive Color
 
-  vec3 emissiveColor = opaqueSurfaceMaterial.emissiveColorConstant;
-
-  if (emissiveColorLoaded)
-  {
-    emissiveColor = emissiveColorSample.xyz;
-  }
-  
   // Load Albedo/Opacity
 
   vec3 albedo;
@@ -943,8 +941,8 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
 #endif
 
   opaqueSurfaceMaterialApplyTextureOperations(opaqueSurfaceMaterial, surface, surfaceInteraction,
-    albedo, emissiveColor, opacity, emissiveBlendOverrideInfluence);
-  
+    albedo, opacity, emissiveBlendOverrideInfluence);
+
   // Note: Gamma correct albedo input (be it from a constant or a texture). Textures using a UNORM format do not have their
   // sRGB->linear conversion done by the sampler, so we do it here in software. When the albedo comes from a texture that uses
   // an sRGB VkFormat however, the sampler hardware already linearized it on read, so applying gammaToLinear again would double
@@ -956,14 +954,6 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
     albedo = gammaToLinear(albedo);
   }
 
-  // Note: Same handling as albedo above - skip the software gamma correction when the emissive color came from an sRGB-format
-  // texture that the sampler already linearized (OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_TEXTURE_IS_SRGB).
-  const bool emissiveAlreadyLinear = emissiveColorLoaded && (opaqueSurfaceMaterial.flags & OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_TEXTURE_IS_SRGB);
-  if (!emissiveAlreadyLinear)
-  {
-    emissiveColor = gammaToLinear(emissiveColor);
-  }
-  
   // Apply material modifiers/overrides
   albedo = saturate(albedo * cb.opaqueMaterialArgs.albedoScale + cb.opaqueMaterialArgs.albedoBias);
   
@@ -1134,11 +1124,40 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
     opaqueSurfaceMaterialInteraction.isotropicRoughness,
     opaqueSurfaceMaterialInteraction.anisotropicRoughness);
 
-  // Pre-exposure (rtx_pre_exposure.h): every radiance source is stored x cb.preExposure. The G-buffer copy
-  // (gbuffer_memory_polymorphic_surface_material_interaction.slangh) stores the result, so its decode does not
-  // multiply again.
-  opaqueSurfaceMaterialInteraction.emissiveRadiance =
-    emissiveBlendOverrideInfluence * emissiveColor * opaqueSurfaceMaterial.emissiveIntensity * cb.preExposure;
+  // Load Emissive Color
+  // Note: Surfaces without an emissive intensity do not read their emissive texture or apply its texture stage operations.
+
+  vec3 emissiveRadiance = vec3(0.0f);
+
+  if (opaqueSurfaceMaterial.emissiveIntensity != 0.0f)
+  {
+    vec4 emissiveColorSample;
+    const bool emissiveColorLoaded = surfaceMaterialInteractionTextureReadHelper(opaqueSurfaceMaterial.emissiveColorTextureIndex, opaqueSurfaceMaterial.samplerIndex, surfaceInteraction, emissiveColorSample, materialLodBias);
+
+    vec3 emissiveColor = opaqueSurfaceMaterial.emissiveColorConstant;
+
+    if (emissiveColorLoaded)
+    {
+      emissiveColor = emissiveColorSample.xyz;
+    }
+
+    opaqueSurfaceMaterialApplyEmissiveTextureOperations(surface, surfaceInteraction, emissiveColor);
+
+    // Note: Same handling as albedo above - skip the software gamma correction when the emissive color came from an sRGB-format
+    // texture that the sampler already linearized (OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_TEXTURE_IS_SRGB).
+    const bool emissiveAlreadyLinear = emissiveColorLoaded && (opaqueSurfaceMaterial.flags & OPAQUE_SURFACE_MATERIAL_FLAG_EMISSIVE_TEXTURE_IS_SRGB);
+    if (!emissiveAlreadyLinear)
+    {
+      emissiveColor = gammaToLinear(emissiveColor);
+    }
+
+    // Pre-exposure (rtx_pre_exposure.h): every radiance source is stored x cb.preExposure. The G-buffer copy
+    // (gbuffer_memory_polymorphic_surface_material_interaction.slangh) stores the result, so its decode does not
+    // multiply again.
+    emissiveRadiance = emissiveBlendOverrideInfluence * emissiveColor * opaqueSurfaceMaterial.emissiveIntensity * cb.preExposure;
+  }
+
+  opaqueSurfaceMaterialInteraction.emissiveRadiance = emissiveRadiance;
 
   opaqueSurfaceMaterialInteraction.subsurfaceMaterialInteraction =
     subSurfaceMaterialReadHelper(opaqueSurfaceMaterial.subsurfaceMaterialIndex, surfaceInteraction, opaqueSurfaceMaterial.samplerIndex);
@@ -1595,16 +1614,18 @@ SurfaceMaterialInteractionSample opaqueSurfaceMaterialInteractionCalcSpecularRef
 #ifdef OPAQUE_MATERIAL_USE_THIN_FILM
   // Note: Compute an approximate refractive index for the material for the thin film math, currently assuming the opaque material is always
   // surrounded by a vacuum (not true in all cases but good enough for this approximation).
-  const float refractiveIndex = baseReflectivityToIoR(
-    materialIoRVacuum, calcBt709Luminance(opaqueSurfaceMaterialInteraction.baseReflectivity));
-  const bool useThinFilm = opaqueSurfaceMaterialInteraction.thinFilmThickness > 0.0;
-  const float thinFilmThickness = opaqueSurfaceMaterialInteraction.thinFilmThickness * OPAQUE_SURFACE_MATERIAL_THIN_FILM_MAX_THICKNESS; // convert [0,1] range to nm
-  // Note: Matching the refractive index calculation, compute the thin film assuming the material is surrounded by a vacuum and with a fixed layer IoR.
-  const vec3 thinFilmFresnel = evalThinFilmFresnel(
-    materialIoRVacuum, materialIoRThinFilmLayer, refractiveIndex,
-    thinFilmThickness, outputDirectionDotMicrofacetNormal);
+  vec3 finalFresnel = fresnel;
 
-  const vec3 finalFresnel = useThinFilm ? thinFilmFresnel : fresnel;
+  if (opaqueSurfaceMaterialInteraction.thinFilmThickness > 0.0)
+  {
+    const float refractiveIndex = baseReflectivityToIoR(
+      materialIoRVacuum, calcBt709Luminance(opaqueSurfaceMaterialInteraction.baseReflectivity));
+    const float thinFilmThickness = opaqueSurfaceMaterialInteraction.thinFilmThickness * OPAQUE_SURFACE_MATERIAL_THIN_FILM_MAX_THICKNESS; // convert [0,1] range to nm
+    // Note: Matching the refractive index calculation, compute the thin film assuming the material is surrounded by a vacuum and with a fixed layer IoR.
+    finalFresnel = evalThinFilmFresnel(
+      materialIoRVacuum, materialIoRThinFilmLayer, refractiveIndex,
+      thinFilmThickness, outputDirectionDotMicrofacetNormal);
+  }
 #else
   const vec3 finalFresnel = fresnel;
 #endif
@@ -1919,16 +1940,18 @@ SurfaceMaterialInteractionPSRSample opaqueSurfaceMaterialInteractionCalcPSRRefle
 #ifdef OPAQUE_MATERIAL_USE_THIN_FILM
   // Note: Compute an approximate refractive index for the material for the thin film math, currently assuming the opaque material is always
   // surrounded by a vacuum (not true in all cases but good enough for this approximation).
-  const float refractiveIndex = baseReflectivityToIoR(
-    materialIoRVacuum, calcBt709Luminance(opaqueSurfaceMaterialInteraction.baseReflectivity));
-  const bool useThinFilm = opaqueSurfaceMaterialInteraction.thinFilmThickness > 0.0;
-  const float thinFilmThickness = opaqueSurfaceMaterialInteraction.thinFilmThickness * OPAQUE_SURFACE_MATERIAL_THIN_FILM_MAX_THICKNESS; // convert [0,1] range to nm
-  // Note: Matching the refractive index calculation, compute the thin film assuming the material is surrounded by a vacuum and with a fixed layer IoR.
-  const vec3 thinFilmFresnel = evalThinFilmFresnel(
-    materialIoRVacuum, materialIoRThinFilmLayer, refractiveIndex,
-    thinFilmThickness, outputDirectionDotMicrofacetNormal);
+  vec3 finalFresnel = fresnel;
 
-  const vec3 finalFresnel = useThinFilm ? thinFilmFresnel : fresnel;
+  if (opaqueSurfaceMaterialInteraction.thinFilmThickness > 0.0)
+  {
+    const float refractiveIndex = baseReflectivityToIoR(
+      materialIoRVacuum, calcBt709Luminance(opaqueSurfaceMaterialInteraction.baseReflectivity));
+    const float thinFilmThickness = opaqueSurfaceMaterialInteraction.thinFilmThickness * OPAQUE_SURFACE_MATERIAL_THIN_FILM_MAX_THICKNESS; // convert [0,1] range to nm
+    // Note: Matching the refractive index calculation, compute the thin film assuming the material is surrounded by a vacuum and with a fixed layer IoR.
+    finalFresnel = evalThinFilmFresnel(
+      materialIoRVacuum, materialIoRThinFilmLayer, refractiveIndex,
+      thinFilmThickness, outputDirectionDotMicrofacetNormal);
+  }
 #else
   const vec3 finalFresnel = fresnel;
 #endif
@@ -2251,16 +2274,18 @@ SurfaceMaterialInteractionSplitWeight opaqueSurfaceMaterialInteractionCalcProjec
 #ifdef OPAQUE_MATERIAL_USE_THIN_FILM
   // Note: Compute an approximate refractive index for the material for the thin film math, currently assuming the opaque material is always
   // surrounded by a vacuum (not true in all cases but good enough for this approximation).
-  const float refractiveIndex = baseReflectivityToIoR(
-    materialIoRVacuum, calcBt709Luminance(opaqueSurfaceMaterialInteraction.baseReflectivity));
-  const bool useThinFilm = opaqueSurfaceMaterialInteraction.thinFilmThickness > 0.0;
-  const float thinFilmThickness = opaqueSurfaceMaterialInteraction.thinFilmThickness * OPAQUE_SURFACE_MATERIAL_THIN_FILM_MAX_THICKNESS; // convert [0,1] range to nm
-  // Note: Matching the refractive index calculation, compute the thin film assuming the material is surrounded by a vacuum and with a fixed layer IoR.
-  const vec3 thinFilmFresnel = evalThinFilmFresnel(
-    materialIoRVacuum, materialIoRThinFilmLayer, refractiveIndex,
-    thinFilmThickness, outputDirectionDotMicrofacetNormal);
+  vec3 finalFresnel = fresnel;
 
-  const vec3 finalFresnel = useThinFilm ? thinFilmFresnel : fresnel;
+  if (opaqueSurfaceMaterialInteraction.thinFilmThickness > 0.0)
+  {
+    const float refractiveIndex = baseReflectivityToIoR(
+      materialIoRVacuum, calcBt709Luminance(opaqueSurfaceMaterialInteraction.baseReflectivity));
+    const float thinFilmThickness = opaqueSurfaceMaterialInteraction.thinFilmThickness * OPAQUE_SURFACE_MATERIAL_THIN_FILM_MAX_THICKNESS; // convert [0,1] range to nm
+    // Note: Matching the refractive index calculation, compute the thin film assuming the material is surrounded by a vacuum and with a fixed layer IoR.
+    finalFresnel = evalThinFilmFresnel(
+      materialIoRVacuum, materialIoRThinFilmLayer, refractiveIndex,
+      thinFilmThickness, outputDirectionDotMicrofacetNormal);
+  }
 #else
   const vec3 finalFresnel = fresnel;
 #endif

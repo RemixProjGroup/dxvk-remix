@@ -116,6 +116,12 @@ namespace dxvk {
   void NeeCachePass::onDeactivation() {
   }
 
+  void NeeCachePass::createDownscaledResource(Rc<DxvkContext>& ctx, const VkExtent3D& downscaledExtent) {
+    // The resources recreate the cache buffers with the other render resolution resources without clearing them,
+    // and the cache clears itself only when the camera resolution changes.
+    requestCacheReset();
+  }
+
   void NeeCachePass::requestCacheReset() const {
     m_resetCacheRequested = true;
   }

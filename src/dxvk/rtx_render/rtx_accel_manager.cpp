@@ -4299,6 +4299,7 @@ namespace dxvk {
     } else {
       m_tlasIdenticalBuilds[Tlas::SSS] = 0; // not built: its content is not tracked this frame
       m_lastTlasCount[Tlas::SSS] = UINT32_MAX;
+      m_tlasRefit[Tlas::SSS].valid = false;
     }
 
     ctx->emitMemoryBarrier(0,
@@ -4335,14 +4336,87 @@ namespace dxvk {
     }
   }
 
+  bool AccelManager::chooseTlasRefit(Tlas::Type type, VkBuildAccelerationStructureFlagsKHR flags, uint32_t numInstances,
+                                     const DxvkAccelStructure* source) {
+    TlasRefitState& state = m_tlasRefit[type];
+    const std::vector<VkAccelerationStructureInstanceKHR>& list = m_mergedInstances[type];
+
+    // Each CPU instance contributes its BLAS and its flags, and each point-instancer batch its slot range,
+    // BLAS, flags and transform source. GPU culling only changes the masks of the batch slots.
+    std::vector<uint64_t>& key = m_tlasRefitKeyScratch;
+    key.clear();
+    key.reserve(list.size() * 2 + 16);
+    for (const VkAccelerationStructureInstanceKHR& instance : list) {
+      key.push_back(instance.accelerationStructureReference);
+      key.push_back((uint64_t(instance.flags) << 32) | instance.instanceShaderBindingTableRecordOffset);
+    }
+    for (const PointInstancerBatch& batch : m_pointInstancerBatches) {
+      if (batch.tlasType != type) {
+        continue;
+      }
+      key.push_back(batch.blasReference);
+      key.push_back((uint64_t(batch.firstIndexInType) << 32) | batch.instanceCount);
+      key.push_back(batch.sbtOffsetAndFlags);
+      key.push_back(reinterpret_cast<uintptr_t>(batch.transforms.get()));
+    }
+
+    bool refit = state.valid && source != nullptr && state.lastWritten == source && state.flags == flags &&
+      state.count == numInstances && state.refitsSinceBuild < tlasRefitRebuildFrames() && state.key == key;
+
+    if (refit) {
+      uint32_t moved = 0;
+      for (size_t i = 0; i < list.size(); ++i) {
+        if (std::memcmp(&list[i].transform, &state.cpuTransforms[i], sizeof(VkTransformMatrixKHR)) != 0) {
+          ++moved;
+        }
+      }
+      size_t batchIndex = 0;
+      for (const PointInstancerBatch& batch : m_pointInstancerBatches) {
+        if (batch.tlasType != type) {
+          continue;
+        }
+        if (std::memcmp(&batch.objectToWorld, &state.batchTransforms[batchIndex], sizeof(Matrix4)) != 0) {
+          moved += batch.instanceCount;
+        }
+        ++batchIndex;
+      }
+      refit = float(moved) <= tlasRefitMovedFraction() * float(numInstances);
+    }
+
+    if (refit) {
+      state.refitsSinceBuild++;
+      return true;
+    }
+
+    // A full build: its content becomes the reference for the next refits.
+    std::swap(state.key, key);
+    state.cpuTransforms.resize(list.size());
+    for (size_t i = 0; i < list.size(); ++i) {
+      state.cpuTransforms[i] = list[i].transform;
+    }
+    state.batchTransforms.clear();
+    for (const PointInstancerBatch& batch : m_pointInstancerBatches) {
+      if (batch.tlasType == type) {
+        state.batchTransforms.push_back(batch.objectToWorld);
+      }
+    }
+    state.flags = flags;
+    state.count = numInstances;
+    state.refitsSinceBuild = 0;
+    state.valid = numInstances != 0;
+    return false;
+  }
+
   template<Tlas::Type type>
   void AccelManager::internalBuildTlas(Rc<DxvkContext> ctx, size_t& totalScratchSize) {
     static constexpr const char* names[] = { "TLAS_Opaque", "TLAS_NonOpaque", "TLAS_SSS" };
     ScopedGpuProfileZone(ctx, names[type]);
-    // TLAS always uses BUILD mode, so it does not need the extra storage for updates.
-    // Fast-trace TLAS (the size cache keys on the flags).
+    // A TLAS needs the extra storage for updates only with rtx.accel.tlasRefit (the size cache keys on the flags).
+    const bool refitEnabled = tlasRefit();
     const VkBuildAccelerationStructureFlagsKHR flags =
-      VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | additionalAccelerationStructureFlags();
+      VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+      (refitEnabled ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR : 0) |
+      additionalAccelerationStructureFlags();
 
     const auto& vkd = m_device->vkd();
 
@@ -4433,14 +4507,31 @@ namespace dxvk {
       Logger::debug(str::format("DxvkRaytrace: TLAS Realloc"));
     }
 
+    // rtx.accel.tlasRefit. The opaque TLAS refits from the previous-frame buffer into the current one.
+    // The other types refit in place.
+    const Rc<DxvkAccelStructure>& refitSource = (type == Tlas::Opaque) ? tlas.previousAccelStructure : tlas.accelStructure;
+    bool refit = false;
+    if (refitEnabled) {
+      refit = chooseTlasRefit(type, flags, numInstances, numInstances != 0 ? refitSource.ptr() : nullptr);
+    } else {
+      m_tlasRefit[type].valid = false;
+    }
+
     // Allocate the scratch memory, we share the same buffer between all TLAS types, so just ensure we handle the offsetting correctly here.
-    const size_t requiredScratchAllocSize = align(sizeInfo.buildScratchSize + m_scratchAlignment, m_scratchAlignment);
+    const VkDeviceSize scratchSize = refit ? sizeInfo.updateScratchSize : sizeInfo.buildScratchSize;
+    const size_t requiredScratchAllocSize = align(scratchSize + m_scratchAlignment, m_scratchAlignment);
     buildInfo.scratchData.deviceAddress = getScratchMemory(totalScratchSize + requiredScratchAllocSize)->getDeviceAddress() + totalScratchSize;
     totalScratchSize += requiredScratchAllocSize;
 
     // Update build information
-    buildInfo.srcAccelerationStructure = nullptr;
+    buildInfo.mode = refit ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    buildInfo.srcAccelerationStructure = refit ? refitSource->getAccelStructure() : VK_NULL_HANDLE;
     buildInfo.dstAccelerationStructure = tlas.accelStructure->getAccelStructure();
+    m_tlasRefit[type].lastWritten = tlas.accelStructure.ptr();
+    if (refit) {
+      m_buildStats.tlasRefit++;
+      ctx->getCommandList()->trackResource<DxvkAccess::Read>(refitSource);
+    }
 
     assert(buildInfo.scratchData.deviceAddress % m_scratchAlignment == 0); // Note: Required by the Vulkan specification.
 

@@ -24,6 +24,8 @@
 #        (True: rtx.debug.stress.forceSlotReuse) set the options. The warm-up run is not stressed.
 #
 # The testhost has no --set, so the options go into $RT/user.conf (it wins over rtx.conf), which is restored on exit.
+# A scenario with SHOT=1 also writes the post-tone-mapping image of frame SHOT_FRAME (default FRAMES - 60) to
+# $OUT/shots-<scenario>-on, and its checks read that image.
 # About 18 scenarios x 30-40 s. It does not start anything else: build the testhost and deploy the runtime first.
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -31,6 +33,7 @@ RT=${RT:?set RT to a runtime folder (all of _output), for example RT=/c/path/to/
 BIN=${BIN:-$HERE/bin}
 OUT=${OUT:-$HERE/bin/scenarios}
 FRAMES=${FRAMES:-720}
+SHOT_FRAME=${SHOT_FRAME:-$((FRAMES - 60))}
 COOL=${COOL:-10}
 WARMUP=${WARMUP:-1}
 TIMEOUT=${TIMEOUT:-600}
@@ -40,7 +43,7 @@ STRESS_DELAY_US=${STRESS_DELAY_US:-3000}
 STRESS_CHANCE=${STRESS_CHANCE:-0.25}
 STRESS_SLOTS=${STRESS_SLOTS:-True}
 STRESS_CONF=()
-ALL_D3D9="repeat twice twice-overlay twice-overlay-first worldspace skinned skinned-view-root skinned-passenger ring-reorder ring-static ring-static-precombined topology-churn-omm texcoord-index identity-view fused-world fused-view reset no-present sky sky-numos skybox3d terrain terrain-pbr emitter portals rendertarget vtf instancer fog lights replacement-reject per-draw per-draw-declined per-draw-sentinel bad-values bad-values-clean lifecycle multi-output multi-output-single multi-output-extra"
+ALL_D3D9="repeat twice twice-overlay twice-overlay-first worldspace skinned skinned-view-root skinned-passenger ring-reorder ring-static ring-static-precombined topology-churn-omm texcoord-index identity-view fused-world fused-view reset no-present sky sky-numos skybox3d terrain terrain-pbr emitter portals rendertarget vtf instancer fog lights replacement-reject per-draw per-draw-declined per-draw-sentinel bad-values bad-values-clean lifecycle multi-output multi-output-single multi-output-extra gbuffer-nrc gbuffer-pom-sss gbuffer-pom-sss-nrc skinned-view-walk skinned-root-motion skinned-parked skinned-uninit skinned-swap skinned-shared-palette ring-props sky-fog sky-fog-numos"
 # The Remix API frontend's runs of the conformance cases.
 ALL_API="api-bad-values api-bad-values-clean api-lifecycle api-caller-threads api-caller-threads-single"
 ALL="$ALL_D3D9 $ALL_API"
@@ -118,11 +121,11 @@ PY
 while read -r tag name value; do
   [ "$tag" = hash ] && declare "H_$name=$value"
 done < <("$TH" --d3d9-hashes | tr -d '\r')
-[ -n "$H_terrain" ] && [ -n "$H_monitor" ] && [ -n "$H_light" ] || { echo "remix_testhost --d3d9-hashes printed no hashes"; exit 3; }
+[ -n "$H_terrain" ] && [ -n "$H_monitor" ] && [ -n "$H_light" ] && [ -n "$H_sky" ] || { echo "remix_testhost --d3d9-hashes printed no hashes"; exit 3; }
 
 # scenario NAME: sets ARGS (testhost) and CONF (user.conf keys for both modes).
 scenario() {
-  ARGS=(); CONF=()
+  ARGS=(); CONF=(); SHOT=0
   case $1 in
     repeat)        ARGS=(--d3d9 repeat); CONF=("rtx.antiCulling.object.enable=True") ;;
     twice)         ARGS=(--d3d9 twice) ;;
@@ -137,6 +140,23 @@ scenario() {
     # A body posed on the CPU in a box that drives fast, beside a standing body of the same mesh that is culled now and
     # then, both from one dynamic ring with an identity world matrix. Objects age out after one unseen frame.
     skinned-passenger) ARGS=(--d3d9 skinned-passenger); CONF=("rtx.numFramesToKeepInstances=1" "rtx.antiCulling.object.enable=False") ;;
+    # Two posed characters whose roots move only in their draws' view matrices (the bones never change).
+    skinned-view-walk) ARGS=(--d3d9 skinned-view-walk) ;;
+    # An elevator-like model of one bone palette: the root (the world matrix) rises and stops in turns, a body and a
+    # one-bone door ride on it, and a fixture of the same palette stays where it is.
+    skinned-root-motion) ARGS=(--d3d9 skinned-root-motion) ;;
+    # Two animated characters whose palettes hold a parked bone 1e29 units away that turns every frame (zero weight).
+    skinned-parked) ARGS=(--d3d9 skinned-parked) ;;
+    # An animated character whose bones are NaN in the event frame.
+    skinned-uninit) ARGS=(--d3d9 skinned-uninit --event-frame 450) ;;
+    # Two characters of one mesh and one material that walk through each other twice every 240 frames.
+    skinned-swap) ARGS=(--d3d9 skinned-swap) ;;
+    # A view model of two skinned draws from one palette with its own field of view: the gun recoils and the main
+    # camera kicks while it fires, with a plain muzzle-flash draw after the gun.
+    skinned-shared-palette) ARGS=(--d3d9 skinned-shared-palette); CONF=("rtx.viewModel.enable=True") ;;
+    # 16 alpha-tested bushes appended to one dynamic vertex buffer (DISCARD, then NOOVERWRITE), strips from their start
+    # vertex and lists with a base vertex, each switching between two and three quads every 30 frames.
+    ring-props) ARGS=(--d3d9 ring-props); CONF=("rtx.opacityMicromap.enable=True") ;;
     # 16 look-alike quads (one texture, one index buffer) written into one dynamic ring in a new shuffled order every
     # frame, each moving a little.
     ring-reorder)  ARGS=(--d3d9 ring-reorder) ;;
@@ -164,6 +184,13 @@ scenario() {
     sky-numos)     ARGS=(--d3d9 sky); CONF=("rtx.skyDrawcallIdThreshold=2" "rtx.skyMode=1") ;;
     # The same draws with sky reprojection on: the crate that becomes sky is a 3D-skybox object, not a sky quad.
     skybox3d)      ARGS=(--d3d9 sky); CONF=("rtx.skyDrawcallIdThreshold=2" "rtx.skyMode=0" "rtx.skyReprojectToMainCameraSpace=True") ;;
+    # A level under dense, nearly black depth-based fog (volumetrics off) and a sky quad tagged by its texture, which
+    # the game draws without fog. The screenshot's sky region must show the sky, not the fog color.
+    sky-fog)       ARGS=(--d3d9 sky-fog); SHOT=1
+                   CONF=("rtx.skyBoxTextures=$H_sky" "rtx.skyMode=0" "rtx.volumetrics.enable=False" "rtx.fogIgnoreSky=True" "rtx.skyReprojectToMainCameraSpace=True") ;;
+    # The same while the sky provider (NUMOS) renders the sky.
+    sky-fog-numos) ARGS=(--d3d9 sky-fog); SHOT=1
+                   CONF=("rtx.skyBoxTextures=$H_sky" "rtx.skyMode=1" "rtx.volumetrics.enable=False" "rtx.fogIgnoreSky=True" "rtx.skyReprojectToMainCameraSpace=True") ;;
     terrain)       ARGS=(--d3d9 terrain); CONF=("rtx.terrainTextures=$H_terrain" "rtx.terrainBaker.enableBaking=True") ;;
     # Ground and crate are both terrain, and the testhost writes a mod that gives the ground's material an albedo, a
     # normal map and a roughness map. Replay runtimes may turn replacements off in their rtx.conf.
@@ -198,6 +225,13 @@ scenario() {
     multi-output-single) ARGS=(--d3d9 multi-output --clean) ;;
     # The scene presented only through an additional swapchain; the implicit one never presents.
     multi-output-extra) ARGS=(--d3d9 multi-output-extra) ;;
+    # The G-buffer slim variants with the indirect modes and materials the other scenarios do not reach: NRC with
+    # stochastic alpha, and a POM ground with a subsurface crate under SHaRC and under NRC without stochastic alpha.
+    # Every preset but Custom selects SHaRC, so the NRC runs use Custom. Replay runtimes may turn replacements off in
+    # their rtx.conf.
+    gbuffer-nrc)   ARGS=(--d3d9 twice); CONF=("rtx.graphicsPreset=4" "rtx.integrateIndirectMode=2" "rtx.enableStochasticAlphaBlend=True") ;;
+    gbuffer-pom-sss) ARGS=(--d3d9 pom-sss); CONF=("rtx.integrateIndirectMode=3" "rtx.enableReplacementAssets=True" "rtx.subsurface.enableThinOpaque=True" "rtx.subsurface.enableDiffusionProfile=True") ;;
+    gbuffer-pom-sss-nrc) ARGS=(--d3d9 pom-sss); CONF=("rtx.graphicsPreset=4" "rtx.integrateIndirectMode=2" "rtx.enableStochasticAlphaBlend=False" "rtx.enableReplacementAssets=True" "rtx.subsurface.enableThinOpaque=True" "rtx.subsurface.enableDiffusionProfile=True") ;;
     api-bad-values) ARGS=(--bad-values --event-frame 400) ;;
     api-bad-values-clean) ARGS=(--bad-values --clean --event-frame 400) ;;
     api-lifecycle) ARGS=(--lifecycle --event-frame 400) ;;
@@ -237,14 +271,22 @@ for sc in $SCENARIOS; do
   sleep $COOL
   setconf "${CONF[@]}" "${STRESS_CONF[@]}"
   rm -f "$LOG"
+  rm -rf "$OUT/shots-$name"
+  if [ "$SHOT" = 1 ]; then
+    mkdir -p "$OUT/shots-$name"
+    export DXVK_DUMP_SCREENSHOT_FRAME=$SHOT_FRAME DXVK_SCREENSHOT_PATH="$(cygpath -m "$OUT/shots-$name")/"
+  fi
   timeout $TIMEOUT "$TH" --runtime "$RT" --frames $FRAMES "${ARGS[@]}" > "$OUT/out-$name.txt" 2>&1
   rc=$?
+  unset DXVK_DUMP_SCREENSHOT_FRAME DXVK_SCREENSHOT_PATH
   if [ -f "$LOG" ]; then cp "$LOG" "$OUT/log-$name.txt"; else : > "$OUT/log-$name.txt"; fi
   echo "=== $name exit $rc"
   grep -E '^(event|no-present|SKIP|FAILED|bad-values|lifecycle)' "$OUT/out-$name.txt" | head -4
 done
 
 # The checks. Each line: PASS / FAIL / INFO / SKIP, the scenario, the checklist ID, what is expected and the values.
+# A run with rtx.frameFeatures.validate on binds the Full G-buffer kernels on purpose.
+if grep -qiE '^ *rtx\.frameFeatures\.validate *= *true' "$RT/user.conf.d3d9v2orig" 2>/dev/null; then export GB_VALIDATE=1; else export GB_VALIDATE=0; fi
 python - "$OUT" "${REF:-}" $SCENARIOS <<'PY'
 import os, re, sys
 
@@ -316,6 +358,8 @@ class Log:
         self.memoStale = sum(1 for l in self.lines if "[GeometryHashMemoCheck]" in l)
         self.perfD3D9 = [l for l in self.lines if "[PerfD3D9] frames=" in l]
         self.preKeyMismatch = sum(int(val(i["inputs"], "preKeyMismatch") or 0) for i in self.inputs)
+        self.slim = [l.split("[GBuffer] slim level ", 1)[1] for l in self.lines if "[GBuffer] slim level " in l]
+        self.frameFeatures = [l for l in self.lines if "[FrameFeatures] scene=" in l]
 
     def lastInputs(self, key):
         return val(self.inputs[-1]["inputs"], key) if self.inputs else None
@@ -383,6 +427,71 @@ class Log:
             return None
         m = re.search(lane + r": (.*?)(?: \| |$)", self.pointInstancers[-1])
         return val(m.group(1), key) if m else None
+
+def dds_rgb(path):
+    """The top mip of a DDS file as a list of rows of (r, g, b) floats, every 4th pixel in each direction."""
+    import struct
+    data = open(path, "rb").read()
+    if data[:4] != b"DDS ":
+        return None
+    height, width = struct.unpack_from("<II", data, 12)
+    fourcc = data[84:88]
+    offset = 128
+    dxgi = None
+    if fourcc == b"DX10":
+        dxgi = struct.unpack_from("<I", data, 128)[0]
+        offset = 148
+    elif fourcc == b"\x71\x00\x00\x00":
+        dxgi = 10
+    elif struct.unpack_from("<I", data, 88)[0] == 32:
+        dxgi = 28 if struct.unpack_from("<I", data, 92)[0] == 0x000000FF else 87
+
+    def half(h):
+        return struct.unpack("<e", struct.pack("<H", h))[0]
+
+    def small_float(bits, mant_bits):
+        mant, exp = bits & ((1 << mant_bits) - 1), bits >> mant_bits
+        if exp == 0:
+            return mant * 2.0 ** (-14 - mant_bits)
+        if exp == 31:
+            return float("nan")
+        return (mant | (1 << mant_bits)) * 2.0 ** (exp - 15 - mant_bits)
+
+    def pixel(i):
+        if dxgi in (28, 29):
+            p = offset + i * 4
+            return data[p] / 255, data[p + 1] / 255, data[p + 2] / 255
+        if dxgi in (87, 91):
+            p = offset + i * 4
+            return data[p + 2] / 255, data[p + 1] / 255, data[p] / 255
+        if dxgi == 24:
+            v = struct.unpack_from("<I", data, offset + i * 4)[0]
+            return (v & 0x3FF) / 1023, ((v >> 10) & 0x3FF) / 1023, ((v >> 20) & 0x3FF) / 1023
+        if dxgi == 10:
+            return tuple(half(h) for h in struct.unpack_from("<3H", data, offset + i * 8))
+        if dxgi == 2:
+            return struct.unpack_from("<3f", data, offset + i * 16)
+        if dxgi == 26:
+            v = struct.unpack_from("<I", data, offset + i * 4)[0]
+            return small_float(v & 0x7FF, 6), small_float((v >> 11) & 0x7FF, 6), small_float((v >> 22) & 0x3FF, 5)
+        return None
+
+    if pixel(0) is None:
+        return None
+    return [[pixel(y * width + x) for x in range(0, width, 4)] for y in range(0, height, 4)]
+
+def screenshot_luminance(sc, top, bottom):
+    """The mean Rec. 709 luminance of the rows between the fractions top and bottom of the scenario's screenshot."""
+    folder = os.path.join(out, f"shots-{sc}-on")
+    shots = sorted(f for f in os.listdir(folder) if f.startswith("rtxImagePostTonemapping")) if os.path.isdir(folder) else []
+    if not shots:
+        return None, "no rtxImagePostTonemapping screenshot"
+    rows = dds_rgb(os.path.join(folder, shots[-1]))
+    if rows is None:
+        return None, f"{shots[-1]}: format not read"
+    band = rows[int(len(rows) * top):int(len(rows) * bottom)]
+    lum = [0.2126 * r + 0.7152 * g + 0.0722 * b for row in band for (r, g, b) in row]
+    return sum(lum) / len(lum), shots[-1]
 
 def report(status, sc, cid, text, values=""):
     if status in results:
@@ -486,6 +595,36 @@ for sc in sys.argv[3:]:
     if sc.startswith("api-"):
         continue
     expect(on.preKeyMismatch == 0 if on.inputs else None, sc, "R1", "on: preKeyMismatch=0", f"{on.preKeyMismatch}")
+    # G-buffer slim coverage: a frame that binds the Full kernels names its expected case (expected=...), or it is a gap
+    # in the variant table. The gbuffer-* scenarios bind a slim level in every logged frame outside validate runs.
+    validating = os.environ.get("GB_VALIDATE") == "1"
+    fullLines = [l for l in on.slim if l.startswith("Full")]
+    gaps = [l for l in fullLines if " expected=" not in l]
+    expect(not gaps, sc, "GB", "on: every [GBuffer] slim level Full line names an expected case (no variant table gap)",
+           (gaps[0][:200] if gaps else f"{len(fullLines)} Full lines, all expected"))
+    if sc.startswith("gbuffer-") and not validating:
+        levels = sorted(set(l.split(" ", 1)[0] for l in on.slim))
+        expect(bool(on.slim) and not fullLines, sc, "GB", "on: no [GBuffer] slim level Full line (a slim level in every logged frame)",
+               (fullLines[0][:200] if fullLines else "levels " + ",".join(levels)))
+        want = {"gbuffer-nrc": ("nrc", "featureVariant=6", None),
+                "gbuffer-pom-sss": ("sharc", "featureVariant=9", "SlimPom"),
+                "gbuffer-pom-sss-nrc": ("nrc", "featureVariant=4", "SlimPom")}[sc]
+        ff = on.frameFeatures[-1] if on.frameFeatures else ""
+        if sc != "gbuffer-nrc":
+            content = all(b in ff.split("scene=", 1)[-1].split(" ", 1)[0] for b in ("pom", "thinOpaque", "sssTlas"))
+            expect(content if ff else None, sc, "GB", "on: the mod's materials are in the scene (last [FrameFeatures] scene has pom, thinOpaque, sssTlas)",
+                   ff.split("scene=", 1)[-1][:120])
+            expect(bool(on.slim) and on.slim[-1].startswith(want[2] + " "), sc, "GB",
+                   f"on: the last slim level is {want[2]} (POM and subsurface content kept)", (on.slim[-1][:120] if on.slim else "no line"))
+        gbf = re.search(r"gbufferFeatures=(\d+)", ff)
+        expect(None if gbf is None else f"featureVariant={gbf.group(1)}" == want[1], sc, "GB",
+               f"on: the G-buffer runs {want[1]} ({want[0]})", f"gbufferFeatures={gbf.group(1) if gbf else None}")
+    verified = sum(int(val(l, "verified") or 0) for l in on.direct)
+    mismatches = sum(int(val(l, "verifyMismatches") or 0) for l in on.direct)
+    expect(mismatches == 0 if on.direct else None, sc, "R2",
+           "on: verifyMismatches=0 (every repeat prepared in full matches the scene's copy)", f"{mismatches} of {verified}")
+    expect(not any("Input and mofified geometry have different" in l for l in on.lines), sc, "R3",
+           "no refit across a topology change ([RTX Opacity Micromap] different primitive counts)")
     ne = on.lastNotEligible()
     if sc in ("replacement-reject", "sky-numos", "bad-values"):
         # The rejected crate waits out its back-off, so only that class may show.
@@ -559,6 +698,45 @@ for sc in sys.argv[3:]:
                f"updates={updates}")
         aged = [int(m.group(1)) for l in on.direct for m in [re.search(r"\(aged (\d+)", l)] if m]
         expect(sum(aged[1:]) == 0 if aged else None, sc, "D2s", "no aged releases after the first interval", f"aged={aged}")
+    elif sc == "skinned-view-walk":
+        updates = num(on.lastInputs("updates"))
+        expect(None if updates is None else updates >= 1.8, sc, "SW1",
+               "on: updates >= 1.8 per frame in the last interval (both walking characters are updated every frame)", f"updates={updates}")
+    elif sc == "skinned-root-motion":
+        moved = sum(int(val(i["inputs"], "moved") or 0) for i in on.inputs)
+        expect(moved == 0 if on.inputs else None, sc, "SR1", "on: moved=0 in every interval (a skinned draw is never moved by its world matrix)", f"moved={moved}")
+        acc = num(on.lastDirect("accepted"))
+        expect(None if acc is None else acc == 0, sc, "SR2", "on: accepted=0 in the last interval (each draw keeps its object)", f"accepted={acc}")
+    elif sc == "skinned-parked":
+        acc, rec = num(on.lastDirect("accepted")), num(on.lastDirect("recreations"))
+        expect(both(acc, rec, lambda a, r: a == 0 and r == 0), sc, "SP1",
+               "on: accepted=0 recreations=0 in the last interval (a parked bone does not move the characters' place)", f"accepted={acc} recreations={rec}")
+        resets = num(on.lastDirect("historyResets"))
+        expect(None if resets is None else resets == 0, sc, "SP2", "on: historyResets=0 in the last interval", f"historyResets={resets}")
+    elif sc == "skinned-uninit":
+        acc = num(on.lastDirect("accepted"))
+        expect(None if acc is None else acc == 0, sc, "SU1", "on: accepted=0 in the interval with the NaN bones (no new object)", f"accepted={acc}")
+        nonFinite = sum(int(val(i["inputs"], "skinNonFinite") or 0) for i in on.inputs)
+        expect(nonFinite == 1 if on.inputs else None, sc, "SU2", "on: skinNonFinite=1 (the NaN draw is dropped, the last pose kept)", f"skinNonFinite={nonFinite}")
+        resets = num(on.lastDirect("historyResets"))
+        expect(None if resets is None else resets == 0, sc, "SU3", "on: historyResets=0 in the last interval", f"historyResets={resets}")
+    elif sc == "skinned-swap":
+        swaps = sum(int(val(i["inputs"], "skinSwaps") or 0) for i in on.inputs[1:])
+        expect(swaps == 0 if len(on.inputs) > 1 else None, sc, "SS1",
+               "on: skinSwaps=0 after the first interval (each character keeps its object as they pass)", f"skinSwaps={swaps}")
+        jumps = on.historyJumps()
+        expect(None if jumps is None else jumps == 0, sc, "SS2", "on: history jumps 0 in the last interval", f"jumps={jumps}")
+    elif sc == "skinned-shared-palette":
+        late = num(on.lastDirect("skinDeferredLate"))
+        expect(None if late is None else late == 0, sc, "SV1",
+               "on: skinDeferredLate=0 in the last interval (no view-model draw is decomposed with the last frame's camera)", f"skinDeferredLate={late}")
+    elif sc == "ring-props":
+        acc = num(on.lastDirect("accepted"))
+        expect(None if acc is None else acc == 0, sc, "RP1", "on: accepted=0 in the last interval (each bush keeps its object)", f"accepted={acc}")
+        resets, rebuilds = num(on.lastDirect("historyResets")), num(on.lastDirect("topologyRebuilds"))
+        expect(both(resets, rebuilds, lambda r, t: r == 0 and t > 0), sc, "RP2",
+               "on: historyResets=0 and topologyRebuilds>0 in the last interval (a bush that changes its vertex count in place keeps its history)",
+               f"historyResets={resets} topologyRebuilds={rebuilds}")
     elif sc == "skinned-passenger":
         # 6 culls of the standing body per 300 frames, each a new object when it is drawn again (anti-culling is off).
         acc = num(on.lastDirect("accepted"))
@@ -676,6 +854,15 @@ for sc in sys.argv[3:]:
         misses = num(on.lastDirect("rasterMisses"))
         expect(None if misses is None else misses == 0, sc, "B1s", "on: rasterMisses=0 (its per-frame draws update the skybox transforms)",
                f"rasterMisses={misses}")
+    elif sc in ("sky-fog", "sky-fog-numos"):
+        # The upper quarter of the view shows only the sky. Nearly black fog laid over it reads below 0.02.
+        sky, shot = screenshot_luminance(sc, 0.0, 0.25)
+        expect(None if sky is None else sky > 0.1, sc, "SF1",
+               "on: the sky keeps its own color under depth-based fog (sky band mean luminance > 0.1)",
+               f"{'' if sky is None else f'{sky:.3f} '}({shot})")
+        raster = num(on.lastInputs("rasterOnly"))
+        report("INFO", sc, "SF1", "on: rasterOnly per frame (the sky quad's replay, or its drop while NUMOS renders the sky)",
+               f"rasterOnly={raster}")
     elif sc == "terrain":
         bakes, misses = num(on.lastDirect("bakes")), num(on.lastDirect("misses"))
         expect(both(bakes, misses, lambda a, b: a > 0 and b == 0), sc, "F3", "on: terrain bakes>0 misses=0", f"bakes={bakes} misses={misses}")

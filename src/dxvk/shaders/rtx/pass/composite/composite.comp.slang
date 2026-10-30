@@ -19,6 +19,19 @@
 * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 * DEALINGS IN THE SOFTWARE.
 */
+
+// The sky provider variant composites NUMOS's clouds, aerial perspective and sky disks,
+// and writes the cloud motion vectors and the upscaler's bias mask.
+// The base variant leaves that code out, because it raises the register count of the whole pass.
+
+//!variant composite.comp
+//!>       COMPOSITE_SKY_PROVIDER=0
+
+//!variant composite_sky_provider.comp
+//!>       COMPOSITE_SKY_PROVIDER=1
+
+//!end-variants
+
 #include "rtx/pass/composite/composite_bindings.slangh"
 
 #include "rtx/pass/composite/composite_args.h"
@@ -41,6 +54,8 @@
 #include "rtx/pass/sparse_rendering/sparse_rendering.slangh"
 #include "rtx/pass/sparse_rendering/compact_active_pixels.slangh"
 #include "numos/host/numos_host.slangh"
+
+static const bool kSkyProvider = COMPOSITE_SKY_PROVIDER != 0;
 
 float3 sampleDomeLightTexture(Sampler2D<float3> DomeLight, float3 worldDirection, float4x4 worldToDomeLightTransform)
 {
@@ -470,18 +485,28 @@ void applyVolumetricLighting(
       volumetricPreintegratedRadiance, volumeAttenuation);
     controlMaskVolumeAttenuation = volumeAttenuation;
   }
-  else if (cb.enableDlssNrVolumetricControlMask)
+  else
   {
     // The control mask remains dense when volumetric radiance integration uses sparse pixels.
-    RNG controlMaskRandomState = randomState;
-    controlMaskVolumeAttenuation = integrateVolumetricTransmittance(
-      controlMaskRandomState,
-      cb.volumeArgs,
-      cb.timeSinceStartMS,
-      primaryMiss,
-      cameraGetWorldPosition(cb.camera),
-      viewDistance,
-      primaryRayDirections.worldDirection);
+    // Dense sky composition also needs the transmittance at inactive misses, since it attenuates the sky.
+    const bool denseSky = primaryMiss && !cb.sparseRenderingArgs.enableSparsePrimaryRayMissComposition;
+    if (cb.enableDlssNrVolumetricControlMask || denseSky)
+    {
+      RNG transmittanceRandomState = randomState;
+      const vec3 transmittance = integrateVolumetricTransmittance(
+        transmittanceRandomState,
+        cb.volumeArgs,
+        cb.timeSinceStartMS,
+        primaryMiss,
+        cameraGetWorldPosition(cb.camera),
+        viewDistance,
+        primaryRayDirections.worldDirection);
+      controlMaskVolumeAttenuation = transmittance;
+      if (denseSky)
+      {
+        volumeAttenuation = transmittance;
+      }
+    }
   }
 
   // Stochastic alpha blend
@@ -490,7 +515,14 @@ void applyVolumetricLighting(
   {    
     AlphaBlendSurface surface = AlphaBlendSurface.createFromPacked(AlphaBlendGBuffer[pixelCoordinate], cb.alphaBlendSurfacePackMult);
     vec3 cameraPosition = cameraGetWorldPosition(cb.camera);
-    vec4 centerLight = AlphaBlendRadiance[pixelCoordinate];
+
+    // composite_alpha_blend only writes the radiance where the surface is valid.
+    vec4 centerLight = vec4(0.0f);
+    if (surface.isValid())
+    {
+      centerLight = AlphaBlendRadiance[pixelCoordinate];
+    }
+
     bool discardPixel = cb.stochasticAlphaBlendDiscardBlackPixel && all(centerLight.xyz == 0);
 
     if (!discardPixel && surface.isValid())
@@ -636,6 +668,7 @@ void applyAerialPerspective(
   vec4 cloudOverPixel,
   inout vec3 radianceOutput)
 {
+#if COMPOSITE_SKY_PROVIDER
   if (cb.skyProviderActive == 0 || cb.skyCameraInMedium != 0)
   {
     return;
@@ -647,6 +680,7 @@ void applyAerialPerspective(
     SkyApSampler, pixelCoordinate, primaryMiss, viewDistance, volumeAttenuation, radianceThroughput,
     cloudOverPixel, radianceOutput);
   radianceOutput /= scale;
+#endif
 }
 
 // The sun and moon disks on a camera ray that left the scene (the geometry resolver traced it without
@@ -657,11 +691,13 @@ void applyAerialPerspective(
 void applySkyDisks(bool primaryMiss, bool performedPSR, vec3 directionWorld, vec3 radianceThroughput,
                    inout vec3 radianceOutput)
 {
+#if COMPOSITE_SKY_PROVIDER
   if (cb.skyProviderActive == 0 || cb.skyHostSkyOverride != 0 || !primaryMiss || performedPSR)
   {
     return;
   }
   radianceOutput += numosSkyDisks(directionWorld, skyArgs, skyArgs.isZUp != 0u) * radianceThroughput / cb.skyRadianceScale;
+#endif
 }
 
 // This frame's clouds over the sky and the surfaces in front of or inside them: the opaque result,
@@ -686,6 +722,7 @@ void applyCloudComposite(
   out vec4 cloudOverPixel)
 {
   cloudOverPixel = vec4(0.0f);
+#if COMPOSITE_SKY_PROVIDER
   if (cb.skyProviderActive == 0 || cb.skyCloudsValid == 0)
   {
     return;
@@ -701,6 +738,7 @@ void applyCloudComposite(
   radianceOutput /= scale;
   alphaBlendOutput /= scale;
   foregroundRadiance /= scale;
+#endif
 }
 
 // Half the width of the opacity band over which a cloud's motion vector takes over from the surface's.
@@ -716,6 +754,7 @@ static const float kCloudMotionVectorBandHalfWidth = 0.15f;
 // Returns the motion vector's cloud weight.
 float applyCloudMotionVectors(uint2 pixelCoordinate, float cloudCoverage)
 {
+#if COMPOSITE_SKY_PROVIDER
   if (cb.cloudMotionVectors == 0 || cloudCoverage <= 0.0f)
   {
     return 0.0f;
@@ -769,6 +808,9 @@ float applyCloudMotionVectors(uint2 pixelCoordinate, float cloudCoverage)
   }
 
   return weight;
+#else
+  return 0.0f;
+#endif
 }
 
 // NV-DXVK start: Apply the full fog extent over the sky.
@@ -823,7 +865,7 @@ vec4 compositeResult(
   // step to the layer part alone carries that part through it: T * layer + S. It starts at zero; each
   // step adds its S (and attenuates what earlier steps added), and the host's own radiance never
   // enters it.
-  const bool trackSkyLayer = cb.skyWriteBiasMask != 0;
+  const bool trackSkyLayer = kSkyProvider && cb.skyWriteBiasMask != 0;
   skyLayerOutput = vec3(0.0f);
   RNG randomState = createRNG(pixelCoordinate, cb.frameIdx, 0);
 
@@ -928,7 +970,12 @@ vec4 compositeResult(
 
   // Shared radiance also contains transparent foreground emission, which must not
   // receive the background's atmospheric extinction.
+  // Without a sky provider the split only moves radiance between two sums, so the base variant skips it.
+#if COMPOSITE_SKY_PROVIDER
   const vec4 foreground = AtmosphereForeground[pixelCoordinate];
+#else
+  const vec4 foreground = vec4(0.0f);
+#endif
   const bool separateForeground = foreground.w > 0.0f && !geometryFlags.performedAnyPSR();
   vec3 foregroundRadiance = separateForeground ? min(max(foreground.rgb, vec3(0.0f)), max(sharedRadiance, vec3(0.0f))) : vec3(0.0f);
   radianceOutput += sharedRadiance - foregroundRadiance;
@@ -979,7 +1026,8 @@ vec4 compositeResult(
   //   * a path that hit something gets it at its own virtual distance, weighted by its own attenuation;
   //   * everything else gets it at the PSR surface's distance, where the air in front of the pixel ends.
   // The PSR surface distance comes from AtmosphereForeground.w, which the geometry resolver writes.
-  const bool psrAerialSurface = geometryFlags.performedAnyPSR() &&
+  const bool psrAerialSurface = kSkyProvider &&
+                                geometryFlags.performedAnyPSR() &&
                                 foreground.w > 0.0f &&
                                 cb.skyProviderActive != 0;
   if (psrAerialSurface) {
@@ -1124,7 +1172,7 @@ void main(uint2 threadIndex : SV_DispatchThreadID, uint2 localIndex : SV_GroupTh
     storeInDebugView(pixelCoordinate, vec3(cloudMotionWeight, cloudCoverage, cloudMotionWeight >= 0.5f ? 1.0f : 0.0f));
   }
 
-  if (cb.skyWriteBiasMask != 0)
+  if (kSkyProvider && cb.skyWriteBiasMask != 0)
   {
     // The share of this pixel's radiance the sky provider's layer contributes. Its clouds and air come
     // temporally filtered by NUMOS already, and move with the wind and the view direction rather than

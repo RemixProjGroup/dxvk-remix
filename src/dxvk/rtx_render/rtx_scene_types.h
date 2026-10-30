@@ -158,6 +158,15 @@ struct RasterGeometry {
     return true;
   }
 
+  // True when a BLAS built from `other` can be refit with this geometry's vertices: the same counts, primitive
+  // topology, index type and index data. A draw without indices has no index hash, so the counts tell such draws apart.
+  bool sameTopology(const RasterGeometry& other) const {
+    return hashes[HashComponents::Indices] == other.hashes[HashComponents::Indices] &&
+           vertexCount == other.vertexCount && indexCount == other.indexCount && topology == other.topology &&
+           indexBuffer.defined() == other.indexBuffer.defined() &&
+           (!indexBuffer.defined() || indexBuffer.indexType() == other.indexBuffer.indexType());
+  }
+
   bool isTopologyRaytraceReady() const {
     // Unsupported BVH builder topology
     if (topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)

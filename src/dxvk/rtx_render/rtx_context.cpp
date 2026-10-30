@@ -435,6 +435,13 @@ namespace dxvk {
       m_prevIntegrateIndirectMode = RtxOptions::integrateIndirectMode();
     }
 
+    // A sparse rendering sampling rate change resets history, so the image converges at the new rate from scratch.
+    const float sparseRenderingSamplingRate = m_common->metaSparseRendering().getSamplingRate();
+    if (sparseRenderingSamplingRate != m_prevSparseRenderingSamplingRate) {
+      m_resetHistory = true;
+      m_prevSparseRenderingSamplingRate = sparseRenderingSamplingRate;
+    }
+
     if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache &&
         m_common->metaNeuralRadianceCache().isResettingHistory()) {
       m_resetHistory = true;
@@ -1351,6 +1358,9 @@ namespace dxvk {
     const uint32_t instances = getSceneManager().getInstanceManager().getActiveCount();
     const uint32_t lights = getSceneManager().getLightManager().getActiveCount();
 
+    // The G-buffer kernels bound in this window.
+    const std::string gbufferSlim = m_common->metaPathtracerGbuffer().takeSlimLevelSummary();
+
     // Settings that cap or scale the frame.
     const bool vsync = RtxOptions::enableVsyncState == EnableVsync::On;
     const uint32_t hz = displayRefreshHz();
@@ -1399,6 +1409,7 @@ namespace dxvk {
       " | V-Sync ", vsync ? "on" : "off", ", display ", hz, " Hz, frame limit ", limit != 0 ? str::format(limit, " fps") : std::string("off"),
       ", frame gen ", frameGen ? "on" : "off",
       " | render ", m_perfCpu.renderW, "x", m_perfCpu.renderH, " -> ", m_perfCpu.outputW, "x", m_perfCpu.outputH, " ", upscaler,
+      gbufferSlim.empty() ? std::string() : str::format(" | ", gbufferSlim),
       " | GPU busy ", uint32_t(gpuBusy * 100.0), "% (", f1(gpuBusyMs), " ms/frame)",
       w.stageSamples != 0 ? str::format("; ", w.stageSamples, " sampled frames ", f1(w.stageMeasuredMs / samples), " ms: ", stageList(5))
                           : std::string(),
@@ -2606,6 +2617,8 @@ namespace dxvk {
     settings.useDLSS = shouldUseDLSS();
     settings.demodulateRoughness = m_common->metaDemodulate().demodulateRoughness();
     settings.roughnessDemodulationOffset = m_common->metaDemodulate().demodulateRoughnessOffset();
+    settings.gameSkyRasterized = m_gameSkyRasterized;
+    m_gameSkyRasterized = false;
     m_common->metaComposite().dispatch(this,
       getSceneManager(),
       rtOutput, settings);
@@ -3498,6 +3511,7 @@ namespace dxvk {
 
   void RtxContext::rasterizeSky(const frontend::RasterDrawInfo& info, const std::function<void(const frontend::RasterPass&)>& draw) {
     initSkyTargets();
+    m_gameSkyRasterized = true;
 
     // Grab the replacement texture if any.
     // NOTE: only the original color texture will be replaced with albedo-opacity texture

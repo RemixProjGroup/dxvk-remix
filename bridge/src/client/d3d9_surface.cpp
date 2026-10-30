@@ -152,9 +152,8 @@ HRESULT Direct3DSurface9_LSS::UnlockRect() {
   LogFunctionCall();
   {
     BRIDGE_PARENT_DEVICE_LOCKGUARD();
-    unlock();
+    return unlock();
   }
-  return S_OK;
 }
 
 HRESULT Direct3DSurface9_LSS::GetDC(HDC* phdc) {
@@ -237,17 +236,24 @@ bool Direct3DSurface9_LSS::lock(D3DLOCKED_RECT& lockedRect, const RECT* pRect, c
   return true;
 }
 
-void Direct3DSurface9_LSS::unlock() {
+HRESULT Direct3DSurface9_LSS::unlock() {
   // Some game engines may attempt to Unlock a non-locked resource "just in case"
   if (m_lockInfoQueue.empty()) {
-    return;
+    return S_OK;
   }
   const auto lockInfo = m_lockInfoQueue.front();
   m_lockInfoQueue.pop();
+
+  // Earlier uploads keep their own snapshots, so the discarded buffer can be retired here.
+  if (lockInfo.discardBufId != SharedHeap::kInvalidId) {
+    SharedHeap::deallocate(lockInfo.discardBufId);
+  }
+
   // If this is a read only access then don't bother sending anything to the server
   if ((lockInfo.flags & D3DLOCK_READONLY) == 0) {
-    sendDataToServer(lockInfo);
+    return sendDataToServer(lockInfo);
   }
+  return S_OK;
 }
 
 RECT Direct3DSurface9_LSS::resolveLockInfoRect(const RECT* const pRect, const D3DSURFACE_DESC& desc) {
@@ -262,11 +268,28 @@ void* Direct3DSurface9_LSS::getBufPtr(const int pitch, const RECT& rect) {
   return ptr;
 }
 
-void Direct3DSurface9_LSS::sendDataToServer(const LockInfo& lockInfo) const {
+HRESULT Direct3DSurface9_LSS::sendDataToServer(const LockInfo& lockInfo) const {
   const auto dataFlag = m_bUseSharedHeap ? Commands::FlagBits::DataInSharedHeap : 0;
+  const auto [width, height] = getRectDimensions(lockInfo.rect);
   if (bridge_util::perf::enabled()) {
-    const auto [width, height] = getRectDimensions(lockInfo.rect);
     bridge_util::perf::noteUpload(bridge_util::calcTotalSizeOfRect(width, height, m_desc.Format));
+  }
+  const uint32_t numRows = bridge_util::calcStride((uint32_t) height, m_desc.Format);
+  const size_t rowSize = bridge_util::calcRowSize(width, m_desc.Format);
+
+  // The game may write the shared buffer again before the server reads it, so the upload sends a copy of the
+  // locked rectangle's rows, packed.
+  auto snapshotId = SharedHeap::kInvalidId;
+  if (m_bUseSharedHeap) {
+    snapshotId = SharedHeap::allocate(std::max<size_t>(rowSize * numRows, 1));
+    if (snapshotId == SharedHeap::kInvalidId) {
+      return E_OUTOFMEMORY;
+    }
+    uint8_t* const pSnapshot = SharedHeap::getBuf(snapshotId);
+    for (uint32_t row = 0; row < numRows; ++row) {
+      memcpy(pSnapshot + size_t(row) * rowSize,
+             (const uint8_t*) lockInfo.lockedRect.pBits + size_t(row) * lockInfo.lockedRect.Pitch, rowSize);
+    }
   }
   {
     ClientMessage c(Commands::IDirect3DSurface9_UnlockRect, getId(), dataFlag);
@@ -274,12 +297,9 @@ void Direct3DSurface9_LSS::sendDataToServer(const LockInfo& lockInfo) const {
     c.send_data(lockInfo.flags);
     c.send_data(m_desc.Format);
     if (m_bUseSharedHeap) {
-      c.send_data(lockInfo.lockedRect.Pitch);
-      c.send_data(lockInfo.bufId);
+      c.send_data(static_cast<uint32_t>(rowSize));
+      c.send_data(snapshotId);
     } else {
-      const auto [width, height] = getRectDimensions(lockInfo.rect);
-      const uint32_t numRows = bridge_util::calcStride((uint32_t) height, m_desc.Format);
-      const size_t rowSize = bridge_util::calcRowSize(width, m_desc.Format);
       c.send_data(rowSize);
       // The server reads blobs until it has all rows, and writes them into the surface under one lock.
       // Blobs of at most one item let the command stream through the data queue (util_bridgecommand.h).
@@ -300,11 +320,11 @@ void Direct3DSurface9_LSS::sendDataToServer(const LockInfo& lockInfo) const {
     }
   }
 
-  if (m_bUseSharedHeap) {
-    if (lockInfo.discardBufId != SharedHeap::kInvalidId) {
-      SharedHeap::deallocate(lockInfo.discardBufId);
-    }
+  if (snapshotId != SharedHeap::kInvalidId) {
+    // The server frees the snapshot in command order, after the upload has read it.
+    SharedHeap::deallocate(snapshotId);
   }
+  return S_OK;
 }
 
 std::tuple<size_t, size_t> Direct3DSurface9_LSS::getRectDimensions(const RECT& rect) {

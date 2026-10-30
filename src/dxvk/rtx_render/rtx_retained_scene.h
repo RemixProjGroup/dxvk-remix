@@ -126,6 +126,9 @@ namespace dxvk {
       // The largest move of the bounds' center among the draws that continued their geometry's last draw, in world
       // units.
       float maxMotion = 0.f;
+      // Rebuilds from a new topology of geometry whose draw did not jump, which keep their history
+      // (SceneManager::inheritPreviousPositions from the new positions).
+      uint32_t topologyRebuilds = 0;
     };
     HistoryStats takeHistoryStats() {
       const HistoryStats stats = m_history;

@@ -427,6 +427,11 @@ namespace dxvk {
       if (sub.instance->teleport(sub.instance->surface.objectToWorld, old.instance->surface.objectToWorld)) {
         sub.instance->surface.isStatic = false;
       }
+      // The old instance's surface of the last frame maps to the new one, so temporal reuse continues on it.
+      if (sub.instance->getPreviousSurfaceIndex() == SURFACE_INDEX_INVALID) {
+        sub.instance->setPreviousSurfaceIndex(old.instance->getPreviousSurfaceIndex());
+        old.instance->setPreviousSurfaceIndex(SURFACE_INDEX_INVALID);
+      }
       if (sub.geometry != nullptr && old.geometry != nullptr && sub.geometry->key.owner != 0) {
         m_scene.inheritPreviousPositions(ctx, sub.geometry->blas, old.geometry->blas);
       }
@@ -1194,8 +1199,7 @@ namespace dxvk {
           drawCall.getSkinningState().boneHash == blas.input.getSkinningState().boneHash) {
         // Same geometry: another instance of it, possibly with another material.
         blas.cacheMaterial(drawCall.getMaterialData());
-      } else if (input.hashes[HashComponents::Indices] == built.hashes[HashComponents::Indices] &&
-                 (geometry->frameUpdated != frame || key.owner != 0) && !jump.jumped) {
+      } else if (input.sameTopology(built) && (geometry->frameUpdated != frame || key.owner != 0) && !jump.jumped) {
         // RefreshGeometry or a new pose: same topology, new vertex data or bones. Update in place (refit, history),
         // as a draw would. Geometry the entry owns is refit again by a second update in the same frame, which keeps
         // the last frame's positions as its previous positions (processGeometryInfo).
@@ -1216,7 +1220,10 @@ namespace dxvk {
         // is reallocated per change.
         const SceneManager::ObjectCacheState result = m_scene.onSceneObjectUpdated(ctx, drawCall, &blas, true, jump.jumped);
         if (result == SceneManager::ObjectCacheState::KBuildBVH && !jump.jumped) {
-          ++m_history.resets;  // Rebuilt from the new topology, without previous positions.
+          // A draw that continues the geometry's last one with another topology (a level of detail, a batch with
+          // another vertex count): its new positions are its previous ones, so its motion is its instance's only.
+          m_scene.inheritPreviousPositions(ctx, blas, blas);
+          ++m_history.topologyRebuilds;
         }
         if (result == SceneManager::ObjectCacheState::kUpdateBVH || result == SceneManager::ObjectCacheState::KBuildBVH) {
           blas.frameLastUpdated = frame;

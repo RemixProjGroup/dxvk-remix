@@ -366,6 +366,8 @@ namespace dxvk {
     VkFormat m_skyRtColorFormat = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
     VkClearValue m_skyClearValue;
     bool m_skyClearDirty = false;
+    // Set by rasterizeSky, and cleared when the frame's composite reads it.
+    bool m_gameSkyRasterized = false;
     SkyMode m_lastSkyMode = SkyMode::SkyboxRasterization;
 
     bool shouldUseDLSS() const;
@@ -403,6 +405,7 @@ namespace dxvk {
     uint32_t m_screenshotFrameNum = -1;
     uint32_t m_terminateAppFrameNum = -1;
     IntegrateIndirectMode m_prevIntegrateIndirectMode = IntegrateIndirectMode::Count;
+    float m_prevSparseRenderingSamplingRate = 1.0f;
 
 
     struct {

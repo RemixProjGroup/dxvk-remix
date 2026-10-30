@@ -399,6 +399,40 @@ namespace dxvk {
     } }
   };
 
+  // The same presets plus the CNN ones, which only nvngx_dlssd.dll versions before 310.4 accept.
+  RemixGui::ComboWithKey<DxvkRayReconstruction::RayReconstructionPreset> rayReconstructionPresetWithCnnCombo {
+    "DLSS RR Preset",
+    { {
+      { DxvkRayReconstruction::RayReconstructionPreset::Default, "Default", "Let DLSS pick the best preset per quality mode." },
+      { DxvkRayReconstruction::RayReconstructionPreset::A,       "A (CNN)", "CNN model. It costs less than the transformer models on older and mobile GPUs.\nNeeds nvngx_dlssd.dll older than version 310.4 in the runtime folder (.trex)." },
+      { DxvkRayReconstruction::RayReconstructionPreset::B,       "B (CNN)", "CNN model. It costs less than the transformer models on older and mobile GPUs.\nNeeds nvngx_dlssd.dll older than version 310.4 in the runtime folder (.trex)." },
+      { DxvkRayReconstruction::RayReconstructionPreset::C,       "C (CNN)", "CNN model. It costs less than the transformer models on older and mobile GPUs.\nNeeds nvngx_dlssd.dll older than version 310.4 in the runtime folder (.trex)." },
+      { DxvkRayReconstruction::RayReconstructionPreset::D,       "D",       "Transformer model." },
+      { DxvkRayReconstruction::RayReconstructionPreset::E,       "E",       "Latest transformer model." },
+      { DxvkRayReconstruction::RayReconstructionPreset::F,       "F",       "Default RR2 model." },
+    } }
+  };
+
+  // Shows the CNN presets when the loaded nvngx_dlssd.dll accepts them, when one is selected, or when asked to.
+  // Explains the fallback when a CNN preset is selected but the DLL does not accept it.
+  void showRayReconstructionPresetCombo(DxvkDevice* device, bool alwaysShowCnnPresets) {
+    const NGXContext& ngxContext = device->getCommon()->metaNGXContext();
+    const bool cnnPresetsAvailable = ngxContext.rayReconstructionSupportsCnnPresets();
+    const bool cnnPresetSelected = DxvkRayReconstruction::isCnnPreset(DxvkRayReconstruction::preset());
+
+    if (alwaysShowCnnPresets || cnnPresetsAvailable || cnnPresetSelected) {
+      rayReconstructionPresetWithCnnCombo.getKey(&DxvkRayReconstruction::presetObject());
+    } else {
+      rayReconstructionPresetCombo.getKey(&DxvkRayReconstruction::presetObject());
+    }
+
+    if (cnnPresetSelected && !cnnPresetsAvailable) {
+      ImGui::TextWrapped("CNN presets need nvngx_dlssd.dll older than version 310.4 in the runtime folder (.trex). "
+                         "Version %s is in use, so the Default preset runs instead.",
+                         ngxContext.getRayReconstructionLibraryVersion().c_str());
+    }
+  }
+
   RemixGui::ComboWithKey<int> dlfgMfgModeCombo {
     "DLSS Frame Generation Mode",
     RemixGui::ComboWithKey<int>::ComboEntries { {
@@ -563,7 +597,7 @@ namespace dxvk {
       changed = RemixGui::Checkbox("Ray Reconstruction", &RtxOptions::enableRayReconstructionObject());
 
       if (RtxOptions::enableRayReconstruction()) {
-        rayReconstructionPresetCombo.getKey(&DxvkRayReconstruction::presetObject());
+        showRayReconstructionPresetCombo(m_device, false);
       }
       ImGui::EndDisabled();
     }
@@ -4923,6 +4957,9 @@ namespace dxvk {
         RemixGui::Checkbox("Compact Stable BLAS", &RtxOptions::compactStableBlasObject());
         RemixGui::DragInt("Compact BLAS Unchanged for N Frames", &RtxOptions::compactStableBlasFramesObject(), 1.f, 1, 100000);
         RemixGui::DragInt("Rebuild BLAS After N Refits (0 = never)", &RtxOptions::maxBlasRefitsBeforeRebuildObject(), 1.f, 0, 100000);
+        RemixGui::Checkbox("Refit TLAS While Instances Are Unchanged", &AccelManager::tlasRefitObject());
+        RemixGui::DragInt("TLAS: Full Build After N Refits", &AccelManager::tlasRefitRebuildFramesObject(), 1.f, 1, 1000);
+        RemixGui::DragFloat("TLAS: Full Build When Moved Fraction Exceeds", &AccelManager::tlasRefitMovedFractionObject(), 0.01f, 0.f, 1.f, "%.2f");
         RemixGui::DragInt("Frames to Keep Instances", &RtxOptions::numFramesToKeepInstancesObject(), 1.f, 1, 10000);
         RemixGui::DragInt("Frames to Keep BLAS / Geometry", &RtxOptions::numFramesToKeepBLASObject(), 1.f, 1, 10000);
         RemixGui::DragInt("Frames to Keep Pooled BLAS (0 = as above)", &RtxOptions::numFramesToKeepMergedBlasObject(), 1.f, 0, 10000);

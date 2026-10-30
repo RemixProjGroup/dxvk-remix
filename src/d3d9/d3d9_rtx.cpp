@@ -1641,21 +1641,13 @@ namespace dxvk {
       }
       const Matrix4* bones = d3d9State().transforms.data() + GetTransformIndex(D3DTS_WORLDMATRIX(firstBone));
       in.boneHash = XXH3_64bits(bones, boneCount * sizeof(Matrix4)) | 1;
-      // The centroid of the used bones tells apart characters whose first bone sits at the same place (a root bone at
-      // the origin). Without a known range the palette holds other models' bones too, so only the first one is used.
-      Vector3 centroid = bones[0][3].xyz();
-      float radiusSqr = 0.f;
-      if (rangeKnown && boneCount > 1) {
-        for (uint32_t i = 1; i < boneCount; ++i) {
-          centroid += bones[i][3].xyz();
-        }
-        centroid /= float(boneCount);
-        for (uint32_t i = 0; i < boneCount; ++i) {
-          radiusSqr = std::max(radiusSqr, lengthSqr(bones[i][3].xyz() - centroid));
-        }
+      // The place of the used bones tells apart characters whose first bone sits at the same place (a root bone at the
+      // origin). Without a known range the palette holds other models' bones too, so only the first one is used.
+      if (!translator::skinPlacement(bones, rangeKnown ? boneCount : 1, in.skinPosition, in.skinRadius)) {
+        in.skinPosition = Vector3(0.f);
+        in.skinRadius = 0.f;
       }
-      in.skinPosition = centroid;
-      in.skinRadius = std::sqrt(radiusSqr);
+      in.skinNonFinite = rangeKnown && !translator::bonesFinite(bones, boneCount);
       in.skinFirstBone = firstBone;
       in.skinBoneCount = rangeKnown ? boneCount : 0;
     }

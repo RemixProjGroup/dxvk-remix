@@ -366,6 +366,11 @@ namespace dxvk {
 
     void showCloudQuality() {
       {
+        static const int values[] = { 0, 1, 2 };
+        static const char* names[] = { "High", "Medium", "Low" };
+        choice("qualityLevel", "Sky Quality Level", values, names, 3);
+      }
+      {
         static const int values[] = { 0, 1 };
         static const char* names[] = { "Quality", "Performance" };
         choice("cloudPerformancePreset", "Performance Preset", values, names, 2);
@@ -581,6 +586,11 @@ namespace dxvk {
       }
 
       if (ImGui::TreeNode("Quality & scattering limits")) {
+        {
+          static const int values[] = { 0, 1, 2 };
+          static const char* names[] = { "High", "Medium", "Low" };
+          choice("qualityLevel", "Sky Quality Level", values, names, 3);
+        }
         setting("aerialPerspectiveFroxelRangeMeters", "Near Field Range", 10.0f, 10.0f, 50000.0f, "%.0f m");
         setting("aerialPerspectiveFroxelSizePixels", "Froxel Size (pixels)", 0.1f, 2.0f, 64.0f);
         setting("aerialPerspectiveFroxelDepthSlices", "Depth Slices", 1.0f, 16.0f, 256.0f);
@@ -1647,6 +1657,8 @@ namespace dxvk {
         numos::SeedContents contents;
         std::string error;
         if (numos::decodeSeed(window.seedText, contents, &error)) {
+          // A seed carries no quality level (NUMOS_SETTING_NO_SEED), so the graphics preset's stays in force.
+          contents.settings.qualityLevel = NumosSettings::resolved().qualityLevel;
           {
             RtxOptionLayerTarget target(RtxOptionEditTarget::User);
             NumosSettings::write(contents.settings);

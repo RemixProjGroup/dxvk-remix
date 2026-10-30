@@ -36,8 +36,14 @@ MinimalRayInteraction minimalRayInteractionReadFromGBuffer(
 {
   GBufferMemoryMinimalRayInteraction memory;
 
-  memory.encodedViewDirection = viewDirectionTexture[position];
+  memory.encodedViewDirection = float2(0.0f, 0.0f);
   memory.encodedConeRadius = float16_t(coneRadiusTexture[position].x);
+
+  // Only a negative cone radius marks a stored view direction, see minimalRayInteractionCreate.
+  if (memory.encodedConeRadius < float16_t(0.0f))
+  {
+    memory.encodedViewDirection = viewDirectionTexture[position];
+  }
 
   return minimalRayInteractionCreate(memory, originalRay);
 }

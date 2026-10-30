@@ -78,9 +78,10 @@ namespace dxvk {
                      "their versions, and every 300 frames logs how many draws repeat last frame's exactly and what the "
                      "scene did with them. Counters only.");
           RTX_OPTION("rtx.d3d9v2", uint32_t, earlyChangeTestSelfCheckFrames, 0,
-                     "Diagnostic for the D3D9 frontend's early change test, which skips the preparation of unchanged "
-                     "draws: every this many frames, the draws it would skip are prepared in full and compared with what "
-                     "was stored. Differences are logged as [D3D9v2] preKeyMismatch. 0 = off.");
+                     "Diagnostic for the D3D9 frontend's change tests, which skip unchanged draws: every this many "
+                     "frames, the draws the early change test would skip are prepared in full and compared with what was "
+                     "stored, and the repeats of scene-owned objects are prepared in full and compared with the scene's "
+                     "copy. Differences are logged as [D3D9v2] preKeyMismatch and [D3D9v2] repeatMismatch. 0 = off.");
           RTX_OPTION("rtx.d3d9v2", uint32_t, perDrawRenderState, 0,
                      "Compatibility hook for hosts that keep some draws out of the D3D9 frontend's scene: the D3D9 "
                      "render state (1-255) whose bit rtx.d3d9v2.perDrawRenderStateBit marks a draw as per-draw. A "
@@ -430,6 +431,7 @@ namespace dxvk {
           uint64_t historyResets = 0;    // rebuilds of deforming geometry that lost its previous positions
           uint64_t historyJumps = 0;     // the resets for a draw that did not continue its geometry's last draw
           float refitMotionMax = 0.f;    // the largest move between two draws of deforming geometry that continue it
+          uint64_t topologyRebuilds = 0; // rebuilds of geometry whose draw changed its topology in place, history kept
           uint64_t mergedPasses = 0;     // Merged passes described to the scene
           uint64_t rasterMisses = 0;     // RasterOnly draws that were not rasterized sky draws (expected 0)
           uint64_t skyboxMoves = 0;      // 3D-skybox reprojections applied
@@ -450,7 +452,10 @@ namespace dxvk {
           float fovViewModelWith = -1.f;
           uint64_t skinDeferred = 0;     // skinned draws held until this frame's camera was set up
           uint64_t skinDeferredLate = 0; // ... decomposed with the last frame's camera, as none was set up this frame
+          uint64_t verified = 0;         // repeats prepared in full for the self-check (CommitMode::VerifyRepeat)
+          uint64_t verifyMismatches = 0; // ... whose full preparation differs from the scene's copy
         } totals;
+        uint32_t verifyLogs = 0;         // [D3D9v2] repeatMismatch lines written (first 20)
 
         // The capture buffer of a vertex-captured draw (its positions), or null.
         static const DxvkBuffer* captureBufferOf(const DrawCallState& state) {
@@ -581,6 +586,18 @@ namespace dxvk {
           return camera < translator::CameraClass::Count ? translator::toView(camera) : frontend::CameraView::Main;
         }
 
+        // The camera set up this frame that a held draw's skinning is decomposed with, as the app thread chooses it
+        // (translator::CameraClassifier::skinningView): its class's, else Main's.
+        // Returns false when neither was set up this frame.
+        static bool skinningCameraThisFrame(const frontend::SceneInterface& scene, const DrawCallState& state, frontend::CameraQuery& camera) {
+          camera = scene.camera(skinningView(state));
+          if (camera.lastSetupFrame == scene.frameIndex()) {
+            return true;
+          }
+          camera = scene.camera(frontend::CameraView::Main);
+          return camera.lastSetupFrame == scene.frameIndex();
+        }
+
         // Returns true when the draw was held. A draw whose camera is set up already takes it at once.
         bool holdSkinned(RtxContext* ctx, const DrawParameters& params, DrawCallState& state, CommitMode mode, uint64_t handle) {
           if ((mode != CommitMode::HandoverFirstDraw && mode != CommitMode::Update) || !state.vertexBlend ||
@@ -588,13 +605,13 @@ namespace dxvk {
             return false;
           }
           const frontend::SceneInterface scene { *ctx };
-          const frontend::CameraQuery current = scene.camera(skinningView(state));
-          if (current.lastSetupFrame == kInvalidFrameIndex) {
-            return false;
-          }
-          if (current.lastSetupFrame == scene.frameIndex()) {
+          frontend::CameraQuery current;
+          if (skinningCameraThisFrame(scene, state, current)) {
             state.skinningWorldToView = current.worldToView;
             state.skinningViewThisFrame = true;
+            return false;
+          }
+          if (scene.camera(skinningView(state)).lastSetupFrame == kInvalidFrameIndex) {
             return false;
           }
           pendingSkinned.push_back(PendingSkinned { params, std::move(state), mode == CommitMode::Update, handle });
@@ -616,8 +633,8 @@ namespace dxvk {
           std::vector<PendingSkinned> pending;
           pending.swap(pendingSkinned);
           for (PendingSkinned& p : pending) {
-            const frontend::CameraQuery current = scene.camera(skinningView(p.state));
-            if (current.lastSetupFrame == scene.frameIndex()) {
+            frontend::CameraQuery current;
+            if (skinningCameraThisFrame(scene, p.state, current)) {
               p.state.skinningWorldToView = current.worldToView;
             } else {
               totals.skinDeferredLate++;
@@ -781,9 +798,11 @@ namespace dxvk {
           }
 
           // View-space texture coordinate generation follows the free camera. The terrain bake's cascade texgen
-          // applies it itself.
+          // applies it itself. An eye draw's texture transform holds its eye parameters, so it is left as it is.
+          const bool eyeDraw = RtxOptions::Eye::enable() && RtxOptions::Eye::assumeViewTexgenModeAsEye() &&
+                               transformData.texgenMode == TexGenMode::ViewPositions;
           if ((transformData.texgenMode == TexGenMode::ViewPositions || transformData.texgenMode == TexGenMode::ViewNormals) &&
-              frontend::freeCameraEnabled()) {
+              frontend::freeCameraEnabled() && !eyeDraw) {
             const frontend::CameraQuery mainCamera = scene.camera(frontend::CameraView::Main);
             if (mainCamera.valid) {
               transformData.textureTransform *= mainCamera.freeCameraViewTransform;
@@ -835,7 +854,10 @@ namespace dxvk {
         // (rejectHandover).
         // update (CommitMode::Update): the same for an object the scene already owns under `handle`. The entry is
         // described and built again in place (same instances, geometry refit or rebuilt in place).
-        void handover(RtxContext* ctx, const DrawParameters& params, DrawCallState& state, uint64_t handle, bool update) {
+        // verify (CommitMode::VerifyRepeat): an update of a draw the app thread found unchanged, counted as a mismatch
+        // when its description or world matrix differs from the scene's copy.
+        void handover(RtxContext* ctx, const DrawParameters& params, DrawCallState& state, uint64_t handle, bool update,
+                      bool verify = false) {
           totals.handovers++;
           frontend::SceneInterface scene { *ctx };
           const MaterialData* overrideMaterial = nullptr;
@@ -904,9 +926,28 @@ namespace dxvk {
           if (update && !kept.vertexCaptured && !skybox && !bakedTerrain) {
             const auto previous = objects.find(handle);
             const Matrix4& objectToWorld = kept.getTransformData().objectToWorld;
-            if (previous != objects.end() && !previous->second.releasing &&
-                previous->second.described == described && previous->second.reprepareEpoch == reprepareEpoch &&
-                std::memcmp(&previous->second.objectToWorld, &objectToWorld, sizeof(Matrix4)) == 0) {
+            const bool sameDescription = previous != objects.end() && previous->second.described == described &&
+                                         previous->second.reprepareEpoch == reprepareEpoch;
+            const bool sameWorld = previous != objects.end() &&
+                                   std::memcmp(&previous->second.objectToWorld, &objectToWorld, sizeof(Matrix4)) == 0;
+            if (verify && previous != objects.end() && !previous->second.releasing) {
+              totals.verified++;
+              if (!sameDescription || !sameWorld) {
+                totals.verifyMismatches++;
+                if (verifyLogs < 20) {
+                  ++verifyLogs;
+                  const Vector3 was = previous->second.objectToWorld[3].xyz();
+                  const Vector3 now = objectToWorld[3].xyz();
+                  Logger::warn(str::format("[D3D9v2] repeatMismatch: a draw the change test found unchanged differs from the "
+                                           "scene's copy in its ", !sameDescription ? "description" : "world matrix",
+                                           " (handle 0x", std::hex, handle, std::dec, ", skinned ",
+                                           kept.getSkinningState().numBones > 0 || kept.vertexBlend ? 1 : 0, ", translation (",
+                                           was.x, ", ", was.y, ", ", was.z, ") -> (", now.x, ", ", now.y, ", ", now.z,
+                                           ")). First 20 are logged."));
+                }
+              }
+            }
+            if (previous != objects.end() && !previous->second.releasing && sameDescription && sameWorld) {
               previous->second.frameLastSeen = scene.frameIndex();
               totals.unchangedUpdates++;
               return;
@@ -1358,6 +1399,7 @@ namespace dxvk {
           totals.historyResets += history.resets;
           totals.historyJumps += history.jumps;
           totals.refitMotionMax = std::max(totals.refitMotionMax, history.maxMotion);
+          totals.topologyRebuilds += history.topologyRebuilds;
           if (RtxOptions::CoreMaterial::selfCheck()) {
             logParity(frame);
           }
@@ -1389,7 +1431,9 @@ namespace dxvk {
               " mods ", totals.resetsBy[uint32_t(ResetReason::Mods)], ")", " reprepares=", totals.reprepares,
               " lightsCreated=", totals.lightsCreated, " updated=", totals.updated,
               " unchangedUpdates=", totals.unchangedUpdates, " recreations=", totals.recreations,
+              " verified=", totals.verified, " verifyMismatches=", totals.verifyMismatches,
               " hiddenUnseen=", totals.hiddenUnseen, " historyResets=", totals.historyResets, " (jumps ", totals.historyJumps, ") refitMotionMax=", totals.refitMotionMax,
+              " topologyRebuilds=", totals.topologyRebuilds,
               " mergedPasses=", totals.mergedPasses,
               " rasterMisses=", totals.rasterMisses, " skyboxMoves=", totals.skyboxMoves, " skyboxRetries=", totals.skyboxRetries,
               " terrain: bakes=", totals.terrainBakes, " misses=", totals.terrainMisses, " rejectedBakes=", totals.rejectedBakes,
@@ -1425,6 +1469,9 @@ namespace dxvk {
           return;
         case CommitMode::Update:
           m_impl->handover(ctx, params, drawCallState, handle, true);
+          return;
+        case CommitMode::VerifyRepeat:
+          m_impl->handover(ctx, params, drawCallState, handle, true, true);
           return;
         case CommitMode::MergePass:
           m_impl->mergePass(ctx, params, drawCallState, handle);
@@ -1534,6 +1581,7 @@ namespace dxvk {
           uint64_t skinAmbiguous = 0;     // held back with more than one candidate
           uint64_t skinEvents = 0;        // skinned lifecycle events (skinEvent), logged or not
           uint64_t skinSwaps = 0;         // skinned draws that took a slot whose last material or position differs
+          uint64_t skinNonFinite = 0;     // skinned draws with bones that are not finite, dropped (the scene keeps the last pose)
           uint64_t matchMaterialRejects = 0;  // slot candidates skipped for another material (lookupNearest)
           uint64_t matchShapeRejects = 0;     // stale slot candidates of coarse-keyed draws skipped for another shape
           uint64_t matchContentExact = 0;     // coarse-keyed draws matched to a slot of the same bytes at the same position
@@ -1741,6 +1789,7 @@ namespace dxvk {
             " derivedChanges=", totals.derivedChanges, " reprepared=", totals.reprepared,
             " duplicates=", perFrame(totals.duplicates), " skinPairs=", totals.skinPairs, "/", totals.skinDeferrals,
             " skinCancels=", totals.skinCancels, " skinAmbiguous=", totals.skinAmbiguous, " skinSwaps=", totals.skinSwaps,
+            " skinNonFinite=", totals.skinNonFinite,
             " matchMaterialRejects=", totals.matchMaterialRejects, " matchShapeRejects=", totals.matchShapeRejects,
             " matchContentExact=", perFrame(totals.matchContentExact), " matchContentNear=", perFrame(totals.matchContentNear),
             " skinEvents=", skinEventLines, "/", totals.skinEvents, " (logged/all)",
@@ -1798,6 +1847,8 @@ namespace dxvk {
           query.shapeFirst = in.usesCoarseKey();
           // The bones of a fixed-function skinned draw are not in its bytes, so look-alike characters have one content.
           query.content = in.usesCoarseKey() && !(in.flags & translator::DrawInputs::kSkinned) ? in.contentKey() : 0;
+          query.positionUnknown = in.skinNonFinite;
+          query.predict = (in.flags & translator::DrawInputs::kSkinned) != 0;
           return query;
         }
 
@@ -2249,20 +2300,29 @@ namespace dxvk {
           }
         }
 
-        // The draw with its skin centroid in the world space of the reference camera of its class.
-        // Returns the draw as it is when it is not skinned, its view is that camera's, or no camera was set yet.
-        const translator::DrawInputs& skinInFrameWorld(const translator::DrawInputs& in, const translator::CameraInputs& camera,
-                                                       translator::CameraClass cameraClass, translator::DrawInputs& rebased) const {
-          if (!(in.flags & translator::DrawInputs::kSkinned)) {
+        // The matrix a fixed-function skinned draw's skinning is decomposed with besides the camera
+        // (DrawCallState::finalizeSkinningData): the view, or the world-view with fused world-view matrices.
+        static const Matrix4& skinnedView(const translator::CameraInputs& camera) {
+          return RtxOptions::fusedWorldViewMode() == FusedWorldViewMode::None ? camera.worldToView : camera.objectToView;
+        }
+
+        // A fixed-function skinned draw as it is placed in the world space of the camera its skinning is decomposed with
+        // (reference): its bone place moved into that world, and the draw's view relative to that camera in its inputs
+        // (DrawInputs::skinViewHash), since the decomposition places the geometry with both.
+        // Returns the draw as it is when it is not skinned or no camera was set yet.
+        static const translator::DrawInputs& skinInFrameWorld(const translator::DrawInputs& in, const translator::CameraInputs& camera,
+                                                              const Matrix4* reference, translator::DrawInputs& rebased) {
+          if (!(in.flags & translator::DrawInputs::kSkinned) || reference == nullptr) {
             return in;
           }
-          const Matrix4* reference = cameras.referenceView(cameraClass);
-          if (reference == nullptr || std::memcmp(reference, &camera.worldToView, sizeof(Matrix4)) == 0) {
+          const Matrix4& view = skinnedView(camera);
+          if (std::memcmp(reference, &view, sizeof(Matrix4)) == 0) {
             return in;
           }
           rebased = in;
-          const Vector4 inView = camera.worldToView * Vector4(in.skinPosition.x, in.skinPosition.y, in.skinPosition.z, 1.f);
-          rebased.skinPosition = (inverseAffine(*reference) * inView).xyz();
+          const Matrix4 relative = inverseAffine(*reference) * view;
+          rebased.skinViewHash = XXH3_64bits(&relative, sizeof(relative)) | 1;
+          rebased.skinPosition = (relative * Vector4(in.skinPosition.x, in.skinPosition.y, in.skinPosition.z, 1.f)).xyz();
           return rebased;
         }
 
@@ -2272,17 +2332,20 @@ namespace dxvk {
           const translator::CameraClass cameraClass = classifyCamera(camera, decision);
 
           // A skinned draw's view can offset its bones from the frame's world, so it is matched in the camera's world,
-          // and its skinning is decomposed with the same camera. A camera of the last frame is replaced by this frame's
+          // its view relative to that camera is one of its inputs, and its skinning is decomposed with the same camera.
+          // A camera of the last frame is replaced by this frame's
           // on the CS thread once this frame's is set up (D3D9Frontend::commit).
-          translator::DrawInputs rebased;
-          const translator::DrawInputs& in = skinInFrameWorld(drawn, camera, cameraClass, rebased);
-          if (drawn.flags & translator::DrawInputs::kSkinned) {
-            const Matrix4* reference = cameras.referenceView(cameraClass, &decision.skinningViewThisFrame);
-            decision.hasSkinningView = reference != nullptr;
-            if (reference != nullptr) {
-              decision.skinningWorldToView = *reference;
+          const bool skinned = (drawn.flags & translator::DrawInputs::kSkinned) != 0;
+          const Matrix4* skinningReference = nullptr;
+          if (skinned) {
+            skinningReference = cameras.skinningView(cameraClass, &decision.skinningViewThisFrame);
+            decision.hasSkinningView = skinningReference != nullptr;
+            if (skinningReference != nullptr) {
+              decision.skinningWorldToView = *skinningReference;
             }
           }
+          translator::DrawInputs rebased;
+          const translator::DrawInputs& in = skinInFrameWorld(drawn, camera, skinningReference, rebased);
 
           // An early check looked this draw up already (the occurrence index is counted once).
           const XXH64_hash_t objectKey = in.identityKey();
@@ -2339,7 +2402,6 @@ namespace dxvk {
           XXH64_hash_t key = pending.key;
           SlotQuery slotMatch = slotQuery(in);
           if (!early) {
-            const bool skinned = (in.flags & translator::DrawInputs::kSkinned) != 0;
             key = lookupNearest(objectKey, skinned ? in.skinPosition : position, in.contentSignature(), slotMatch);
           }
           if (drawKey != 0) {
@@ -2360,6 +2422,22 @@ namespace dxvk {
           }
           const bool fresh = !object.change.hasLast;
 
+          // A skinned draw whose bones are not finite would place its vertices nowhere. It is dropped, and a scene-owned
+          // object keeps its last pose for this frame. Its record stays the last good draw's, so the next draw is
+          // compared with that.
+          if (skinned && in.skinNonFinite) {
+            totals.skinNonFinite++;
+            object.lastFrame = frame;
+            if (object.state == State::Direct) {
+              batch->seen.push_back(object.handle);
+            } else {
+              totals.dropped++;
+            }
+            pending = Pending();
+            decision.skip = true;
+            return decision;
+          }
+
           // Unversioned inputs (user-pointer data, version-0 buffers) compare equal whatever their data: never a repeat.
           // The categories and the camera type also come from sky auto-detection, the draw-call-ID sky rule, texture
           // tagging and camera reclassification, which can change while the inputs stay the same.
@@ -2376,6 +2454,7 @@ namespace dxvk {
           change.comparable = in.versioned() && !(in.flags & translator::DrawInputs::kVertexTextures);
           // A move would send a pre-combined draw's world-view to setTransform, so such a change is an Update.
           change.preCombined = camera.preCombined;
+          change.skinned = skinned;
           change.viewSpaceTexgen = viewSpaceTexgen(in.texgenMode);
           translator::DerivedState derived;
           if (prepared != nullptr) {
@@ -2463,6 +2542,21 @@ namespace dxvk {
           }
 
           if (object.state == State::Direct) {
+            // The self-check (rtx.d3d9v2.earlyChangeTestSelfCheckFrames): a repeat is prepared in full and compared with
+            // the scene's copy. A raster-service or vertex-captured object is described again by every update, and a
+            // skinned draw whose camera is the last frame's waits for this frame's on the CS thread, so neither is
+            // compared.
+            const uint32_t selfCheckFrames = D3D9V2Options::earlyChangeTestSelfCheckFrames();
+            if (eligible && repeat && selfCheckFrames != 0 && frame % selfCheckFrames == 0 && !object.rasterService &&
+                !(in.flags & translator::DrawInputs::kVertexCapture) && (!skinned || decision.skinningViewThisFrame)) {
+              decision.skip = false;
+              decision.mode = CommitMode::VerifyRepeat;
+              decision.handle = object.handle;
+              totals.skipped++;
+              batch->seen.push_back(object.handle);
+              noteSortOrder(object, categories, false);
+              return decision;
+            }
             if (eligible && (repeat || moved)) {
               if (moved) {
                 batch->moves.push_back({ object.handle, in.objectToWorld });

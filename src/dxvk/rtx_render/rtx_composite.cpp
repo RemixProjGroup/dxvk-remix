@@ -38,6 +38,7 @@
 #include "../util/util_global_time.h"
 
 #include <rtx_shaders/composite.h>
+#include <rtx_shaders/composite_sky_provider.h>
 #include <rtx_shaders/composite_alpha_blend.h>
 #include "rtx_texture_manager.h"
 
@@ -75,6 +76,7 @@ namespace dxvk {
         TEXTURE2D(COMPOSITE_ALPHA_GBUFFER_INPUT)
         TEXTURE2D(COMPOSITE_ACTIVE_PIXEL_MASK_INPUT)
         TEXTURE2D(COMPOSITE_ACTIVE_LOCAL_PIXEL_COORDS_INPUT)
+        TEXTURE2D(COMPOSITE_PIXEL_SAMPLING_RATE_INPUT)
         TEXTURE2DARRAY(COMPOSITE_BLUE_NOISE_TEXTURE)
         SAMPLER3D(COMPOSITE_VALUE_NOISE_SAMPLER)
 
@@ -168,6 +170,23 @@ namespace dxvk {
     };
 
     PREWARM_SHADER_PIPELINE(CompositeShader);
+
+    // The sky provider variant is used only while a sky provider renders, see composite.comp.slang.
+    Rc<DxvkShader> getCompositeShader(bool skyProviderActive) {
+      return skyProviderActive
+        ? GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, CompositeShader, composite_sky_provider)
+        : CompositeShader::getShader();
+    }
+
+    struct CompositeShaderVariantPrewarmer {
+      CompositeShaderVariantPrewarmer() {
+        AutoShaderPipelinePrewarmer::registerComputeShaderForPrewarm([] {
+          return getCompositeShader(true);
+        });
+      }
+    };
+
+    CompositeShaderVariantPrewarmer s_compositeShaderVariantPrewarmer;
   }
 
   CompositePass::CompositePass(dxvk::DxvkDevice* device)
@@ -187,6 +206,7 @@ namespace dxvk {
       RemixGui::Checkbox("Use Neighbor Search", &stochasticAlphaBlendUseNeighborSearchObject());
       RemixGui::Checkbox("Search The Same Object", &stochasticAlphaBlendSearchTheSameObjectObject());
       RemixGui::Checkbox("Share Search Result", &stochasticAlphaBlendShareNeighborsObject());
+      RemixGui::Checkbox("Average Search Matches", &stochasticAlphaBlendAverageSearchMatchesObject());
       RemixGui::DragInt("Search Iterations", &stochasticAlphaBlendSearchIterationObject(), 0.1f, 1, 20, "%d", ImGuiSliderFlags_AlwaysClamp);
       RemixGui::DragFloat("Initial Search Radius", &stochasticAlphaBlendInitialSearchRadiusObject(), 0.01f, 1.0f, 20.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
       RemixGui::DragFloat("Radius Expand Factor", &stochasticAlphaBlendRadiusExpandFactorObject(), 0.01f, 1.0f, 5.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
@@ -443,7 +463,6 @@ namespace dxvk {
       const float colorScale = fogColorScale() * PreExposure::get();
       auto& fog = settings.fog;
       compositeArgs.fogMode = static_cast<uint32_t>(fog.mode);
-      compositeArgs.fogApplyToSky = fogApplyToSky();
       compositeArgs.fogColor = { fog.color.x * colorScale, fog.color.y * colorScale, fog.color.z * colorScale };
       // Todo: Scene scale stuff ignored for now because scene scale stuff is not actually functioning properly. Add back in if it's ever fixed.
       // compositeArgs.fogEnd = fog.end * RtxOptions::sceneScale();
@@ -478,6 +497,9 @@ namespace dxvk {
     ctx->getCommonObjects()->metaNumos().bindCompositeResources(*ctx, compositeArgs.skyProviderActive,
       compositeArgs.skyWorldUnitsPerKm, compositeArgs.skyRadianceScale, compositeArgs.skyHostSkyOverride,
       compositeArgs.skyCloudsValid);
+    // Depth-based fog covers only a sky that nothing authored. The game's sky draws carry the game's own fog.
+    const bool skyAuthored = settings.gameSkyRasterized || compositeArgs.skyProviderActive || domeLightArgs.active;
+    compositeArgs.fogApplyToSky = fogApplyToSky() && !skyAuthored;
     // A submerged camera (any start-in medium): no aerial perspective, see composite_args.h.
     compositeArgs.skyCameraInMedium =
       rtOutput.m_raytraceArgs.startInMediumMaterialIndex != SURFACE_INDEX_INVALID ? 1u : 0u;
@@ -530,6 +552,7 @@ namespace dxvk {
     compositeArgs.stochasticAlphaBlendInitialSearchRadius = stochasticAlphaBlendInitialSearchRadius();
     compositeArgs.stochasticAlphaBlendRadiusExpandFactor = stochasticAlphaBlendRadiusExpandFactor();
     compositeArgs.stochasticAlphaBlendShareNeighbors = stochasticAlphaBlendShareNeighbors();
+    compositeArgs.stochasticAlphaBlendAverageSearchMatches = stochasticAlphaBlendAverageSearchMatches();
     compositeArgs.stochasticAlphaBlendNormalSimilarity = stochasticAlphaBlendNormalSimilarity();
     compositeArgs.stochasticAlphaBlendDepthDifference = stochasticAlphaBlendDepthDifference();
     compositeArgs.stochasticAlphaBlendPlanarDifference = stochasticAlphaBlendPlanarDifference();
@@ -575,7 +598,7 @@ namespace dxvk {
     {
       ScopedGpuProfileZone(ctx, "Composition");
       ctx->setFramePassStage(RtxFramePassStage::Composition);
-      ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, CompositeShader::getShader());
+      ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, getCompositeShader(compositeArgs.skyProviderActive != 0));
       ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
     }
 

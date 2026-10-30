@@ -83,8 +83,8 @@ namespace dxvk {
     };
   }
 
-  // Combo box shared with dxvk_imgui.cpp
-  extern RemixGui::ComboWithKey<DxvkRayReconstruction::RayReconstructionPreset> rayReconstructionPresetCombo;
+  // Preset combo shared with dxvk_imgui.cpp.
+  void showRayReconstructionPresetCombo(DxvkDevice* device, bool alwaysShowCnnPresets);
 
   DxvkRayReconstruction::DxvkRayReconstruction(DxvkDevice* device)
     : DxvkDLSS(device)
@@ -143,8 +143,8 @@ namespace dxvk {
     m_prevPreset = preset();
 
     if (mRecreate) {
-      initializeRayReconstruction(ctx);
       mRecreate = false;
+      initializeRayReconstruction(ctx);
     }
 
     SceneManager& sceneManager = device()->getCommon()->getSceneManager();
@@ -369,7 +369,7 @@ namespace dxvk {
       RemixGui::Checkbox("DLSS-RR Demodulate Roughness", &demodulateRoughnessObject());
       RemixGui::DragFloat("DLSS-RR Roughness Sensitivity", &upscalerRoughnessDemodulationOffsetObject(), 0.01f, 0.0f, 2.0f, "%.3f");
       RemixGui::DragFloat("DLSS-RR Roughness Multiplier", &upscalerRoughnessDemodulationMultiplierObject(), 0.01f, 0.0f, 20.0f, "%.3f");
-      rayReconstructionPresetCombo.getKey(&presetObject());
+      showRayReconstructionPresetCombo(m_device, true);
 
       if (RemixGui::CollapsingHeader("Disocclusion Mask")) {
         ImGui::Indent();
@@ -435,10 +435,28 @@ namespace dxvk {
 
     if (m_rayReconstructionContext) {
 
+      NGXContext& ngxContext = m_device->getCommon()->metaNGXContext();
+      const bool cnnPresetsAvailable = ngxContext.rayReconstructionSupportsCnnPresets();
+      if (isCnnPreset(preset()) && !cnnPresetsAvailable) {
+        if (!m_cnnPresetWarningLogged) {
+          Logger::warn(str::format(
+            "[DLSS-RR] The CNN preset needs nvngx_dlssd.dll older than version 310.4 in the runtime folder, but version ",
+            ngxContext.getRayReconstructionLibraryVersion(), " is in use. Using the default preset instead."));
+          m_cnnPresetWarningLogged = true;
+        }
+      }
+
       // RayReconstructionPreset enum values match the NGX preset enum, so a direct cast is valid.
       // Fall back to the default preset for any unexpected/out-of-range value.
       NVSDK_NGX_RayReconstruction_Hint_Render_Preset dlssdModel;
       switch (preset()) {
+      case RayReconstructionPreset::A:
+      case RayReconstructionPreset::B:
+      case RayReconstructionPreset::C:
+        dlssdModel = cnnPresetsAvailable
+          ? static_cast<NVSDK_NGX_RayReconstruction_Hint_Render_Preset>(preset())
+          : NVSDK_NGX_RayReconstruction_Hint_Render_Preset_Default;
+        break;
       case RayReconstructionPreset::D:
       case RayReconstructionPreset::E:
       case RayReconstructionPreset::F:
@@ -452,6 +470,13 @@ namespace dxvk {
       auto optimalSettings = m_rayReconstructionContext->queryOptimalSettings(mInputSize, perfQuality);
 
       m_rayReconstructionContext->initialize(renderContext, mInputSize, mDLSSOutputSize, mIsHDR, mInverseDepth, mAutoExposure, false, dlssdModel, perfQuality);
+
+      // NGX may load a different copy than the one the search path pointed at before creation.
+      // A CNN preset is then created again with what the loaded copy supports.
+      ngxContext.updateRayReconstructionLibrary();
+      if (isCnnPreset(preset()) && ngxContext.rayReconstructionSupportsCnnPresets() != cnnPresetsAvailable) {
+        mRecreate = true;
+      }
     }
   }
 } // namespace dxvk

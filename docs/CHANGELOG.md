@@ -28,6 +28,143 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-10-30
+
+### Sparse rendering: sampling rate scaled by render resolution
+From upstream `e14940d58`: the graphics presets set a sampling rate at a reference render resolution (4K with DLSS Auto) and an exponent, and the rate scales with the actual render resolution, so low render resolutions keep more of their pixels and high ones skip more. Sparse rendering turns off when the scaled rate exceeds `rtx.sparseRendering.maxSamplingRate` (0.75), and a quality slider tunes the rate around the scaled value. The presets use upstream's tuning one level down, since the High preset runs upstream's Ultra path settings: High 0.357 with exponent 0.69 (upstream Ultra), Medium 0.228 with 0.83 (upstream High), Low 0.125 with 0.83 (upstream Medium). The stochastic alpha blend neighbor search can be sparse-aware (more iterations at lower rates, no radius growth at inactive pixels), which High and Medium enable, and it can average up to 4 matching neighbors.
+- Options: added `rtx.sparseRendering.enableAdaptiveSamplingRate`, `samplingRateResolutionExponent` (0.69), `quality` (0.5), `maxSamplingRate` (0.75), `enableSparseAwareAlphaBlendSearch`, and `rtx.stochasticAlphaBlendAverageSearchMatches` (default off). `rtx.sparseRendering.samplingRate` default 1.0 → 0.357. The High, Medium and Low presets set enableAdaptiveSamplingRate, samplingRate, samplingRateResolutionExponent and enableSparseAwareAlphaBlendSearch.
+- Commits: see the merge of feat/20261029-upstream-sparse-autorate.
+
+### Sparse rendering: dense volumetrics on primary hits by default
+From upstream `3af4a39b7`: the volumetric integration at primary hits runs at every pixel again instead of only the active ones, which avoided over-sharpened, mosaic-like fog in foggy scenes. Sky pixels already ran dense.
+- Options: default flipped `rtx.sparseRendering.enableSparseVolumetricsPrimaryHit` → false.
+- Commits: see the merge of feat/20261029-upstream-sparse-autorate.
+
+### Sparse rendering: history and cache resets, sky fog at inactive pixels
+The bug fixes from upstream's sparse rendering commit `e14940d58`, without its sampling rate changes. A change of the sparse rendering sampling rate, or sparse rendering turning on or off, resets the denoiser history, so the image settles at the new rate at once. The RTXDI reservoir buffer is cleared when it is created, and a cleared record reads as an empty reservoir, so RTXDI reuse no longer picks up garbage from pixels that have not been active since a resolution change. The NEE cache is reset when the render resolution resources are recreated. With sparse volumetrics on sky pixels and dense sky composition, inactive sky pixels now get the fog's transmittance on a dome light sky and the aerial perspective.
+- Options: none.
+- Commits: see the merge of fix/20261029-upstream-sparse-fixes.
+
+### Sparse rendering: alpha-blended particles no longer too bright
+From upstream `c4165bc3b`: under sparse rendering, alpha-blended surfaces lit by the stochastic alpha blend neighbor search took the neighbor's lighting after demodulate had scaled it by the inverse sampling rate, so particles and smoke were 1/rate too bright (1.7x at the High preset's rate of 0.6, 2x at Medium's 0.5). The neighbor's lighting is now scaled back by its sampling rate.
+- Options: none.
+- Commits: see the merge of fix/20261029-upstream-sparse-fixes.
+
+### RTXDI: best light sampling fixes
+From upstream `c57f4644c`: Sample Best Lights no longer leaves block-shaped artifacts or biases direct lighting. The RTXDI submodule moves from 7835387 to NVIDIA's 639c99f (the same pin as upstream, still unmodified), where a rejected random light counts as a null sample and the best light of each block is the one with the highest target function instead of the brightest pixel; the passes jitter the previous frame's best light lookup by up to one pixel, so pixels at block edges sometimes use the neighboring block's light. Upstream's `rtx.di.enableBestLightJitter` option is not taken: the jitter is always on.
+- Options: none.
+- Commits: see the merge of fix/20261029-upstream-rtxdi-best-light.
+
+### RTXDI: per-pixel spatial reuse neighbors
+From upstream `0618cab63`: RTXDI spatial reuse picks random neighbor offsets per pixel instead of one set per wave, which removes the horizontal streaks and shimmer on hard shadow edges and along the screen border that the denoiser could not resolve.
+- Options: none.
+- Commits: see the merge of fix/20261029-upstream-rtxdi-best-light.
+
+### Crash fixes: malformed shaders in the bridge, OMM candidates
+From upstream `0384d427d`: the bridge client rejects a vertex or pixel shader whose bytecode it cannot walk to its end token (pixel shader 1.4's three-dword texcrd and texld instructions are now sized correctly) instead of reading past the buffer, and the opacity micromap manager no longer keeps raw pointers to renderer-created instances or keeps its candidate set across a reset, both of which left dangling pointers that crashed the next scan. Skinning also skips a draw whose blend weight stream is unbound. Upstream's change to stage all 256 bone matrices is not taken: the D3D9 path already reads bones above the highest one the game set as identity.
+- Options: none.
+- Commits: see the merge of fix/20261029-upstream-crash-fixes.
+
+### Secret replacements survive the asset load
+From upstream `c8a654180`: the mod loader builds secret replacement variants (a mod's secret replacements) in its scratch table, and the merge into the live table dropped them, so they never appeared. The merge now moves them across on a full load and keeps the live list on a filtered hot reload, which does not walk secrets.
+- Options: none.
+- Commits: see the merge of fix/20261029-upstream-small-fixes.
+
+### Eyes keep their shading under the free camera
+From upstream `ca69e0453`: the D3D9 frontend no longer applies the free camera's correction to an eye draw's texture transform, which holds the eye parameters, so eyes no longer disappear or distort while the free camera is on.
+- Options: none.
+- Commits: see the merge of fix/20261029-upstream-small-fixes.
+
+### Remix API: SetConfigVariable takes the option update lock
+From upstream `da9aeaa35`: `remixapi_SetConfigVariable` writes the option's value under the option update mutex, which the render thread holds while it applies pending option values, so a host setting options from its own thread no longer races that pass.
+- Options: none.
+- Commits: see the merge of fix/20261029-upstream-small-fixes.
+
+### Particles: spawn direction independent of triangle shape and instance scale
+From upstream `b205e8799`: the particle spawn pass normalizes the triangle normal after the object-to-world transform, so the triangle's corner angle and the instance's scale no longer change the initial speed of particles emitted along the normal, and degenerate triangles or zero-scale transforms fall back to a fixed normal instead of producing NaN.
+- Options: none.
+- Commits: see the merge of fix/20261029-upstream-small-fixes.
+
+### Developer menu: drag speed after Alt+Tab
+From upstream `e675d2ef5`: the overlay reads the modifier keys from raw input instead of the window's key state, which raw keyboard input does not update, so a Shift or Alt released while the game was out of focus no longer stays held and keeps value drags slow or fast after Alt+Tab.
+- Options: none.
+- Commits: see the merge of fix/20261029-upstream-small-fixes.
+### Depth-based fog no longer covers an authored sky
+With volumetrics off, the depth-based fog was laid over every sky pixel at its full extent, so a game's rasterized sky or the NUMOS sky showed only the fog color, black under dark fog. Sky pixels are now fogged only when nothing authored the sky this frame: no game sky draw, no sky provider and no dome light.
+- Options: `rtx.fogApplyToSky` (default on) now applies only to sky pixels without an authored sky.
+- Tests: D3D9 suite scenarios `sky-fog` and `sky-fog-numos` check the sky's brightness in a screenshot under dark fog.
+
+## 2026-10-29
+
+### Bridge: query completion, upload ownership and present teardown (upstream `3f75d648b`)
+Ported by hand from upstream `3f75d648b`, which corrects the bridge transport work. Event queries now report the GPU's real completion through the shared result slots instead of "the server has run the Issue", a D3DGETDATA_FLUSH sent while a request is in flight reaches the next request, and Issue and GetData are serialized under the device lock. Source games wait for create results again, so a failed create is reported to the game instead of answered with D3D_OK. Queue reads return values instead of references into the rings, and the client reads the device create result before it releases the response. With the shared heap, each buffer and surface upload sends its own copy of only the uploaded range or packed rows, so the game can write the next lock before the server has read the previous one. A discarded buffer is freed on every unlock path, a failed copy allocation returns `E_OUTOFMEMORY` from Unlock, and the allocator searches every segment, frees retired uploads before it grows the heap and waits for space at the 32-bit limit. The Present semaphore keeps a credit when the server finishes a present before the client waits for it (the maximum count is one above `presentSemaphoreMaxFrames`). Presents are serialized with window teardown: `WM_DESTROY` marks the window closing and waits for queued presents, a present to a closing window returns `D3DERR_DEVICELOST`, and device release waits for the server's acknowledgement.
+- Options: the built-in default for one Source game `sendCreateFunctionServerResponses = False` is removed, so Source games use the global default (True). The setting still works in bridge.conf.
+- Not taken: the module bridge's per-command read position (that bridge leaves its data ring unprotected here), the `consumeResponse` split (the client releases response data only at `pop_front()` here), the UP-draw invalidation (already present), and the tests that run a 32-bit app against a built bridge and runtime. New unit tests: `test_query_results`, `test_present_semaphore`, `test_shared_heap_allocator`.
+- Also fixed: with `sendAllServerResponses`, ShowCursor left its response's value unread.
+- Bridge protocol: the query block and the shared heap upload layout changed, and the server acknowledges device destruction. Deploy the client `d3d9.dll` and `NvRemixBridge.exe` together.
+- Commits: see the merge of fix/20261029-upstream-bridge-correctness.
+### RTXDI is the default light sampler
+Light sampling defaults to RTXDI again. Across games, light BVH sampling gave clearly worse direct lighting than RTXDI in many scenes, so it stays available as a plain option for scenes with many lights.
+- Options: default flipped `rtx.lightSampling.mode` 1 (LightBVH) → 0 (RTXDI). LightBVH (1) and Auto (3) are unchanged.
+- Presets: not preset-driven. The mode is a plain option that a game's `rtx.conf` sets, and no preset or app profile sets it.
+- Startup: the RTXDI passes are always prewarmed and their resources follow `rtx.useRTXDI`, so the default mode needs no extra warm-up. The light BVH select variants and the dedicated-sun direct variants are prewarmed only when the mode can use them, and a later switch to LightBVH or Auto queues them through the changed-settings prewarm.
+- Commits: see the merge of feat/20261029-rtxdi-default.
+### G-buffer: slim variant coverage check and Full fallback reporting
+The RayQuery G-buffer's slim variant table now lives in `rtx_pathtracer_gbuffer_variants.h` with a list of the feature combinations that run the Full kernels on purpose, each with a one-line reason (RayGen modes, validate, WBOIT off, debug views and object picking, PSR off, raytraced render targets, the thin-film override, intersection billboards on primary rays, thin-film materials, portals, dynamic-mask billboards). A `static_assert` and the new unit test `test_gbuffer_variant_coverage` walk every combination of the indirect mode, PSR, raytraced render targets, stochastic alpha, debug view, object picking, validate, WBOIT, SSS options, thin-film override, primary billboards and scene content, and fail when one selects Full without a listed reason, so a feature that forgets its slim variant no longer falls back silently. At runtime the `[Perf]` summary names each bound slim level's share of the frames and the last Full frame's cause, a frame whose table entry is Full logs a one-time warning with its feature variant, mode key and blocking entry, and the `[GBuffer] slim level Full` line names its expected case (`expected=<name>`) or `noSlimEntry`. The D3D9 suite gains `gbuffer-nrc`, `gbuffer-pom-sss` and `gbuffer-pom-sss-nrc` (a POM ground and a thin-opaque diffusion-profile crate from a testhost mod), which fail on any `slim level Full` line outside validate runs, and every scenario fails on a Full line without an expected case. A tester's report (`featureVariant=10 nrc=1 noEntryForModeKey modeKey=0x7b`) is the debug feature set, bound while the developer menu picks or highlights objects, so it stays Full; its `blockedBy=Lean(sssProfile):pom` lines bind LeanPom, the leanest level that keeps POM. Kernels and image are unchanged.
+- Options: none. Preset-independent: diagnostics and checks only.
+- Measured: MEASURED_PLACEHOLDER
+- Commits: see the merge of perf/20261029-gbuffer-slim-coverage.
+- Docs: [ShaderVariants.md](ShaderVariants.md#slim-variant-tables)
+### D3D9 frontend: fixed-function skinning and refits across topology changes
+Fixes skinned meshes that stayed behind (stuck in midair, an elevator body that did not ride with its door, view-model hands that came apart from the gun while firing), skinned objects built again every frame, and stretched triangles between batched props.
+- A skinned draw whose view moved relative to the camera its skinning is decomposed with is updated instead of skipped as a repeat, and a change of its world matrix alone is an update, never a move (the bones place it). The decomposition camera is one set this frame (the draw class's, else Main's) before one of the last frame, so the draws of one frame share it.
+- A skinned draw's place for matching is the median of its bones, so a bone a game parks far away (some games park bones at 1e29) no longer makes a new object every frame. A draw with bones that are not finite is dropped and its object keeps its last pose.
+- Geometry is refit only when its draw keeps the vertex and index counts, topology and index data it was built with. Draws without indices all share an empty index hash, so a batched prop whose vertex count changed was refit over the old topology.
+- Such a draw that does not jump is rebuilt in place and keeps its history: same instance, its new positions as its previous ones, so its motion is its transform's only. A new object that takes over a stale one's history also takes its last surface index, so temporal reuse continues. The direct line counts `topologyRebuilds=`, which are not `historyResets`.
+- Options: `rtx.d3d9v2.earlyChangeTestSelfCheckFrames` also prepares repeats of scene-owned objects in full and compares them with the scene's copy (`[D3D9v2] repeatMismatch`, `verified=` / `verifyMismatches=` in the direct line). The inputs line counts `skinNonFinite=`.
+- Tests: D3D9 scenarios skinned-view-walk, skinned-root-motion, skinned-parked, skinned-uninit, skinned-swap, skinned-shared-palette and ring-props.
+- Commits: see the merge of fix/20261029-d3d9-skinning.
+
+### TLAS refit while the instance list is unchanged
+Each TLAS is updated (refit) instead of rebuilt while its instance list keeps the same length, order, BLASes and point-instancer layout, so only transforms and masks change. A full build follows every 16 refits, on any list change, and when more than a quarter of the instances moved since the last full build. The opaque TLAS refits from the previous-frame buffer into the current one, so the previous-frame TLAS stays intact.
+- Options: added `rtx.accel.tlasRefit` (default on: a same-image performance fix, preset-independent), `rtx.accel.tlasRefitRebuildFrames` (16) and `rtx.accel.tlasRefitMovedFraction` (0.25). The `[AccelMem]` build line counts the refits.
+- Measured: scene B (about 600 CPU instances plus 21k point-instancer slots in two TLASes), interleaved separate runs: TlasBuild stage 0.43 → 0.05 ms in held frames, 0.26 → 0.15 ms while moving; whole frame equal or faster (moving median −0.08 / −0.13 ms, held −0.57 / +0.11 ms, noise). The trace passes did not slow down. Image 49.3 dB against trunk with trunk against itself at 49.2 dB. D3D9 suite with refit on: only the 6 known ring-static fails, and instance counts equal to trunk's.
+- Commits: see the merge of perf/20261029-ptlas.
+
+### Tried and removed: TLAS changes
+- `PREFER_FAST_BUILD` for the TLAS: TlasBuild 0.43 → 0.41 ms, whole frame unchanged within noise. Removed.
+- Partitioned TLAS (`VK_NV_partitioned_acceleration_structure`): not built. The TLAS costs about 0.4 ms, 97% of its instances are point-instancer slots that GPU culling rewrites every frame, and a PTLAS needs its own descriptor type through every ray tracing pipeline layout.
+
+### NUMOS: quality level in the graphics presets
+NUMOS gets a quality level that the graphics presets set, so mid-range GPUs no longer pay the full cost of the clouds and the haze: at Balanced and coarser upscaling the clouds marched every pixel, which cost about 7-10 ms per frame on an RTX 4060 Laptop. Level High is the full quality. Level Medium takes the quarter cloud march at every resolution and a coarser near-field haze grid, and level Low also uses the faster cloud sun shadows and half the cloud sample cap. The Ultra preset sets level High, the High preset sets level Medium, and the Medium and Low presets set level Low; Auto follows the preset it picks, and a user-set level overrides the preset's. The High preset therefore runs the quarter cloud march at any upscale, which cuts NUMOS from about 4.7 to 1.9 ms per moving frame at 1114x626 to 1080p with DLSS Balanced on an RTX 5080 Laptop. Seeds no longer carry the level. The far-field haze table also updates only every 8th frame while no pixel uses it, as in interiors.
+- Options: added `rtx.atmosphere.qualityLevel` (0 High, the default; 1 Medium; 2 Low), set by `rtx.graphicsPreset`. Its control is "Sky Quality Level" in the developer menu's sky Clouds and Haze quality sections.
+- Measured: moving frames, 1114x626 render to 1080p with DLSS-RR Balanced, RTX 5080 Laptop, CloudScreen + AtmosphereFinish. By level, Scene A: before 4.22 + 0.54 ms, High 4.34 + 0.42, Medium 1.54 + 0.43, Low 1.11 + 0.41. Scene B: before 4.19 + 0.54, High 4.26 + 0.41, Medium 1.48 + 0.41, Low 1.10 + 0.41. NUMOS viewer at the same resolution: cloud pass 2.29 ms at High, 0.85 ms at Medium, 0.72 ms at Low; in a cloud 3.16, 0.96 and 0.95 ms. High's image matches the previous build: bit-identical in the viewer, 56.8 dB (the replay noise floor) in scene A.
+- Commits: 81b1d3ed6, c7a9921ab, and the submodule bump to NUMOS 6ba250d (NUMOS 7e6d70f, 424cf08, 6ba250d).
+
+### DLSS Ray Reconstruction: CNN presets with a user-supplied older DLL
+`rtx.rayreconstruction.preset` accepts the CNN presets A, B and C again (values 1-3), which cost much less than the transformer models on Turing and mobile GPUs (testers saw a flat 4.5-5.6 ms for transformer RR). The 310.9 SDK and DLL no longer have them, so they work only when the user puts an `nvngx_dlssd.dll` older than 310.4 in the runtime folder (`.trex`) in place of the shipped one. The runtime reads that DLL's file version, logs it (`[DLSS-RR] nvngx_dlssd.dll: ... CNN presets A to C are available/unavailable`), shows the CNN entries in the user menu only when the DLL accepts them (the developer menu always shows them), and falls back to the Default preset with one warning and a menu note when it does not. No DLL is shipped for this.
+- Options: `rtx.rayreconstruction.preset` gains A = 1, B = 2, C = 3 (default stays Default). Not wired into the graphics presets, because it depends on a DLL the user supplies.
+- Tested: a 310.2.1 `nvngx_dlssd.dll` loads with the 310.9 SDK and creates the feature with preset A (an open-world replay, no errors). D3D9 suite 370 pass, 6 fail (the 6 known ring-static fails).
+- Commits: see the merge of feat/20261029-cnn-rr.
+
+### G-buffer: slim variants for NRC with stochastic alpha
+With NRC and `rtx.enableStochasticAlphaBlend` (the default), the G-buffer runs the inline PSR stochastic alpha feature set, which had no slim variants, so every such frame ran the Full primary and PSR kernels (`[GBuffer] slim level Full (full: featureSet featureVariant=6 nrc=1)`). That feature set now has Slim, Lean, SlimPom and LeanPom variants with the same predicates as the other sets, and a `rtx.frameFeatures.validate` kernel. The image is unchanged.
+- Options: none. Preset-independent: the same image, chosen per frame from the frame features.
+- Measured: an open-world replay with NRC, 2 interleaved runs per build: GBufferPrimaryRays p50 5.86 -> 4.48 ms (median; before 5.67, 6.05; after 4.25, 4.72), G-buffer stages 6.17 -> 4.71 ms; frame time within run-to-run noise (held frame median 27.35 -> 27.20 ms). Slim level `Full (featureVariant=6 nrc=1)` -> `Lean`. Image PSNR against the release build 54.4 / 53.1 dB, at the release self-level of 51.8 dB.
+- Commits: e9afd411b, merge 56115ec95.
+
+### G-buffer: unused material and alpha blend work skipped
+The bit-identical parts of upstream's register-count commit `8e2dd3931`: a material with zero emissive intensity no longer reads its emissive texture or runs its emissive texture stage, thin-film Fresnel runs only for thin-film materials, and the primary pass keeps the initial stochastic alpha surface in registers instead of storing and reloading it for every pixel. The decal pass, PSR Prepare and the G-buffer readers load the stored view direction only when the cone radius marks one, and PSR Prepare skips its radiance read and write for pixels without a diffuse layer. The image is unchanged.
+- Options: none. Preset-independent: pure performance.
+- Commits: 1457b4b87, 8e2208f44, merge 56115ec95.
+
+### Composite pass: sky provider code in its own shader variant
+The composite shader now has two variants. The base one leaves out the sky provider's clouds, aerial perspective, sky disks, cloud motion vectors and bias-mask writes, and it skips the atmosphere foreground read. The sky provider variant runs only while a sky provider renders a frame. The sky code raised the whole pass to 128 registers on NVIDIA (upstream: 80), which cut occupancy even in games that never use it. The image does not change. The alpha-blend pass also takes upstream's changes: it writes its radiance only where the surface is valid, skips the geometry-hash read for the first search tap, and honors `rtx.stochasticAlphaBlendShareNeighbors`.
+- Options: none. The change is preset-independent, because it only changes which code is compiled into the pass.
+- Registers (RTX 5080 Laptop, driver 617.14): composite 128 -> 80 (sky provider variant 128), binary 476 KB -> 79 KB; alpha blend 55 -> 47. RDNA3 (amdllpc): 144 -> 96 VGPRs.
+- Measured: scene B, sky provider off, volumetrics on, 4 interleaved runs per build: Composition p50 0.99 -> 0.67 ms (median; before 0.98, 0.99, 0.99, 0.77; after 0.65, 0.78, 0.67, 0.66). With the sky provider on, the pass is unchanged (1.23 vs 1.21 ms). Image: A vs B PSNR at the A vs A noise floor, 59.2-59.7 dB with the sky provider off and 51.6-52.0 dB with it on (A vs A 51.1-52.7 dB).
+- Commits: see the merge of perf/20261029-composition.
+
 ## 2026-10-28
 
 ### Developer menu: settings search

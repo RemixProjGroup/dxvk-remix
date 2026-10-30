@@ -29,6 +29,7 @@
 
 #define RAB_GetLightSample RAB_GetLightSampleBase
 #define RAB_GetPortalSpaceLightSample RAB_GetPortalSpaceLightSampleBase
+#define RAB_LoadReservoir RAB_LoadReservoirBase
 #if VOLUME_LIGHT_SAMPLE_CLOUD_SHADOW
 #define RAB_GetLightSampleWithTypeHint RAB_GetLightSampleWithTypeHintBase
 #endif
@@ -43,6 +44,7 @@
 
 #undef RAB_GetLightSample
 #undef RAB_GetPortalSpaceLightSample
+#undef RAB_LoadReservoir
 #undef RAB_GetLightSampleWithTypeHint
 #undef RAB_LoadGIReservoir
 #undef RAB_GetGBufferSurface
@@ -63,6 +65,24 @@ RAB_Surface RAB_GetGBufferSurface(ivec2 pixel, bool previousFrame)
   return surface;
 }
 #endif
+
+// The reservoir buffer is zero-filled on creation, and a zero record would unpack as a valid reservoir for light 0.
+// Sparse rendering reuses pixels that have not written a reservoir since then, so a zero record is read as empty.
+// A written reservoir for light 0 is not affected, since holding a sample makes its M at least 1, which keeps data1 nonzero.
+RTXDI_Reservoir RAB_LoadReservoir(int2 pixel, int page)
+{
+#ifdef RAB_HAS_RTXDI_RESERVOIRS
+  const RTXDI_PackedReservoir packedReservoir = RtxdiReservoirBuffer[RTXDI_ReservoirPositionToPointer(pixel, cb.camera.resolution, page)];
+  if (all((packedReservoir.data0 | packedReservoir.data1) == 0u))
+  {
+    return RTXDI_EmptyReservoir();
+  }
+
+  return RTXDI_UnpackReservoir(packedReservoir);
+#else
+  return RTXDI_EmptyReservoir();
+#endif
+}
 
 #ifdef RESTIR_GI_PREVIOUS_FRAME_PAGE
 ReSTIRGI_Reservoir RAB_LoadGIReservoir(int2 pixel, int page)

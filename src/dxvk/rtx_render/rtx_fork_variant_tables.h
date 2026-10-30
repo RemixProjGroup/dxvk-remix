@@ -48,7 +48,7 @@ namespace dxvk {
     bool noEntryForModeKey = false;  // only an entry without mode test (Full) matches the mode key
   };
 
-  inline bool variantEntryMatchesModeKey(const VariantTableEntry& entry, const uint32_t modeKey) {
+  constexpr bool variantEntryMatchesModeKey(const VariantTableEntry& entry, const uint32_t modeKey) {
     return (modeKey & entry.modeMask) == entry.modeKey;
   }
 

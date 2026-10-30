@@ -118,6 +118,21 @@ namespace dxvk {
       return m_viewFrames[index] != 0 ? &m_views[index] : nullptr;
     }
 
+    const Matrix4* CameraClassifier::skinningView(CameraClass camera, bool* thisFrame) const {
+      const uint32_t own = camera < CameraClass::Unknown ? uint32_t(camera) : uint32_t(CameraClass::Main);
+      const uint32_t main = uint32_t(CameraClass::Main);
+      uint32_t index = own;
+      if (m_viewFrames[own] != m_frame + 1) {
+        if (m_viewFrames[main] == m_frame + 1 || m_viewFrames[own] == 0 || m_viewFrames[own] < m_frame) {
+          index = main;
+        }
+      }
+      if (thisFrame != nullptr) {
+        *thisFrame = m_viewFrames[index] == m_frame + 1;
+      }
+      return m_viewFrames[index] != 0 ? &m_views[index] : nullptr;
+    }
+
     bool CameraClassifier::firstOfFrame(CameraClass camera) {
       const uint32_t bit = 1u << uint32_t(camera);
       const bool first = (m_fed & bit) == 0;

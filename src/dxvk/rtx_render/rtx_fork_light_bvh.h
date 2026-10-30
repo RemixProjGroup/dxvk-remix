@@ -42,11 +42,13 @@ namespace dxvk {
 
   class LightBvh {
   public:
-    RTX_OPTION("rtx.lightSampling", LightSamplingMode, mode, LightSamplingMode::LightBVH,
+    RTX_OPTION("rtx.lightSampling", LightSamplingMode, mode, LightSamplingMode::RTXDI,
                "The light selection method for direct lighting and NEE.\n"
-               "0: RTXDI. ReSTIR DI on the primary surface, and RIS over the light list elsewhere.\n"
+               "0: RTXDI. ReSTIR DI on the primary surface, and RIS over the light list elsewhere. "
+               "Gives the best direct lighting quality in most scenes.\n"
                "1: LightBVH. Light BVH sampling (by bounds, power and orientation, as in PBRT 4th edition) on the "
-               "primary surface and for indirect NEE. The RTXDI passes are skipped. Scales better to many lights.\n"
+               "primary surface and for indirect NEE. The RTXDI passes are skipped. Scales better to many lights, "
+               "but its direct lighting is lower quality than RTXDI's in many scenes.\n"
                "3: Auto. RTXDI while the active light count is low, LightBVH once it reaches "
                "rtx.lightSampling.autoLightCountThreshold (see also rtx.lightSampling.autoHysteresisLights and "
                "rtx.lightSampling.autoSwitchDelayFrames).");

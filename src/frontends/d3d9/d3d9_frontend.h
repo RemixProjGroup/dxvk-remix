@@ -65,6 +65,9 @@ namespace dxvk {
         RasterOnly,         // A Direct object whose draw is also a raster service (sky): replayed, not described
         MergePass,          // An opaque draw after a non-opaque draw of a Direct object: its merged pass
         PerDraw,            // a host-marked draw: described on the scene's transient lane for this frame only
+        // A repeat of a Direct object prepared in full for the change test's self-check: compared with the scene's
+        // copy and then handled as an Update.
+        VerifyRepeat,
       };
 
       // What a full preparation derived for a draw, kept per object so a skipped draw can repeat its D3D9-thread

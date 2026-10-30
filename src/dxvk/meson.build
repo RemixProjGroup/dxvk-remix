@@ -376,6 +376,7 @@ dxvk_src = files([
   'rtx_render/rtx_options.h',
   'rtx_render/rtx_pathtracer_gbuffer.cpp',
   'rtx_render/rtx_pathtracer_gbuffer.h',
+  'rtx_render/rtx_pathtracer_gbuffer_variants.h',
   'rtx_render/rtx_pathtracer_integrate_direct.cpp',
   'rtx_render/rtx_pathtracer_integrate_direct.h',
   'rtx_render/rtx_pathtracer_integrate_indirect.cpp',

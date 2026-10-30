@@ -109,6 +109,13 @@ namespace dxvk {
       // Returns null when neither was ever set. thisFrame, when given, tells whether the returned camera was set this frame.
       const Matrix4* referenceView(CameraClass camera, bool* thisFrame = nullptr) const;
 
+      // The camera a fixed-function skinned draw's skinning is decomposed with: a camera set this frame comes first,
+      // the draw class's and else Main's, so the draws of one frame share it. Without one, the camera of the draw's
+      // class from the last frame, otherwise Main's.
+      // Returns null when no camera was ever set. thisFrame, when given, tells whether the returned camera was set this
+      // frame.
+      const Matrix4* skinningView(CameraClass camera, bool* thisFrame = nullptr) const;
+
       // True the first time a camera class is seen this frame.
       bool firstOfFrame(CameraClass camera);
 

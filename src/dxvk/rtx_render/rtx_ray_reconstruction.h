@@ -29,13 +29,21 @@ namespace dxvk {
   class DxvkRayReconstruction : public DxvkDLSS {
   public:
     // Note: Values must match NVSDK_NGX_RayReconstruction_Hint_Render_Preset in nvsdk_ngx_defs_dlssd.h.
-    // Presets A/B/C were removed in the SDK and G+ are unused, so only the valid presets are exposed here.
+    // A, B and C are the CNN models. The SDK header no longer defines them, and only nvngx_dlssd.dll
+    // versions before 310.4 accept them. G and later are unused.
     enum class RayReconstructionPreset : uint32_t {
       Default = 0,
+      A = 1,
+      B = 2,
+      C = 3,
       D = 4,
       E = 5,
       F = 6,
     };
+
+    static bool isCnnPreset(RayReconstructionPreset preset) {
+      return preset == RayReconstructionPreset::A || preset == RayReconstructionPreset::B || preset == RayReconstructionPreset::C;
+    }
 
     explicit DxvkRayReconstruction(DxvkDevice* device);
 
@@ -79,7 +87,10 @@ namespace dxvk {
                  "This suppresses ghosting from the water's per-frame normal variation, but can introduce shimmering on objects seen through or near the water, so it is disabled by default.\n"
                  "Enable it for content whose animated water ghosts noticeably.");
     RTX_OPTION_ARGS("rtx.rayreconstruction", RayReconstructionPreset, preset, RayReconstructionPreset::Default,
-                    "Render preset for Ray Reconstruction. Default = 0 (DLSS picks the best preset), D = 4, E = 5, F = 6.",
+                    "Render preset for Ray Reconstruction. Default = 0 (DLSS picks the best preset), A = 1, B = 2, C = 3, D = 4, E = 5, F = 6.\n"
+                    "A, B and C are the CNN models, which cost less than the transformer models on older and mobile GPUs.\n"
+                    "They need an nvngx_dlssd.dll older than version 310.4 in the runtime folder (.trex).\n"
+                    "With a newer DLL they fall back to Default and log a warning.",
                     args.environment = "RTX_RAY_RECONSTRUCTION_PRESET",
                     args.flags = RtxOptionFlags::UserSetting);
 
@@ -91,6 +102,7 @@ namespace dxvk {
 
     bool                        m_biasCurrentColorEnabled = true;
     RayReconstructionPreset     m_prevPreset;
+    bool                        m_cnnPresetWarningLogged = false;
 
     Rc<DxvkBuffer> m_constants;
     std::unique_ptr<NGXRayReconstructionContext> m_rayReconstructionContext;

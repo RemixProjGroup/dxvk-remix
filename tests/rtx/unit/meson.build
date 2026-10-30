@@ -144,4 +144,9 @@ exe = executable('test_legacy_material_fresnel', files('test_legacy_material_fre
 test('test_legacy_material_fresnel', exe, env: test_env)
 tests += exe
 
+# The RayQuery G-buffer slim variant coverage over every feature combination (self-contained, no runtime link).
+exe = executable('test_gbuffer_variant_coverage',  files('test_gbuffer_variant_coverage.cpp'),  dependencies : test_unit_deps, win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_gbuffer_variant_coverage', exe, env: test_env)
+tests += exe
+
 alias_target('unit_tests', tests)
