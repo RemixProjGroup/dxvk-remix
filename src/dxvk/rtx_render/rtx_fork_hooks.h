@@ -250,8 +250,10 @@ namespace dxvk {
     // The command stream then uploads every mip and registers the texture with the texture manager
     // and the ImGui texture catalog under info->hash.
     // Implementation in rtx_fork_api_entry.cpp.
+    // The caller does not hold apiMutex. It is taken only to queue the upload, in the documented lock order.
     remixapi_ErrorCode createTexture(
       RemixApiDevice*         remixDevice,
+      dxvk::mutex&            apiMutex,
       const remixapi_TextureInfo* info,
       remixapi_TextureHandle*  out_handle);
 

@@ -81,7 +81,18 @@ void Direct3DDevice9Ex_LSS<EnableSync>::onDestroy() {
   assert(getRef<D3DRefCounted::Ref::Object>() == 0 &&
          "Destroying an LSS device object with underlying D3D9 object refcount > 0!");
   unregisterLiveDevice();
-   ClientMessage c { Commands::IDirect3DDevice9Ex_Destroy, getId() };
+  DeviceBridge::ResponseTransaction responseTransaction;
+  UID currentUID = 0;
+  {
+    ClientMessage c { Commands::IDirect3DDevice9Ex_Destroy, getId() };
+    currentUID = c.get_uid();
+  }
+  // The caller can destroy its window once Release returns, so all queued presents must finish first.
+  if (gbBridgeRunning &&
+      DeviceBridge::waitForCommandAndDiscard(Commands::Bridge_Ack, GlobalOptions::getAckTimeout(),
+                                             nullptr, true, currentUID) != Result::Success) {
+    Logger::warn("Server did not acknowledge device destruction before the client released it.");
+  }
 }
 
 template<bool EnableSync>
@@ -386,6 +397,7 @@ BOOL Direct3DDevice9Ex_LSS<EnableSync>::ShowCursor(BOOL bShow) {
   }
   if (GlobalOptions::getSendAllServerResponses()) {
     WAIT_FOR_SERVER_RESPONSE("ShowCursor()", prevShow, currentUID);
+    DeviceBridge::get_data();
     DeviceBridge::pop_front();
   }
 
@@ -536,6 +548,31 @@ HRESULT syncOnPresent() {
     }
   }
   return S_OK;
+}
+
+// Requires gPresentMutex to be held by the caller.
+HRESULT waitForPendingPresents() {
+  if (!gbBridgeRunning || !GlobalOptions::getPresentSemaphoreEnabled()) {
+    return S_OK;
+  }
+
+  const size_t framesAhead = GlobalOptions::getPresentSemaphoreMaxFrames();
+  size_t acquiredCredits = 0;
+  HRESULT result = S_OK;
+  while (acquiredCredits < framesAhead) {
+    result = syncOnPresent();
+    if (result != S_OK) {
+      break;
+    }
+    ++acquiredCredits;
+  }
+
+  // Collecting every credit drains the queued presents. The credits are returned for the other swapchains.
+  if (acquiredCredits) {
+    gpPresent->release(static_cast<LONG>(acquiredCredits));
+  }
+
+  return result;
 }
 
 template<bool EnableSync>
@@ -1044,9 +1081,10 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::SetRenderTarget(DWORD RenderTargetInd
   DeviceBridge::ResponseTransaction responseTransaction;
   UID currentUID = 0;
   {
+    // The state, the command and the viewport and scissor invalidation form one step.
+    BRIDGE_DEVICE_LOCKGUARD();
     UID id = 0;
     {
-      BRIDGE_DEVICE_LOCKGUARD();
       if (pLssRenderTarget) {
         m_state.renderTargets[RenderTargetIndex] = MakeD3DAutoPtr(pLssRenderTarget);
         id = pLssRenderTarget->getId();
@@ -2655,6 +2693,9 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreateVertexShader(CONST DWORD* pFunc
     return D3DERR_INVALIDCALL;
 
   CommonShader shader(pFunction);
+  if (!shader.isValid())
+    return D3DERR_INVALIDCALL;
+
   if (D3DSHADER_VERSION_MAJOR(m_caps.VertexShaderVersion) < shader.getMajorVersion())
     return D3DERR_INVALIDCALL;
 
@@ -3083,6 +3124,9 @@ HRESULT Direct3DDevice9Ex_LSS<EnableSync>::CreatePixelShader(CONST DWORD* pFunct
     return D3DERR_INVALIDCALL;
 
   CommonShader shader(pFunction);
+  if (!shader.isValid())
+    return D3DERR_INVALIDCALL;
+
   if (D3DSHADER_VERSION_MAJOR(m_caps.PixelShaderVersion) < shader.getMajorVersion())
     return D3DERR_INVALIDCALL;
 

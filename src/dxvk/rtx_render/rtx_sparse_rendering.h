@@ -48,15 +48,51 @@ namespace dxvk {
         "WhiteNoise (0): wangHash ~ white-noise.\n"
         "BlueNoise128x128x64x8 (1): 8 bit 128x128 blue-noise 64 frame length.");
 
-      RTX_OPTION_ARGS("rtx.sparseRendering", float, samplingRate, 1.0f,
+      RTX_OPTION_ARGS("rtx.sparseRendering", float, samplingRate, 0.357f,
         "Per-pixel sampling rate shared by primary direct and indirect lighting.\n"
+        "When enableAdaptiveSamplingRate is set, it applies at the reference render resolution and other render resolutions scale it, see samplingRateResolutionExponent.\n"
+        "Graphics presets set it together with samplingRateResolutionExponent. The default is the rate the High preset uses at 4K with DLSS Auto.\n"
         "Lower values boost performance at the cost of image detail and temporal stability.\n"
-        "Range [0.0625, 1.0]. Rates below ~0.2 tend to look bad and yield diminishing perf returns.",
+        "Range [0.0625, 1.0]. Rates below ~0.2 tend to suffer from undersampling and yield diminishing performance returns.\n"
+        "With enableAdaptiveSamplingRate, sparse rendering turns off when the scaled rate exceeds maxSamplingRate.",
         args.environment = "RTX_SPARSE_RENDERING_SAMPLING_RATE",
         // 1/255 is the absolute minimum, but 1/16 is a more reasonable lower bound for image quality. Even 1/16 will show temporal instabilities but tends to not be catastrophic.
         // Second, there are diminishing returns on performance with lower rates so aggressive rates don't provide much more performance but can cause very bad image quality.
         args.minValue = 1.0f / 16.0f,
         args.maxValue = 1.0f);
+
+      RTX_OPTION("rtx.sparseRendering", bool, enableAdaptiveSamplingRate, false,
+        "Picks the sampling rate for the current render resolution from samplingRate and samplingRateResolutionExponent.\n"
+        "Use the quality option to tune the balance of performance and quality further.\n"
+        "When disabled, samplingRate is used as is at every resolution. The graphics presets enable it.");
+
+      RTX_OPTION_ARGS("rtx.sparseRendering", float, samplingRateResolutionExponent, 0.69f,
+        "Scales samplingRate by the reference render resolution's pixel count divided by the current render resolution's pixel count, raised to this exponent.\n"
+        "Graphics presets set it together with samplingRate.\n"
+        "The scaled rate stays within samplingRate's range. 0 applies samplingRate at every resolution, and 1 keeps the number of active pixels constant.",
+        args.minValue = 0.0f,
+        args.maxValue = 1.0f,
+        args.flags = RtxOptionFlags::UserSetting);
+
+      RTX_OPTION_ARGS("rtx.sparseRendering", float, quality, 0.5f,
+        "Trades performance for image quality when enableAdaptiveSamplingRate is set.\n"
+        "0.5 is the default and recommended value, 1 gives the highest quality and 0 the highest performance.\n"
+        "Values toward 1 can raise the rate above maxSamplingRate, which turns sparse rendering off.\n"
+        "The scaled rate is already adjusted for each graphics preset and resolution, so this is meant for slight fine tuning.",
+        args.minValue = 0.0f,
+        args.maxValue = 1.0f);
+
+      RTX_OPTION_ARGS("rtx.sparseRendering", float, maxSamplingRate, 0.75f,
+        "With enableAdaptiveSamplingRate, sparse rendering turns off when the scaled samplingRate exceeds this,\n"
+        "since above it the performance gain is no longer worth the loss in image quality.",
+        args.minValue = 1.0f / 16.0f,
+        args.maxValue = 1.0f);
+
+      RTX_OPTION_ARGS("rtx.sparseRendering", bool, enableSparseAwareAlphaBlendSearch, false,
+        "Improves the lighting of semi-transparent surfaces, such as particles and smoke, when sparse rendering is enabled.\n"
+        "The stochastic alpha blend neighbor search keeps its radius at inactive pixels and gets more iterations at lower rates.\n"
+        "Costs a little performance, more so at lower sampling rates. The High and Medium graphics presets enable it.",
+        args.flags = RtxOptionFlags::UserSetting);
 
       // Deprecated per-signal rates - these are migrated to samplingRate via an onChange callback.
       static void deprecatedSamplingRateOnChange(DxvkDevice* device);
@@ -93,7 +129,7 @@ namespace dxvk {
         "Disabling improves performance and, counterintuitively, has been observed to reduce ghosting."
         "In theory it can increase direct lighting noise under animated lighting.");
 
-      RTX_OPTION("rtx.sparseRendering", bool, enableSparseVolumetricsPrimaryHit, true,
+      RTX_OPTION("rtx.sparseRendering", bool, enableSparseVolumetricsPrimaryHit, false,
         "When enabled, volumetric NEE integration at primary-hit pixels uses sparse rendering.");
 
       RTX_OPTION("rtx.sparseRendering", bool, enableSparseVolumetricsPrimaryMiss, false,
@@ -120,6 +156,10 @@ namespace dxvk {
     static bool isEnabledByOptions();
 
     bool resamplesNrcTrainingPaths(bool nrcIsActive) const;
+
+    // Returns the sampling rate that sparse rendering applies this frame.
+    // Returns 1 when sparse rendering does not run, including when the scaled rate exceeds maxSamplingRate.
+    float getSamplingRate() const;
     static bool shouldDeferNrcTrainingSetup(const SparseRenderingArgs& args);
 
     void showImguiSettings();
@@ -143,6 +183,9 @@ namespace dxvk {
     void releaseDownscaledResource() override;
 
   private:
+    // Returns samplingRate scaled for a render resolution with this many pixels.
+    static float calculateSamplingRate(uint32_t pixelCount);
+
     void dispatchActivePixelSamplingRate(RtxContext& ctx, const Resources::RaytracingOutput& rtOutput);
     void dispatchActivePixelMask(RtxContext& ctx, const Resources::RaytracingOutput& rtOutput);
     void dispatchCompactActivePixels(RtxContext& ctx, const Resources::RaytracingOutput& rtOutput);

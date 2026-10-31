@@ -23,12 +23,10 @@
 
 // Non-blocking D3D9 queries through the bridge.
 //
-// One shared block, mapped by both processes:
-// - issuedProcessedUid: the client command UID of the last IDirect3DQuery9::Issue the server has executed. The client
-//   answers D3DQUERYTYPE_EVENT itself: the event is signalled once this has reached the UID of its own Issue.
-// - slots: results of the other query types. The client sends GetData without waiting (FlagBits::AsyncResult); the
-//   server runs the real GetData and writes hresult + data, then publishes the request's sequence number. The client
-//   returns S_FALSE until its sequence number appears, and sends a new request after an S_FALSE answer.
+// One shared block of result slots, mapped by both processes. The client sends GetData without waiting
+// (FlagBits::AsyncResult). The server runs the real GetData, writes hresult and data, then publishes the request's
+// sequence number. The client returns S_FALSE until its sequence number appears, and sends a new request after an
+// S_FALSE answer.
 //
 // Layout is identical in the 32-bit client and the 64-bit server (only 32-bit fields).
 
@@ -50,8 +48,6 @@ namespace bridge_util {
   struct QuerySharedBlock {
     static constexpr uint32_t kMaxSlots = 4096;
 
-    std::atomic<uint32_t> issuedProcessedUid;
-    uint32_t pad[15];  // keep the slots off the counter's cache line
     QueryResultSlot slots[kMaxSlots];
   };
 
@@ -72,9 +68,4 @@ namespace bridge_util {
     // Client: request sequence numbers, never 0.
     static uint32_t nextSeq();
   };
-
-  // Wrap-safe "a is at or after b" for 32-bit UIDs.
-  inline bool uidReached(uint32_t a, uint32_t b) {
-    return static_cast<int32_t>(a - b) >= 0;
-  }
 }

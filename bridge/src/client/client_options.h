@@ -83,9 +83,8 @@ namespace ClientOptions {
     return bridge_util::Config::getOption<bool>("client.optimizedDynamicLock", false);
   }
 
-  // Non-blocking queries: event queries are answered on the client from the
-  // server's processed-Issue counter, other queries through shared result slots. False = every GetData is a
-  // blocking round trip, as before. Read once per query object.
+  // Non-blocking queries: results arrive through shared result slots.
+  // False makes every GetData a blocking round trip. Read once per query object.
   inline bool getAsyncQueries() {
     return bridge_util::Config::getOption<bool>("client.asyncQueries", true);
   }

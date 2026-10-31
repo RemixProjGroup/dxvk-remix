@@ -25,6 +25,9 @@
 // recognize the draw's object from frame to frame. A frontend fills the record from its
 // bound state on its own thread. It reads no vertex data.
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
 
 #include "resource_stamp.h"
@@ -99,6 +102,13 @@ namespace dxvk {
       float skinRadius = 0.f;
       uint32_t skinFirstBone = 0;
       uint32_t skinBoneCount = 0;
+      // Fixed-function skinning: a bone the draw uses is not finite, so its skinned vertices would be too. Not part of
+      // any key.
+      bool skinNonFinite = false;
+      // Fixed-function skinning: what places the skinned geometry besides the bones, the draw's view relative to the
+      // camera its skinning is decomposed with (0 when they are the same). The frontend sets it and adds it to the
+      // inputs, so a draw whose root moves only in its view is not a repeat.
+      XXH64_hash_t skinViewHash = 0;
       // A coarse-keyed draw's place for the instance matcher: the world position of its first vertex, or the world
       // translation when that cannot be read. A draw whose vertices are already in world space has an identity world
       // matrix, so its translation does not tell its objects apart. Not part of any key.
@@ -238,13 +248,71 @@ namespace dxvk {
             h = XXH3_64bits_withSeed(&streams[i].buffer.version, sizeof(uint64_t), h);
           }
         }
-        const XXH64_hash_t parts[7] = { indices.version, psBytecode, materialKey, includeVsConstants ? vsConstants : 0,
-                                        texgenMode, extra, boneHash };
+        const XXH64_hash_t parts[8] = { indices.version, psBytecode, materialKey, includeVsConstants ? vsConstants : 0,
+                                        texgenMode, extra, boneHash, skinViewHash };
         h = XXH3_64bits_withSeed(parts, sizeof(parts), h);
         h = XXH3_64bits_withSeed(&textureTransform, sizeof(textureTransform), h);
         return includeWorld ? XXH3_64bits_withSeed(&objectToWorld, sizeof(objectToWorld), h) : h;
       }
     };
+
+    // Where a fixed-function skinned draw is, from the translations of the bones it uses: their per-axis median, and the
+    // largest distance from it of a bone that is no farther than eight times the median distance. A bone far from the
+    // others, as a game parks the bones of hidden parts, then moves neither value. Bones that are not finite are left
+    // out.
+    // Returns false when none of the bones is finite.
+    inline bool skinPlacement(const Matrix4* bones, uint32_t count, Vector3& position, float& radius) {
+      constexpr uint32_t kMaxBones = 256;
+      std::array<float, kMaxBones> axis[3];
+      std::array<Vector3, kMaxBones> points;
+      uint32_t n = 0;
+      for (uint32_t i = 0; i < count && i < kMaxBones; ++i) {
+        const Vector3 t = bones[i][3].xyz();
+        if (std::isfinite(t.x) && std::isfinite(t.y) && std::isfinite(t.z)) {
+          points[n] = t;
+          axis[0][n] = t.x;
+          axis[1][n] = t.y;
+          axis[2][n] = t.z;
+          ++n;
+        }
+      }
+      if (n == 0) {
+        return false;
+      }
+      const auto median = [n](std::array<float, kMaxBones>& values) {
+        float* const middle = values.data() + n / 2;
+        std::nth_element(values.data(), middle, values.data() + n);
+        return *middle;
+      };
+      position = Vector3(median(axis[0]), median(axis[1]), median(axis[2]));
+      std::array<float, kMaxBones>& distances = axis[0];
+      for (uint32_t i = 0; i < n; ++i) {
+        distances[i] = length(points[i] - position);
+      }
+      const float limit = 8.f * median(distances);
+      radius = 0.f;
+      for (uint32_t i = 0; i < n; ++i) {
+        const float distance = length(points[i] - position);
+        if (distance <= limit) {
+          radius = std::max(radius, distance);
+        }
+      }
+      return true;
+    }
+
+    // True when every element of the bones is finite.
+    inline bool bonesFinite(const Matrix4* bones, uint32_t count) {
+      for (uint32_t i = 0; i < count; ++i) {
+        for (uint32_t r = 0; r < 4; ++r) {
+          for (uint32_t c = 0; c < 4; ++c) {
+            if (!std::isfinite(bones[i][r][c])) {
+              return false;
+            }
+          }
+        }
+      }
+      return true;
+    }
 
   } // namespace translator
 } // namespace dxvk

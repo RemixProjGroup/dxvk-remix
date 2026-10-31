@@ -420,6 +420,12 @@ namespace dxvk {
           m_graphTopologies.insert_or_assign(hash, std::move(topo));
         }
 
+        // Only unfiltered mesh walks produce secret metadata.
+        // Filtered hot reloads skip the secret pass, so they keep the live list.
+        if (changes.fullMeshRebuild || !src.m_secretReplacements.empty()) {
+          m_secretReplacements = std::move(src.m_secretReplacements);
+        }
+
         for (const auto hash : changes.dirtyMatHashes) {
           if (src.m_materials.find(hash) == src.m_materials.end()) {
             auto it = m_materials.find(hash);

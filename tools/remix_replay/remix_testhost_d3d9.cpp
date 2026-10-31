@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #define XXH_INLINE_ALL
@@ -156,9 +157,9 @@ namespace {
     }
   }
 
-  enum class Tex : uint32_t { Ground, Crate, Terrain, Emitter, PortalA, PortalB, Cutout, Light, Count };
+  enum class Tex : uint32_t { Ground, Crate, Terrain, Emitter, PortalA, PortalB, Cutout, Light, Sky, Count };
   constexpr const char* kTexNames[uint32_t(Tex::Count)] = { "ground", "crate", "terrain", "emitter", "portalA", "portalB",
-                                                            "cutout", "light" };
+                                                            "cutout", "light", "sky" };
 
   // A8R8G8B8 checkers, one colour pair per kind, so every kind has its own texture hash.
   // The cutout's second colour has alpha 0, so an alpha-tested draw with it asks for opacity micromaps.
@@ -166,7 +167,7 @@ namespace {
     static const uint32_t kColours[uint32_t(Tex::Count)][2] = {
       { 0xFFC8C8C8u, 0xFF282828u }, { 0xFFDC3C1Eu, 0xFFF0C828u }, { 0xFF3C8C28u, 0xFF785028u },
       { 0xFFF0F0F0u, 0xFF3060F0u }, { 0xFF2080FFu, 0xFF103060u }, { 0xFFFF8020u, 0xFF603010u },
-      { 0xFF28A050u, 0x00000000u }, { 0xFFFFE080u, 0xFFA06010u } };
+      { 0xFF28A050u, 0x00000000u }, { 0xFFFFE080u, 0xFFA06010u }, { 0xFF90C0F0u, 0xFFA0D0FFu } };
     std::vector<uint32_t> px(kTexSize * kTexSize);
     for (uint32_t y = 0; y < kTexSize; ++y) {
       for (uint32_t x = 0; x < kTexSize; ++x) {
@@ -1235,6 +1236,349 @@ namespace {
     return 0;
   }
 
+  // ---- fixed-function skinning cases ------------------------------------------------------------------------------
+
+  // Which skinning case runSkinCase draws.
+  enum class SkinCase {
+    // Two posed characters whose roots move only in their draws' view matrices, with bones that never change.
+    ViewWalk,
+    // An elevator-like model of one bone palette: the root (bone 0, the world matrix) stands still for 40 frames and rises
+    // for 80 in turns, the body (bones 1-3) and the door (bone 4, one bone) ride on it, and a fixture (bones 5-6) stays
+    // where it is.
+    RootMotion,
+    // Two animated characters whose palettes hold a parked bone far away (1e29 units, turning every frame) that every
+    // vertex names with a zero weight.
+    Parked,
+    // An animated character whose bones are not finite in the event frame, as uninitialized bone matrices are.
+    Uninitialized,
+    // Two characters of one mesh and one material that walk through each other again and again.
+    Swap,
+    // A view model of two skinned draws (hands and gun) from one bone palette with its own field of view. The gun recoils
+    // and the main camera kicks while it fires (20 of every 60 frames), and a muzzle flash, a plain view-model draw,
+    // follows the gun then.
+    SharedPalette,
+  };
+
+  // A column of `segments` boxes. Segment k blends bones first + k and the next two (clamped to the last), with weights
+  // w0, w1 and the rest. lastBone, when not negative, is the third bone of every vertex instead.
+  std::vector<SkinVertex> skinColumn(std::vector<uint16_t>& idx, int first, int segments, float w0, float w1, int lastBone = -1,
+                                     float x = 0.f) {
+    std::vector<Vertex> plain;
+    std::vector<SkinVertex> v;
+    for (int k = 0; k < segments; ++k) {
+      const size_t from = plain.size();
+      box(plain, idx, x, 0.35f + 0.7f * float(k), 0.f, 0.5f, 0.7f, 0.5f);
+      for (size_t i = from; i < plain.size(); ++i) {
+        const Vertex& p = plain[i];
+        SkinVertex s {};
+        s.x = p.x; s.y = p.y; s.z = p.z;
+        s.w0 = w0; s.w1 = w1;
+        s.bones[0] = uint8_t(first + k);
+        s.bones[1] = uint8_t(first + std::min(k + 1, segments - 1));
+        s.bones[2] = uint8_t(lastBone >= 0 ? lastBone : first + std::min(k + 2, segments - 1));
+        s.bones[3] = 0;
+        s.nx = p.nx; s.ny = p.ny; s.nz = p.nz;
+        s.u = p.u; s.v = p.v;
+        v.push_back(s);
+      }
+    }
+    return v;
+  }
+
+  // A box whose vertices all use one bone.
+  std::vector<SkinVertex> skinBox(std::vector<uint16_t>& idx, int bone, float cx, float cy, float cz, float sx, float sy, float sz) {
+    std::vector<Vertex> plain;
+    box(plain, idx, cx, cy, cz, sx, sy, sz);
+    std::vector<SkinVertex> v;
+    for (const Vertex& p : plain) {
+      SkinVertex s {};
+      s.x = p.x; s.y = p.y; s.z = p.z;
+      s.w0 = 1.f;
+      s.bones[0] = s.bones[1] = s.bones[2] = s.bones[3] = uint8_t(bone);
+      s.nx = p.nx; s.ny = p.ny; s.nz = p.nz;
+      s.u = p.u; s.v = p.v;
+      v.push_back(s);
+    }
+    return v;
+  }
+
+  Mesh skinMesh(Host& h, const std::vector<SkinVertex>& v, const std::vector<uint16_t>& idx) {
+    Mesh mesh = h.makeMesh(v, idx, D3DPOOL_MANAGED, 0);
+    const D3DVERTEXELEMENT9 elements[] = {
+      { 0, 0, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0 },
+      { 0, 12, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_BLENDWEIGHT, 0 },
+      { 0, 20, D3DDECLTYPE_UBYTE4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_BLENDINDICES, 0 },
+      { 0, 24, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL, 0 },
+      { 0, 36, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0 },
+      D3DDECL_END()
+    };
+    const HRESULT hr = h.m_device->CreateVertexDeclaration(elements, &mesh.decl);
+    if (FAILED(hr)) {
+      fail("CreateVertexDeclaration", hr);
+    }
+    return mesh;
+  }
+
+  // Draws a skinned mesh with indexed vertex blending.
+  void drawSkin(Host& h, const Mesh& mesh, IDirect3DTexture9* tex, DWORD vertexBlend) {
+    h.m_device->SetRenderState(D3DRS_INDEXEDVERTEXBLENDENABLE, TRUE);
+    h.m_device->SetRenderState(D3DRS_VERTEXBLEND, vertexBlend);
+    h.m_device->SetTexture(0, tex);
+    h.m_device->SetStreamSource(0, mesh.vb, 0, mesh.stride);
+    h.m_device->SetIndices(mesh.ib);
+    h.m_device->SetVertexDeclaration(mesh.decl);
+    h.m_device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, mesh.vertices, 0, mesh.primitives);
+    h.m_device->SetRenderState(D3DRS_VERTEXBLEND, D3DVBF_DISABLE);
+    h.m_device->SetRenderState(D3DRS_INDEXEDVERTEXBLENDENABLE, FALSE);
+  }
+
+  void setBone(Host& h, int bone, const D3DMATRIX& m) {
+    h.m_device->SetTransform(D3DTS_WORLDMATRIX(bone), &m);
+  }
+
+  D3DMATRIX rotationY(float a) {
+    D3DMATRIX m = identity();
+    const float c = std::cos(a), s = std::sin(a);
+    m._11 = c; m._13 = -s;
+    m._31 = s; m._33 = c;
+    return m;
+  }
+
+  D3DMATRIX rotationX(float a) {
+    D3DMATRIX m = identity();
+    const float c = std::cos(a), s = std::sin(a);
+    m._22 = c; m._23 = s;
+    m._32 = -s; m._33 = c;
+    return m;
+  }
+
+  // A pose of a three-bone column at root: bone k bends by `bend` times k.
+  void setColumnPose(Host& h, int first, float bend, const D3DMATRIX& root) {
+    for (int b = 0; b < 3; ++b) {
+      setBone(h, first + b, mul(rotationZ(bend * float(b)), root));
+    }
+  }
+
+  int runSkinCase(Host& h, const D3D9ScenarioArgs& a, SkinCase kind) {
+    Mesh ground = h.ground();
+    Mesh flash = h.quad();
+    std::vector<uint16_t> columnIdx;
+    // Three bones per vertex, the third with a zero weight (Parked names the parked bone 3 there).
+    Mesh column = skinMesh(h, skinColumn(columnIdx, 0, 3, 0.7f, 0.3f, kind == SkinCase::Parked ? 3 : -1), columnIdx);
+    std::vector<uint16_t> bodyIdx, doorIdx, fixtureIdx, handsIdx, gunIdx;
+    Mesh body = skinMesh(h, skinColumn(bodyIdx, 1, 3, 0.7f, 0.3f), bodyIdx);
+    Mesh door = skinMesh(h, skinBox(doorIdx, 4, 0.f, 1.f, -0.6f, 1.2f, 2.f, 0.1f), doorIdx);
+    Mesh fixture = skinMesh(h, skinColumn(fixtureIdx, 5, 2, 0.8f, 0.2f, -1, 2.f), fixtureIdx);
+    Mesh hands = skinMesh(h, skinColumn(handsIdx, 0, 3, 0.7f, 0.3f), handsIdx);
+    Mesh gun = skinMesh(h, skinColumn(gunIdx, 3, 3, 0.7f, 0.3f), gunIdx);
+
+    const D3DMATRIX camView = lookAt({ 0.f, 2.5f, -4.f }, { 0.f, 1.f, 5.f });
+    const D3DMATRIX mainProjection = h.m_projection;
+    const D3DMATRIX viewModelProjection = perspective(kPi / 4.f, h.m_aspect, 0.05f, 100.f);
+    bool announced = false;
+    const auto announce = [&](const char* what, int frame) {
+      if (!announced) {
+        std::printf("event: %s at frame %d\n", what, frame);
+        announced = true;
+      }
+    };
+
+    for (int frame = 0; frame < a.frames; ++frame) {
+      h.begin();
+      const float t = float(frame);
+      const bool firing = kind == SkinCase::SharedPalette && (frame % 60) < 20;
+      // The main camera kicks up while the gun fires. The view model is drawn with the camera without the kick.
+      const D3DMATRIX mainView = firing ? mul(camView, rotationX(0.04f + 0.01f * float(frame % 60))) : camView;
+      h.m_device->SetTransform(D3DTS_PROJECTION, &mainProjection);
+      h.setView(mainView);
+      h.draw(ground, identity(), h.texture(Tex::Ground));
+
+      switch (kind) {
+      case SkinCase::ViewWalk:
+        for (int c = 0; c < 2; ++c) {
+          const float x = (c == 0 ? -2.f : 2.f) + 1.5f * std::sin(0.03f * t + 1.7f * float(c));
+          h.setView(mul(translation(x, 0.f, 4.f + float(c)), camView));
+          setColumnPose(h, 0, 0.1f * float(c + 1), identity());
+          drawSkin(h, column, h.texture(c == 0 ? Tex::Crate : Tex::Ground), D3DVBF_2WEIGHTS);
+        }
+        h.setView(camView);
+        break;
+      case SkinCase::RootMotion: {
+        // The root stands still for the first 40 frames of every 120 and rises for the rest.
+        const int moving = (frame / 120) * 80 + std::max(0, frame % 120 - 39);
+        const float rise = 0.02f * float(moving);
+        const D3DMATRIX root = translation(-1.f, std::fmod(rise, 3.f), 5.f);
+        setBone(h, 0, root);
+        setColumnPose(h, 1, 0.1f, root);
+        setBone(h, 4, mul(translation(0.6f * std::sin(0.02f * t), 0.f, 0.f), root));
+        setBone(h, 5, translation(1.f, 0.f, 6.f));
+        setBone(h, 6, mul(rotationZ(0.2f), translation(1.f, 0.f, 6.f)));
+        drawSkin(h, body, h.texture(Tex::Crate), D3DVBF_2WEIGHTS);
+        drawSkin(h, door, h.texture(Tex::Ground), D3DVBF_0WEIGHTS);
+        drawSkin(h, fixture, h.texture(Tex::Terrain), D3DVBF_1WEIGHTS);
+        break;
+      }
+      case SkinCase::Parked:
+        for (int c = 0; c < 2; ++c) {
+          setColumnPose(h, 0, 0.15f * std::sin(0.05f * t + 1.3f * float(c)), translation(c == 0 ? -1.5f : 1.5f, 0.f, 5.f));
+          // Bone 3 is parked far away and turns with the frame, as a hidden part's bone that follows the body's yaw.
+          setBone(h, 3, mul(translation(2.9e29f, 0.f, 2.7e29f), rotationY(0.17f * t + float(c))));
+          drawSkin(h, column, h.texture(c == 0 ? Tex::Crate : Tex::Ground), D3DVBF_2WEIGHTS);
+        }
+        break;
+      case SkinCase::Uninitialized: {
+        const bool garbage = frame == a.eventFrame;
+        if (garbage) {
+          announce("the character's bones are not finite", frame);
+          D3DMATRIX nan {};
+          for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 4; ++j) {
+              nan.m[i][j] = std::numeric_limits<float>::quiet_NaN();
+            }
+          }
+          for (int b = 0; b < 3; ++b) {
+            setBone(h, b, nan);
+          }
+        } else {
+          setColumnPose(h, 0, 0.15f * std::sin(0.05f * t), translation(0.f, 0.f, 5.f));
+        }
+        drawSkin(h, column, h.texture(Tex::Crate), D3DVBF_2WEIGHTS);
+        break;
+      }
+      case SkinCase::Swap: {
+        // Each walks 6 units across and back over 240 frames, so the two pass through each other twice.
+        const float phase = float(frame % 240) / 120.f;
+        const float s = phase < 1.f ? phase : 2.f - phase;
+        for (int c = 0; c < 2; ++c) {
+          const float x = c == 0 ? -3.f + 6.f * s : 3.f - 6.f * s;
+          setColumnPose(h, 0, 0.15f * std::sin(0.05f * t + 1.3f * float(c)), translation(x, 0.f, 5.f + 0.3f * float(c)));
+          drawSkin(h, column, h.texture(Tex::Crate), D3DVBF_2WEIGHTS);
+        }
+        break;
+      }
+      case SkinCase::SharedPalette: {
+        // The view model's bones sit in front of the camera. The gun's bones slide back while it fires.
+        h.m_device->SetTransform(D3DTS_PROJECTION, &viewModelProjection);
+        h.setView(camView);
+        const D3DMATRIX place = translation(0.4f, 1.9f, -2.8f);
+        setColumnPose(h, 0, 0.1f, place);
+        const float recoil = firing ? 0.05f * std::sin(0.5f * float(frame % 60)) : 0.f;
+        setColumnPose(h, 3, 0.05f, mul(translation(0.f, 0.f, -recoil), place));
+        drawSkin(h, hands, h.texture(Tex::Ground), D3DVBF_2WEIGHTS);
+        drawSkin(h, gun, h.texture(Tex::Crate), D3DVBF_2WEIGHTS);
+        if (firing) {
+          h.draw(flash, scaled(0.1f, 0.4f, 2.2f, -2.4f), h.texture(Tex::Emitter));
+        }
+        h.m_device->SetTransform(D3DTS_PROJECTION, &mainProjection);
+        break;
+      }
+      }
+      h.end();
+    }
+    for (Mesh* m : { &ground, &flash, &column, &body, &door, &fixture, &hands, &gun }) {
+      m->destroy();
+    }
+    return 0;
+  }
+
+  // ---- props batched through one dynamic vertex buffer ----------------------------------------------------------------
+
+  // 16 alpha-tested bushes in world space, appended to one dynamic vertex buffer each frame (DISCARD at the frame's first
+  // draw, NOOVERWRITE after it) and drawn from their own place in it. Even bushes are triangle strips drawn with
+  // DrawPrimitive from their start vertex, odd ones triangle lists drawn with DrawIndexedPrimitive and a base vertex. Each
+  // bush switches between two and three quads every 30 frames, as a level of detail does, so its object changes its
+  // vertex count without moving.
+  int runRingProps(Host& h, const D3D9ScenarioArgs& a) {
+    Mesh ground = h.ground();
+    constexpr int kBushes = 16;
+    constexpr UINT kVertexCapacity = 4096;
+    IDirect3DVertexBuffer9* vb = nullptr;
+    HRESULT hr = h.m_device->CreateVertexBuffer(kVertexCapacity * sizeof(Vertex), D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, kFvf,
+                                                D3DPOOL_DEFAULT, &vb, nullptr);
+    if (FAILED(hr)) {
+      fail("CreateVertexBuffer ring-props", hr);
+    }
+    // Indices of a list of three quads, of which the first two serve the two-quad level.
+    std::vector<uint16_t> listIdx;
+    for (uint16_t q = 0; q < 3; ++q) {
+      const uint16_t b = uint16_t(q * 4);
+      listIdx.insert(listIdx.end(), { b, uint16_t(b + 1), uint16_t(b + 2), b, uint16_t(b + 2), uint16_t(b + 3) });
+    }
+    IDirect3DIndexBuffer9* ib = nullptr;
+    hr = h.m_device->CreateIndexBuffer(UINT(listIdx.size() * sizeof(uint16_t)), 0, D3DFMT_INDEX16, D3DPOOL_MANAGED, &ib, nullptr);
+    if (FAILED(hr)) {
+      fail("CreateIndexBuffer ring-props", hr);
+    }
+    void* p = nullptr;
+    ib->Lock(0, 0, &p, 0);
+    std::memcpy(p, listIdx.data(), listIdx.size() * sizeof(uint16_t));
+    ib->Unlock();
+
+    const D3DMATRIX view = lookAt({ 0.f, 4.f, -6.f }, { 0.f, 0.f, 6.f });
+    std::vector<Vertex> v;
+    for (int frame = 0; frame < a.frames; ++frame) {
+      h.begin();
+      h.setView(view);
+      h.draw(ground, identity(), h.texture(Tex::Ground));
+      const D3DMATRIX world = identity();
+      h.m_device->SetTransform(D3DTS_WORLD, &world);
+      h.m_device->SetTexture(0, h.texture(Tex::Cutout));
+      h.m_device->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE);
+      h.m_device->SetRenderState(D3DRS_ALPHAREF, 127);
+      h.m_device->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_GREATER);
+      h.m_device->SetFVF(kFvf);
+      h.m_device->SetStreamSource(0, vb, 0, sizeof(Vertex));
+      UINT used = 0;
+      for (int b = 0; b < kBushes; ++b) {
+        const float x = -6.f + 4.f * float(b % 4), z = 2.f + 4.f * float(b / 4);
+        const int quads = ((frame / 30 + b) % 2) == 0 ? 2 : 3;
+        const bool strip = (b % 2) == 0;
+        v.clear();
+        for (int q = 0; q < quads; ++q) {
+          // Quad q stands at an angle of q * 60 degrees around the bush's centre.
+          const float angle = kPi / 3.f * float(q);
+          const float dx = 0.6f * std::cos(angle), dz = 0.6f * std::sin(angle);
+          const float y0 = 0.f, y1 = 1.f + 0.1f * float(q);
+          if (strip) {
+            // A strip of quads joined by a degenerate pair.
+            if (q > 0) {
+              v.push_back(v.back());
+              v.push_back({ x - dx, y0, z - dz, 0, 1, 0, 0, 1 });
+            }
+            v.push_back({ x - dx, y0, z - dz, 0, 1, 0, 0, 1 });
+            v.push_back({ x - dx, y1, z - dz, 0, 1, 0, 0, 0 });
+            v.push_back({ x + dx, y0, z + dz, 0, 1, 0, 1, 1 });
+            v.push_back({ x + dx, y1, z + dz, 0, 1, 0, 1, 0 });
+          } else {
+            v.push_back({ x - dx, y0, z - dz, 0, 1, 0, 0, 1 });
+            v.push_back({ x - dx, y1, z - dz, 0, 1, 0, 0, 0 });
+            v.push_back({ x + dx, y1, z + dz, 0, 1, 0, 1, 0 });
+            v.push_back({ x + dx, y0, z + dz, 0, 1, 0, 1, 1 });
+          }
+        }
+        const UINT count = UINT(v.size());
+        if (FAILED(vb->Lock(used * sizeof(Vertex), count * sizeof(Vertex), &p, used == 0 ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE))) {
+          fail("Lock ring-props", E_FAIL);
+        }
+        std::memcpy(p, v.data(), count * sizeof(Vertex));
+        vb->Unlock();
+        if (strip) {
+          h.m_device->DrawPrimitive(D3DPT_TRIANGLESTRIP, used, count - 2);
+        } else {
+          h.m_device->SetIndices(ib);
+          h.m_device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, INT(used), 0, count, 0, UINT(quads * 2));
+        }
+        used += count;
+      }
+      h.m_device->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+      h.end();
+    }
+    release(vb);
+    release(ib);
+    ground.destroy();
+    return 0;
+  }
+
   // ---- crate grid: device Reset and an unpresented stretch --------------------------------------------------------
 
   void drawGrid(Host& h, const Mesh& ground, const Mesh& crate) {
@@ -1611,6 +1955,33 @@ namespace {
     }
     ground.destroy();
     crate.destroy();
+    return 0;
+  }
+
+  // ---- a fogged level under an authored sky ------------------------------------------------------------------------
+
+  // A game fogs its level but not its authored sky. A light blue sky quad (rtx.skyBoxTextures, set by the script) is
+  // drawn first without fog and fills the view. The ground and a crate follow with dense, nearly black linear fog.
+  // The camera looks level, so the upper half of the view shows only the sky.
+  int runSkyFog(Host& h, const D3D9ScenarioArgs& a) {
+    Mesh ground = h.ground();
+    Mesh crate = h.crate();
+    Mesh sky = h.quad();
+    for (int frame = 0; frame < a.frames; ++frame) {
+      h.begin();
+      h.setView(lookAt({ 0.f, 1.5f, -1.f }, { 0.f, 1.5f, 4.f }));
+      h.m_device->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+      h.draw(sky, scaled(1500.f, 0.f, 1.5f, 900.f), h.texture(Tex::Sky));
+      h.m_device->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+      setFog(h, D3DFOG_LINEAR, D3DCOLOR_XRGB(8, 8, 8), 2.f, 30.f, 0.f);
+      h.draw(ground, identity(), h.texture(Tex::Ground));
+      h.draw(crate, translation(0.f, 0.f, 4.f), h.texture(Tex::Crate));
+      setFog(h, D3DFOG_NONE, 0, 0.f, 0.f, 0.f);
+      h.end();
+    }
+    ground.destroy();
+    crate.destroy();
+    sky.destroy();
     return 0;
   }
 
@@ -2122,6 +2493,55 @@ namespace {
     std::fputs(text.c_str(), f);
     std::fclose(f);
   }
+
+  // ---- POM and subsurface material replacements ------------------------------------------------------------------
+
+  // The mod gives the ground's material a height map (parallax occlusion mapping) and the crate's material a
+  // diffusion-profile subsurface layer with a thin-opaque measurement distance, so a frame has POM, thin-opaque and SSS
+  // TLAS content at once.
+  fs::path pomSssModDir(const fs::path& runtime) {
+    return runtime / "rtx-remix" / "mods" / "testhost_d3d9_pom_sss";
+  }
+
+  void writePomSssMod(const fs::path& runtime) {
+    const fs::path dir = pomSssModDir(runtime);
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    writeDds(dir / "ground_albedo.dds", 0xFF6E6450u, 0xFF3C3428u);
+    writeDds(dir / "ground_height.dds", 0xFFFFFFFFu, 0xFF202020u);
+    char groundHash[32];
+    char crateHash[32];
+    std::snprintf(groundHash, sizeof(groundHash), "%016llX", static_cast<unsigned long long>(textureHash(Tex::Ground)));
+    std::snprintf(crateHash, sizeof(crateHash), "%016llX", static_cast<unsigned long long>(textureHash(Tex::Crate)));
+    const std::string shaderHead =
+      "            def Shader \"Shader\"\n            {\n"
+      "                uniform token info:implementationSource = \"sourceAsset\"\n"
+      "                uniform asset info:mdl:sourceAsset = @AperturePBR_Opacity.mdl@\n"
+      "                uniform token info:mdl:sourceAsset:subIdentifier = \"AperturePBR_Opacity\"\n";
+    const std::string text = std::string(
+      "#usda 1.0\n(\n    upAxis = \"Y\"\n)\n\n"
+      "def \"RootNode\"\n{\n    def \"Looks\"\n    {\n        def Material \"mat_") + groundHash + "\"\n        {\n" +
+      shaderHead +
+      "                asset inputs:diffuse_texture = @./ground_albedo.dds@\n"
+      "                asset inputs:height_texture = @./ground_height.dds@\n"
+      "                float inputs:displace_in = 0.05\n"
+      "                token outputs:out\n"
+      "            }\n        }\n"
+      "        def Material \"mat_" + crateHash + "\"\n        {\n" +
+      shaderHead +
+      "                bool inputs:subsurface_diffusion_profile = 1\n"
+      "                float inputs:subsurface_measurement_distance = 0.5\n"
+      "                color3f inputs:subsurface_radius = (0.8, 0.4, 0.2)\n"
+      "                color3f inputs:subsurface_transmittance_color = (0.9, 0.5, 0.4)\n"
+      "                token outputs:out\n"
+      "            }\n        }\n    }\n}\n";
+    FILE* f = _wfopen((dir / "mod.usda").wstring().c_str(), L"wb");
+    if (f == nullptr) {
+      fail("writing the POM and subsurface material mod", E_FAIL);
+    }
+    std::fputs(text.c_str(), f);
+    std::fclose(f);
+  }
 }
 
 void printD3D9Hashes() {
@@ -2138,8 +2558,12 @@ int runD3D9Scenario(const std::wstring& name, const fs::path& runtime, HWND hwnd
   const bool instancer = name == L"instancer";
   const bool replacementReject = name == L"replacement-reject";
   const bool terrainPbr = name == L"terrain-pbr";
+  const bool pomSss = name == L"pom-sss";
   if (terrainPbr) {
     writeTerrainPbrMod(runtime);
+  }
+  if (pomSss) {
+    writePomSssMod(runtime);
   }
   if (instancer) {
     writeInstancerMod(runtime);
@@ -2168,6 +2592,20 @@ int runD3D9Scenario(const std::wstring& name, const fs::path& runtime, HWND hwnd
     rc = runSkinned(host, args, true);
   } else if (name == L"skinned-passenger") {
     rc = runSkinnedPassenger(host, args);
+  } else if (name == L"skinned-view-walk") {
+    rc = runSkinCase(host, args, SkinCase::ViewWalk);
+  } else if (name == L"skinned-root-motion") {
+    rc = runSkinCase(host, args, SkinCase::RootMotion);
+  } else if (name == L"skinned-parked") {
+    rc = runSkinCase(host, args, SkinCase::Parked);
+  } else if (name == L"skinned-uninit") {
+    rc = runSkinCase(host, args, SkinCase::Uninitialized);
+  } else if (name == L"skinned-swap") {
+    rc = runSkinCase(host, args, SkinCase::Swap);
+  } else if (name == L"skinned-shared-palette") {
+    rc = runSkinCase(host, args, SkinCase::SharedPalette);
+  } else if (name == L"ring-props") {
+    rc = runRingProps(host, args);
   } else if (name == L"ring-reorder") {
     rc = runRingReorder(host, args);
   } else if (name == L"ring-static") {
@@ -2188,6 +2626,9 @@ int runD3D9Scenario(const std::wstring& name, const fs::path& runtime, HWND hwnd
     // Ground and crate are both terrain (rtx.terrainTextures lists both textures), and the ground's material has the
     // mod's secondary textures.
     rc = runTagged(host, args, Tex::Terrain, Tex::Crate);
+  } else if (pomSss) {
+    // The ground has the mod's POM material and the crate its subsurface material.
+    rc = runTagged(host, args, Tex::Ground, Tex::Crate);
   } else if (name == L"emitter") {
     rc = runTagged(host, args, Tex::Ground, Tex::Emitter);
   } else if (name == L"portals") {
@@ -2200,6 +2641,8 @@ int runD3D9Scenario(const std::wstring& name, const fs::path& runtime, HWND hwnd
     rc = runInstancer(host, args);
   } else if (name == L"fog") {
     rc = runFog(host, args);
+  } else if (name == L"sky-fog") {
+    rc = runSkyFog(host, args);
   } else if (name == L"lights") {
     rc = runLights(host, args);
   } else if (name == L"per-draw") {
@@ -2237,6 +2680,10 @@ int runD3D9Scenario(const std::wstring& name, const fs::path& runtime, HWND hwnd
   if (terrainPbr) {
     std::error_code ec;
     fs::remove_all(terrainPbrModDir(runtime), ec);
+  }
+  if (pomSss) {
+    std::error_code ec;
+    fs::remove_all(pomSssModDir(runtime), ec);
   }
   return rc;
 }

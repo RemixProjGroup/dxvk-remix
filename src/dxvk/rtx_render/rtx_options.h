@@ -1557,18 +1557,20 @@ namespace dxvk {
                "Splits merged BLAS buckets by a world-space grid with cells of this size, in world units. Each merged "
                "BLAS then holds one cell's geometry, so the BLASes are spatially tight, rays visit fewer of them and a "
                "change rebuilds only its own cell. Instances are placed by the centre of their bounding box. The traced "
-               "result is the same. 0 = off, unless rtx.accel.autoCellSize picks a size.");
+               "result is the same. 0 = rtx.accel.autoCellSize picks the size, or no grid when that is off.");
     // A game-independent default for rtx.mergedBucketCellSize.
-    RTX_OPTION("rtx.accel", bool, autoCellSize, false,
+    RTX_OPTION("rtx.accel", bool, autoCellSize, true,
                "When rtx.mergedBucketCellSize is 0, derives the merged BLAS cell size from rtx.sceneScale, as about "
                "58.5 metres in the game's world units. Keeps merged BLAS cluster rebuilds small in any game without a "
-               "hand-tuned cell size. An explicit rtx.mergedBucketCellSize takes precedence.");
+               "hand-tuned cell size, for API hosts and D3D9 games alike. An explicit rtx.mergedBucketCellSize takes "
+               "precedence.");
     static float effectiveMergedBucketCellSize() {
       const float cellSize = mergedBucketCellSize();
       if (cellSize > 0.f) {
         return cellSize;
       }
-      return autoCellSize() ? 58.5f * getMeterToWorldUnitScale() : 0.f;
+      // The floor keeps a very small scene scale from giving each merged instance its own cell.
+      return autoCellSize() ? std::max(58.5f * getMeterToWorldUnitScale(), 16.f) : 0.f;
     }
     RTX_OPTION("rtx", bool, batchBlasInputBarriers, true,
                "Reduces CPU cost: records the memory barriers for BLAS build inputs once per frame, before the builds, "

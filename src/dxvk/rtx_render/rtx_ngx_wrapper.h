@@ -126,7 +126,23 @@ namespace dxvk {
     // Returns the directories NGX searches for feature DLLs, in search order, joined for display.
     // Returns an empty string before NGX has been initialized.
     std::string getFeatureSearchPathText() const;
-    
+
+    // Returns true when the nvngx_dlssd.dll that NGX uses accepts the CNN Ray Reconstruction presets A to C.
+    // Versions before 310.4 accept them.
+    bool rayReconstructionSupportsCnnPresets() const {
+      return m_rayReconstructionSupportsCnnPresets;
+    }
+
+    // Returns the file version of the nvngx_dlssd.dll that NGX uses, such as "310.2.1.0".
+    // Returns "unknown" when no copy was found or it has no version resource.
+    const std::string& getRayReconstructionLibraryVersion() const {
+      return m_rayReconstructionLibraryVersion;
+    }
+
+    // Looks up which nvngx_dlssd.dll NGX uses and logs it when that changes.
+    // Call it again after creating the feature, because NGX loads the DLL only then.
+    void updateRayReconstructionLibrary();
+
     std::unique_ptr<NGXDLSSContext> createDLSSContext();
     std::unique_ptr<NGXRayReconstructionContext> createRayReconstructionContext();
     std::unique_ptr<NGXDLFGContext> createDLFGContext();
@@ -151,6 +167,10 @@ namespace dxvk {
     void checkDLFGSupport(NVSDK_NGX_Parameter* params);
 
     std::string m_dlfgNotSupportedReason;
+
+    bool m_rayReconstructionSupportsCnnPresets = false;
+    std::string m_rayReconstructionLibraryVersion = "unknown";
+    std::wstring m_rayReconstructionLibraryPath;
 
     // Set up by initialize() and passed to NGX as NVSDK_NGX_FeatureCommonInfo::PathListInfo.
     std::vector<std::wstring> m_featureSearchPaths;

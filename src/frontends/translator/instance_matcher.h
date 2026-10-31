@@ -55,6 +55,12 @@ namespace dxvk {
         // the same content and signature is taken before any other, at exactly this position first, else the nearest,
         // wherever its occurrence index is. A draw whose bytes changed finds no such slot.
         XXH64_hash_t content = 0;
+        // The draw's position is not known (its bones are not finite): it takes the slot of its material drawn in the
+        // previous frame nearest to its occurrence index, which keeps its last position, or a new slot without one.
+        bool positionUnknown = false;
+        // A slot drawn in the previous frame is compared at the position its last movement leads to (its last position
+        // plus its last move), so two objects that pass each other keep their slots.
+        bool predict = false;
         // Out: how the slot was found.
         enum class Tier : uint8_t {
           Occurrence,    // near the occurrence index, or a new slot
@@ -95,6 +101,7 @@ namespace dxvk {
     private:
       struct PositionSlot {
         Vector3 position;
+        Vector3 velocity;           // the move between its last two draws in consecutive frames (zero otherwise)
         XXH64_hash_t signature = 0;
         XXH64_hash_t material = 0;  // the material identity of its last prepared draw (0 = not known)
         uint32_t lastFrame = 0;     // the slot is taken in this frame when lastFrame equals it

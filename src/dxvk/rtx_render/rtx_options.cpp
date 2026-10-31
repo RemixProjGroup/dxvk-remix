@@ -43,8 +43,20 @@
 #include "rtx_sharc.h"
 #include "rtx_fork_sccr_shell.h"
 #include "rtx_sparse_rendering.h"
+#include "rtx_numos_settings.h"
 
 namespace dxvk {
+  namespace {
+    // Sets the sky's GPU cost level (rtx.atmosphere.qualityLevel): 0 is High, 1 Medium, 2 Low.
+    void setNumosQualityLevel(int32_t level) {
+      const NumosSettings::Entry* entry = NumosSettings::find("rtx.atmosphere.qualityLevel");
+      if (entry != nullptr && entry->intOption != nullptr) {
+        entry->intOption->setDeferred(level);
+        Logger::info(str::format("[RTX] Graphics preset sky quality level: ", level, "."));
+      }
+    }
+  }
+
   RtxOptions* RtxOptions::s_instance = nullptr;
   HashRule RtxOptions::s_geometryHashGenerationRule = 0;
   HashRule RtxOptions::s_geometryAssetHashRule = 0;
@@ -533,6 +545,16 @@ namespace dxvk {
       }
     };
 
+    // Sets the sparse rendering rate at the reference render resolution and how it scales with the render resolution.
+    auto applySparseRenderingPreset = [](const float samplingRate,
+                                         const float samplingRateResolutionExponent,
+                                         const bool enableSparseAwareAlphaBlendSearch) {
+      SparseRendering::Options::enableAdaptiveSamplingRate.setDeferred(true);
+      SparseRendering::Options::samplingRate.setDeferred(samplingRate);
+      SparseRendering::Options::samplingRateResolutionExponent.setDeferred(samplingRateResolutionExponent);
+      SparseRendering::Options::enableSparseAwareAlphaBlendSearch.setDeferred(enableSparseAwareAlphaBlendSearch);
+    };
+
     assert(graphicsPreset() != GraphicsPreset::Auto);
 
     RtxGlobalVolumetrics& volumetrics = device->getCommon()->metaGlobalVolumetrics();
@@ -565,6 +587,7 @@ namespace dxvk {
       volumetrics.setConsumerCacheQualityLevel(RtxGlobalVolumetrics::Ultra);
       setIndirectPreset(RtxSharc::QualityPreset::Ultra, NeuralRadianceCache::QualityPreset::Ultra);
       SccrShellManager::setQualityLevel(SccrShellManager::Quality::High);
+      setNumosQualityLevel(0);
       SparseRendering::Options::enableSparseRendering.setDeferred(false);
 
     } else if (graphicsPreset() == GraphicsPreset::High) {
@@ -590,9 +613,10 @@ namespace dxvk {
       volumetrics.setConsumerCacheQualityLevel(RtxGlobalVolumetrics::Ultra);
       setIndirectPreset(RtxSharc::QualityPreset::High, NeuralRadianceCache::QualityPreset::Ultra);
       SccrShellManager::setQualityLevel(SccrShellManager::Quality::High);
+      setNumosQualityLevel(1);
       // Sparse rendering needs Ray Reconstruction to fill in the pixels it skips.
       SparseRendering::Options::enableSparseRendering.setDeferred(isRayReconstruction);
-      SparseRendering::Options::samplingRate.setDeferred(0.6f);
+      applySparseRenderingPreset(0.357f, 0.69f, true);
 
     } else if (graphicsPreset() == GraphicsPreset::Medium) {
       DxvkDLFG::litePreset.setDeferred(true);
@@ -606,9 +630,10 @@ namespace dxvk {
       volumetrics.setConsumerCacheQualityLevel(RtxGlobalVolumetrics::Medium);
       setIndirectPreset(RtxSharc::QualityPreset::Medium, NeuralRadianceCache::QualityPreset::Medium);
       SccrShellManager::setQualityLevel(SccrShellManager::Quality::Medium);
+      setNumosQualityLevel(2);
       // Sparse rendering needs Ray Reconstruction to fill in the pixels it skips.
       SparseRendering::Options::enableSparseRendering.setDeferred(isRayReconstruction);
-      SparseRendering::Options::samplingRate.setDeferred(0.5f);
+      applySparseRenderingPreset(0.228f, 0.83f, true);
     } else if (graphicsPreset() == GraphicsPreset::Low) {
       DxvkDLFG::litePreset.setDeferred(true);
 
@@ -621,8 +646,9 @@ namespace dxvk {
       volumetrics.setConsumerCacheQualityLevel(RtxGlobalVolumetrics::Low);
       setIndirectPreset(RtxSharc::QualityPreset::Medium, NeuralRadianceCache::QualityPreset::Medium);
       SccrShellManager::setQualityLevel(SccrShellManager::Quality::Low);
+      setNumosQualityLevel(2);
       SparseRendering::Options::enableSparseRendering.setDeferred(isRayReconstruction);
-      SparseRendering::Options::samplingRate.setDeferred(0.357f);
+      applySparseRenderingPreset(0.125f, 0.83f, false);
     }
 
     // Ensure we are using auto DLSS profile since we will be relying on quality downgrades for Medium/Low settings

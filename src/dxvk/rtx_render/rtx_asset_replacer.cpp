@@ -254,15 +254,15 @@ namespace {
 }
 
 void AssetReplacer::makeMaterialWithTexturePreload(DxvkContext& ctx, remixapi_MaterialHandle handle, MaterialData&& data) {
-  auto [iter, isNew] = m_extMaterials.emplace(handle, std::move(data));
+  // A create for a live handle replaces its material. try_emplace leaves data intact when the handle exists.
+  auto [iter, isNew] = m_extMaterials.try_emplace(handle, std::move(data));
+  if (!isNew) {
+    iter->second.emplace(std::move(data));
+  }
+
   // A retained entry whose material handle was not registered yet resolved it to "none".
   ++m_externalAssetEpoch;
   noteChangedExternalAsset(reinterpret_cast<uint64_t>(handle));
-
-  if (!isNew) {
-    Logger::info("Ignoring repeated material registration (handle=" + tostr(handle) + ") ");
-    return;
-  }
 }
 
 const MaterialData* AssetReplacer::accessExternalMaterial(remixapi_MaterialHandle handle) const {

@@ -134,10 +134,7 @@ namespace bridge_util {
 
   std::vector<Config::AppDefaultConfig> Config::appDefaultConfigs = {
     { "Source Engine", R"(\\hl2\.exe$)", {
-      { "presentSemaphoreMaxFrames", "1" },
-      // Async creates: the client does not wait for create results. The server counts and
-      // reports failures ([Bridge] async creates); the server adopts the client's policy at the handshake.
-      { "sendCreateFunctionServerResponses", "False" }
+      { "presentSemaphoreMaxFrames", "1" }
     }}
   };
 

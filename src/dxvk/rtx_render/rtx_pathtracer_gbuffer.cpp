@@ -19,6 +19,9 @@
 * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 * DEALINGS IN THE SOFTWARE.
 */
+#include <algorithm>
+#include <iterator>
+
 #include "rtx_pathtracer_gbuffer.h"
 #include "dxvk_device.h"
 #include "rtx_shader_manager.h"
@@ -43,6 +46,7 @@
 #include <rtx_shaders/gbuffer_rayquery_psr_prepare_wboit_validate.h>
 #include <rtx_shaders/gbuffer_rayquery_psr_prepare_stochastic_alpha_wboit_validate.h>
 #include <rtx_shaders/gbuffer_rayquery_psr_inline_nrc_wboit_validate.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_inline_stochastic_alpha_nrc_wboit_validate.h>
 #include <rtx_shaders/gbuffer_rayquery_psr_prepare_wboit_lean.h>
 #include <rtx_shaders/gbuffer_rayquery_psr_prepare_wboit_slimpom.h>
 #include <rtx_shaders/gbuffer_rayquery_psr_prepare_wboit_leanpom.h>
@@ -66,6 +70,14 @@
 #include <rtx_shaders/gbuffer_rayquery_psr_inline_psr_nrc_wboit_lean.h>
 #include <rtx_shaders/gbuffer_rayquery_psr_inline_psr_nrc_wboit_slimpom.h>
 #include <rtx_shaders/gbuffer_rayquery_psr_inline_psr_nrc_wboit_leanpom.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_inline_stochastic_alpha_nrc_wboit_slim.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_inline_stochastic_alpha_nrc_wboit_lean.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_inline_stochastic_alpha_nrc_wboit_slimpom.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_inline_stochastic_alpha_nrc_wboit_leanpom.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_inline_stochastic_alpha_psr_nrc_wboit_slim.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_inline_stochastic_alpha_psr_nrc_wboit_lean.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_inline_stochastic_alpha_psr_nrc_wboit_slimpom.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_inline_stochastic_alpha_psr_nrc_wboit_leanpom.h>
 #include <rtx_shaders/gbuffer_psr_prepare_slim.h>
 #include <rtx_shaders/gbuffer_psr_prepare_slimpom.h>
 #include <rtx_shaders/gbuffer_decal_prepare_slim.h>
@@ -250,18 +262,25 @@ namespace dxvk {
 
     constexpr uint32_t kGbufferDecalPrepareVariantDebug = 1u << 0;
 
-    constexpr uint32_t kGbufferRayQueryFeatureRaytracedRenderTarget = 1u << 0;
-    constexpr uint32_t kGbufferRayQueryFeatureStochasticAlpha = 1u << 1;
     constexpr uint32_t kGbufferRayQueryFeatureVariantPass = 1u << 8;
     constexpr uint32_t kGbufferRayQueryFeatureVariantWBOIT = 1u << 9;
     constexpr uint32_t kGbufferRayQueryFeatureVariantNRC = 1u << 10;
-    constexpr uint32_t kGbufferRayQueryFeatureVariantCount =
-      RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_DEBUG + 1u;
 
-    static_assert(RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_NO_PSR == 0u);
-    static_assert(RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_INLINE == 4u);
-    static_assert(RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_PREPARE == 8u);
-    static_assert(RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_DEBUG == 10u);
+    // rtx_pathtracer_gbuffer_variants.h names the features axis indices.
+    static_assert(RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_NO_PSR == kGbufferRayQueryFeaturesNoPsr);
+    static_assert(RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_INLINE == kGbufferRayQueryFeaturesPsrInline);
+    static_assert(RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_INLINE_STOCHASTIC_ALPHA ==
+                  kGbufferRayQueryFeaturesPsrInlineStochasticAlpha);
+    static_assert(RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_PREPARE == kGbufferRayQueryFeaturesPsrPrepare);
+    static_assert(RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_PREPARE_STOCHASTIC_ALPHA ==
+                  kGbufferRayQueryFeaturesPsrPrepareStochasticAlpha);
+    static_assert(RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_DEBUG == kGbufferRayQueryFeaturesDebug);
+    static_assert(RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_DEBUG + 1u == kGbufferRayQueryFeatureVariantCount);
+
+    // Every feature combination a frame can run selects a slim entry of kGbufferVariantEntries or names a
+    // kGbufferExpectedFull case. The unit test test_gbuffer_variant_coverage walks every scene too and lists the gaps.
+    static_assert(gbufferVariantGapCount(false) == 0,
+                  "A G-buffer feature combination has no slim variant table entry and no expected Full case");
 
     constexpr uint32_t getGbufferFeatureVariantKey(
       const uint32_t features) {
@@ -328,46 +347,6 @@ namespace dxvk {
       return psrEnabled
         ? RTX_SHADER_VARIANT_MATRIX_GBUFFER_FEATURES_LEAN_PSR
         : RTX_SHADER_VARIANT_MATRIX_GBUFFER_FEATURES_LEAN_NO_PSR;
-    }
-
-    constexpr uint32_t getGbufferRayQueryFeatureMask(
-      const bool raytracedRenderTargetEnabled,
-      const bool stochasticAlphaEnabled) {
-      return
-        (raytracedRenderTargetEnabled ? kGbufferRayQueryFeatureRaytracedRenderTarget : 0u) |
-        (stochasticAlphaEnabled ? kGbufferRayQueryFeatureStochasticAlpha : 0u);
-    }
-
-    constexpr uint32_t getGbufferRayQueryPSRPrepareFeatureMask(
-      const uint32_t featureMask) {
-      return (featureMask & kGbufferRayQueryFeatureStochasticAlpha) >> 1u;
-    }
-
-    constexpr uint32_t selectGbufferRayQueryFeatureVariant(
-      const bool debugViewEnabled,
-      const bool objectPickingEnabled,
-      const bool psrEnabled,
-      const bool usePSRPrepare,
-      const bool raytracedRenderTargetEnabled,
-      const bool stochasticAlphaEnabled) {
-      if (debugViewEnabled || objectPickingEnabled) {
-        return RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_DEBUG;
-      }
-
-      const uint32_t featureMask = getGbufferRayQueryFeatureMask(
-        raytracedRenderTargetEnabled,
-        stochasticAlphaEnabled);
-
-      if (!psrEnabled) {
-        return RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_NO_PSR + featureMask;
-      }
-
-      if (usePSRPrepare) {
-        return RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_PREPARE +
-          getGbufferRayQueryPSRPrepareFeatureMask(featureMask);
-      }
-
-      return RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_INLINE + featureMask;
     }
 
     constexpr uint32_t getGbufferTraceRayGenVariantKey(
@@ -477,14 +456,11 @@ namespace dxvk {
     }
 
     // The slim levels (gbuffer_rayquery_slim.comp.slang). Only the WBOIT psr_prepare and
-    // psr_prepare_stochastic_alpha (no NRC) and psr_inline + NRC feature sets have slim variants;
-    // DxvkPathtracerGbuffer::selectSlimLevel returns Full otherwise.
-    using GbufferSlimLevel = DxvkPathtracerGbuffer::SlimLevel;
-    constexpr uint32_t kGbufferRayQueryFeaturesPsrPrepareStochasticAlpha =
-      RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_PREPARE_STOCHASTIC_ALPHA;
+    // psr_prepare_stochastic_alpha (no NRC) and psr_inline and psr_inline_stochastic_alpha (NRC) feature sets have slim
+    // variants. DxvkPathtracerGbuffer::selectSlimLevel returns Full otherwise.
     // selectGbufferRayQueryFeatureVariant picks it as PSR_PREPARE + getGbufferRayQueryPSRPrepareFeatureMask(stochastic alpha).
     static_assert(kGbufferRayQueryFeaturesPsrPrepareStochasticAlpha ==
-                  RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_PREPARE +
+                  kGbufferRayQueryFeaturesPsrPrepare +
                   getGbufferRayQueryPSRPrepareFeatureMask(kGbufferRayQueryFeatureStochasticAlpha));
 #define GBUFFER_SLIM_COMPUTE(code) GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, GbufferRayGenShader, code)
     // The validation variant of the Full primary-ray kernel for this frame's feature set, or null (the
@@ -502,11 +478,32 @@ namespace dxvk {
       if (nrcEnabled && featureVariant == RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_INLINE) {
         return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_inline_nrc_wboit_validate);
       }
+      if (nrcEnabled && featureVariant == kGbufferRayQueryFeaturesPsrInlineStochasticAlpha) {
+        return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_inline_stochastic_alpha_nrc_wboit_validate);
+      }
       return nullptr;
     }
     Rc<DxvkShader> getGbufferRayQuerySlimComputeShader(const uint32_t featureVariant, const bool isPSRPass, const GbufferSlimLevel level) {
       const bool psrInlineNrc = featureVariant == RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_INLINE;
-      if (featureVariant == kGbufferRayQueryFeaturesPsrPrepareStochasticAlpha) {
+      if (featureVariant == kGbufferRayQueryFeaturesPsrInlineStochasticAlpha) {
+        if (!isPSRPass) {
+          switch (level) {
+          case GbufferSlimLevel::Slim: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_inline_stochastic_alpha_nrc_wboit_slim);
+          case GbufferSlimLevel::Lean: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_inline_stochastic_alpha_nrc_wboit_lean);
+          case GbufferSlimLevel::SlimPom: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_inline_stochastic_alpha_nrc_wboit_slimpom);
+          case GbufferSlimLevel::LeanPom: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_inline_stochastic_alpha_nrc_wboit_leanpom);
+          default: break;
+          }
+        } else {
+          switch (level) {
+          case GbufferSlimLevel::Slim: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_inline_stochastic_alpha_psr_nrc_wboit_slim);
+          case GbufferSlimLevel::Lean: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_inline_stochastic_alpha_psr_nrc_wboit_lean);
+          case GbufferSlimLevel::SlimPom: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_inline_stochastic_alpha_psr_nrc_wboit_slimpom);
+          case GbufferSlimLevel::LeanPom: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_inline_stochastic_alpha_psr_nrc_wboit_leanpom);
+          default: break;
+          }
+        }
+      } else if (featureVariant == kGbufferRayQueryFeaturesPsrPrepareStochasticAlpha) {
         if (!isPSRPass) {
           switch (level) {
           case GbufferSlimLevel::Slim: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_prepare_stochastic_alpha_wboit_slim);
@@ -635,9 +632,10 @@ namespace dxvk {
     }
 #undef GBUFFER_SLIM_COMPUTE
 
-    // The slim level is picked per frame, so warm every level of the feature set
-    // the configuration runs (psr_inline + NRC with NRC, otherwise psr_prepare with or without stochastic alpha), or of all.
-    void prewarmGbufferSlimComputeShaders(const bool prepareSet, const bool prepareStochasticAlphaSet, const bool inlineNrcSet) {
+    // The slim level is picked per frame, so warm every level of the feature set the configuration runs, or of all.
+    // NRC runs psr_inline, and otherwise psr_prepare runs, each with or without stochastic alpha.
+    void prewarmGbufferSlimComputeShaders(const bool prepareSet, const bool prepareStochasticAlphaSet, const bool inlineNrcSet,
+                                          const bool inlineNrcStochasticAlphaSet) {
       const GbufferSlimLevel levels[] = { GbufferSlimLevel::Slim, GbufferSlimLevel::Lean, GbufferSlimLevel::SlimPom, GbufferSlimLevel::LeanPom };
       for (const GbufferSlimLevel level : levels) {
         for (int32_t isPSRPass = 1; isPSRPass >= 0; isPSRPass--) {
@@ -649,6 +647,9 @@ namespace dxvk {
           }
           if (inlineNrcSet) {
             getGbufferRayQuerySlimComputeShader(RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_INLINE, isPSRPass, level);
+          }
+          if (inlineNrcStochasticAlphaSet) {
+            getGbufferRayQuerySlimComputeShader(kGbufferRayQueryFeaturesPsrInlineStochasticAlpha, isPSRPass, level);
           }
         }
         if (prepareSet || prepareStochasticAlphaSet) {
@@ -766,70 +767,9 @@ namespace dxvk {
     }
   }
 
-  // The G-buffer variant table (rtx_fork_variant_tables.h). Derived from the slim
-  // shader defines, independently of selectSlimLevel, which stays as the check.
+  // The G-buffer variant table is in rtx_pathtracer_gbuffer_variants.h. It is derived from the slim shader defines,
+  // independently of selectSlimLevel, which stays as the check.
   namespace {
-    enum GbufferVariantKeyBit : uint32_t {
-      kGbKeyNotValidating       = 1u << 0, // rtx.frameFeatures.validate off
-      kGbKeyWboit               = 1u << 1, // the slim kernels are WBOIT variants
-      kGbKeySlimFeatureSet      = 1u << 2, // psr_prepare (+ stochastic alpha) without NRC, or psr_inline with NRC
-      kGbKeyNoThinFilmOverride  = 1u << 3, // GBUFFER_SLIM_NO_THIN_FILM ignores the debug override
-      kGbKeyNoBillboardsPrimary = 1u << 4, // GBUFFER_SLIM_NO_PORTALS skips procedural primitives on primary rays
-      kGbKeySssProfile          = 1u << 5, // rtx.subsurface.enableDiffusionProfile
-      kGbKeySssThinOpaque       = 1u << 6, // rtx.subsurface.enableThinOpaque
-    };
-    const char* const kGbKeyNames[] = {
-      "notValidating", "wboit", "slimFeatureSet", "noThinFilmOverride", "noBillboardsPrimary", "sssProfile", "sssThinOpaque",
-    };
-    constexpr uint32_t kGbKeyRequired = kGbKeyNotValidating | kGbKeyWboit | kGbKeySlimFeatureSet |
-                                        kGbKeyNoThinFilmOverride | kGbKeyNoBillboardsPrimary;
-    constexpr uint32_t kGbKeySss = kGbKeySssProfile | kGbKeySssThinOpaque;
-    // Every slim level: no thin film (thin-film materials), no ray portal resolve (portals, portal materials, dynamic-mask
-    // billboards). Lean levels also drop the subsurface loads; the non-Pom levels also POM.
-    constexpr uint32_t kGbRemovesSlim = RtFrameFeatures::kSceneThinFilm | RtFrameFeatures::kScenePortalsActive |
-                                        RtFrameFeatures::kScenePortalMaterial | RtFrameFeatures::kSceneBillboardDynamic;
-    constexpr uint32_t kGbRemovesSubsurface = RtFrameFeatures::kSceneThinOpaque | RtFrameFeatures::kSceneSssTlas;
-    constexpr uint32_t kGbRemovesPom = RtFrameFeatures::kScenePom;
-
-    const VariantTableEntry kGbufferVariantEntries[] = {
-      // Subsurface options both off: no subsurface data is read, whatever the scene holds.
-      { "Lean(sssOff)", kGbKeyRequired | kGbKeySss, kGbKeyRequired, kGbRemovesSlim | kGbRemovesPom,
-        (int32_t) GbufferSlimLevel::Lean },
-      // Diffusion profiles on: subsurface entries exist only for thin-opaque materials and SSS TLAS instances.
-      { "Lean(sssProfile)", kGbKeyRequired | kGbKeySssProfile, kGbKeyRequired | kGbKeySssProfile,
-        kGbRemovesSlim | kGbRemovesPom | kGbRemovesSubsurface, (int32_t) GbufferSlimLevel::Lean },
-      { "LeanPom(sssOff)", kGbKeyRequired | kGbKeySss, kGbKeyRequired, kGbRemovesSlim, (int32_t) GbufferSlimLevel::LeanPom },
-      { "LeanPom(sssProfile)", kGbKeyRequired | kGbKeySssProfile, kGbKeyRequired | kGbKeySssProfile,
-        kGbRemovesSlim | kGbRemovesSubsurface, (int32_t) GbufferSlimLevel::LeanPom },
-      { "Slim", kGbKeyRequired, kGbKeyRequired, kGbRemovesSlim | kGbRemovesPom, (int32_t) GbufferSlimLevel::Slim },
-      { "SlimPom", kGbKeyRequired, kGbKeyRequired, kGbRemovesSlim, (int32_t) GbufferSlimLevel::SlimPom },
-      { "Full", 0u, 0u, 0u, (int32_t) GbufferSlimLevel::Full },
-    };
-    const VariantTable kGbufferVariantTable = {
-      "gbuffer", kGbufferVariantEntries, (uint32_t) (sizeof(kGbufferVariantEntries) / sizeof(kGbufferVariantEntries[0])),
-      kGbKeyNames, (uint32_t) (sizeof(kGbKeyNames) / sizeof(kGbKeyNames[0])),
-    };
-
-    bool gbufferIsSlimFeatureSet(const uint32_t rayQueryFeatureVariant, const bool nrc) {
-      return nrc
-        ? rayQueryFeatureVariant == RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_INLINE
-        : (rayQueryFeatureVariant == RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_PREPARE ||
-           rayQueryFeatureVariant == kGbufferRayQueryFeaturesPsrPrepareStochasticAlpha);
-    }
-
-    // This frame's mode key: the options read live, the rest from the frame feature mask's mode bits.
-    uint32_t gbufferVariantModeKey(const RtFrameFeatures& f, const uint32_t rayQueryFeatureVariant) {
-      uint32_t key = 0;
-      key |= !RtxOptions::FrameFeatures::validate() ? kGbKeyNotValidating : 0u;
-      key |= f.hasMode(RtFrameFeatures::kModeWboit) ? kGbKeyWboit : 0u;
-      key |= gbufferIsSlimFeatureSet(rayQueryFeatureVariant, f.hasMode(RtFrameFeatures::kModeNrc)) ? kGbKeySlimFeatureSet : 0u;
-      key |= !f.hasMode(RtFrameFeatures::kModeThinFilmOverride) ? kGbKeyNoThinFilmOverride : 0u;
-      key |= !f.hasMode(RtFrameFeatures::kModeBillboardsPrimary) ? kGbKeyNoBillboardsPrimary : 0u;
-      key |= f.hasMode(RtFrameFeatures::kModeSssProfileOpt) ? kGbKeySssProfile : 0u;
-      key |= f.hasMode(RtFrameFeatures::kModeSssThinOpaqueOpt) ? kGbKeySssThinOpaque : 0u;
-      return key;
-    }
-
     // The mode key configured at startup. Options are read as at runtime; what only the frame's args decide
     // (feature set, thin-film override, primary billboards) is taken as slim-capable, so every entry the configuration
     // can reach is warmed.
@@ -843,12 +783,12 @@ namespace dxvk {
     }
 
     // Warm every kernel of every entry of the configured mode key, plus Full, for the configured feature set
-    // (psr_inline with NRC, otherwise psr_prepare with or without stochastic alpha). Requests only: compiles run on the
-    // state cache workers like the rest of the prewarm.
+    // (psr_inline with NRC, otherwise psr_prepare, each with or without stochastic alpha). Requests only: compiles run on
+    // the state cache workers like the rest of the prewarm.
     void prewarmGbufferVariantTable(const bool nrcEnabled, const bool stochasticAlpha, const bool wboitEnabled) {
       const uint32_t key = gbufferConfiguredVariantModeKey();
       const uint32_t featureVariant = nrcEnabled
-        ? RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_INLINE
+        ? (stochasticAlpha ? kGbufferRayQueryFeaturesPsrInlineStochasticAlpha : RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_INLINE)
         : (stochasticAlpha ? kGbufferRayQueryFeaturesPsrPrepareStochasticAlpha : RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_PREPARE);
       for (const VariantTableEntry& entry : kGbufferVariantEntries) {
         if (!variantEntryMatchesModeKey(entry, key)) {
@@ -924,7 +864,7 @@ namespace dxvk {
       getGbufferPSRPrepareComputeShader();
       prewarmGbufferDecalPrepareComputeShaders();
       // The slim levels.
-      prewarmGbufferSlimComputeShaders(true, true, isNrcSupported);
+      prewarmGbufferSlimComputeShaders(true, true, isNrcSupported, isNrcSupported);
       // The deferred unordered particle resolve.
       getGbufferDecalPrepareParticlesComputeShader(GbufferSlimLevel::Slim);
       getGbufferDecalPrepareParticlesComputeShader(GbufferSlimLevel::SlimPom);
@@ -948,11 +888,12 @@ namespace dxvk {
       switch (RtxOptions::renderPassGBufferRaytraceMode()) {
       case RaytraceMode::RayQuery:
         prewarmGbufferRayQueryComputeShaders(false, nrcEnabled, wboitEnabled);
-        // The slim levels of the configured feature set only (WBOIT only; with
-        // rtx.enableStochasticAlphaBlend the psr_prepare frames run psr_prepare_stochastic_alpha).
+        // The slim levels of the configured feature set only (WBOIT only). With rtx.enableStochasticAlphaBlend
+        // the frames run the stochastic alpha form of psr_prepare or psr_inline.
         if (wboitEnabled) {
           const bool stochasticAlpha = CompositePass::enableStochasticAlphaBlend();
-          prewarmGbufferSlimComputeShaders(!nrcEnabled && !stochasticAlpha, !nrcEnabled && stochasticAlpha, nrcEnabled);
+          prewarmGbufferSlimComputeShaders(!nrcEnabled && !stochasticAlpha, !nrcEnabled && stochasticAlpha,
+                                           nrcEnabled && !stochasticAlpha, nrcEnabled && stochasticAlpha);
         }
         // The compact PSR kernels, for the PSR prepare feature set only (NRC keeps inline PSR).
         if (!nrcEnabled) {
@@ -1129,13 +1070,7 @@ namespace dxvk {
     const uint32_t decalPrepareVariantKey = getGbufferDecalPrepareVariantKey(
       debugViewEnabled,
       rtOutput.m_raytraceArgs.enableObjectPicking);
-    // Keep NRC on the original inline PSR sampling path. NRC updates depend
-    // on knowing whether the current GBuffer hit is the final integrated
-    // surface, which PSR prepare defers to a later pass.
-    const bool usePSRPrepare =
-      psrEnabled &&
-      !nrcEnabled &&
-      !rtOutput.m_raytraceArgs.enableRaytracedRenderTarget;
+    const bool usePSRPrepare = gbufferUsesPsrPrepare(psrEnabled, nrcEnabled, rtOutput.m_raytraceArgs.enableRaytracedRenderTarget);
     const uint32_t rayQueryFeatureVariant = selectGbufferRayQueryFeatureVariant(
       debugViewEnabled,
       rtOutput.m_raytraceArgs.enableObjectPicking,
@@ -1157,7 +1092,7 @@ namespace dxvk {
     if (variantTables) {
       variantTablesSelfCheckIfNeeded();
       const RtFrameFeatures& features = ctx->getFrameFeatures();
-      variantModeKey = gbufferVariantModeKey(features, rayQueryFeatureVariant);
+      variantModeKey = gbufferVariantModeKey(features.mode, rayQueryFeatureVariant, RtxOptions::FrameFeatures::validate());
       variantSelection = selectVariant(kGbufferVariantTable, variantModeKey, features.scene);
       const SlimLevel tableLevel = (SlimLevel) kGbufferVariantEntries[variantSelection.entry].level;
       if (tableLevel != slimLevel) {
@@ -1439,10 +1374,80 @@ namespace dxvk {
       break;
     }
 
+    // A Full entry chosen by the table names its expected case, or none for a coverage gap.
+    // A Full entry bound only while the chosen kernels compile is not a table choice.
+    const bool tableFull = !variantTables || kGbufferVariantEntries[variantSelection.entry].level == (int32_t) SlimLevel::Full;
+    const GbufferExpectedFullCase expectedFull = tableFull
+      ? gbufferExpectedFullCase(variantTables, rayQueryFeatureVariant, variantModeKey, ctx->getFrameFeatures().scene)
+      : GbufferExpectedFullCase::None;
+    const char* expectedName = !tableFull
+      ? "fallbackWhileCompiling"
+      : expectedFull != GbufferExpectedFullCase::None ? kGbufferExpectedFull[(size_t) expectedFull].name : nullptr;
+    const std::string variantInfo = variantTables
+      ? variantSelectionToString(kGbufferVariantTable, variantSelection, variantModeKey, variantBoundEntry)
+      : std::string();
     logSlimLevel(slimLevel, slimFullReason, rayQueryFeatureVariant, nrcEnabled, compactPsrActive,
-                 ctx->getDevice()->getCurrentFrameId(),
-                 variantTables ? variantSelectionToString(kGbufferVariantTable, variantSelection, variantModeKey, variantBoundEntry)
-                               : std::string());
+                 ctx->getDevice()->getCurrentFrameId(), variantInfo, expectedName);
+
+    std::string fullText;
+    if (slimLevel == SlimLevel::Full) {
+      fullText = !tableFull
+        ? std::string(expectedName)
+        : str::format(slimFullReasonToString(slimFullReason), " featureVariant=", rayQueryFeatureVariant, " nrc=", nrcEnabled ? 1 : 0,
+                      expectedName != nullptr ? str::format(" expected=", expectedName) : std::string(" noSlimEntry"));
+    }
+    noteSlimLevel(slimLevel, fullText, tableFull && slimLevel == SlimLevel::Full, expectedFull,
+                  str::format(fullText, " modeKey=", variantModeKeyToString(kGbufferVariantTable, variantModeKey), variantInfo));
+  }
+
+  void DxvkPathtracerGbuffer::noteSlimLevel(const SlimLevel level, const std::string& fullText, const bool tableFull,
+                                            const GbufferExpectedFullCase expected, const std::string& warnKey) {
+    m_summaryFrames[(uint32_t) level]++;
+    if (level == SlimLevel::Full) {
+      m_summaryFullText = fullText;
+    }
+    // One warning per distinct cause, at most 8 per session.
+    if (!tableFull || m_warnedFullKeys.size() >= 8 ||
+        std::find(m_warnedFullKeys.begin(), m_warnedFullKeys.end(), warnKey) != m_warnedFullKeys.end()) {
+      return;
+    }
+    m_warnedFullKeys.push_back(warnKey);
+    Logger::warn(str::format("[GBuffer] A frame fell back to the Full G-buffer kernels (", warnKey, "). ",
+                             expected != GbufferExpectedFullCase::None
+                               ? str::format("Expected: ", kGbufferExpectedFull[(size_t) expected].reason)
+                               : std::string("No slim variant covers this combination, so the G-buffer pass runs slower than it "
+                                             "needs to. Please report it with this log.")));
+  }
+
+  std::string DxvkPathtracerGbuffer::takeSlimLevelSummary() {
+    uint32_t total = 0;
+    for (const uint32_t frames : m_summaryFrames) {
+      total += frames;
+    }
+    if (total == 0) {
+      return std::string();
+    }
+    // Levels by share, largest first.
+    uint32_t order[5] = { 0, 1, 2, 3, 4 };
+    std::sort(std::begin(order), std::end(order), [&](const uint32_t a, const uint32_t b) { return m_summaryFrames[a] > m_summaryFrames[b]; });
+    std::string out = "G-buffer slim level";
+    bool first = true;
+    for (const uint32_t level : order) {
+      if (m_summaryFrames[level] == 0) {
+        continue;
+      }
+      const uint32_t percent = (uint32_t) ((100ull * m_summaryFrames[level] + total / 2) / total);
+      out += str::format(first ? " " : ", ", slimLevelToString((SlimLevel) level), " ", percent, "%");
+      if ((SlimLevel) level == SlimLevel::Full) {
+        out += str::format(" (", m_summaryFullText, ")");
+      }
+      first = false;
+    }
+    for (uint32_t& frames : m_summaryFrames) {
+      frames = 0;
+    }
+    m_summaryFullText.clear();
+    return out;
   }
 
   bool DxvkPathtracerGbuffer::prepareCompactPsrBuffers(const uint32_t pixelCount) {
@@ -1524,15 +1529,17 @@ namespace dxvk {
       fullReason = SlimFullReason::NoWboit;
       return SlimLevel::Full;
     }
-    // Only the feature sets with slim variants: PSR prepare without NRC, with or without stochastic alpha, and inline PSR
-    // with NRC (debug / picking, raytraced render targets, inline PSR with stochastic alpha and PSR-off frames keep the
+    // Only the feature sets with slim variants: PSR prepare without NRC and inline PSR with NRC, each with or without
+    // stochastic alpha (debug / picking, raytraced render targets, inline PSR without NRC and PSR-off frames keep the
     // full kernels). Stochastic alpha needs no extra test: its code reads only opacity / albedo / shading normal / surface
     // hash, which no slim axis changes while the tests below hold, and it has no POM, thin-film, portal or SSS path of its
     // own (see gbuffer_rayquery_slim.comp.slang).
     const bool prepareSet =
       (rayQueryFeatureVariant == RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_PREPARE ||
        rayQueryFeatureVariant == RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_PREPARE_STOCHASTIC_ALPHA) && !nrcEnabled;
-    const bool inlineNrcSet = rayQueryFeatureVariant == RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_INLINE && nrcEnabled;
+    const bool inlineNrcSet =
+      (rayQueryFeatureVariant == RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_INLINE ||
+       rayQueryFeatureVariant == RTX_SHADER_VARIANT_MATRIX_GBUFFER_RAYQUERY_FEATURES_PSR_INLINE_STOCHASTIC_ALPHA) && nrcEnabled;
     if (!prepareSet && !inlineNrcSet) {
       fullReason = SlimFullReason::FeatureSet;
       return SlimLevel::Full;
@@ -1598,7 +1605,7 @@ namespace dxvk {
   uint32_t DxvkPathtracerGbuffer::frameRayQueryFeatureVariant(const RaytraceArgs& args, const bool nrcEnabled) {
     // Same derivation as dispatch().
     const bool psrEnabled = args.enablePSRR || args.enablePSTR;
-    const bool usePSRPrepare = psrEnabled && !nrcEnabled && !args.enableRaytracedRenderTarget;
+    const bool usePSRPrepare = gbufferUsesPsrPrepare(psrEnabled, nrcEnabled, args.enableRaytracedRenderTarget);
     return selectGbufferRayQueryFeatureVariant(
       args.debugView != 0,
       args.enableObjectPicking,
@@ -1630,7 +1637,7 @@ namespace dxvk {
         for (uint32_t featureVariant = 0; featureVariant < kGbufferRayQueryFeatureVariantCount; featureVariant++) {
           SlimFullReason reason = SlimFullReason::None;
           const SlimLevel legacy = selectSlimLevel(f, featureVariant, nrc, wboit, portals, reason);
-          const uint32_t key = gbufferVariantModeKey(f, featureVariant);
+          const uint32_t key = gbufferVariantModeKey(f.mode, featureVariant, RtxOptions::FrameFeatures::validate());
           const VariantSelection selection = selectVariant(kGbufferVariantTable, key, f.scene);
           result.checked++;
           if ((SlimLevel) kGbufferVariantEntries[selection.entry].level != legacy) {
@@ -1667,11 +1674,12 @@ namespace dxvk {
 
   void DxvkPathtracerGbuffer::logSlimLevel(const SlimLevel level, const SlimFullReason fullReason, const uint32_t rayQueryFeatureVariant,
                                            const bool nrcEnabled, const bool compactPsrActive,
-                                           const uint32_t frameId, const std::string& variantInfo) {
+                                           const uint32_t frameId, const std::string& variantInfo, const char* expectedName) {
     // Logs the bound slim level (and why it is Full) and whether the compact PSR dispatch ran when they change,
     // at most once per 60 frames, so the settled state is still logged within 60 frames.
     // In ray query mode, variantInfo also names the table entry and what blocked the next slimmer one.
     // It is empty otherwise.
+    // A Full line names its kGbufferExpectedFull case (expected=<name>), or noSlimEntry for a coverage gap.
     if ((int32_t) level == m_loggedSlimLevel && (int32_t) fullReason == m_loggedSlimFullReason &&
         (int32_t) compactPsrActive == m_loggedCompactPsr && variantInfo == m_loggedVariantInfo) {
       return;
@@ -1680,11 +1688,15 @@ namespace dxvk {
       return;
     }
     // featureVariant: the gbuffer_rayquery features axis index (0 no_psr .. 4 psr_inline .. 8 psr_prepare,
-    // 9 psr_prepare_stochastic_alpha, 10 debug); slim levels exist for 8 and 9 without NRC and 4 with NRC.
+    // 6 psr_inline_stochastic_alpha .. 9 psr_prepare_stochastic_alpha, 10 debug).
+    // Slim levels exist for 8 and 9 without NRC and for 4 and 6 with NRC.
     Logger::info(str::format("[GBuffer] slim level ", slimLevelToString(level),
                              level == SlimLevel::Full ? str::format(" (full: ", slimFullReasonToString(fullReason),
                                                                     " featureVariant=", rayQueryFeatureVariant,
-                                                                    " nrc=", nrcEnabled ? 1 : 0, ")") : std::string(),
+                                                                    " nrc=", nrcEnabled ? 1 : 0,
+                                                                    expectedName != nullptr ? str::format(" expected=", expectedName)
+                                                                                            : std::string(" noSlimEntry"),
+                                                                    ")") : std::string(),
                              " compactPsr=", compactPsrActive ? 1 : 0,
                              variantInfo,
                              " (frame ", frameId, ")"));
@@ -1737,8 +1749,8 @@ namespace dxvk {
     const bool wboitEnabled,
     const SlimLevel slimLevel) const {
     if (slimLevel != SlimLevel::Full) {
-      // selectSlimLevel returns a slim level only for the psr_prepare (with or without stochastic alpha)
-      // and psr_inline + NRC feature sets (WBOIT).
+      // selectSlimLevel returns a slim level only for the psr_prepare and psr_inline + NRC feature sets
+      // (with or without stochastic alpha, WBOIT).
       return getGbufferRayQuerySlimComputeShader(featureVariant, isPSRPass, slimLevel);
     }
     return getGbufferRayQueryComputeShader(getGbufferRayQueryVariantKey(featureVariant, isPSRPass, nrcEnabled, wboitEnabled));

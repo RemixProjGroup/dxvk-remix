@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contract; `remix_c.h` and `remixapi_Interface` are unchanged.
 
 ### Changed
+- 2026-10-30: `CreateMaterial` with a live hash no longer ignores the new data. An
+  identical description returns at once with no rebuilds, and different data
+  replaces the material and rebuilds its users. `DestroyMaterial` then
+  `CreateMaterial` still works. The API's signatures are unchanged.
 - 2026-10-27: `REMIXAPI_VERSION` is `1.0.0` (was `0.1000.1`), for the release
   after `public-rpv2-rc1`. Major 1 marks the Remix Plus line as distinct from
   NVIDIA dxvk-remix (0.x) and other forks. Under the version check, the runtime

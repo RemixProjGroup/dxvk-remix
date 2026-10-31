@@ -235,6 +235,8 @@ DECL_BRIDGE_FUNC(Header, pop_front) {
 DECL_BRIDGE_FUNC(void, releaseReadData) {
   const ReaderChannel& channel = getReaderChannel();
   const int64_t pos = (int64_t) get_data_pos();
+  // Every read of the released data happens before the writer can see the new position.
+  std::atomic_thread_fence(std::memory_order_release);
   *channel.serverDataPos = pos;
   // The low word is read because a 32-bit reader cannot read the 64-bit value atomically.
   const int64_t expectedPos = (int64_t) *reinterpret_cast<volatile int32_t*>(channel.clientDataExpectedPos);

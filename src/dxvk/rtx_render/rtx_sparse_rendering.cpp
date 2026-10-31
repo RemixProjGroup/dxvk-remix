@@ -176,6 +176,14 @@ namespace dxvk {
       return false;
     }
 
+    const VkExtent3D& downscaledExtent = device()->getCommon()->getResources().getDownscaleDimensions();
+    if (Options::enableAdaptiveSamplingRate() &&
+        calculateSamplingRate(downscaledExtent.width * downscaledExtent.height) > Options::maxSamplingRate()) {
+      ONCE(Logger::info("[RTX Sparse Rendering] The sampling rate for this render resolution exceeds rtx.sparseRendering.maxSamplingRate; sparse rendering will not run. "
+                        "It will resume automatically at a higher render resolution or a lower sampling rate."));
+      return false;
+    }
+
     return true;
   }
 
@@ -318,6 +326,45 @@ namespace dxvk {
       return false;
     }
     return true;
+  }
+
+  float SparseRendering::calculateSamplingRate(const uint32_t pixelCount) {
+    const RtxOption<float>& samplingRateOption = Options::samplingRateObject();
+    const float minSamplingRate = samplingRateOption.getMinValue().value();
+    const float maxSamplingRate = samplingRateOption.getMaxValue().value();
+
+    if (!Options::enableAdaptiveSamplingRate()) {
+      return std::clamp(Options::samplingRate(), minSamplingRate, maxSamplingRate);
+    }
+
+    // The render resolution of 4K with DLSS Auto, where samplingRate was tuned.
+    constexpr float kReferencePixelCount = 2227.0f * 1238.0f;
+
+    const float scaledSamplingRate = Options::samplingRate() *
+      std::pow(kReferencePixelCount / float(std::max(pixelCount, 1u)), Options::samplingRateResolutionExponent());
+    const float calculatedSamplingRate = std::clamp(scaledSamplingRate, minSamplingRate, maxSamplingRate);
+
+    // The quality interpolates in log space from the calculated rate at 0.5 to the bounds at 0 and 1,
+    // so equal slider steps make about equal steps in image quality.
+    // A quality of 1 reaches the full rate, so sparse rendering turns off once the rate passes Options::maxSamplingRate.
+    const float quality = Options::quality();
+    const float boundSamplingRate = quality >= 0.5f ? maxSamplingRate : minSamplingRate;
+    const float qualitySamplingRate =
+      calculatedSamplingRate * std::pow(boundSamplingRate / calculatedSamplingRate, std::abs(2.0f * quality - 1.0f));
+
+    // Rounding can overshoot the bounds, so the result is kept within them.
+    return std::clamp(qualitySamplingRate,
+                      std::min(calculatedSamplingRate, boundSamplingRate),
+                      std::max(calculatedSamplingRate, boundSamplingRate));
+  }
+
+  float SparseRendering::getSamplingRate() const {
+    if (!isActive()) {
+      return 1.0f;
+    }
+
+    const VkExtent3D& downscaledExtent = device()->getCommon()->getResources().getDownscaleDimensions();
+    return calculateSamplingRate(downscaledExtent.width * downscaledExtent.height);
   }
 
   bool SparseRendering::resamplesNrcTrainingPaths(const bool nrcIsActive) const {
@@ -476,7 +523,8 @@ namespace dxvk {
     NeuralRadianceCache& nrc = ctx.getCommonObjects()->metaNeuralRadianceCache();
     args.resampledNrcTrainingPaths = resamplesNrcTrainingPaths(nrc.isActive());
 
-    args.pixelSamplingRate = Options::samplingRate();
+    args.pixelSamplingRate = getSamplingRate();
+    args.enableSparseAwareAlphaBlendSearch = Options::enableSparseAwareAlphaBlendSearch();
 
     args.activePixelMaskExtent = { m_activePixelMaskExtent.width, m_activePixelMaskExtent.height };
 
@@ -510,7 +558,35 @@ namespace dxvk {
 
     RemixGui::Checkbox("Enable Sparse Rendering", &Options::enableSparseRenderingObject());
 
-    RemixGui::DragFloat("Sampling Rate", &Options::samplingRateObject(), 0.01f, 1.0f / 128.0f, 1.0f, "%.3f", sliderFlags);
+    RemixGui::Checkbox("Enable Auto Scaling", &Options::enableAdaptiveSamplingRateObject());
+
+    if (Options::enableAdaptiveSamplingRate()) {
+      RemixGui::DragFloat("Quality", &Options::qualityObject(), 0.01f, 0.0f, 1.0f, "%.3f", sliderFlags);
+
+      if (RemixGui::CollapsingHeader("Advanced", collapsingHeaderClosedFlags)) {
+        ImGui::Indent();
+        RemixGui::DragFloat("Sampling Rate", &Options::samplingRateObject(), 0.01f, 1.0f / 128.0f, 1.0f, "%.3f", sliderFlags);
+        RemixGui::DragFloat("Resolution Scaling Exponent", &Options::samplingRateResolutionExponentObject(), 0.01f, 0.0f, 1.0f, "%.3f", sliderFlags);
+        RemixGui::DragFloat("Max Sampling Rate", &Options::maxSamplingRateObject(), 0.01f, 1.0f / 16.0f, 1.0f, "%.3f", sliderFlags);
+        ImGui::Unindent();
+      }
+    } else {
+      RemixGui::DragFloat("Sampling Rate", &Options::samplingRateObject(), 0.01f, 1.0f / 128.0f, 1.0f, "%.3f", sliderFlags);
+    }
+
+    {
+      const VkExtent3D& downscaledExtent = device()->getCommon()->getResources().getDownscaleDimensions();
+      const float calculatedSamplingRate = calculateSamplingRate(downscaledExtent.width * downscaledExtent.height);
+      if (isActive()) {
+        ImGui::Text("Effective Rate: %.3f", calculatedSamplingRate);
+      } else if (Options::enableAdaptiveSamplingRate() && calculatedSamplingRate > Options::maxSamplingRate()) {
+        ImGui::Text("Effective Rate: Off (%.3f exceeds Max Sampling Rate %.3f)", calculatedSamplingRate, Options::maxSamplingRate());
+      } else {
+        ImGui::Text("Effective Rate: Off");
+      }
+    }
+
+    RemixGui::Checkbox("Sparse-Aware Alpha Blend Search", &Options::enableSparseAwareAlphaBlendSearchObject());
 
     RemixGui::Checkbox("Compact Active Pixels", &Options::compactActivePixelsObject());
     if (buildsActivePixelList() && m_activePixelCountPixels > 0u) {

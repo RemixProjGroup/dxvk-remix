@@ -548,7 +548,8 @@ namespace dxvk {
     if (!isNew) {
       // This is a geometry we've seen before, that requires updating
       //  'inOutGeometry' has valid historical data
-      if (input.hashes[HashComponents::Indices] == inOutGeometry.hashes[HashComponents::Indices]) {
+      if (input.hashes[HashComponents::Indices] == inOutGeometry.hashes[HashComponents::Indices] &&
+          input.sameTopology(pBlas->input.getGeometryData())) {
         // Position changes require a BVH refit; UV-only changes may reuse the BVH.
         if (input.hashes[HashComponents::VertexPosition] == inOutGeometry.hashes[HashComponents::VertexPosition]
          && input.hashes[HashComponents::VertexShader] == inOutGeometry.hashes[HashComponents::VertexShader]
@@ -1786,7 +1787,8 @@ namespace dxvk {
     // force a full BLAS build for it (frameTopologyChanged).
     bool rebuiltInPlace = false;
     ObjectCacheState result = ObjectCacheState::kInvalid;
-    if (rebuildTopologyInPlace) {
+    // A refit needs the topology the BLAS was built with, so any entry whose draw changed it is rebuilt in place.
+    if (rebuildTopologyInPlace || !drawCallState.getGeometryData().sameTopology(pBlas->input.getGeometryData())) {
       const RasterGeometry& now = drawCallState.getGeometryData();
       const RasterGeometry& last = pBlas->input.getGeometryData();
       const bool topologyChanged =
@@ -2083,8 +2085,14 @@ namespace dxvk {
       m_instanceManager.notifySceneChanged();
     }
 
+    // A non-zero bone count does not imply the weight buffer is defined.
+    // processSkinning derives the count from D3DRS_VERTEXBLEND and the vertex
+    // declaration, while the buffer is populated only when the stream had a
+    // valid mapped slice. A fixed-function indexed-blend draw may legally
+    // leave the weight stream unbound while still reporting a bone count.
     if (drawCallState.getSkinningState().numBones > 0 &&
         drawCallState.getGeometryData().numBonesPerVertex > 0 &&
+        drawCallState.getGeometryData().blendWeightBuffer.defined() &&
         (result == ObjectCacheState::KBuildBVH || result == ObjectCacheState::kUpdateBVH)) {
       RtxGeometryUtils& geometryUtils = m_device->getCommon()->metaGeometryUtils();
       geometryUtils.dispatchSkinning(drawCallState, pBlas->modifiedGeometryData);
@@ -4635,7 +4643,7 @@ namespace dxvk {
       " | per-geometry BLAS: built ", bs.dynamicBuilt, ", refit ", bs.dynamicRefit, ", refit-limit rebuilds ", bs.refitLimitRebuilds,
       "; promoted to own BLAS: moved ", bs.promotedMoved, ", hidden/shown ", bs.promotedToggled, ", chronically dirty ", bs.promotedChronic,
       ", mover backoffs ", bs.moverBackoffs,
-      " | TLAS: built ", bs.tlasBuilt, ", skipped ", bs.tlasSkipped,
+      " | TLAS: built ", bs.tlasBuilt, " (refit ", bs.tlasRefit, "), skipped ", bs.tlasSkipped,
       " | compaction: queried ", bs.compactionQueries, ", compacted ", bs.compacted, " (", mib(bs.compactedBytesBefore),
       " -> ", mib(bs.compactedBytesAfter), "), not worth ", bs.compactionNotWorth, ", discarded ", bs.compactionDiscarded,
       " | surface upload ", mib(bs.surfaceBytesUploaded), " of ", mib(bs.surfaceBytesTotal),

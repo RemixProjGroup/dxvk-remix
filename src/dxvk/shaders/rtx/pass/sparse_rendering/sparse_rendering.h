@@ -57,4 +57,9 @@ struct SparseRenderingArgs
   uint compactedLaunchMask;
   // Number of entries the active-pixel list can hold.
   uint activePixelListCapacity;
+
+  uint enableSparseAwareAlphaBlendSearch;
+  uint pad0;
+  uint pad1;
+  uint pad2;
 };

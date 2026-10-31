@@ -90,6 +90,9 @@ namespace dxvk {
       bool comparable = false;
       // The world matrix holds world-view, which a move must not send as a world matrix.
       bool preCombined = false;
+      // Fixed-function skinning places the geometry with the bones, not with the world matrix, so a change of the
+      // world matrix alone is no move.
+      bool skinned = false;
       // The texture transform follows the free camera while it is on (view-space texture coordinate generation).
       bool viewSpaceTexgen = false;
     };
@@ -120,7 +123,7 @@ namespace dxvk {
         v.inputsSame = record.hasLast && in.comparable && in.inputsNoWorld == record.inputsNoWorld;
         v.current = record.reprepareEpoch == epoch;
         v.repeat = v.inputsSame && v.derivedSame && v.current && in.inputs == record.inputs;
-        v.moved = v.inputsSame && v.derivedSame && v.current && !v.repeat && !in.preCombined;
+        v.moved = v.inputsSame && v.derivedSame && v.current && !v.repeat && !in.preCombined && !in.skinned;
         record.inputs = in.inputs;
         record.inputsNoWorld = in.inputsNoWorld;
         record.hasLast = true;

@@ -123,6 +123,7 @@ GeometryResolverState geometryResolverStateCreateEmpty(u16vec2 pixelCoordinate)
   geometryResolverState.decalEncountered = false;
   geometryResolverState.useAlternateDisocclusionThreshold = false;
   geometryResolverState.pomOpaqueSurfaceEncountered = false;
+  geometryResolverState.alphaBlendSurfaceStored = false;
 
   return geometryResolverState;
 }
@@ -148,12 +149,39 @@ void geometryResolverStoreDlssNrControlMask(
   DlssNrControlMask[pixelCoordinate] = dlssControlMask;
 }
 
+// Returns the packed alpha blend surface that the primary pass starts every pixel with.
+uint4 geometryResolverCreateInitialAlphaBlendSurface(uvec2 pixelCoordinate)
+{
+  RNG randomState = createRNG(pixelCoordinate, cb.frameIdx);
+  AlphaBlendSurface alphaBlendSurface = AlphaBlendSurface.createEmpty();
+  alphaBlendSurface.randomThreshold = getNextSampleBlueNoise(randomState);
+  return alphaBlendSurface.pack(cb.alphaBlendSurfacePackMult);
+}
+
+// Returns the alpha blend surface stored at the pixel.
+// Returns the initial surface while the primary pass has stored none.
+// The initial surface goes through pack() too, because update and finalize compare its quantized random threshold.
+AlphaBlendSurface geometryResolverLoadAlphaBlendSurface(uvec2 pixelCoordinate, bool alphaBlendSurfaceStored)
+{
+  uint4 packedAlphaBlendSurface;
+  if (alphaBlendSurfaceStored)
+  {
+    packedAlphaBlendSurface = AlphaBlendGBuffer[pixelCoordinate];
+  }
+  else
+  {
+    packedAlphaBlendSurface = geometryResolverCreateInitialAlphaBlendSurface(pixelCoordinate);
+  }
+
+  return AlphaBlendSurface.createFromPacked(packedAlphaBlendSurface, cb.alphaBlendSurfacePackMult);
+}
+
 // Geometry Resolver Vertex Functions
 
 void geometryResolverOutputMiss<
   let PRIMARY_SURFACE : bool,
   let SELECTED_INTEGRATION_SURFACE : bool>(
-  uvec2 pixelCoordinate)
+  uvec2 pixelCoordinate, bool alphaBlendSurfaceStored = true)
 {
   const float missHitDistance = -1.0f;
 
@@ -188,7 +216,7 @@ void geometryResolverOutputMiss<
 
     if (GBUFFER_FEATURE_STOCHASTIC_ALPHA && cb.enableStochasticAlphaBlend)
     {
-      AlphaBlendSurface alphaBlendSurface = AlphaBlendSurface.createFromPacked(AlphaBlendGBuffer[pixelCoordinate], cb.alphaBlendSurfacePackMult);
+      AlphaBlendSurface alphaBlendSurface = geometryResolverLoadAlphaBlendSurface(pixelCoordinate, alphaBlendSurfaceStored);
       alphaBlendSurface.finalize(0);
       AlphaBlendGBuffer[pixelCoordinate] = alphaBlendSurface.pack(cb.alphaBlendSurfacePackMult);
     }
@@ -275,7 +303,7 @@ void geometryResolverOutputSurface<
   PolymorphicSurfaceMaterialInteraction polymorphicSurfaceMaterialInteraction,
   vec3 radiance, vec3 attenuation, vec4 accumulatedRotation,
   uint mediumMaterialIndex, float virtualHitDistance, bool directionAltered,
-  bool useAlternateDisocclusionThreshold, bool isViewModel)
+  bool useAlternateDisocclusionThreshold, bool isViewModel, bool alphaBlendSurfaceStored = true)
 {
   // Output Attenuation (Primary/secondary surface coherent)
 
@@ -471,7 +499,7 @@ void geometryResolverOutputSurface<
   if (GBUFFER_FEATURE_STOCHASTIC_ALPHA && cb.enableStochasticAlphaBlend && PRIMARY_SURFACE)
   {
     //Write opaque objects' geometry hash
-    AlphaBlendSurface alphaBlendSurface = AlphaBlendSurface.createFromPacked(AlphaBlendGBuffer[pixelCoordinate], cb.alphaBlendSurfacePackMult);
+    AlphaBlendSurface alphaBlendSurface = geometryResolverLoadAlphaBlendSurface(pixelCoordinate, alphaBlendSurfaceStored);
     alphaBlendSurface.finalize(surface.hashPacked);
     AlphaBlendGBuffer[pixelCoordinate] = alphaBlendSurface.pack(cb.alphaBlendSurfacePackMult);
   }
@@ -2178,10 +2206,12 @@ void geometryResolverVertex(
     vec4 alphaBlendColor = AlphaBlendSurface::getAlphaBlendSurface(polymorphicSurfaceMaterialInteraction);
     bool hasEmissive = any(geometryResolverState.radiance > 0);
     
-    AlphaBlendSurface alphaBlendSurface = AlphaBlendSurface.createFromPacked(AlphaBlendGBuffer[geometryResolverState.pixelCoordinate], cb.alphaBlendSurfacePackMult);
+    AlphaBlendSurface alphaBlendSurface =
+      geometryResolverLoadAlphaBlendSurface(geometryResolverState.pixelCoordinate, geometryResolverState.alphaBlendSurfaceStored);
     alphaBlendSurface.update(
       alphaBlendColor, polymorphicSurfaceMaterialInteraction.shadingNormal, geometryResolverState.accumulatedHitDistance, surface.hashPacked, hasEmissive);
     AlphaBlendGBuffer[geometryResolverState.pixelCoordinate] = alphaBlendSurface.pack(cb.alphaBlendSurfacePackMult);
+    geometryResolverState.alphaBlendSurfaceStored = true;
 
     if (alphaBlendSurface.backgroundTransparency < 1.0 / 255.0)
     {
@@ -2242,7 +2272,8 @@ void geometryResolverVertex(
     // Note: Always write to primary surface for initial misses,
     // it always will be the selected integrated surface in this case as well.
     PrimaryAttenuation[geometryResolverState.pixelCoordinate] = colorToR11G11B10(geometryResolverState.attenuation);
-    geometryResolverOutputMiss<true, true>(geometryResolverState.pixelCoordinate);
+    geometryResolverOutputMiss<true, true>(geometryResolverState.pixelCoordinate, geometryResolverState.alphaBlendSurfaceStored);
+    geometryResolverState.alphaBlendSurfaceStored = true;
 
     SharedRadianceRG[geometryResolverState.pixelCoordinate] = geometryResolverState.radiance.rg;
     SharedRadianceB[geometryResolverState.pixelCoordinate] = geometryResolverState.radiance.b;
@@ -2405,7 +2436,8 @@ void geometryResolverVertex(
       geometryResolverState.accumulatedRotation, cb.startInMediumMaterialIndex,
       geometryResolverState.accumulatedHitDistance, geometryResolverState.directionAltered,
       geometryResolverState.useAlternateDisocclusionThreshold,
-      geometryResolverState.isViewModelSurface);
+      geometryResolverState.isViewModelSurface, geometryResolverState.alphaBlendSurfaceStored);
+    geometryResolverState.alphaBlendSurfaceStored = true;
   }
   else if (GBUFFER_FEATURE_RAYTRACED_RENDER_TARGET && cb.enableRaytracedRenderTarget && isRaytracedRenderTarget)
   {
@@ -2553,7 +2585,8 @@ void geometryResolverVertex(
       geometryResolverState.accumulatedRotation, cb.startInMediumMaterialIndex,
       geometryResolverState.accumulatedHitDistance, geometryResolverState.directionAltered,
       geometryResolverState.useAlternateDisocclusionThreshold,
-      geometryResolverState.isViewModelSurface);
+      geometryResolverState.isViewModelSurface, geometryResolverState.alphaBlendSurfaceStored);
+    geometryResolverState.alphaBlendSurfaceStored = true;
   }
 
   if (GBUFFER_FEATURE_INLINE_PSR_SAMPLING && !push.usePSRPrepare && geometryResolverState.performedAnyPSR())
@@ -3236,13 +3269,8 @@ void geometryResolver(ivec2 pixelCoordinate) {
   // resolve logic.
   GeometryResolverState geometryResolverState = geometryResolverStateCreateEmpty(u16vec2(pixelCoordinate));
 
-  if (GBUFFER_FEATURE_STOCHASTIC_ALPHA && cb.enableStochasticAlphaBlend)
-  {
-    RNG randomState = createRNG(geometryResolverState.pixelCoordinate, cb.frameIdx);
-    AlphaBlendSurface alphaBlendSurface = AlphaBlendSurface.createEmpty();
-    alphaBlendSurface.randomThreshold = getNextSampleBlueNoise(randomState);
-    AlphaBlendGBuffer[pixelCoordinate] = alphaBlendSurface.pack(cb.alphaBlendSurfacePackMult);
-  }
+  // The alpha blend surface starts as geometryResolverCreateInitialAlphaBlendSurface. It is kept in registers until the
+  // first vertex that updates or finalizes it, and stored below if no vertex did.
 #ifndef GBUFFER_PSR
   if (GBUFFER_FEATURE_OBJECT_PICKING && cb.enableObjectPicking != 0)
   {
@@ -3276,6 +3304,13 @@ void geometryResolver(ivec2 pixelCoordinate) {
     {
       accumulateInDebugViewAdd(geometryResolverState.pixelCoordinate, 1);
     }
+  }
+
+  // Inline PSR pixels, raytraced render targets and resolves that ran out of interactions stored no alpha blend surface,
+  // but the PSR passes and the composite read one.
+  if (GBUFFER_FEATURE_STOCHASTIC_ALPHA && cb.enableStochasticAlphaBlend && !geometryResolverState.alphaBlendSurfaceStored)
+  {
+    AlphaBlendGBuffer[pixelCoordinate] = geometryResolverCreateInitialAlphaBlendSurface(geometryResolverState.pixelCoordinate);
   }
 
   // Translate PSR flags and the selected integration surface flag from reflection/transmission to a primary/secondary context
@@ -3526,6 +3561,23 @@ void geometryResolverDeferredUnorderedParticles(ivec2 pixelCoordinate, bool isMi
 }
 #endif
 
+// Mirrors minimalRayInteractionReadFromGBuffer for the writable primary GBuffer textures.
+MinimalRayInteraction geometryResolverReadPrimaryMinimalRayInteraction(
+  ivec2 pixelCoordinate, float encodedConeRadius, Ray primaryRay)
+{
+  GBufferMemoryMinimalRayInteraction memory;
+  memory.encodedViewDirection = float2(0.0f, 0.0f);
+  memory.encodedConeRadius = float16_t(encodedConeRadius);
+
+  // Only a negative cone radius marks a stored view direction, see minimalRayInteractionCreate.
+  if (memory.encodedConeRadius < float16_t(0.0f))
+  {
+    memory.encodedViewDirection = PrimaryViewDirection[pixelCoordinate];
+  }
+
+  return minimalRayInteractionCreate(memory, primaryRay);
+}
+
 void geometryResolverApplyUnorderedDecalsPass(ivec2 pixelCoordinate) {
   if (!cb.enableSeparateUnorderedApproximations || !cb.enableDecalMaterialBlending)
   {
@@ -3549,11 +3601,8 @@ void geometryResolverApplyUnorderedDecalsPass(ivec2 pixelCoordinate) {
   // view directions are reconstructed from this ray during GBuffer decode.
   const Ray primaryRay = rayCreatePrimaryFromPixel(cb.camera, pixelCoordinate);
 
-  GBufferMemoryMinimalRayInteraction rayInteractionMemory;
-  rayInteractionMemory.encodedViewDirection = PrimaryViewDirection[pixelCoordinate];
-  rayInteractionMemory.encodedConeRadius = encodedConeRadius;
   const MinimalRayInteraction minimalRayInteraction =
-    minimalRayInteractionCreate(rayInteractionMemory, primaryRay);
+    geometryResolverReadPrimaryMinimalRayInteraction(pixelCoordinate, encodedConeRadius, primaryRay);
 
   GBufferMemoryMinimalSurfaceInteraction surfaceInteractionMemory;
   surfaceInteractionMemory.encodedWorldPositionWorldTriangleTBN =
@@ -3743,11 +3792,8 @@ uint geometryPSRPreparePass(ivec2 pixelCoordinate) {
   // view directions are reconstructed from this ray during GBuffer decode.
   const Ray primaryRay = rayCreatePrimaryFromPixel(cb.camera, pixelCoordinate);
 
-  GBufferMemoryMinimalRayInteraction rayInteractionMemory;
-  rayInteractionMemory.encodedViewDirection = PrimaryViewDirection[pixelCoordinate];
-  rayInteractionMemory.encodedConeRadius = float16_t(PrimaryConeRadius[pixelCoordinate]);
   const MinimalRayInteraction minimalRayInteraction =
-    minimalRayInteractionCreate(rayInteractionMemory, primaryRay);
+    geometryResolverReadPrimaryMinimalRayInteraction(pixelCoordinate, PrimaryConeRadius[pixelCoordinate], primaryRay);
 
   GBufferMemoryMinimalSurfaceInteraction surfaceInteractionMemory;
   surfaceInteractionMemory.encodedWorldPositionWorldTriangleTBN =
@@ -3818,18 +3864,25 @@ uint geometryPSRPreparePass(ivec2 pixelCoordinate) {
   const bool performPSRR = candidatePSRR && reflectionPSRSample.performPSR;
   const bool performPSTR = candidatePSTR && transmissionPSRSample.performPSR;
 
-  vec3 radiance = vec3(SharedRadianceRG[pixelCoordinate], SharedRadianceB[pixelCoordinate]);
   const vec3 attenuation = r11g11b10ToColor(PrimaryAttenuation[pixelCoordinate]);
-  const vec3 diffuseLayerRadiance = approximateDiffuseLayerRadiance(
-    surfaceInteraction,
-    polymorphicSurfaceMaterialInteraction.shadingNormal,
-    geometryFlags.portalSpace,
-    diffuseLayerWeight) * attenuation;
 
-  radiance += diffuseLayerRadiance;
+  // Without a diffuse layer the radiance would be stored back unchanged.
+  // The test matches the early out in approximateDiffuseLayerRadiance.
+  if (!all(diffuseLayerWeight <= 0.0f))
+  {
+    vec3 radiance = vec3(SharedRadianceRG[pixelCoordinate], SharedRadianceB[pixelCoordinate]);
+    const vec3 diffuseLayerRadiance = approximateDiffuseLayerRadiance(
+      surfaceInteraction,
+      polymorphicSurfaceMaterialInteraction.shadingNormal,
+      geometryFlags.portalSpace,
+      diffuseLayerWeight) * attenuation;
 
-  SharedRadianceRG[pixelCoordinate] = radiance.rg;
-  SharedRadianceB[pixelCoordinate] = radiance.b;
+    radiance += diffuseLayerRadiance;
+
+    SharedRadianceRG[pixelCoordinate] = radiance.rg;
+    SharedRadianceB[pixelCoordinate] = radiance.b;
+  }
+
   SharedIntegrationSurfacePdf[pixelCoordinate] = selectedIntegrationSurfacePdf;
 
   geometryFlags.performPSRR = performPSRR;

@@ -444,7 +444,7 @@ namespace bridge_util {
            << " blockedUsPerFrame=" << toUs(empty.blockTicks) * perFrame;
         {
           // Query GetData calls per frame by path; after "/" the ones that returned the result (S_OK).
-          constexpr const char* kQueryPathNames[size_t(QueryPath::Count)] = { "clientEvent", "asyncCached", "asyncRequest", "blocking" };
+          constexpr const char* kQueryPathNames[size_t(QueryPath::Count)] = { "asyncCached", "asyncRequest", "blocking" };
           ss << " | queryGetDataPerFrame:";
           for (size_t i = 0; i < size_t(QueryPath::Count); ++i) {
             ss << " " << kQueryPathNames[i] << "=" << double(d.queryCalls[i]) * perFrame

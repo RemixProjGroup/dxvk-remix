@@ -98,6 +98,17 @@ namespace dxvk {
 
       if (chosen != ~0u) {
         // Found by content.
+      } else if (query.positionUnknown) {
+        uint32_t bestOffset = ~0u;
+        const uint32_t first = index > kWindow ? index - kWindow : 0u;
+        const uint32_t last = std::min(count, index + kWindow + 1);
+        for (uint32_t slot = first; slot < last; ++slot) {
+          const uint32_t offset = slot > index ? slot - index : index - slot;
+          if (claimable(slot) && known[slot].lastFrame + 1 == frame && sameMaterialAs(slot) && offset < bestOffset) {
+            bestOffset = offset;
+            chosen = slot;
+          }
+        }
       } else if (index < count && claimable(index) && known[index].position == position && known[index].signature == signature &&
           sameMaterialAs(index)) {
         chosen = index;
@@ -113,8 +124,9 @@ namespace dxvk {
           if (!claimable(slot)) {
             continue;
           }
-          const float distance = lengthSqr(known[slot].position - position);
           const bool recent = known[slot].lastFrame + 1 == frame;
+          const Vector3 expected = query.predict && recent ? known[slot].position + known[slot].velocity : known[slot].position;
+          const float distance = lengthSqr(expected - position);
           // A non-finite position has a NaN distance, which never matches.
           if (!(distance <= maxDistanceSqr) || (!recent && distance > query.staleDistanceSqr)) {
             continue;
@@ -160,7 +172,10 @@ namespace dxvk {
         known.resize(chosen + 1);
       }
       PositionSlot& taken = known[chosen];
-      taken.position = position;
+      if (!query.positionUnknown || !query.reused) {
+        taken.velocity = query.reused && taken.lastFrame + 1 == frame ? position - taken.position : Vector3(0.f);
+        taken.position = position;
+      }
       taken.signature = signature;
       if (query.material != 0 || !query.reused) {
         taken.material = query.material;

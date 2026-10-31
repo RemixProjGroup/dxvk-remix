@@ -524,7 +524,7 @@ creates a likelihood of confusion with NVIDIA Marks.
 
 This software contains source code provided by NVIDIA Corporation.
 
-The NVIDIA RTXDI SDK, Remix branch (commit 7835387d499c331d728c6e76d981c8960e9da066), is
+The NVIDIA RTXDI SDK, Remix branch (commit 639c99fd0d8df6bf81ea9730d71a071d6eff5dba), is
 used unmodified from the submodules/rtxdi git submodule; its shader headers, including the
 volumetrics headers, are compiled into the runtime. It is licensed under the NVIDIA RTX
 SDKs licence in the NVIDIA RTX SDKS section above, which is the LICENSE.txt shipped with

@@ -38,7 +38,7 @@ option is listed in [`RtxOptions.md`](RtxOptions.md).
 | **Color grade presets** | Editable looks (color matrix, color balance, saturation, contrast and curve shape) saved as files in `rtx-remix/colorgrade`. Pick one in the Alt+X menu, edit it live in the developer menu, and the runtime blends smoothly from one look to the next. |
 | **Screenshots** | Print Screen, or the Take Screenshot button in the Alt+X menu, saves the frame with the game's own interface and without the Remix menu, without a hitch. In HDR it saves an HDR PNG and a matching SDR PNG that shows correctly in ordinary viewers. |
 | **SCCR relief displacement** | A new default displacement mode that gives height-mapped surfaces deep, stable relief with correct depth and motion vectors. An optional shell-tracing mode keeps deep relief connected across triangle edges. |
-| **Light BVH light sampling** | The default light selection: it picks lights by their bounds, power and direction, which keeps scenes with many lights fast and clean. |
+| **Light BVH light sampling** | An optional light selection (`rtx.lightSampling.mode = 1`): it picks lights by their bounds, power and direction, which keeps scenes with very many lights fast. RTXDI is the default. |
 | **SHaRC indirect lighting by default** | A world-space radiance cache (it stores bounced light in the world and reuses it) is the default indirect lighting on NVIDIA GPUs. It no longer goes dark for a moment after camera cuts or exposure changes. |
 | **Pre-exposure** | Keeps night scenes precise by scaling the image to the current exposure before it is stored, so dark scenes keep their detail. |
 | **Auto exposure** | A new metering model by TheGreatHmmmmm, weighted slightly below the middle of the screen so a bright sky counts for less. A single invalid pixel can no longer stick the exposure. |
@@ -178,7 +178,7 @@ GPUs with 8 GB of video memory or less get one step lower (Low at the bottom).
 | **Light bounces** | 1 to 4 | 1 to 4 | 0 to 2 | 0 to 2 |
 | **Indirect lighting** (NVIDIA: SHaRC; other GPUs: ReSTIR GI) | Ultra cache update | High cache update, about half the cost of Ultra | Medium | Medium |
 | **Separate direct and indirect denoising** | On | On | Off | Off |
-| **Sparse rendering** (with Ray Reconstruction on) | Off: full image quality | 60% of pixels traced | 50% | about 36% |
+| **Sparse rendering** (with Ray Reconstruction on) | Off: full image quality | A share of pixels traced, set by the preset and render resolution; off when it would be close to full rate | Fewer pixels | Fewest pixels |
 | **Volumetrics** | Ultra | Ultra | Medium | Low |
 | **Relief displacement quality** | High | High | Medium | Low |
 | **Particles and blended surfaces in reflections and bounces** | On | On | Off | Off |
@@ -196,11 +196,10 @@ keeps every setting as you set it.
   what to rebuild, and the traps.
 - [Host path performance guide](docs/api-host-path-migration.md): moving a game to retained instances and the D3D11
   host path.
-- [Remix API performance guide](https://github.com/RemixProjGroup/dxvk-remix/blob/dev/docs/RemixApi-Performance.md):
-  getting the best CPU and GPU performance from an integration, and how to measure it. Written for the `dev` branch.
-- [D3D9 performance guide](https://github.com/RemixProjGroup/dxvk-remix/blob/dev/docs/D3D9-Performance.md): what to set
-  and how to author content for D3D9 games and mods that do not use the Remix API, and how to read the performance logs.
-  Written for the `dev` branch.
+- [Remix API performance guide](docs/RemixApi-Performance.md): getting the best CPU and GPU performance from an
+  integration, and how to measure it.
+- [D3D9 performance guide](docs/D3D9-Performance.md): what to set and how to author content for D3D9 games and mods that
+  do not use the Remix API, and how to read the performance logs.
 - [Remix API changelog](documentation/RemixApiChangelog.md) and the [Remix Plus changelog](docs/CHANGELOG.md).
 - [Remix Sky API](docs/RemixSkyAPI.md): weather presets, game weather and the NUMOS settings.
 - [RemixFX post-processing effects](docs/RemixFx.md) and the [post-processing stack](docs/PostProcessingStack.md).

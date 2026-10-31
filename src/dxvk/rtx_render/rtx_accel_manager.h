@@ -29,6 +29,7 @@
 #include "../util/rc/util_rc_ptr.h"
 #include "rtx_types.h"
 #include "rtx_common_object.h"
+#include "rtx_option.h"
 #include "rtx_gpu_crash_recorder.h"
 #include "rtx_staging.h"
 #include "rtx_point_instancer_system.h"
@@ -149,6 +150,18 @@ class AccelManager : public CommonDeviceObject {
   };
 
 public:
+  RTX_OPTION("rtx.accel", bool, tlasRefit, true,
+             "Updates (refits) each TLAS instead of rebuilding it while its instance list keeps the same "
+             "length, order and BLASes, so only transforms and masks change. A full build still happens every "
+             "rtx.accel.tlasRefitRebuildFrames frames and when more than rtx.accel.tlasRefitMovedFraction of the "
+             "instances moved since the last full build. Saves TLAS build time without changing the image.");
+  RTX_OPTION("rtx.accel", uint32_t, tlasRefitRebuildFrames, 16,
+             "With rtx.accel.tlasRefit: the most consecutive refits of a TLAS before it is fully built again. "
+             "Higher values save more build time but let the tree degrade further while instances move.");
+  RTX_OPTION("rtx.accel", float, tlasRefitMovedFraction, 0.25f,
+             "With rtx.accel.tlasRefit: a TLAS is fully built again when more than this fraction (0 to 1) of its "
+             "instances moved since its last full build.");
+
   AccelManager(AccelManager const&) = delete;
   AccelManager& operator=(AccelManager const&) = delete;
 
@@ -306,6 +319,7 @@ public:
     // TLAS
     uint32_t tlasBuilt = 0;
     uint32_t tlasSkipped = 0;
+    uint32_t tlasRefit = 0;             // rtx.accel.tlasRefit, counted within tlasBuilt
     // rtx.compactStableBlas
     uint32_t compactionQueries = 0;
     uint32_t compacted = 0;
@@ -429,6 +443,10 @@ private:
                                      size_t& currentScratchOffset);
   template<Tlas::Type type>
   void internalBuildTlas(Rc<DxvkContext> ctx, size_t& totalScratchSize);
+  // rtx.accel.tlasRefit: returns true when the TLAS of this type may be refit from source.
+  // Returns false for a full build, and then records the build as the reference for later refits.
+  bool chooseTlasRefit(Tlas::Type type, VkBuildAccelerationStructureFlagsKHR flags, uint32_t numInstances,
+                       const DxvkAccelStructure* source);
 
   void buildParticleSurfaceMapping(std::vector<uint32_t>& surfaceIndexMapping, bool infoGathered = false);
   void fillPrimitiveCountsSerial();
@@ -683,6 +701,22 @@ private:
   uint32_t m_lastTlasCount[Tlas::Count] = {};
   uint32_t m_tlasIdenticalBuilds[Tlas::Count] = {};
   VkBuildAccelerationStructureFlagsKHR m_lastTlasFlags[Tlas::Count] = {}; // TLAS build flags as last built
+
+  // rtx.accel.tlasRefit: the state of each TLAS type at its last full build. The key holds each
+  // CPU instance's BLAS and flags, and each point-instancer batch's layout. A refit is valid while
+  // the key and the instance count match. The transforms count the moved instances.
+  struct TlasRefitState {
+    std::vector<uint64_t> key;
+    std::vector<VkTransformMatrixKHR> cpuTransforms;
+    std::vector<Matrix4> batchTransforms;
+    const DxvkAccelStructure* lastWritten = nullptr;
+    VkBuildAccelerationStructureFlagsKHR flags = 0;
+    uint32_t count = 0;
+    uint32_t refitsSinceBuild = 0;
+    bool valid = false;
+  };
+  TlasRefitState m_tlasRefit[Tlas::Count];
+  std::vector<uint64_t> m_tlasRefitKeyScratch;
   // Set when any BLAS was built or refit this frame (TLAS bounds would be stale).
   bool m_blasBuiltThisFrame = false;
   // See isSssTlasActive().

@@ -94,6 +94,67 @@ namespace dxvk
       return std::string(buf);
     }
 
+    struct FeatureLibraryInfo {
+      std::wstring path;
+      const char* origin = "not found in the feature search path";
+      bool hasVersion = false;
+      uint16_t version[4] = {};
+
+      std::string versionText() const {
+        return hasVersion
+          ? str::format(version[0], ".", version[1], ".", version[2], ".", version[3])
+          : std::string("unknown");
+      }
+    };
+
+    // Finds the copy of a feature DLL that NGX uses.
+    // That is the module NGX loaded, when it has loaded one by now.
+    // Otherwise it is the first copy in the search order, which is the one NGX picks from these directories.
+    FeatureLibraryInfo findFeatureLibrary(const wchar_t* libraryName, const std::vector<std::wstring>& searchPaths) {
+      FeatureLibraryInfo info;
+      if (const HMODULE module = GetModuleHandleW(libraryName)) {
+        wchar_t modulePath[MAX_PATH] = {};
+        const DWORD length = GetModuleFileNameW(module, modulePath, MAX_PATH);
+        if (length > 0 && length < MAX_PATH) {
+          info.path = modulePath;
+          info.origin = "loaded by NGX";
+        }
+      }
+
+      if (info.path.empty()) {
+        for (const std::wstring& directory : searchPaths) {
+          const std::wstring candidate = directory + L"\\" + libraryName;
+          const DWORD attributes = GetFileAttributesW(candidate.c_str());
+          if (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            info.path = candidate;
+            info.origin = "first in the feature search path";
+            break;
+          }
+        }
+      }
+
+      if (!info.path.empty()) {
+        DWORD handle = 0;
+        const DWORD size = GetFileVersionInfoSizeW(info.path.c_str(), &handle);
+        if (size > 0) {
+          std::vector<uint8_t> versionInfo(size);
+          VS_FIXEDFILEINFO* pFixedInfo = nullptr;
+          UINT fixedInfoSize = 0;
+          if (GetFileVersionInfoW(info.path.c_str(), 0, size, versionInfo.data()) &&
+              VerQueryValueW(versionInfo.data(), L"\\", reinterpret_cast<void**>(&pFixedInfo), &fixedInfoSize) &&
+              pFixedInfo != nullptr && fixedInfoSize >= sizeof(VS_FIXEDFILEINFO)) {
+            info.hasVersion = true;
+            info.version[0] = HIWORD(pFixedInfo->dwFileVersionMS);
+            info.version[1] = LOWORD(pFixedInfo->dwFileVersionMS);
+            info.version[2] = HIWORD(pFixedInfo->dwFileVersionLS);
+            info.version[3] = LOWORD(pFixedInfo->dwFileVersionLS);
+          }
+        }
+      }
+
+      return info;
+    }
+
     NVSDK_NGX_Resource_VK ViewToResourceVK(const Rc<DxvkImageView>& view, bool isUAV) {
       VkImageView imageView = view->handle();
       auto info = view->image()->info();
@@ -258,6 +319,7 @@ namespace dxvk
     m_supportsDlssNeuralRendering = checkDlssNeuralRenderingSupport(tempParams);
     m_dlssNeuralRenderingSupportChecked = true;
     logDlssNeuralRenderingLibrary();
+    updateRayReconstructionLibrary();
     
 #if defined(NVSDK_NGX_Parameter_SuperSampling_NeedsUpdatedDriver)        \
     && defined (NVSDK_NGX_Parameter_SuperSampling_MinDriverVersionMajor) \
@@ -420,54 +482,32 @@ namespace dxvk
   }
 
   void NGXContext::logDlssNeuralRenderingLibrary() const {
-    constexpr wchar_t kLibraryName[] = L"nvngx_dlssnr.dll";
-
-    // The module NGX loaded, when it has loaded one by now.
-    // Otherwise the first copy in the search order, which is the one NGX picks from these directories.
-    std::wstring libraryPath;
-    const char* origin = "not found in the feature search path";
-    if (const HMODULE module = GetModuleHandleW(kLibraryName)) {
-      wchar_t modulePath[MAX_PATH] = {};
-      const DWORD length = GetModuleFileNameW(module, modulePath, MAX_PATH);
-      if (length > 0 && length < MAX_PATH) {
-        libraryPath = modulePath;
-        origin = "loaded by NGX";
-      }
-    }
-
-    if (libraryPath.empty()) {
-      for (const std::wstring& directory : m_featureSearchPaths) {
-        const std::wstring candidate = directory + L"\\" + kLibraryName;
-        const DWORD attributes = GetFileAttributesW(candidate.c_str());
-        if (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
-          libraryPath = candidate;
-          origin = "first in the feature search path";
-          break;
-        }
-      }
-    }
-
-    std::string version = "unknown";
-    if (!libraryPath.empty()) {
-      DWORD handle = 0;
-      const DWORD size = GetFileVersionInfoSizeW(libraryPath.c_str(), &handle);
-      if (size > 0) {
-        std::vector<uint8_t> versionInfo(size);
-        VS_FIXEDFILEINFO* pFixedInfo = nullptr;
-        UINT fixedInfoSize = 0;
-        if (GetFileVersionInfoW(libraryPath.c_str(), 0, size, versionInfo.data()) &&
-            VerQueryValueW(versionInfo.data(), L"\\", reinterpret_cast<void**>(&pFixedInfo), &fixedInfoSize) &&
-            pFixedInfo != nullptr && fixedInfoSize >= sizeof(VS_FIXEDFILEINFO)) {
-          version = str::format(HIWORD(pFixedInfo->dwFileVersionMS), ".", LOWORD(pFixedInfo->dwFileVersionMS), ".",
-                                HIWORD(pFixedInfo->dwFileVersionLS), ".", LOWORD(pFixedInfo->dwFileVersionLS));
-        }
-      }
-    }
+    const FeatureLibraryInfo library = findFeatureLibrary(L"nvngx_dlssnr.dll", m_featureSearchPaths);
 
     Logger::info(str::format(
       "[DLSS-NR] NGX reports DLSS-NR as ", m_supportsDlssNeuralRendering ? "available" : "unavailable",
-      ". nvngx_dlssnr.dll: ", libraryPath.empty() ? std::string("none") : str::fromws(libraryPath.c_str()),
-      " (", origin, ", version ", version, "). Search path: ", getFeatureSearchPathText(), "."));
+      ". nvngx_dlssnr.dll: ", library.path.empty() ? std::string("none") : str::fromws(library.path.c_str()),
+      " (", library.origin, ", version ", library.versionText(), "). Search path: ", getFeatureSearchPathText(), "."));
+  }
+
+  void NGXContext::updateRayReconstructionLibrary() {
+    const FeatureLibraryInfo library = findFeatureLibrary(L"nvngx_dlssd.dll", m_featureSearchPaths);
+
+    // The CNN presets A to C are gone from nvngx_dlssd.dll 310.4.0 and later.
+    m_rayReconstructionSupportsCnnPresets = library.hasVersion
+      && (library.version[0] < 310 || (library.version[0] == 310 && library.version[1] < 4));
+    m_rayReconstructionLibraryVersion = library.versionText();
+
+    if (library.path == m_rayReconstructionLibraryPath && !m_rayReconstructionLibraryPath.empty()) {
+      return;
+    }
+    m_rayReconstructionLibraryPath = library.path;
+
+    Logger::info(str::format(
+      "[DLSS-RR] nvngx_dlssd.dll: ", library.path.empty() ? std::string("none") : str::fromws(library.path.c_str()),
+      " (", library.origin, ", version ", m_rayReconstructionLibraryVersion, "). CNN presets A to C are ",
+      m_rayReconstructionSupportsCnnPresets ? "available" : "unavailable, they need a version before 310.4",
+      ". Search path: ", getFeatureSearchPathText(), "."));
   }
 
   bool NGXContext::checkDLSSSupport(NVSDK_NGX_Parameter* params) {

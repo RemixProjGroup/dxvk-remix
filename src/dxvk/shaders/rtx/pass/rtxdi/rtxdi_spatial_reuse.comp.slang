@@ -42,7 +42,10 @@
 #define RAB_HAS_CURRENT_GBUFFER 1
 #define SHADOW_TERMINATOR_FIX_ALLOWED 1
 #define RAB_HAS_RTXDI_RESERVOIRS 1
-#define RTXDI_COHERENT_SPATIAL_NEIGHBOR_OFFSETS 1
+// Spatial reuse picks random neighbor offsets per pixel. Wave-uniform offsets correlate the reuse across a whole wave,
+// and with the clamp to the screen bounds whole strips reuse one edge pixel, which shows as streaks on hard shadow edges
+// and along the screen border.
+#define RTXDI_COHERENT_SPATIAL_NEIGHBOR_OFFSETS 0
 
 #ifndef RTXDI_ENABLE_BSDF_DETAIL
 #define RTXDI_ENABLE_BSDF_DETAIL 1

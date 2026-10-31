@@ -34,3 +34,13 @@ return useFeature
 If the entry point already has a complex variant matrix (many axes), adding one more doubles the compiled variant count. Prefer this cost over unconditional compilation: the shader cache takes the hit once at build time, whereas unconditional code runs in every dispatch even when the feature is disabled.
 
 For the full variant system syntax and C++ integration pattern, see `src/dxvk/shaders/rtx/README.md`.
+
+## Slim variant tables
+
+The RayQuery G-buffer picks a slim kernel per frame from the table in `src/dxvk/rtx_render/rtx_pathtracer_gbuffer_variants.h`. A feature that changes the G-buffer's feature set (the `gbuffer_rayquery` features axis) or its mode key must either add slim entries for the new combinations or add a case to `kGbufferExpectedFull` with a one-line reason. Otherwise frames with that feature run the Full kernels without saying so.
+
+Two checks enforce this:
+- a `static_assert` in `rtx_pathtracer_gbuffer.cpp` fails the build when a combination of the frame inputs (scene 0) has neither;
+- the unit test `test_gbuffer_variant_coverage` walks every combination, including every scene bit the table can remove, and lists the gaps.
+
+At runtime, a frame whose table entry is Full logs a one-time `[GBuffer] A frame fell back to the Full G-buffer kernels` warning with its feature variant, mode key and blocking entry, and the `[Perf]` summary shows each slim level's share of the frames.

@@ -46,6 +46,8 @@ namespace dxvk {
       bool useDLSS;
       bool demodulateRoughness;
       float roughnessDemodulationOffset;
+      // True when the game's sky draws were rasterized into the sky matte this frame.
+      bool gameSkyRasterized = false;
     };
 
     enum class EnhancementMode{
@@ -89,8 +91,8 @@ namespace dxvk {
 
     RTX_OPTION("rtx", bool, enableFog, true, "");
     RTX_OPTION("rtx", bool, fogApplyToSky, true,
-      "Applies depth-based fog to sky pixels. Turn it off when the game's fog hides a separately authored sky. Fog on "
-      "geometry is unaffected.");
+      "Applies depth-based fog to sky pixels that show no authored sky, so the void past the level fades into the fog. "
+      "The game's own sky draws, the sky provider and the dome light are never fogged. Fog on geometry is unaffected.");
     RTX_OPTION("rtx", float, fogColorScale, 0.25f, "");
     RTX_OPTION("rtx", float, maxFogDistance, 65504.f,
       "Distance in world units over which depth-based fog accumulates. "
@@ -112,6 +114,8 @@ namespace dxvk {
     RTX_OPTION("rtx", float, stochasticAlphaBlendInitialSearchRadius, 10.0f, "Initial search radius.");
     RTX_OPTION("rtx", float, stochasticAlphaBlendRadiusExpandFactor, 1.6f, "Multiply radius by this factor if cannot find a good neighbor.");
     RTX_OPTION("rtx", bool, stochasticAlphaBlendShareNeighbors, true, "Share result with other pixels to accelerate search.");
+    RTX_OPTION("rtx", bool, stochasticAlphaBlendAverageSearchMatches, false,
+               "Averages the radiance of up to 4 matching neighbors instead of using the first match, which reduces flicker from per-frame noise.");
     RTX_OPTION("rtx", float, stochasticAlphaBlendNormalSimilarity, 0.9f, "Min normal similarity for a valid neighbor.");
     RTX_OPTION("rtx", float, stochasticAlphaBlendDepthDifference, 0.1f, "Max depth difference for a valid neighbor.");
     RTX_OPTION("rtx", float, stochasticAlphaBlendPlanarDifference, 0.2f, "Max planar difference for a valid neighbor.");

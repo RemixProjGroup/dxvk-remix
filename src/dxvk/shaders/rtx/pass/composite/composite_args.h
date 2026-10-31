@@ -139,4 +139,9 @@ struct CompositeArgs {
   // The depth a primary miss writes (RaytraceArgs::clearColorDepth). Cloud depth never lies beyond it.
   float cloudMotionVectorMissDepth;
   uint cloudMotionVectorPad;
+
+  uint stochasticAlphaBlendAverageSearchMatches;
+  uint alphaBlendSearchPad0;
+  uint alphaBlendSearchPad1;
+  uint alphaBlendSearchPad2;
 };

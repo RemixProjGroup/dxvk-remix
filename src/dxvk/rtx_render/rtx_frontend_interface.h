@@ -139,6 +139,9 @@ namespace dxvk {
       uint32_t jumps = 0;
       // The largest move of a draw's bounds between two draws of its geometry that continue it, in world units.
       float maxMotion = 0.f;
+      // Rebuilds of geometry whose draw changed its topology in place, without moving: the instance keeps its
+      // history, and its geometry's previous positions are its new positions.
+      uint32_t topologyRebuilds = 0;
     };
 
     // What a frontend states about one instance of a mesh.
