@@ -37,8 +37,8 @@
 namespace nrd {
   using pfnCreateInstance = Result(*)(const InstanceCreationDesc& instanceCreationDesc, Instance*& instance);
   using pfnDestroyInstance = void (*)(Instance& instance);
-  using pfnGetLibraryDesc = const LibraryDesc& (*)();
-  using pfnGetInstanceDesc = const InstanceDesc& (*)(const Instance& instance);
+  using pfnGetLibraryDesc = const LibraryDesc* (*)();
+  using pfnGetInstanceDesc = const InstanceDesc* (*)(const Instance& instance);
   using pfnSetCommonSettings = Result (*)(Instance& instance, const CommonSettings& commonSettings);
   using pfnSetDenoiserSettings = Result (*)(Instance& instance, Identifier identifier, const void* denoiserSettings);
   using pfnGetComputeDispatches = Result (*)(Instance& instance, const Identifier* identifiers, uint32_t identifiersNum, const DispatchDesc*& dispatchDescs, uint32_t& dispatchDescsNum);
@@ -85,9 +85,16 @@ namespace nrd {
     GET_PROC_MACRO(GetDenoiserString);
 #undef GET_PROC_MACRO
 
-    const LibraryDesc& desc = dispatch.GetLibraryDesc();
-    if (desc.versionMajor != NRD_VERSION_MAJOR || desc.versionMinor != NRD_VERSION_MINOR || desc.versionBuild != NRD_VERSION_BUILD) {
+    const LibraryDesc* desc = dispatch.GetLibraryDesc();
+    if (desc->versionMajor != NRD_VERSION_MAJOR || desc->versionMinor != NRD_VERSION_MINOR || desc->versionBuild != NRD_VERSION_BUILD) {
       dxvk::Logger::err("Incorrect version of NRD has been loaded.  Ensure the correct DLLs have been copied to the Remix binary directory.  NRD disabled.");
+      FreeLibrary(hNRD);
+      return NULL;
+    }
+
+    // The shaders and the G-buffer guides use these encodings (rtx/utility/nrd.slangh).
+    if (desc->normalEncoding != NormalEncoding::R10_G10_B10_A2_UNORM || desc->roughnessEncoding != RoughnessEncoding::LINEAR) {
+      dxvk::Logger::err("NRD was built with encodings that do not match the runtime. NRD disabled.");
       FreeLibrary(hNRD);
       return NULL;
     }
@@ -129,6 +136,12 @@ namespace dxvk {
       return VK_FORMAT_R8G8_UNORM;
     case nrd::Format::RGBA8_UNORM:
       return VK_FORMAT_R8G8B8A8_UNORM;
+    case nrd::Format::RGBA8_SNORM:
+      return VK_FORMAT_R8G8B8A8_SNORM;
+    case nrd::Format::RGBA16_UNORM:
+      return VK_FORMAT_R16G16B16A16_UNORM;
+    case nrd::Format::RGBA16_SNORM:
+      return VK_FORMAT_R16G16B16A16_SNORM;
     case nrd::Format::RGBA16_SFLOAT:
       return VK_FORMAT_R16G16B16A16_SFLOAT;
     case nrd::Format::RGBA32_SFLOAT:
@@ -159,7 +172,7 @@ namespace dxvk {
       return;
     }
 
-    m_settings.initialize(nrd::dispatch.GetLibraryDesc(), device->instance()->config(), type);
+    m_settings.initialize(*nrd::dispatch.GetLibraryDesc(), device->instance()->config(), type);
     
     // Disable the replace direct specular HitT with indirect specular HitT if we are using combined denoiser.
     // Because in combined denoiser the direct and indirect signals are denoised together,
@@ -226,6 +239,11 @@ namespace dxvk {
         ctx->getDevice()->waitForIdle();
         destroyResources();
         destroyPipelines();
+
+        if (m_denoiserInstance) {
+          nrd::dispatch.DestroyInstance(*m_denoiserInstance);
+          m_denoiserInstance = nullptr;
+        }
       }
 
       // Initialize new graphics state
@@ -308,7 +326,7 @@ namespace dxvk {
   void NRDContext::createResources(
     Rc<DxvkContext> ctx,
     const Resources::RaytracingOutput& rtOutput) {
-    const nrd::InstanceDesc& instanceDesc = nrd::dispatch.GetInstanceDesc(*m_denoiserInstance);
+    const nrd::InstanceDesc& instanceDesc = *nrd::dispatch.GetInstanceDesc(*m_denoiserInstance);
 
     DxvkImageCreateInfo desc;
     desc.type = VK_IMAGE_TYPE_2D;
@@ -333,6 +351,8 @@ namespace dxvk {
     viewInfo.numLevels = 1;
 
     const uint32_t textureCount = instanceDesc.permanentPoolSize + instanceDesc.transientPoolSize;
+
+    SharedTransientPool& sharedPool = m_sharedTransientTex;
 
     // Take a copy so we can pull from the bag without aliasing.
     SharedTransientPool sharedPoolCopy = m_sharedTransientTex;
@@ -395,6 +415,31 @@ namespace dxvk {
         }
       }
     }
+
+    // The denoiser instances run one after another, so they can share these. Each one fills them before it reads them.
+    if (m_settings.m_denoiserDesc.denoiser != nrd::Denoiser::REFERENCE) {
+      viewInfo.format = desc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+      desc.extent = { m_settings.m_commonSettings.resourceSize[0], m_settings.m_commonSettings.resourceSize[1], 1 };
+
+      for (uint32_t i = 0; i < kInputCopyCount; i++) {
+        DxvkHashState result;
+        result.add(std::hash<size_t>()(desc.hash()));
+        result.add(std::hash<size_t>()(viewInfo.hash()));
+        result.add(kInputCopyHashSeed + i);
+        const size_t imageHash = result;
+
+        m_inputCopies[i] = sharedPool[imageHash].lock();
+        if (!m_inputCopies[i]) {
+          Resources::Resource resource;
+          resource.image = device()->createImage(desc, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, DxvkMemoryStats::Category::RTXRenderTarget, "nrd input copy");
+          resource.view = device()->createImageView(resource.image, viewInfo);
+          ctx->changeImageLayout(resource.image, VK_IMAGE_LAYOUT_GENERAL);
+
+          m_inputCopies[i] = std::make_shared<Resource>(resource);
+          sharedPool[imageHash] = m_inputCopies[i];
+        }
+      }
+    }
   }
 
   Resources::Resource NRDContext::getValidationTexture() const {
@@ -403,10 +448,14 @@ namespace dxvk {
 
   void NRDContext::createPipelines() {
 
-    const nrd::InstanceDesc& instanceDesc = nrd::dispatch.GetInstanceDesc(*m_denoiserInstance);
+    const nrd::InstanceDesc& instanceDesc = *nrd::dispatch.GetInstanceDesc(*m_denoiserInstance);
 
-    const nrd::DescriptorPoolDesc& descriptorDesc = instanceDesc.descriptorPoolDesc;
-    const nrd::SPIRVBindingOffsets spirvOffsets = nrd::dispatch.GetLibraryDesc().spirvBindingOffsets;
+    const nrd::SPIRVBindingOffsets spirvOffsets = nrd::dispatch.GetLibraryDesc()->spirvBindingOffsets;
+
+    // Register spaces map to descriptor set indices, so the pipeline layout needs both sets in that order.
+    assert(instanceDesc.resourcesSpaceIndex < ComputePipeline::kSetCount);
+    assert(instanceDesc.constantBufferAndSamplersSpaceIndex < ComputePipeline::kSetCount);
+    assert(instanceDesc.resourcesSpaceIndex != instanceDesc.constantBufferAndSamplersSpaceIndex);
 
     // Create constant buffer
     // With NRD, using width + height + method, you receive a description of the pipelines
@@ -435,8 +484,7 @@ namespace dxvk {
         m_staticSamplers[i] = device()->createSampler(samplerInfo);
 
         // Bind info
-        const uint32_t reg = static_cast<uint32_t>(instanceDesc.samplers[i]);
-        samplersBindInfo[i].binding = spirvOffsets.samplerOffset + reg;
+        samplersBindInfo[i].binding = spirvOffsets.samplerOffset + instanceDesc.samplersBaseRegisterIndex + i;
         samplersBindInfo[i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
         samplersBindInfo[i].descriptorCount = 1;
         samplersBindInfo[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -450,10 +498,10 @@ namespace dxvk {
       const nrd::PipelineDesc& nrdPipelineDesc = instanceDesc.pipelines[i];
       const nrd::ComputeShaderDesc& nrdComputeShader = nrdPipelineDesc.computeShaderSPIRV;
 
-      // Start with static samplers bind infos
-      std::vector<VkDescriptorSetLayoutBinding> bindInfo(samplersBindInfo.begin(), samplersBindInfo.end());
+      // The constant buffer set starts with the static samplers.
+      std::vector<VkDescriptorSetLayoutBinding> constantBindInfo(samplersBindInfo.begin(), samplersBindInfo.end());
+      std::vector<VkDescriptorSetLayoutBinding> resourceBindInfo;
       uint32_t cbBindInfoIndex = ComputePipeline::kInvalidIndex;
-      uint32_t resourcesStartIndex = ComputePipeline::kInvalidIndex;
       {
         // Constant Buffer
         if (nrdPipelineDesc.hasConstantData)
@@ -465,12 +513,11 @@ namespace dxvk {
           binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
           binding.pImmutableSamplers = nullptr;
 
-          cbBindInfoIndex = (uint32_t)bindInfo.size();
-          bindInfo.emplace_back(std::move(binding));
+          cbBindInfoIndex = (uint32_t)constantBindInfo.size();
+          constantBindInfo.emplace_back(std::move(binding));
         }
 
         // Textures
-        resourcesStartIndex = (uint32_t)bindInfo.size();
         for (uint32_t j = 0; j < nrdPipelineDesc.resourceRangesNum; j++) {
 
           const nrd::ResourceRangeDesc& nrdDescriptorRange = nrdPipelineDesc.resourceRanges[j];
@@ -479,57 +526,58 @@ namespace dxvk {
           VkDescriptorType descType = isSRV ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
           uint32_t vkBaseOffset = isSRV ? spirvOffsets.textureOffset : spirvOffsets.storageTextureAndBufferOffset;
 
-          assert(nrdDescriptorRange.baseRegisterIndex == 0);
           for (uint32_t k = 0; k < nrdDescriptorRange.descriptorsNum; k++) {
 
             VkDescriptorSetLayoutBinding binding{};
-            binding.binding = vkBaseOffset + k;
+            binding.binding = vkBaseOffset + instanceDesc.resourcesBaseRegisterIndex + k;
             binding.descriptorType = descType;
             binding.descriptorCount = 1;
             binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
             binding.pImmutableSamplers = nullptr;
 
-            bindInfo.emplace_back(std::move(binding));
+            resourceBindInfo.emplace_back(std::move(binding));
           }
         }
       }
 
-      // Create descriptor set layout   
-      VkDescriptorSetLayout descriptorSetLayout;
-      {
+      // Create descriptor set layouts
+      auto createSetLayout = [&](const std::vector<VkDescriptorSetLayoutBinding>& bindings) {
         VkDescriptorSetLayoutCreateInfo dsetInfo;
         dsetInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         dsetInfo.pNext = nullptr;
         dsetInfo.flags = 0;
-        dsetInfo.bindingCount = (uint32_t)bindInfo.size();
-        dsetInfo.pBindings = &bindInfo[0];
+        dsetInfo.bindingCount = (uint32_t)bindings.size();
+        dsetInfo.pBindings = bindings.data();
 
-        VK_THROW_IF_FAILED(m_vkd->vkCreateDescriptorSetLayout(m_vkd->device(), &dsetInfo, nullptr, &descriptorSetLayout));
-      }
-
-      // Create pipeline
-      VkPipelineLayout pipelineLayout = createPipelineLayout(descriptorSetLayout);
-      VkPipeline pipeline = createPipeline(nrdComputeShader, nrdPipelineDesc, pipelineLayout);
+        VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+        VK_THROW_IF_FAILED(m_vkd->vkCreateDescriptorSetLayout(m_vkd->device(), &dsetInfo, nullptr, &setLayout));
+        return setLayout;
+      };
 
       ComputePipeline computePipeline;
-      computePipeline.descriptorSetLayout = descriptorSetLayout;
-      computePipeline.pipelineLayout = pipelineLayout;
-      computePipeline.pipeline = pipeline;
+      computePipeline.resourcesSet = instanceDesc.resourcesSpaceIndex;
+      computePipeline.constantsSet = instanceDesc.constantBufferAndSamplersSpaceIndex;
+      computePipeline.setLayouts[computePipeline.resourcesSet] = createSetLayout(resourceBindInfo);
+      computePipeline.setLayouts[computePipeline.constantsSet] = createSetLayout(constantBindInfo);
+
+      // Create pipeline
+      computePipeline.pipelineLayout = createPipelineLayout(computePipeline.setLayouts);
+      computePipeline.pipeline = createPipeline(nrdComputeShader, nrdPipelineDesc, computePipeline.pipelineLayout);
       computePipeline.constantBufferIndex = cbBindInfoIndex;
-      computePipeline.resourcesStartIndex = resourcesStartIndex;
-      computePipeline.bindings = std::move(bindInfo);
+      computePipeline.constantBindings = std::move(constantBindInfo);
+      computePipeline.resourceBindings = std::move(resourceBindInfo);
       m_computePipelines.emplace_back(std::move(computePipeline));
     }
   }
 
-  VkPipelineLayout NRDContext::createPipelineLayout(VkDescriptorSetLayout dsetLayout) {
+  VkPipelineLayout NRDContext::createPipelineLayout(const VkDescriptorSetLayout* setLayouts) {
 
     VkPipelineLayoutCreateInfo pipeInfo;
     pipeInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipeInfo.pNext = nullptr;
     pipeInfo.flags = 0;
-    pipeInfo.setLayoutCount = 1;
-    pipeInfo.pSetLayouts = &dsetLayout;
+    pipeInfo.setLayoutCount = ComputePipeline::kSetCount;
+    pipeInfo.pSetLayouts = setLayouts;
     pipeInfo.pushConstantRangeCount = 0;
     pipeInfo.pPushConstantRanges = nullptr;
 
@@ -553,7 +601,7 @@ namespace dxvk {
     VkShaderModule shaderModule = VK_NULL_HANDLE;
     VK_THROW_IF_FAILED(m_vkd->vkCreateShaderModule(m_vkd->device(), &shaderInfo, nullptr, &shaderModule));
 
-    registerAftermathShader(shaderInfo.pCode, shaderInfo.codeSize, str::format("NRD ", nrdPipelineDesc.shaderFileName));
+    registerAftermathShader(shaderInfo.pCode, shaderInfo.codeSize, str::format("NRD ", nrdPipelineDesc.shaderIdentifier));
 
     VkPipelineShaderStageCreateInfo stageInfo;
     stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -597,16 +645,16 @@ namespace dxvk {
       throw DxvkError("Dxvk: Failed to create meta clear compute pipeline");
     }
 
-    RtxPipelineStats::logCreation(cache, "compute", str::format("nrd_", nrdPipelineDesc.shaderFileName ? nrdPipelineDesc.shaderFileName : "unnamed"),
+    RtxPipelineStats::logCreation(cache, "compute", str::format("nrd_", nrdPipelineDesc.shaderIdentifier),
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - createStart).count(),
       (feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT) == 0 ? -1
         : (feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT) != 0 ? 1 : 0,
       false);
 
     if (unlikely(pipeInfo.flags & VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR)) {
-      std::string name = str::format("nrd_", nrdPipelineDesc.shaderFileName ? nrdPipelineDesc.shaderFileName : "unnamed");
+      std::string name = str::format("nrd_", nrdPipelineDesc.shaderIdentifier);
       for (char& c : name) {
-        if (c == ' ' || c == '=')
+        if (c == ' ' || c == '=' || c == '|')
           c = '_';
       }
       RtxPipelineStats::logPipeline(*m_vkd, result, name);
@@ -677,12 +725,22 @@ namespace dxvk {
 
     updateNRDSettings(sceneManager, inputs, rtOutput);
 
+    DxvkDenoise::Input nrdInputs = inputs;
+
     std::vector<Rc<DxvkImageView>> pInputs, pOutputs;
     if (m_settings.m_denoiserDesc.denoiser == nrd::Denoiser::REFERENCE) {
       pInputs = { inputs.reference->view, inputs.normal_roughness->view, inputs.linearViewZ->view, inputs.motionVector->view };
       pOutputs = { outputs.reference->view };
     } else {
-      pInputs = { inputs.diffuse_hitT->view, inputs.specular_hitT->view, inputs.normal_roughness->view, inputs.linearViewZ->view, inputs.motionVector->view };
+      const VkImageSubresourceLayers subresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+      const VkOffset3D origin = { 0, 0, 0 };
+      const VkExtent3D extent = m_inputCopies[0]->image->info().extent;
+      ctx->copyImage(m_inputCopies[0]->image, subresource, origin, inputs.diffuse_hitT->image, subresource, origin, extent);
+      ctx->copyImage(m_inputCopies[1]->image, subresource, origin, inputs.specular_hitT->image, subresource, origin, extent);
+      nrdInputs.diffuse_hitT = m_inputCopies[0].get();
+      nrdInputs.specular_hitT = m_inputCopies[1].get();
+
+      pInputs = { nrdInputs.diffuse_hitT->view, nrdInputs.specular_hitT->view, inputs.normal_roughness->view, inputs.linearViewZ->view, inputs.motionVector->view };
       pOutputs = { outputs.diffuse_hitT->view, outputs.specular_hitT->view };
     }
 
@@ -727,7 +785,7 @@ namespace dxvk {
     };
 
     // Prepare and run dispatches
-    const nrd::InstanceDesc& instanceDesc = nrd::dispatch.GetInstanceDesc(*m_denoiserInstance);
+    const nrd::InstanceDesc& instanceDesc = *nrd::dispatch.GetInstanceDesc(*m_denoiserInstance);
     {
       uint32_t dispatchDescNum = 0;
       const nrd::DispatchDesc* dispatchDescs = nullptr;
@@ -742,7 +800,8 @@ namespace dxvk {
 
         ScopedGpuProfileZoneDynamicZ(ctx, dispatchDesc.name);
 
-        VkDescriptorSet descriptorSet = ctx->allocateDescriptorSet(computePipeline.descriptorSetLayout, "NRD descriptor set");
+        VkDescriptorSet resourcesSet = ctx->allocateDescriptorSet(computePipeline.setLayouts[computePipeline.resourcesSet], "NRD resources descriptor set");
+        VkDescriptorSet constantsSet = ctx->allocateDescriptorSet(computePipeline.setLayouts[computePipeline.constantsSet], "NRD constants descriptor set");
 
         std::vector<VkWriteDescriptorSet> descriptorWriteSets;
 
@@ -754,11 +813,11 @@ namespace dxvk {
         // Static sampler descriptors
         for (size_t i = 0; i < instanceDesc.samplersNum; i++) {
 
-          const VkDescriptorSetLayoutBinding& binding = computePipeline.bindings[i];
+          const VkDescriptorSetLayoutBinding& binding = computePipeline.constantBindings[i];
           samplerDescs[i].sampler = m_staticSamplers[i]->handle();
           samplerDescs[i].imageView = VK_NULL_HANDLE;
           samplerDescs[i].imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-          descriptorWriteSets.emplace_back(DxvkDescriptor::texture(descriptorSet, &samplerDescs[i], binding.descriptorType, binding.binding));
+          descriptorWriteSets.emplace_back(DxvkDescriptor::texture(constantsSet, &samplerDescs[i], binding.descriptorType, binding.binding));
           
           ctx->getCommandList()->trackResource<DxvkAccess::None>(m_staticSamplers[i]);
         }
@@ -776,11 +835,11 @@ namespace dxvk {
           ctx->getCommandList()->trackResource<DxvkAccess::Write>(cbSlice.buffer());
           memcpy(cbSlice.mapPtr(0), dispatchDesc.constantBufferData, dispatchDesc.constantBufferDataSize);
 
-          const VkDescriptorSetLayoutBinding& cb = computePipeline.bindings[computePipeline.constantBufferIndex];
+          const VkDescriptorSetLayoutBinding& cb = computePipeline.constantBindings[computePipeline.constantBufferIndex];
           assert(cb.descriptorCount == 1);
 
           cbDesc = cbSlice.getDescriptor().buffer;
-          descriptorWriteSets.emplace_back(DxvkDescriptor::buffer(descriptorSet, &cbDesc, cb.descriptorType, cb.binding));
+          descriptorWriteSets.emplace_back(DxvkDescriptor::buffer(constantsSet, &cbDesc, cb.descriptorType, cb.binding));
 
           barriers.accessBuffer(cbSlice.getSliceHandle(),
             VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -792,13 +851,12 @@ namespace dxvk {
         // Gather needed resource infos for the pipeline
         for (size_t i = 0; i < dispatchDesc.resourcesNum; i++) {
 
-          const nrd::ResourceRangeDesc& descRange = pipelineDesc.resourceRanges[i];
-          const VkDescriptorSetLayoutBinding& binding = computePipeline.bindings[computePipeline.resourcesStartIndex + i];
+          const VkDescriptorSetLayoutBinding& binding = computePipeline.resourceBindings[i];
           assert(binding.descriptorCount == 1);
 
           const nrd::ResourceDesc& resource = dispatchDesc.resources[i];
 
-          const Resources::Resource* texture = getTexture(resource, inputs, outputs);
+          const Resources::Resource* texture = getTexture(resource, nrdInputs, outputs);
 
           const bool bStorage = resource.descriptorType == nrd::DescriptorType::STORAGE_TEXTURE;
 
@@ -819,7 +877,7 @@ namespace dxvk {
             ctx->getCommandList()->trackResource<DxvkAccess::Read>(texture->image);
           }
 
-          descriptorWriteSets.emplace_back(DxvkDescriptor::texture(descriptorSet, &imageDesc[i], *imageView, binding.descriptorType, binding.binding));
+          descriptorWriteSets.emplace_back(DxvkDescriptor::texture(resourcesSet, &imageDesc[i], *imageView, binding.descriptorType, binding.binding));
 
           // The source accesses are the image's tracked ones, so the source stages must be its tracked stages too.
           barriers.accessImage(
@@ -839,7 +897,8 @@ namespace dxvk {
         ctx->getCommandList()->updateDescriptorSets(descriptorWriteSets.size(), descriptorWriteSets.data());
 
         ctx->getCommandList()->cmdBindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline.pipeline);
-        ctx->getCommandList()->cmdBindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline.pipelineLayout, descriptorSet, 0, nullptr);
+        ctx->getCommandList()->cmdBindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline.pipelineLayout, resourcesSet, computePipeline.resourcesSet);
+        ctx->getCommandList()->cmdBindDescriptorSet(VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline.pipelineLayout, constantsSet, computePipeline.constantsSet);
 
         ctx->getCommandList()->cmdDispatch(dispatchDesc.gridWidth, dispatchDesc.gridHeight, 1);
 
@@ -1004,6 +1063,8 @@ namespace dxvk {
   }
 
   void NRDContext::destroyResources() {
+    m_inputCopies[0] = nullptr;
+    m_inputCopies[1] = nullptr;
     m_transientTex.clear();
     m_permanentTex.clear();
     m_sharedTransientTex.clear();
@@ -1014,7 +1075,9 @@ namespace dxvk {
     for (auto& pipeline : m_computePipelines) {
       m_vkd->vkDestroyPipeline(m_vkd->device(), pipeline.pipeline, nullptr);
       m_vkd->vkDestroyPipelineLayout(m_vkd->device(), pipeline.pipelineLayout, nullptr);
-      m_vkd->vkDestroyDescriptorSetLayout(m_vkd->device(), pipeline.descriptorSetLayout, nullptr);
+      for (VkDescriptorSetLayout setLayout : pipeline.setLayouts) {
+        m_vkd->vkDestroyDescriptorSetLayout(m_vkd->device(), setLayout, nullptr);
+      }
     }
 
     m_computePipelines.clear();
@@ -1043,8 +1106,8 @@ namespace dxvk {
     args.maxDirectHitTContribution = m_settings.m_groupedSettings.maxDirectHitTContribution;
     args.frameToDenoiser = PreExposure::frameToDenoiser();
 
-    auto getHitDistanceParameters = [](const nrd::HitDistanceParameters& params) {
-      return Vector4(params.A, params.B, params.C, params.D);
+    auto getHitDistanceParameters = [](const nrd::ReblurHitDistanceParameters& params) {
+      return Vector4(params.A, params.B, params.C, 0.0f);
     };
 
     args.hitDistanceParams = getHitDistanceParameters(m_settings.m_reblurSettings.hitDistanceParameters);

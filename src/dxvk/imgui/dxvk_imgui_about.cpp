@@ -123,6 +123,7 @@ namespace dxvk {
       ImGui::TextUnformatted("Remix Plus is a community fork of NVIDIA RTX Remix.");
       ImGui::TextUnformatted("It is not affiliated with or endorsed by NVIDIA.");
       ImGui::TextUnformatted("RTX Remix is based on the DXVK project.");
+      ImGui::TextUnformatted("Remix Plus uses the NVIDIA Real-Time Denoisers (NRD) SDK for denoising.");
       ImGui::TextUnformatted("The people below are credited for their work on RTX Remix.");
 
       RemixGui::Separator();

@@ -64,6 +64,12 @@ A skinned draw set up no camera, so a view model made only of skinned draws had 
 - Tests: D3D9 scenario skinned-view-model-effect, and check SV2 on skinned-shared-palette.
 - Commits: the commit that adds this entry.
 
+### NRD 4.18 from source
+NRD moves from the prebuilt 4.13 package to version 4.18.0, built from an unmodified `submodules/nrd` submodule while configuring (`scripts-common/build_nrd.py`, SPIR-V only, encodings 2 and 1, quad intrinsics off because the runtime does not enable `VK_KHR_compute_shader_derivatives`). A build needs CMake 3.30 or newer, a Vulkan SDK for its SPIR-V compiler, and network access on the first configure to fetch NRD's pinned MathLib and ShaderMake. Denoiser choices are unchanged. NRD's inputs now get their own copies, because 4.18 uses its outputs as scratch while reading its inputs, and the runtime used to pass one image as both. Switching the denoiser at runtime now recreates the NRD instance, so the ImGui switch really changes denoisers.
+- Options: removed REBLUR's performance mode, hit distance D, hit distance anti-lag and specular probability thresholds, which NRD removed. Added controls for REBLUR's fast history clamp and responsive accumulation minimum.
+- Memory: 2 RGBA16F full-resolution images for the input copies, shared between denoisers and allocated only while NRD denoises.
+- Commits: this change.
+
 ### NRD input fixes for every denoiser
 Fixes that apply to ReLAX and REBLUR alike, none of which touch Ray Reconstruction. Sampling tuned for Ray Reconstruction no longer stays active on the NRD path with FSR, XeSS, TAA-U, NIS or a GPU without DLSS, because every path without Ray Reconstruction now gets the default preset. First-bounce misses report a distant hit instead of 0, which NRD read as a skipped lobe, so reflections of the sky keep their specular tracking. History length follows a low pass filtered frame time, so one hitch no longer cuts it in half. The direct denoiser reconstructs specular hit distance, which holds zeros wherever the diffuse lobe was sampled. NRD receives camera jitter in pixels with the sign it documents, which also corrects its disocclusion threshold bonus. NRD's history now stays at a pre-exposure of its own, so an exposure step no longer clears every denoiser's history; only a drift of more than 4 stops does.
 - Options: `rtx.rayreconstruction.preserveSettingsInNativeMode` now applies only while NRD is not denoising.

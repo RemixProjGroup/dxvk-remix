@@ -14,6 +14,9 @@ code is under two licenses, and each file's header says which applies:
 - **This fork's own files** (no header, added by Kim2091: `rtx_fork_*`, `rtx_host_settings.*`,
   `rtx_perf_log.*`, `rtx_weather*`, `rtx_remix_api_device.h` and others): our own work. Where
   such a file holds code moved out of an NVIDIA file, that code stays MIT.
+- NVIDIA Real-Time Denoisers (NRD): used unmodified from the `submodules/nrd` submodule at tag
+  `v4.18.0` and shipped as `NRD.dll` inside the application under the NVIDIA RTX SDKs license
+  (`submodules/nrd/LICENSE.txt`, reproduced in `ThirdPartyLicenses.txt`). The About tab's credits name it.
 - Bundled libraries: `ThirdPartyLicenses.txt`. That includes the NVIDIA SHARC SDK, used
   unmodified from the `submodules/sharc` submodule and compiled into the runtime under the NVIDIA
   RTX SDKs license (`submodules/sharc/License.md`, reproduced in `ThirdPartyLicenses.txt`), which

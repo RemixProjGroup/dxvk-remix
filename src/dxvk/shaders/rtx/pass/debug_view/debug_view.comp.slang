@@ -149,7 +149,7 @@ SamplerState LinearSampler;
 #include "rtx/utility/color.slangh"
 #include "rtx/utility/packing.slangh"
 #include "rtx/utility/noise.slangh"
-#include "rtx/external/NRD.slangh"
+#include "rtx/utility/nrd.slangh"
 
 
 float4 sampleTexture(Texture2D<float4> texture, ivec2 threadId)
@@ -177,7 +177,7 @@ float nrdGetHitT(float normalizedHitT, float primaryHitPerceptualRoughness, floa
 {
   if (cb.nrd.isReblurEnabled > 0)
   {
-    return REBLUR_GetHitDist(normalizedHitT, linearViewZ, cb.nrd.hitDistanceParams, primaryHitPerceptualRoughness);
+    return REBLUR_GetHitDist(normalizedHitT, linearViewZ, cb.nrd.hitDistanceParams.xyz, primaryHitPerceptualRoughness);
   }
   else
   {
@@ -216,7 +216,7 @@ vec4 nrdDenoisedHitTtoColor(ivec2 threadId)
   if (cb.nrd.isReblurEnabled > 0)
   {
     float linearViewZ = PrimaryLinearViewZ[threadId].x;
-    return vec4(vec3(REBLUR_GetHitDist(normalizedHitT, linearViewZ, cb.nrd.hitDistanceParams, primaryHitPerceptualRoughness)), 1.0);
+    return vec4(vec3(REBLUR_GetHitDist(normalizedHitT, linearViewZ, cb.nrd.hitDistanceParams.xyz, primaryHitPerceptualRoughness)), 1.0);
   }
   else
   {

@@ -33,7 +33,7 @@
 #include "rtx/utility/debug_view_helpers.slangh"
 #include "rtx/concept/camera/camera.slangh"
 #include "rtx/concept/surface/alpha_blend_surface.slangh"
-#include "rtx/external/NRD.slangh"
+#include "rtx/utility/nrd.slangh"
 #include "rtx/utility/geometry_flags.slangh"
 #include "rtx/algorithm/volume_lighting_consumer.slangh"
 #include "rtx/pass/sparse_rendering/sparse_rendering.slangh"

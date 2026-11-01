@@ -20,7 +20,7 @@
 * DEALINGS IN THE SOFTWARE.
 */
 
-#include "rtx/external/NRD.slangh"
+#include "rtx/utility/nrd.slangh"
 #include "rtx/utility/color.slangh"
 
 // The fog modes of cb.fogMode. The values are frontend::FogMode's.

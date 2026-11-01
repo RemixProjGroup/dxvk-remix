@@ -89,17 +89,21 @@ namespace dxvk {
 
       VkPipeline pipeline = VK_NULL_HANDLE;
       VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-      VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
+      // NRD uses one set for the constant buffer and samplers and another for its textures.
+      static constexpr uint32_t kSetCount = 2;
+      VkDescriptorSetLayout setLayouts[kSetCount] = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+      uint32_t resourcesSet = 0;
+      uint32_t constantsSet = 1;
 
       // Static sampler bindings are first
-      std::vector<VkDescriptorSetLayoutBinding> bindings;
+      std::vector<VkDescriptorSetLayoutBinding> constantBindings;
+      std::vector<VkDescriptorSetLayoutBinding> resourceBindings;
       uint32_t constantBufferIndex = kInvalidIndex;
-      uint32_t resourcesStartIndex = kInvalidIndex;
 
       Rc<DxvkSampler> linearSampler;
     };
 
-    VkPipelineLayout createPipelineLayout(VkDescriptorSetLayout dsetLayout);
+    VkPipelineLayout createPipelineLayout(const VkDescriptorSetLayout* setLayouts);
     VkPipeline createPipeline(
       const nrd::ComputeShaderDesc& nrdCS,
       const nrd::PipelineDesc& nrdPipelineDesc,
@@ -119,6 +123,12 @@ namespace dxvk {
     std::vector<Resource> m_permanentTex;
     std::vector<std::shared_ptr<Resource>> m_transientTex;
     Resource m_validationTex;
+
+    // NRD's inputs and outputs must be separate images, while the integrator and composite share one per signal.
+    // These hold the noisy diffuse and specular inputs.
+    static constexpr uint32_t kInputCopyCount = 2;
+    static constexpr size_t kInputCopyHashSeed = 0x4e5244;
+    std::shared_ptr<Resource> m_inputCopies[kInputCopyCount];
 
     using SharedTransientPool = std::unordered_map<size_t, std::weak_ptr<Resource>>;
     inline static SharedTransientPool m_sharedTransientTex; // share these between all NRD instances

@@ -38,7 +38,7 @@
 #include "rtx/concept/surface/surface.slangh"
 #include "rtx/concept/surface_material/surface_material.slangh"
 #include "rtx/algorithm/integrator_helpers.slangh"
-#include "rtx/external/NRD.slangh"
+#include "rtx/utility/nrd.slangh"
 
 #define UPDATE_NEE_CACHE 1
 #include "rtx/algorithm/nee_cache.h"

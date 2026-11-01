@@ -169,7 +169,7 @@ namespace dxvk {
           relaxSettings.diffusePhiLuminance = 1.0f;
           relaxSettings.specularPhiLuminance = 1.0f;
           relaxSettings.specularLobeAngleSlack = 0.15f;
-          relaxSettings.historyClampingColorBoxSigmaScale = 3.f;
+          relaxSettings.fastHistoryClampingSigmaScale = 3.f;
           relaxSettings.lobeAngleFraction = .5f;  // Reduced to 0.5 to make specular highlights more defined
           relaxSettings.roughnessFraction = .15f;
           relaxSettings.luminanceEdgeStoppingRelaxation = .65f;
@@ -369,14 +369,11 @@ namespace dxvk {
           }
           RemixGui::Checkbox("Anti-firefly", &m_reblurSettings.enableAntiFirefly);
           ImGui::SameLine();
-          RemixGui::Checkbox("Performance mode", &m_reblurSettings.enablePerformanceMode);
-          ImGui::SameLine();
           reblurHitTReconstructionModeCombo.getKey(&m_reblurSettings.hitDistanceReconstructionMode);
 
           ADVANCED ImGui::SliderFloat("Hit distance parameters A", &m_reblurSettings.hitDistanceParameters.A, 0.0f, 10000.0f, "%.2f");
           ADVANCED ImGui::SliderFloat("Hit distance parameters B", &m_reblurSettings.hitDistanceParameters.B, 0.0f, 10.0f, "%.2f");
           ADVANCED ImGui::SliderFloat("Hit distance parameters C", &m_reblurSettings.hitDistanceParameters.C, 1.0f, 100.0f, "%.2f");
-          ADVANCED ImGui::SliderFloat("Hit distance parameters D", &m_reblurSettings.hitDistanceParameters.D, -100.0f, 0.0f, "%.2f");
 
           ImGui::Text("PRE-PASS:");
           const float maxBlurRadius = RtxOptions::adaptiveResolutionDenoising() ? 200.0f : 100.0f;
@@ -391,9 +388,10 @@ namespace dxvk {
           RemixGui::SliderFloat("Max blur radius [pixels]", &m_reblurSettings.maxBlurRadius, 0.0f, maxBlurRadius, "%.1f");
           RemixGui::SliderFloat("Lobe angle fraction [normalized %]", &m_reblurSettings.lobeAngleFraction, 0.0f, 1.0f, "%.2f");
           RemixGui::SliderFloat("Roughness fraction [normalized %]", &m_reblurSettings.roughnessFraction, 0.0f, 1.0f, "%.2f");
-          RemixGui::SliderFloat("Responsive accumulation roughness threshold", &m_reblurSettings.responsiveAccumulationRoughnessThreshold, 0.0f, 1.0f, "%.2f");
+          RemixGui::SliderFloat("Responsive accumulation roughness threshold", &m_reblurSettings.responsiveAccumulationSettings.roughnessThreshold, 0.0f, 1.0f, "%.2f");
+          RemixGui::SliderInt("Responsive accumulation min frames", &m_reblurSettings.responsiveAccumulationSettings.minAccumulatedFrameNum, 0, nrd::REBLUR_MAX_HISTORY_FRAME_NUM);
+          RemixGui::SliderFloat("Fast history clamping sigma scale", &m_reblurSettings.fastHistoryClampingSigmaScale, 1.0f, 3.0f, "%.2f");
           ADVANCED RemixGui::SliderFloat("Plane distance sensitivity [normalized %]", &m_reblurSettings.planeDistanceSensitivity, 0.0f, 1.0f, "%.2f");
-          ADVANCED RemixGui::SliderFloat2("Specular probability threshold for mvec modification", m_reblurSettings.specularProbabilityThresholdsForMvModification, 0.0f, 1.0f, "%.2f");
           RemixGui::SliderFloat("Firefly suppressor min relative scale", &m_reblurSettings.fireflySuppressorMinRelativeScale, 1.0f, 3.0f, "%.2f");
           ADVANCED RemixGui::Checkbox("Enable Prepass Only For Specular Motion Estimation", &m_reblurSettings.usePrepassOnlyForSpecularMotionEstimation);
           
@@ -403,8 +401,6 @@ namespace dxvk {
           ADVANCED RemixGui::SliderFloat("Luminance sigma scale", &m_reblurSettings.antilagSettings.luminanceSigmaScale, 0.0f, 10.0f, "%.2f");
           ADVANCED RemixGui::SliderFloat("Luminance sensitivity to darkness", &m_reblurSettings.antilagSettings.luminanceSensitivity, 0.0f, 100.0f, "%.2f");
 
-          ADVANCED RemixGui::SliderFloat("Hit distance sigma scale", &m_reblurSettings.antilagSettings.hitDistanceSigmaScale, 0.0f, 10.0f, "%.2f");
-          ADVANCED RemixGui::SliderFloat("Hit distance sensitivity to darkness", &m_reblurSettings.antilagSettings.hitDistanceSensitivity, 0.0f, 100.0f, "%.2f");
         }
 
         if (resetHistoryOnSettingsChange && memcmp(&m_reblurSettings, &prevReblurSettingsState, sizeof(m_reblurSettings)) != 0)
@@ -448,7 +444,7 @@ namespace dxvk {
 
           ImGui::Text("REPROJECTION:");
           RemixGui::SliderFloat("Specular variance boost", &m_relaxSettings.specularVarianceBoost, 0.0f, 8.0f, "%.2f");
-          RemixGui::SliderFloat("Clamping color sigma scale", &m_relaxSettings.historyClampingColorBoxSigmaScale, 0.0f, 10.0f, "%.1f");
+          RemixGui::SliderFloat("Fast history clamping sigma scale", &m_relaxSettings.fastHistoryClampingSigmaScale, 0.0f, 10.0f, "%.1f");
 
           ImGui::Text("SPATIAL FILTERING:");
           RemixGui::SliderInt("A-trous iterations", (int32_t*) &m_relaxSettings.atrousIterationNum, 2, 8);

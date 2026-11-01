@@ -1,0 +1,13 @@
+#pragma once
+
+#include "rtx/utility/shader_types.slangh"
+
+// NRD does not use material IDs here, but its inputs require one.
+#define MATERIAL_ID_DEFAULT 0.f
+
+// NRD.hlsli takes its encodings from NRDConfig.hlsli, which scripts-common/build_nrd.py generates through NRD's CMake project.
+#include "../../../submodules/nrd/Shaders/NRD.hlsli"
+
+#if NRD_NORMAL_ENCODING != NRD_NORMAL_ENCODING_R10G10B10A2_UNORM || NRD_ROUGHNESS_ENCODING != NRD_ROUGHNESS_ENCODING_LINEAR
+#error The NRD encodings must match the guides the G-buffer writes. See scripts-common/build_nrd.py.
+#endif

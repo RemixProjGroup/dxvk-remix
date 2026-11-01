@@ -27,7 +27,7 @@ NUMOS_MAX_MOONS = 4
 EXTRA_HEADERS = [
   "include/vulkan/include/vulkan/vulkan_core.h",
   "submodules/nrc/Include/NrcStructures.h",
-  "external/nrd/Include/NRDDescs.h",
+  "submodules/nrd/Include/NRDDescs.h",
 ]
 KEYBIND_HEADER = os.path.join(SRC_DIR, "util", "util_keybind.h")
 

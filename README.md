@@ -221,6 +221,7 @@ keeps every setting as you set it.
 - [Windows SDK 10.0.19041.0](https://developer.microsoft.com/en-us/windows/downloads/sdk-archive/) or newer.
 - [Meson 1.8.2+](https://mesonbuild.com/) and Ninja (`pip install --user meson ninja`).
 - [Vulkan SDK 1.4.313.2+](https://vulkan.lunarg.com/sdk/home#windows).
+- CMake 3.30+, to build NRD from its submodule. The one in Visual Studio works. The first configure downloads NRD's pinned dependencies.
 - [Python 3.9+](https://www.python.org/downloads/) (not the Microsoft Store version).
 - Internet access for the first configure, which downloads the prebuilt dependencies listed in
   `packman-external.xml` into `external/`.

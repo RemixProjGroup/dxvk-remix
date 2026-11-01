@@ -554,7 +554,7 @@ dxvk_src = files([
 
 thread_dep = dependency('threads')
 
-nrd_include_dir = include_directories(join_paths('../../', 'external/nrd/Include'))
+nrd_include_dir = include_directories(join_paths('../../', 'submodules/nrd/Include'))
 nrd_dep = declare_dependency(
   include_directories : nrd_include_dir
 )
