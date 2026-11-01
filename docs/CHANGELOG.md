@@ -28,6 +28,13 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-01
+
+### D3D9: a draw that changes only its fog is no longer a repeat
+A draw of a scene-owned object whose only change was its fog state was treated as unchanged, so the object kept its old fog and a fog state reached only through such draws never found its USD replacement material. Such a draw now records the new fog and keeps the draw for the replacement, without rebuilding the object.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ## 2026-10-30
 
 ### Remix API: repeated materials, identical transforms and the texture lock

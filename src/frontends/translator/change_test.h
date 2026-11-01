@@ -54,6 +54,7 @@ namespace dxvk {
       bool terrain = false;     // the Terrain category, which moves with the terrain bake between services
       bool terrainBaking = false;
       bool freeCamera = false;  // rtx.camera.enableFreeCamera
+      XXH64_hash_t fog = 0;     // FogRecord hash, 0 = no fog
     };
 
     // What the change test remembers about an object's last prepared draw.
@@ -67,6 +68,7 @@ namespace dxvk {
       uint32_t derivedCamera = kNoCamera;
       bool derivedTerrainBaking = false;
       bool derivedFreeCamera = false;
+      XXH64_hash_t derivedFog = 0;
       // The re-preparation epoch the scene's copy was described in. An object of an older one is updated at its next
       // draw.
       uint32_t reprepareEpoch = 0;
@@ -118,6 +120,7 @@ namespace dxvk {
         ChangeVerdict v;
         v.derivedSame = derived == nullptr ||
           (derived->categories == record.derivedCategories && derived->cameraType == record.derivedCamera &&
+           derived->fog == record.derivedFog &&
            (!derived->terrain || derived->terrainBaking == record.derivedTerrainBaking) &&
            !followsFreeCamera(in.viewSpaceTexgen, derived->freeCamera || record.derivedFreeCamera));
         v.inputsSame = record.hasLast && in.comparable && in.inputsNoWorld == record.inputsNoWorld;
@@ -132,6 +135,7 @@ namespace dxvk {
           record.derivedCamera = derived->cameraType;
           record.derivedTerrainBaking = derived->terrainBaking;
           record.derivedFreeCamera = derived->freeCamera;
+          record.derivedFog = derived->fog;
         }
         return v;
       }

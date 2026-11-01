@@ -463,24 +463,24 @@ namespace dxvk {
             ? state.getGeometryData().positionBuffer.buffer().ptr() : nullptr;
         }
 
-        // What a description of a processed draw depends on besides the world matrix: the geometry (FullGeometryHash, the
-        // hash acquireGeometry reuses geometry by), the bones, both materials, the texture transform, the categories, the
-        // camera, the fog and the resolver's replacement (ReplacementQuery::version). The world matrix is compared with
-        // Object::objectToWorld, which follows the moves applied since the description.
+        // What a description of a processed draw depends on besides the world matrix and the fog: the geometry
+        // (FullGeometryHash, the hash acquireGeometry reuses geometry by), the bones, both materials, the texture
+        // transform, the categories, the camera and the resolver's replacement (ReplacementQuery::version). The world
+        // matrix is compared with Object::objectToWorld, which follows the moves applied since the description. The fog
+        // is compared with Object::fogHash, since the scene's copy is built the same under any fog.
         static XXH64_hash_t descriptionKey(const DrawCallState& state, const MaterialData& material, uint64_t replacement) {
           const DrawCallTransforms& transforms = state.getTransformData();
           const struct {
-            XXH64_hash_t geometry, bones, material, legacyMaterial, fog;
+            XXH64_hash_t geometry, bones, material, legacyMaterial;
             uint64_t replacementVersion;
             uint32_t categories, cameraType, texgenMode, pad;
           } k = {
             state.getGeometryData().getHashForRule<rules::FullGeometryHash>(), state.getSkinningState().boneHash,
             material.getHash(), state.getMaterialData().computeIdentityHash(),
-            state.getFogState().mode != frontend::FogMode::None ? state.getFogState().getHash() : 0,
             replacement, state.getCategoryFlags().raw(), uint32_t(state.cameraType),
             uint32_t(transforms.texgenMode), 0u
           };
-          static_assert(sizeof(k) == 64, "no implicit padding");
+          static_assert(sizeof(k) == 56, "no implicit padding");
           const XXH64_hash_t h = XXH3_64bits(&k, sizeof(k));
           return XXH3_64bits_withSeed(&transforms.textureTransform, sizeof(transforms.textureTransform), h);
         }
@@ -925,6 +925,7 @@ namespace dxvk {
           // the rebuild. Captured, 3D-skybox and baked-terrain draws are always described again, since their positions or
           // transforms come from more than the geometry hash and the draw's own transforms show.
           const XXH64_hash_t described = descriptionKey(kept, material, replacement.version);
+          const XXH64_hash_t fogHash = kept.getFogState().mode != frontend::FogMode::None ? kept.getFogState().getHash() : 0;
           if (update && !kept.vertexCaptured && !skybox && !bakedTerrain) {
             const auto previous = objects.find(handle);
             const Matrix4& objectToWorld = kept.getTransformData().objectToWorld;
@@ -932,16 +933,17 @@ namespace dxvk {
                                          previous->second.reprepareEpoch == reprepareEpoch;
             const bool sameWorld = previous != objects.end() &&
                                    std::memcmp(&previous->second.objectToWorld, &objectToWorld, sizeof(Matrix4)) == 0;
+            const bool sameFog = previous != objects.end() && previous->second.fogHash == fogHash;
             if (verify && previous != objects.end() && !previous->second.releasing) {
               totals.verified++;
-              if (!sameDescription || !sameWorld) {
+              if (!sameDescription || !sameWorld || !sameFog) {
                 totals.verifyMismatches++;
                 if (verifyLogs < 20) {
                   ++verifyLogs;
                   const Vector3 was = previous->second.objectToWorld[3].xyz();
                   const Vector3 now = objectToWorld[3].xyz();
                   Logger::warn(str::format("[D3D9v2] repeatMismatch: a draw the change test found unchanged differs from the "
-                                           "scene's copy in its ", !sameDescription ? "description" : "world matrix",
+                                           "scene's copy in its ", !sameDescription ? "description" : !sameWorld ? "world matrix" : "fog",
                                            " (handle 0x", std::hex, handle, std::dec, ", skinned ",
                                            kept.getSkinningState().numBones > 0 || kept.vertexBlend ? 1 : 0, ", translation (",
                                            was.x, ", ", was.y, ", ", was.z, ") -> (", now.x, ", ", now.y, ", ", now.z,
@@ -951,6 +953,7 @@ namespace dxvk {
             }
             if (previous != objects.end() && !previous->second.releasing && sameDescription && sameWorld) {
               previous->second.frameLastSeen = scene.frameIndex();
+              previous->second.fogHash = fogHash;
               totals.unchangedUpdates++;
               return;
             }
@@ -998,9 +1001,7 @@ namespace dxvk {
           object.frameLastSeen = frame;
           object.described = described;
           object.reprepareEpoch = reprepareEpoch;
-          if (kept.getFogState().mode != frontend::FogMode::None) {
-            object.fogHash = kept.getFogState().getHash();
-          }
+          object.fogHash = fogHash;
 
           frontend::SceneInstanceDesc desc = describe(kept);
           XXH64_hash_t meshKey;
@@ -2465,6 +2466,7 @@ namespace dxvk {
             derived.terrain = CategoryFlags(prepared->categories).test(InstanceCategories::Terrain);
             derived.terrainBaking = frontend::terrainBakeActive();
             derived.freeCamera = frontend::freeCameraEnabled();
+            derived.fog = prepared->fog.mode != 0 ? prepared->fog.hash() : 0;
           }
           const translator::ChangeVerdict verdict =
             translator::ChangeTest::test(object.change, change, prepared != nullptr ? &derived : nullptr, reprepareEpoch);
