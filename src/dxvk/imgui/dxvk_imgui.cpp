@@ -5030,6 +5030,9 @@ namespace dxvk {
         RemixGui::Checkbox("Drain Sparse Memory Chunks", &VramBudget::drainSparseChunksObject());
         RemixGui::DragInt("Released Import Copy Size (px, 0 = keep game image)", &VramBudget::releasedImportMaxSizeObject(), 16.f, 0, 16384);
         RemixGui::DragFloat("Drain Chunks Used Below (%)", &VramBudget::drainOccupancyPercentObject(), 0.5f, 1.f, 100.f, "%.0f");
+        RemixGui::Checkbox("Move Textures Out of Draining Chunks", &VramBudget::relocateDrainingTexturesObject());
+        RemixGui::DragInt("Drop Mips Unsampled for Frames (0 = never)", &VramBudget::idleMipFramesObject(), 10.f, 0, 100000);
+        RemixGui::DragInt("Evict Micromaps Unused for Frames (0 = at limit only)", &VramBudget::idleMicromapFramesObject(), 10.f, 0, 100000);
         RemixGui::DragInt("Log Interval Frames (0 = changes only)", &VramBudget::logIntervalFramesObject(), 1.f, 0, 100000);
         RemixGui::Separator();
         RemixGui::Checkbox("L1: Free Idle Pooled BLAS and Scratch", &VramBudget::freeIdleAccelMemoryObject());

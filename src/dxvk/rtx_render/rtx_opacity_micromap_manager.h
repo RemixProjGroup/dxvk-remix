@@ -81,6 +81,10 @@ namespace dxvk {
                                                                          "If the min amount is not available, then the budget will be set to 0.");
       RTX_OPTION("rtx.opacityMicromap.cache", int, maxBudgetSizeMB, 1536, "Budget: Max Allowed Size [MB].");
       RTX_OPTION("rtx.opacityMicromap.cache", float, maxVidmemSizePercentage, 0.15, "Budget: Max Video Memory Size %.");
+      RTX_OPTION("rtx.opacityMicromap.cache", int, maxItemSizeMB, 128,
+                 "A 4-state micromap of one mesh that would reserve more than this gets a lower subdivision level.\n"
+                 "Each level less needs a quarter of the memory and bake work. Rays still alpha-test every micro-triangle\n"
+                 "the bake marks unknown, so the image does not change, but those rays cost more on that mesh. 0 = no limit.");
       RTX_OPTION("rtx.opacityMicromap.cache", int, minUsageFrameAgeBeforeEviction, 60 * 15, 
                  "Min Opacity Micromap usage frame age before eviction.\n"
                  "Opacity Micromaps unused longer than this can be evicted when freeing up memory for new Opacity Micromaps.");
@@ -570,6 +574,8 @@ namespace dxvk {
     SharedBlasOmm checkSharedBlasOmm(const std::vector<RtInstance*>& instances, const InstanceManager& instanceManager) const;
     // Built micromaps that no BLAS has bound yet (walks the cache; logging only).
     uint32_t countBuiltNeverBound() const;
+    // Logs the [OmmCache] line: what the cache's budget and buffers hold (walks the cache; logging only).
+    void logCacheCensus() const;
 
     // Internal use only
     void onInstanceUnlinked(const RtInstance& instance);
@@ -640,7 +646,7 @@ namespace dxvk {
     struct ChurnStats {
       uint32_t textureChangeRebakes = 0;  // rtx.opacityMicromap.rebakeOnTextureChange drops
       uint32_t slotReusedSkips = 0;       // baked slot now holds another texture: not a change, kept
-      uint32_t sameExtentSkips = 0;       // same texture, new view of the same size (copy-on-write): kept
+      uint32_t sameExtentSkips = 0;       // same texture, new view of the same or a smaller size: kept
       uint32_t lostRerequests = 0;        // rtx.opacityMicromap.rerequestLostMicromaps
       uint32_t evictions = 0;             // LRU evictions
       uint32_t evictedYoungerThan900 = 0; // evictions forced by a budget decrease
@@ -743,6 +749,9 @@ namespace dxvk {
     void calculateMicromapBuildInfo(VkMicromapUsageEXT& ommUsageGroup, VkMicromapBuildInfoEXT& ommBuildInfo, VkMicromapBuildSizesInfoEXT& sizeInfo);
 
     void calculateRequiredVRamSize(uint32_t numTriangles, uint16_t subdivisionLevel, VkOpacityMicromapFormatEXT ommFormat, VkIndexType triangleIndexType, VkDeviceSize& arrayBufferDeviceSize, VkDeviceSize& blasOmmBuffersDeviceSize);
+
+    // rtx.opacityMicromap.cache.maxItemSizeMB. Returns the highest level up to subdivisionLevel that fits the limit.
+    uint32_t capSubdivisionLevelForItemSize(const RtInstance& instance, uint32_t numTriangles, uint32_t subdivisionLevel);
 
     OmmResult bakeOpacityMicromapArray(Rc<DxvkContext> ctx, XXH64_hash_t ommSrcHash,
                                   OpacityMicromapCacheItem& ommCacheItem, CachedSourceData& sourceData,

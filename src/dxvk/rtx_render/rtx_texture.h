@@ -91,6 +91,7 @@ namespace dxvk {
     uint16_t            m_samplerFeedbackStamp = 0; // unique linear index of this asset; required to keep
                                                     // the data structure access simple (i.e. with a linear index, it's just an offset in array)
     int32_t             m_refCount = 0;  // number of live RtInstances whose bound surface material references this texture; negative values indicate a retain/release bug
+    uint32_t            m_lastRelocationFrame = 0; // rtx.vramBudget.relocateDrainingTextures
 
   public:
     bool hasUploadedMips(uint32_t requiredMips, bool exact) const;

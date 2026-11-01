@@ -656,6 +656,7 @@ namespace dxvk {
         " foliageCullFromBounce=", RtxOptions::cullNonOpaqueFromBounce(),
         " foliageCullDiffuse=", RtxOptions::cullNonOpaqueOnDiffuseRays() ? 1 : 0,
         " foliageFastRayMode=", RtxOptions::fastRayMode()));
+      omm->logCacheCensus();
     }
     D3d9Alpha::logStats(omm);
   }

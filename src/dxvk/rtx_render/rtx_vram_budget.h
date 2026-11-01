@@ -52,7 +52,12 @@ struct IUnknown;
 // Free space inside chunks goes back to the driver only when a chunk empties. Sparse chunks
 // drain at any level (rtx.vramBudget.drainSparseChunks). While driver usage alone is above
 // the Elevated threshold, idle pooled BLASes, oversized scratch and spare empty chunks are
-// freed as well, which costs no quality.
+// freed as well, which costs no quality. Material textures in draining chunks are loaded again into other
+// chunks, a few per second (rtx.vramBudget.relocateDrainingTextures).
+//
+// Two caches follow the scene at every level, so they do not stay at their high-water mark:
+// replacement-texture mips nothing sampled for rtx.vramBudget.idleMipFrames are dropped, and micromaps unused for
+// rtx.vramBudget.idleMicromapFrames are evicted. Both come back on the next use.
 //
 // A scene change trims memory at any level: a bump of rtx.skyProvider.worldChangeCount,
 // or the instance count falling to a few percent of its recent peak (a save load or a
@@ -119,6 +124,20 @@ namespace dxvk {
     RTX_OPTION("rtx.vramBudget", float, drainOccupancyPercent, 50.f,
                "Memory blocks used below this percent are drained (rtx.vramBudget.drainSparseChunks), sparsest first, as "
                "long as the other blocks of the same kind have room for what the drained blocks hold.");
+    RTX_OPTION("rtx.vramBudget", bool, relocateDrainingTextures, true,
+               "Loads material textures that lie in draining memory blocks again into other blocks, a few per second, so "
+               "the blocks empty and go back to the driver. The mip count stays the same, so the image does not change. "
+               "The textures are read from disk again.");
+    RTX_OPTION("rtx.vramBudget", uint32_t, idleMipFrames, 3600,
+               "Replacement textures drop the mips the frame has not sampled for this many frames, down to the largest "
+               "mip it did sample in that time, and never below 256 pixels. Without this they keep the sharpest mips ever "
+               "sampled until memory runs short. A dropped mip loads again from disk when it is sampled, so a surface seen "
+               "from up close after a long time can be blurry for a moment. Set by the graphics preset. 0 = never drop.");
+    RTX_OPTION("rtx.vramBudget", uint32_t, idleMicromapFrames, 1800,
+               "Evicts opacity micromaps no BLAS has used for this many traced frames, at any pressure level, so the "
+               "cache follows the scene instead of filling to its limit. An evicted micromap bakes again when its geometry "
+               "comes back, and that geometry alpha-tests every ray until then: the image does not change, but foliage "
+               "can cost more for a moment. Set by the graphics preset. 0 = only evict at the cache limit.");
     RTX_OPTION("rtx.vramBudget", int, releasedImportMaxSize, 256,
                "When the game destroys a texture that Remix samples in place (a host D3D11 import) while the host "
                "still uses the import, Remix copies the import's mips up to this many pixels and releases the game's "
@@ -201,6 +220,9 @@ namespace dxvk {
 
     // BLASes copied out of draining chunks (CS thread, for the log).
     void noteBlasRelocated(uint32_t count, uint64_t bytes);
+    // Replacement textures that dropped idle mips, and material textures moved out of draining chunks (CS thread, for the log).
+    void noteIdleMipDrops(uint32_t count);
+    void noteTextureRelocated();
 
     struct HostInfo {
       uint32_t level;

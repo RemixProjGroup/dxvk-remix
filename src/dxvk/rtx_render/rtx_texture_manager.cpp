@@ -867,6 +867,8 @@ namespace dxvk {
     float     avgMipcount;    // A running average of all seen mipcount-s.
                               // Used as a smooth fallback, when there's VRAM budget pressure.
     uint8_t   mipcount;       // The max mipcount seen across frames.
+    uint8_t   recentMipcount; // The max mipcount seen since 'windowFrame'.
+    uint32_t  windowFrame;    // Frame when 'mipcount' was last confirmed by a sample or lowered (rtx.vramBudget.idleMipFrames).
   };
 
   namespace {
@@ -1362,7 +1364,13 @@ namespace dxvk {
 
 #define FRAMES_TO_DETAIN 60
 
-  void SamplerFeedback::accumulateMipCounts(uint32_t len, uint32_t curframe, bool canReset) {
+  void SamplerFeedback::accumulateMipCounts(uint32_t len, uint32_t curframe, bool canReset, uint32_t idleFrames) {
+    // Textures that lower their mip count per frame, so a whole area going idle does not queue all its loads at once.
+    constexpr uint32_t kMaxIdleDropsPerFrame = 8;
+    // A dropped texture keeps the mips up to 256 pixels. Rays other than primary ones report no feedback.
+    constexpr uint8_t kMinIdleMipcount = 9;
+    uint32_t idleDropsLeft = idleFrames != 0 ? kMaxIdleDropsPerFrame : 0;
+
     for (uint32_t stamp = 0; stamp < len; stamp++) {
       FeedbackAccum& accum = m_accumulatedMipcount[stamp];
 
@@ -1372,10 +1380,22 @@ namespace dxvk {
         if (new_mipcount >= accum.mipcount) {
           accum.frame = curframe;
           accum.mipcount = new_mipcount;
+          accum.windowFrame = curframe;
+          accum.recentMipcount = 0;
         }
       }
+      accum.recentMipcount = std::max(accum.recentMipcount, new_mipcount);
 
       accum.avgMipcount = (float(new_mipcount) + accum.avgMipcount) * 0.5f;
+
+      // The mips above what the last idleFrames sampled go. Sampling them again brings them back.
+      if (idleDropsLeft != 0 && accum.mipcount > kMinIdleMipcount && curframe - accum.windowFrame > idleFrames) {
+        accum.mipcount = std::max(accum.recentMipcount, kMinIdleMipcount);
+        accum.windowFrame = curframe;
+        accum.recentMipcount = 0;
+        idleDropsLeft--;
+        vram_budget::noteIdleMipDrops(1);
+      }
 
       if (canReset) {
         assert(curframe >= accum.frame);
@@ -1393,12 +1413,30 @@ namespace dxvk {
     const auto curframe = m_device->getCurrentFrameId();
 
     uint32_t sfTextureCount = m_sf.fetchNoisyMipCounts(gpuAccessedMips);
-    m_sf.accumulateMipCounts(sfTextureCount, curframe, m_wasTextureBudgetPressure);
+    m_sf.accumulateMipCounts(sfTextureCount, curframe, m_wasTextureBudgetPressure, VramBudget::idleMipFrames());
     m_wasTextureBudgetPressure = false;
 
     
     static auto prioritylist = std::vector<PriorityTexture>{};
     static auto checkonlyframes = std::vector<ManagedTexture*>{};
+
+    // rtx.vramBudget.relocateDrainingTextures: a load at the same mip count puts the texture in another chunk and leaves
+    // its old memory free. One texture every few frames, and each texture rarely, since it reads the file again.
+    constexpr uint32_t kRelocationIntervalFrames = 8;
+    constexpr uint32_t kMinFramesBetweenRelocations = 3600;
+    bool canRelocate = VramBudget::relocateDrainingTextures() && vram_budget::drainingActive() && curframe % kRelocationIntervalFrames == 0;
+    const auto relocateIfDraining = [&](ManagedTexture* tex) {
+      if (canRelocate && tex->m_state == ManagedTexture::State::kVidMem && tex->m_currentMipView != nullptr &&
+          tex->hasUploadedMips(tex->m_requestedMips, true) && tex->m_currentMipView->image()->isInDrainingChunk() &&
+          (tex->m_lastRelocationFrame == 0 || curframe - tex->m_lastRelocationFrame >= kMinFramesBetweenRelocations)) {
+        tex->m_lastRelocationFrame = curframe;
+        constexpr bool forceReload = true;
+        scheduleTextureLoad(tex, true, forceReload);
+        canRelocate = false;
+        vram_budget::noteTextureRelocated();
+      }
+    };
+
     {
       prioritylist.clear();
       checkonlyframes.clear();
@@ -1432,6 +1470,7 @@ namespace dxvk {
       assert(tex && tex->m_canDemote);
       tex->requestMips(tex->m_refCount > 0 ? MAX_MIPS : 0);
       scheduleTextureLoad(tex, true);
+      relocateIfDraining(tex);
     }
 
     
@@ -1467,6 +1506,7 @@ namespace dxvk {
         }
 
         scheduleTextureLoad(tex, true);
+        relocateIfDraining(tex);
       }
       assert(usedBytes <= budgetBytes);
 

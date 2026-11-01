@@ -496,13 +496,15 @@ blocks, which new allocations fill first. Driver usage overstates it, here by 52
 
 | Level | Starts at (`demand` / `budget`) | What Remix does |
 | :-- | :-- | :-- |
-| 0 | Below 90% | Nothing |
+| 0 | Below 90% | Drains sparse blocks, moves material textures out of them, drops mips nothing sampled for `rtx.vramBudget.idleMipFrames` and evicts micromaps unused for `rtx.vramBudget.idleMicromapFrames`. A dropped mip or micromap comes back on its next use. |
 | 1 Elevated | `rtx.vramBudget.elevatedPercent` (90) | Frees idle BLASes, scratch memory and empty blocks. OMM cache halved, replacement texture budget × 0.75. |
 | 2 High | `highPercent` (94) | OMM cache quartered, replacement texture budget × 0.5. |
 | 3 Critical | `criticalPercent` (97) | The highest level. |
 
 At levels 1 and above, your textures drop mips and your micromaps get evicted, so a mod at level 1 or above loses
 quality or speed. Lower your texture sizes first. `app textures` is the game's own, and `material textures` holds streamed material textures such as your replacements.
+
+`[OmmCache]` follows `[OmmChurn]` and says what fills the micromap budget: items by state and triangle count, reserved MiB against the buffers alive, the largest item, and how many items nothing used for 600 frames. A budget far above the buffers alive means big meshes are still baking, since a bake reserves the array and the micromap at once.
 
 ### `[AccelMem]`
 

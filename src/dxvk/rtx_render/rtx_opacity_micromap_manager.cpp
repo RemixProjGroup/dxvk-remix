@@ -673,6 +673,7 @@ namespace dxvk {
       RemixGui::DragFloat("Budget: Max Vidmem Size %", &OpacityMicromapOptions::Cache::maxVidmemSizePercentageObject(), 0.001f, 0.0f, 1.f, "%.3f", sliderFlags);
       ADVANCED(RemixGui::DragInt("Budget: Min Required Size [MB]", &OpacityMicromapOptions::Cache::minBudgetSizeMBObject(), 8.f, 0, 256 * 1024, "%d", sliderFlags));
       RemixGui::DragInt("Budget: Max Allowed Size [MB]", &OpacityMicromapOptions::Cache::maxBudgetSizeMBObject(), 8.f, 0, 256 * 1024, "%d", sliderFlags);
+      RemixGui::DragInt("Budget: Max Size of One Mesh [MB]", &OpacityMicromapOptions::Cache::maxItemSizeMBObject(), 8.f, 0, 256 * 1024, "%d", sliderFlags);
       RemixGui::DragInt("Budget: Min Vidmem Free To Not Allocate [MB]", &OpacityMicromapOptions::Cache::minFreeVidmemMBToNotAllocateObject(), 16.f, 0, 256 * 1024, "%d", sliderFlags);
       ADVANCED(RemixGui::DragInt("Min Usage Frame Age Before Eviction", &OpacityMicromapOptions::Cache::minUsageFrameAgeBeforeEvictionObject(), 1.f, 0, 60 * 3600, "%d", sliderFlags));
       ADVANCED(RemixGui::Checkbox("Hash Instance Index Only", &OpacityMicromapOptions::Cache::hashInstanceIndexOnlyObject()));
@@ -1068,7 +1069,8 @@ namespace dxvk {
           static_cast<uint16_t>(std::min(maxSubdivisionLevel, std::max(kMinAdaptiveSubdivisionLevel, level)));
       }
     }
-    const uint32_t subdivisionLevel = numTexelsPerMicroTriangle.subdivisionLevel;
+    const uint32_t subdivisionLevel = capSubdivisionLevelForItemSize(instance, numTriangles, numTexelsPerMicroTriangle.subdivisionLevel);
+    numTexelsPerMicroTriangle.subdivisionLevel = static_cast<uint16_t>(subdivisionLevel);
 
     // Calculate number of texel footprint per micro triangle for all triangles
     {
@@ -1546,11 +1548,13 @@ namespace dxvk {
     if (maxDrops <= 0) {
       return;
     }
-    // Only the baked-from texture re-pointed at an image of another size (a streamed placeholder upgraded in
-    // place) is a change. These are not:
+    // Only the baked-from texture re-pointed at a larger image (a streamed placeholder upgraded in place) is a change.
+    // These are not:
     //  - The slot was reused by another texture after the baked-from one was released. The slot stops being watched.
     //  - A new view of the same texture at the same size, such as a copy-on-write of a shared import
     //    (rtx.hostImport.shareDefaultTextures). The new view is adopted.
+    //  - A smaller view of the same texture, such as a streamed texture that dropped mips. The array holds the sharper
+    //    bake, so the new view is adopted and the baked size stays.
     //  - A slot whose view was released.
     const auto changed = [&](uint32_t& index, uint64_t& bakedCookie, XXH64_hash_t bakedHash,
                              uint32_t bakedWidth, uint32_t bakedHeight) {
@@ -1567,7 +1571,7 @@ namespace dxvk {
         return false;
       }
       const VkExtent3D extent = view->mipLevelExtent(0);
-      if (extent.width == bakedWidth && extent.height == bakedHeight) {
+      if (extent.width <= bakedWidth && extent.height <= bakedHeight) {
         bakedCookie = view->cookie();
         ++m_churn.sameExtentSkips;
         return false;
@@ -2097,6 +2101,57 @@ namespace dxvk {
     return count;
   }
 
+  void OpacityMicromapManager::logCacheCensus() const {
+    constexpr uint32_t kNumStates = uint32_t(OpacityMicromapCacheState::eUnknown) + 1;
+    constexpr uint32_t kMaxTriangles[] = { 2, 16, 256, 4096 };
+    constexpr uint32_t kNumTriangleBins = uint32_t(std::size(kMaxTriangles)) + 1;
+    constexpr uint32_t kStaleAgeFrames = 600;
+    uint32_t items[kNumStates] = {};
+    uint32_t perTriangleBin[kNumTriangleBins] = {};
+    uint32_t stale = 0, neverBound = 0;
+    VkDeviceSize reservedArray = 0, reservedBlas = 0, heldArray = 0, heldBlas = 0, staleBytes = 0, neverBoundBytes = 0, largest = 0;
+    for (const auto& [hash, item] : m_ommCache) {
+      items[std::min(uint32_t(item.cacheState), kNumStates - 1)]++;
+      uint32_t bin = 0;
+      while (bin < std::size(kMaxTriangles) && item.numTriangles > kMaxTriangles[bin]) {
+        bin++;
+      }
+      perTriangleBin[bin]++;
+      reservedArray += item.arrayBufferDeviceSize;
+      reservedBlas += item.blasOmmBuffersDeviceSize;
+      largest = std::max(largest, item.getDeviceSize());
+      if (item.ommArrayBuffer != nullptr) {
+        heldArray += item.ommArrayBuffer->info().size;
+      }
+      if (item.blasOmmBuffers != nullptr) {
+        if (item.blasOmmBuffers->opacityMicromapBuffer != nullptr) {
+          heldBlas += item.blasOmmBuffers->opacityMicromapBuffer->info().size;
+        }
+        if (item.blasOmmBuffers->opacityMicromapTriangleIndexBuffer != nullptr) {
+          heldBlas += item.blasOmmBuffers->opacityMicromapTriangleIndexBuffer->info().size;
+        }
+      }
+      if (m_tracedFrameIndex - item.lastUseFrameIndex >= kStaleAgeFrames) {
+        stale++;
+        staleBytes += item.getDeviceSize();
+      }
+      const bool built = item.cacheState == OpacityMicromapCacheState::eStep3_Built ||
+                         item.cacheState == OpacityMicromapCacheState::eStep4_Ready;
+      if (built && !item.everBound) {
+        neverBound++;
+        neverBoundBytes += item.getDeviceSize();
+      }
+    }
+    const auto mib = [](VkDeviceSize bytes) { return double(uint64_t(bytes >> 10) * 10 / 1024) / 10.0; };
+    Logger::info(str::format("[OmmCache] items unprocessed+baking ", items[0] + items[1], ", baked ", items[2],
+      ", built ", items[3] + items[4], " | by triangles <=2: ", perTriangleBin[0], ", <=16: ", perTriangleBin[1], ", <=256: ", perTriangleBin[2],
+      ", <=4096: ", perTriangleBin[3], ", more: ", perTriangleBin[4],
+      " | budget used ", mib(m_memoryManager.getUsed()), " of ", mib(m_memoryManager.getBudget()), " MiB: arrays ", mib(reservedArray),
+      ", micromaps ", mib(reservedBlas), ", largest item ", mib(largest), " | buffers alive: arrays ", mib(heldArray), ", micromaps ", mib(heldBlas),
+      " MiB | unused for ", kStaleAgeFrames, "+ frames ", stale, " (", mib(staleBytes), " MiB), built but never bound ", neverBound,
+      " (", mib(neverBoundBytes), " MiB)"));
+  }
+
   XXH64_hash_t OpacityMicromapManager::bindOpacityMicromapWithRequest(Rc<DxvkContext> ctx, const OmmRequest& ommRequest,
                                                                       VkAccelerationStructureGeometryKHR& targetGeometry) {
     auto ommCacheItemIter = m_ommCache.find(ommRequest.ommSrcHash);
@@ -2345,6 +2400,34 @@ namespace dxvk {
       triangleArrayBufferSize + 2 * kBufferAlignment +
       triangleIndexBufferSize + 2 * kBufferInBlasUsageAlignment +
       sizeInfo.micromapSize + 2 * kBufferInBlasUsageAlignment;
+  }
+
+  uint32_t OpacityMicromapManager::capSubdivisionLevelForItemSize(const RtInstance& instance, uint32_t numTriangles, uint32_t subdivisionLevel) {
+    // Level 3 is the floor of the compact and software paths.
+    constexpr uint32_t kMinLevel = 3;
+    const int maxItemSizeMB = OpacityMicromapOptions::Cache::maxItemSizeMB();
+    if (maxItemSizeMB <= 0 || VkDeviceSize(numTriangles) * calculateNumMicroTriangles(uint16_t(subdivisionLevel)) <= VkDeviceSize(maxItemSizeMB) << 20) {
+      return subdivisionLevel;
+    }
+
+    // Only 4-state micromaps keep the alpha test for what they mark unknown. A 2-state one needs its level to stay exact.
+    const OmmRequest request(instance, m_device->getCommon()->getSceneManager().getInstanceManager(), OmmRequest::kInvalidIndex);
+    if (request.ommFormat != VK_OPACITY_MICROMAP_FORMAT_4_STATE_EXT) {
+      return subdivisionLevel;
+    }
+
+    const VkDeviceSize maxItemSize = VkDeviceSize(maxItemSizeMB) << 20;
+    const VkIndexType indexType = numTriangles <= UINT16_MAX ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+    uint32_t level = subdivisionLevel;
+    while (level > kMinLevel) {
+      VkDeviceSize arraySize, blasSize;
+      calculateRequiredVRamSize(numTriangles, uint16_t(level), request.ommFormat, indexType, arraySize, blasSize);
+      if (arraySize + blasSize <= maxItemSize) {
+        break;
+      }
+      level--;
+    }
+    return level;
   }
 
   OpacityMicromapManager::OmmResult OpacityMicromapManager::getNumTexelsPerMicroTriangle(
@@ -3212,8 +3295,10 @@ namespace dxvk {
             ++trimmed;
             destroyOmmData(cacheItemIter);
           }
-          Logger::info(str::format("[RTX Opacity Micromap] Trim: evicted ", trimmed, " micromaps unused for ", m_trimMinAgeFrames,
-                                   "+ traced frames, cache held ", usedBefore >> 20, " MiB, ", m_ommCache.size(), " micromaps remain"));
+          if (trimmed != 0) {
+            Logger::info(str::format("[RTX Opacity Micromap] Trim: evicted ", trimmed, " micromaps unused for ", m_trimMinAgeFrames,
+                                     "+ traced frames, cache held ", usedBefore >> 20, " MiB, ", m_ommCache.size(), " micromaps remain"));
+          }
         }
       } else { // budget == 0
         if (m_memoryManager.getPrevBudget() > 0) {

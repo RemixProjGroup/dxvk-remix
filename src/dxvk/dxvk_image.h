@@ -369,6 +369,11 @@ namespace dxvk {
       return m_image.memory.length();
     }
 
+    // True when the image's memory lies in a chunk that is draining.
+    bool isInDrainingChunk() const {
+      return m_image.memory.isInDrainingChunk();
+    }
+
     // Counts the image in DxvkAppImageStats::heldAfterRelease until it is destroyed. Called when
     // the application releases its texture while other references keep the image alive.
     void markHeldAfterAppRelease();

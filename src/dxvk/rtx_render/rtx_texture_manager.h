@@ -54,7 +54,7 @@ namespace dxvk {
 
     bool associate(uint16_t stampWithList, uint16_t stampToAdd);
     uint32_t fetchNoisyMipCounts(const uint32_t* src_gpubuf);
-    void accumulateMipCounts(uint32_t len, uint32_t curframe, bool canReset);
+    void accumulateMipCounts(uint32_t len, uint32_t curframe, bool canReset, uint32_t idleFrames);
   };
 
   class RtxTextureManager : public CommonDeviceObject {
