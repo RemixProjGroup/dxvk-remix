@@ -43,7 +43,7 @@ STRESS_DELAY_US=${STRESS_DELAY_US:-3000}
 STRESS_CHANCE=${STRESS_CHANCE:-0.25}
 STRESS_SLOTS=${STRESS_SLOTS:-True}
 STRESS_CONF=()
-ALL_D3D9="repeat twice twice-overlay twice-overlay-first worldspace skinned skinned-view-root skinned-passenger ring-reorder ring-static ring-static-precombined topology-churn-omm texcoord-index identity-view fused-world fused-view reset no-present sky sky-numos skybox3d terrain terrain-pbr emitter portals rendertarget vtf instancer fog lights replacement-reject per-draw per-draw-declined per-draw-sentinel bad-values bad-values-clean lifecycle multi-output multi-output-single multi-output-extra gbuffer-nrc gbuffer-pom-sss gbuffer-pom-sss-nrc skinned-view-walk skinned-root-motion skinned-parked skinned-uninit skinned-swap skinned-shared-palette ring-props sky-fog sky-fog-numos"
+ALL_D3D9="repeat twice twice-overlay twice-overlay-first worldspace skinned skinned-view-root skinned-passenger ring-reorder ring-static ring-static-precombined topology-churn-omm texcoord-index identity-view fused-world fused-view reset no-present sky sky-numos skybox3d terrain terrain-pbr emitter portals rendertarget vtf instancer fog lights replacement-reject per-draw per-draw-declined per-draw-sentinel bad-values bad-values-clean lifecycle multi-output multi-output-single multi-output-extra gbuffer-nrc gbuffer-pom-sss gbuffer-pom-sss-nrc skinned-view-walk skinned-root-motion skinned-parked skinned-uninit skinned-swap skinned-shared-palette ring-props sky-fog sky-fog-numos sky-fog-switch"
 # The Remix API frontend's runs of the conformance cases.
 ALL_API="api-bad-values api-bad-values-clean api-lifecycle api-caller-threads api-caller-threads-single"
 ALL="$ALL_D3D9 $ALL_API"
@@ -191,6 +191,10 @@ scenario() {
                    CONF=("rtx.skyBoxTextures=$H_sky" "rtx.skyMode=0" "rtx.volumetrics.enable=False" "rtx.fogIgnoreSky=True" "rtx.skyReprojectToMainCameraSpace=True") ;;
     # The same while the sky provider (NUMOS) renders the sky.
     sky-fog-numos) ARGS=(--d3d9 sky-fog); SHOT=1
+                   CONF=("rtx.skyBoxTextures=$H_sky" "rtx.skyMode=1" "rtx.volumetrics.enable=False" "rtx.fogIgnoreSky=True" "rtx.skyReprojectToMainCameraSpace=True") ;;
+    # The sky provider renders the sky until frame 500, and then the sky mode goes to the game's sky. Frame 500 falls
+    # inside the sky quad's longest back-off so far (its reject near frame 450 waits 512 frames, past the screenshot).
+    sky-fog-switch) ARGS=(--d3d9 sky-fog-switch --event-frame 500); SHOT=1
                    CONF=("rtx.skyBoxTextures=$H_sky" "rtx.skyMode=1" "rtx.volumetrics.enable=False" "rtx.fogIgnoreSky=True" "rtx.skyReprojectToMainCameraSpace=True") ;;
     terrain)       ARGS=(--d3d9 terrain); CONF=("rtx.terrainTextures=$H_terrain" "rtx.terrainBaker.enableBaking=True") ;;
     # Ground and crate are both terrain, and the testhost writes a mod that gives the ground's material an albedo, a
@@ -627,8 +631,8 @@ for sc in sys.argv[3:]:
     expect(not any("Input and mofified geometry have different" in l for l in on.lines), sc, "R3",
            "no refit across a topology change ([RTX Opacity Micromap] different primitive counts)")
     ne = on.lastNotEligible()
-    if sc in ("replacement-reject", "sky-numos", "bad-values"):
-        # The rejected crate waits out its back-off, so only that class may show.
+    if sc in ("replacement-reject", "sky-numos", "sky-fog-numos", "sky-fog-switch", "bad-values"):
+        # The rejected draw waits out its back-off, so only that class may show.
         expect(None if ne is None else all(c.startswith("backoff=") for c in ne.split()), sc, "cov",
                "on: [D3D9v2] notEligible shows no class but backoff (last interval)", ne or "")
     else:
@@ -638,8 +642,8 @@ for sc in sys.argv[3:]:
         # The asset resolver cannot expand a replacement without a mesh, so the crate is rejected under its reason.
         expect(None if rej is None else "replacement: no meshes=" in rej, sc, "rej",
                "on: rejected: replacement: no meshes (last interval)", rej or "")
-    elif sc == "sky-numos":
-        # The backend renders its own sky, so the crate's sky draws are dropped under the preparation's reason.
+    elif sc in ("sky-numos", "sky-fog-numos", "sky-fog-switch"):
+        # The backend renders its own sky, so the game's sky draws are dropped under the preparation's reason.
         expect(None if rej is None else "not submitted=" in rej, sc, "rej",
                "on: rejected: not submitted (last interval; the game's sky draws are dropped)", rej or "")
     elif sc == "bad-values":
@@ -859,7 +863,14 @@ for sc in sys.argv[3:]:
         misses = num(on.lastDirect("rasterMisses"))
         expect(None if misses is None else misses == 0, sc, "B1s", "on: rasterMisses=0 (its per-frame draws update the skybox transforms)",
                f"rasterMisses={misses}")
-    elif sc in ("sky-fog", "sky-fog-numos"):
+    elif sc in ("sky-fog", "sky-fog-numos", "sky-fog-switch"):
+        if sc == "sky-fog-numos":
+            # Only the sky quad may be dropped: the ground and the crate stay in the scene.
+            expect(None if s_on is None else s_on == 2, sc, "SF2", "on: surfaces=2 (only the game's sky draw is dropped)",
+                   f"surfaces={s_on}")
+        if sc == "sky-fog-switch":
+            switched = any("[Session] setting changed: rtx.skyMode 1 -> 0" in l for l in on.lines)
+            expect(switched, sc, "SF3", "on: the runtime took the sky mode change")
         # The upper quarter of the view shows only the sky. Nearly black fog laid over it reads below 0.02.
         sky, shot = screenshot_luminance(sc, 0.0, 0.25)
         expect(None if sky is None else sky > 0.1, sc, "SF1",

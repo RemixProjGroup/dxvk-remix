@@ -11,6 +11,8 @@
 
 #include "remix_testhost_d3d9.h"
 
+#include <remix/remix_c.h>
+
 #include <d3d9.h>
 #include <d3dcompiler.h>
 
@@ -259,6 +261,7 @@ namespace {
     D3DPRESENT_PARAMETERS m_presentParams {};
     HWND m_hwnd = nullptr;
     float m_aspect = 1.f;
+    HMODULE m_runtime = nullptr;
     D3DMATRIX m_projection {};
     IDirect3DTexture9* m_textures[uint32_t(Tex::Count)] = {};
 
@@ -270,6 +273,19 @@ namespace {
       release(m_d3d);
     }
 
+    // Changes a runtime option while the scenario runs, as the menu does in a game.
+    void setOption(const char* key, const char* value) {
+      auto initialize = reinterpret_cast<PFN_remixapi_InitializeLibrary>(GetProcAddress(m_runtime, "remixapi_InitializeLibrary"));
+      remixapi_InitializeLibraryInfo info {};
+      info.sType = REMIXAPI_STRUCT_TYPE_INITIALIZE_LIBRARY_INFO;
+      info.version = REMIXAPI_VERSION_MAKE(REMIXAPI_VERSION_MAJOR, REMIXAPI_VERSION_MINOR, REMIXAPI_VERSION_PATCH);
+      remixapi_Interface remix {};
+      if (initialize == nullptr || initialize(&info, &remix) != REMIXAPI_ERROR_CODE_SUCCESS ||
+          remix.SetConfigVariable(key, value) != REMIXAPI_ERROR_CODE_SUCCESS) {
+        fail("SetConfigVariable", E_FAIL);
+      }
+    }
+
     void create(const fs::path& runtime, HWND hwnd, uint32_t width, uint32_t height) {
       using PFN_Direct3DCreate9 = IDirect3D9* (WINAPI*)(UINT);
       HMODULE dll = LoadLibraryExW((runtime / "d3d9.dll").wstring().c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
@@ -277,6 +293,7 @@ namespace {
       if (create9 == nullptr) {
         fail("no Direct3DCreate9 in the runtime's d3d9.dll", E_FAIL);
       }
+      m_runtime = dll;
       m_d3d = create9(D3D_SDK_VERSION);
       if (m_d3d == nullptr) {
         fail("Direct3DCreate9", E_FAIL);
@@ -1963,11 +1980,16 @@ namespace {
   // A game fogs its level but not its authored sky. A light blue sky quad (rtx.skyBoxTextures, set by the script) is
   // drawn first without fog and fills the view. The ground and a crate follow with dense, nearly black linear fog.
   // The camera looks level, so the upper half of the view shows only the sky.
-  int runSkyFog(Host& h, const D3D9ScenarioArgs& a) {
+  // switchToGameSky: at the event frame, the sky mode goes from the sky provider to the game's sky.
+  int runSkyFog(Host& h, const D3D9ScenarioArgs& a, bool switchToGameSky) {
     Mesh ground = h.ground();
     Mesh crate = h.crate();
     Mesh sky = h.quad();
     for (int frame = 0; frame < a.frames; ++frame) {
+      if (switchToGameSky && frame == a.eventFrame) {
+        std::printf("event: rtx.skyMode goes to the game's sky from frame %d\n", frame);
+        h.setOption("rtx.skyMode", "0");
+      }
       h.begin();
       h.setView(lookAt({ 0.f, 1.5f, -1.f }, { 0.f, 1.5f, 4.f }));
       h.m_device->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
@@ -2642,7 +2664,9 @@ int runD3D9Scenario(const std::wstring& name, const fs::path& runtime, HWND hwnd
   } else if (name == L"fog") {
     rc = runFog(host, args);
   } else if (name == L"sky-fog") {
-    rc = runSkyFog(host, args);
+    rc = runSkyFog(host, args, false);
+  } else if (name == L"sky-fog-switch") {
+    rc = runSkyFog(host, args, true);
   } else if (name == L"lights") {
     rc = runLights(host, args);
   } else if (name == L"per-draw") {

@@ -1659,6 +1659,7 @@ namespace dxvk {
           PreparedState prepared;
         };
         std::unordered_map<XXH64_hash_t, Object> objects;       // by object key + slot (InstanceMatcher)
+        SkyMode lastSkyMode = SkyMode::SkyboxRasterization;
         std::unordered_map<uint64_t, XXH64_hash_t> byHandle;    // direct objects
         translator::InstanceMatcher matcher;
         // This frame's draws (frameDrawKey) to the object of the first one, by inputs and by pre-key.
@@ -2700,6 +2701,19 @@ namespace dxvk {
 
         void endFrame() {
           applyResults();
+
+          // The scene rejects the game's sky draws while the backend renders its own sky, and those draws must not wait
+          // out that back-off once the game's sky is back. Rejections made under the old mode have arrived by now, since
+          // the CS thread applies an option change only after it has processed the earlier frames.
+          const SkyMode skyMode = RtxOptions::skyMode();
+          if (skyMode != lastSkyMode) {
+            lastSkyMode = skyMode;
+            for (auto& [key, object] : objects) {
+              object.rejects = 0;
+              object.backoffUntil = 0;
+            }
+          }
+
           pairSkinned();
           if (!resetCandidates.empty() && frame - resetFrame >= kResetFrames) {
             resetCandidates.clear();

@@ -42,6 +42,12 @@ A draw streamed through a discarded buffer whose bytes match an object elsewhere
 - Measured: `ring-static` scenario, per 300 frames: history resets 13 -> 0, micromap topology resets 6 -> 0. All 73 objects stay in the scene, where 63 did.
 - Commits: the commit that adds this entry.
 
+### Game sky returns at once after switching away from the NUMOS sky
+While NUMOS renders the sky, the game's sky draws are rejected with a growing back-off of up to 2048 frames. After switching back to the game's sky they kept waiting that out, so the sky stayed black for up to 2048 frames. Changing the sky mode now clears every draw's back-off.
+- Options: none.
+- Tests: new D3D9 suite scenario `sky-fog-switch`. `sky-fog-numos` now expects the sky draw's back-off and rejection, as `sky-numos` does, and also checks that the ground and crate stay in the scene.
+- Commits: the commit that adds this entry.
+
 ### D3D9: a draw that changes only its fog is no longer a repeat
 A draw of a scene-owned object whose only change was its fog state was treated as unchanged, so the object kept its old fog and a fog state reached only through such draws never found its USD replacement material. Such a draw now records the new fog and keeps the draw for the replacement, without rebuilding the object.
 - Options: none.
