@@ -81,6 +81,9 @@ namespace dxvk {
 
   void AccelManager::clear() {
     m_gpuCrashRecorder.clear();
+    for (const Rc<PooledBlas>& blas : m_blasPool) {
+      queueBoundOmmsForRetirement(*blas);
+    }
     m_blasPool.clear();
     // Pending compaction queries refer to BLASes that are gone now; their slots are reset
     // before reuse, so dropping them is enough.
@@ -114,6 +117,22 @@ namespace dxvk {
   void AccelManager::retireActiveDynamicBlas(const Rc<DxvkContext>& ctx, const Rc<PooledBlas>& blas) {
     if (blas.ptr() != nullptr && blas->accelStructure != nullptr) {
       ctx->getCommandList()->trackResource<DxvkAccess::None>(blas->accelStructure);
+      retireBoundOmms(ctx, *blas);
+    }
+  }
+
+  // An in-flight TLAS reaches a BLAS's micromaps by address, and no command list tracks them after the frame that
+  // bound them. The current command list completes after every earlier one, so it keeps them alive long enough.
+  void AccelManager::retireBoundOmms(const Rc<DxvkContext>& ctx, const PooledBlas& blas) {
+    for (const PooledBlas::BoundOmm& omm : blas.boundOmms) {
+      ctx->getCommandList()->trackResource<DxvkAccess::None>(omm.buffers);
+    }
+  }
+
+  // Keeps the micromaps of a BLAS leaving the pool until the next frame's command list can track them.
+  void AccelManager::queueBoundOmmsForRetirement(const PooledBlas& blas) {
+    for (const PooledBlas::BoundOmm& omm : blas.boundOmms) {
+      m_boundOmmsToRetire.push_back(omm.buffers);
     }
   }
 
@@ -218,6 +237,7 @@ namespace dxvk {
       Rc<PooledBlas>& blas = m_blasPool[i];
 
       if (blas->frameLastTouched + numFramesToKeepBLAS < currentFrame) {
+        queueBoundOmmsForRetirement(*blas);
         // Put this BLAS to the end of the vector
         std::swap(blas, m_blasPool.back());
         // Remove the last element
@@ -238,6 +258,7 @@ namespace dxvk {
       Rc<PooledBlas>& blas = m_blasPool[i];
       if (blas->frameLastTouched != kInvalidFrameIndex && blas->frameLastTouched + keepFrames < currentFrame) {
         released += blas->accelStructure != nullptr ? blas->accelStructure->info().size : 0;
+        queueBoundOmmsForRetirement(*blas);
         std::swap(blas, m_blasPool.back());
         m_blasPool.pop_back();
         continue;
@@ -860,6 +881,11 @@ namespace dxvk {
 
     m_buildStats.frames++;
     m_blasBuiltThisFrame = false;
+
+    for (const Rc<DxvkResource>& omm : m_boundOmmsToRetire) {
+      ctx->getCommandList()->trackResource<DxvkAccess::None>(omm);
+    }
+    m_boundOmmsToRetire.clear();
 
     // [PerfCpu] prep.merge.* sub-phases
     std::fill(std::begin(m_mergeSubMs), std::end(m_mergeSubMs), 0.0);
@@ -2181,6 +2207,7 @@ namespace dxvk {
         selectedBlas->builtPose = blasEntry->skinnedPose;
         selectedBlas->uncompactedSize = 0; // never compacted here: compacted ones are replaced above
         selectedBlas->hasOmm = boundOpacityMicromapHash != kEmptyHash;
+        retireBoundOmms(ctx, *selectedBlas);
         selectedBlas->boundOmms.clear();
         if (optHoldBoundOmms && m_dynamicOmmScratch[uniqueBlasIdx].buffers != nullptr) {
           selectedBlas->boundOmms.push_back({ boundOpacityMicromapHash, Rc<DxvkResource>(m_dynamicOmmScratch[uniqueBlasIdx].buffers) });
@@ -3122,6 +3149,7 @@ namespace dxvk {
           selectedBlas->boundOmms.insert(selectedBlas->boundOmms.end(), bucket->boundOmms.begin(), bucket->boundOmms.end());
         } else {
           selectedBlas->hasOmm = bucket->hasOmmInstances;
+          retireBoundOmms(ctx, *selectedBlas);
           selectedBlas->boundOmms = bucket->boundOmms; // rtx.ommHoldBoundMicromaps
         }
         // Use the selected BLAS for the build

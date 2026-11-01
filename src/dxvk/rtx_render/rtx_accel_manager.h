@@ -497,6 +497,7 @@ private:
   // Tracks all dynamic BLAS references from the last full build so they can be
   // touched during the cached (skip) path to prevent GC from collecting them.
   std::vector<Rc<PooledBlas>> m_activeDynamicBlases;
+  std::vector<Rc<DxvkResource>> m_boundOmmsToRetire;
 
   // --- Dynamics-only rebuild cached state ---
   // Per-bucket cache from the last build.  Each entry corresponds to one merged
@@ -559,6 +560,8 @@ private:
   std::vector<uint64_t> m_cachedBucketUids;
   void syncCachedBucketUids();
   void retireActiveDynamicBlas(const Rc<DxvkContext>& ctx, const Rc<PooledBlas>& blas);
+  void retireBoundOmms(const Rc<DxvkContext>& ctx, const PooledBlas& blas);
+  void queueBoundOmmsForRetirement(const PooledBlas& blas);
   // Whether m_instanceBucketIndex is being maintained (the option's value when the cache was built).
   bool m_bucketIndexMapInUse = true;
   // rtx.accelIncrementalSelfCheckFrames

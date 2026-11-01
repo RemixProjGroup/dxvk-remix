@@ -30,6 +30,12 @@ Entry format:
 
 ## 2026-11-01
 
+### GPU device loss when a BLAS drops an opacity micromap in flight
+Rebuilding or releasing a BLAS let go of the micromaps it held while an earlier frame's TLAS could still be traced through them, so a large micromap's memory was unmapped under the GPU (page fault, then device loss). Those micromaps now stay alive until the current command list completes.
+- Options: none.
+- Measured: replay of an open-world recording lost the device in 5 of 7 runs before, 0 of 8 after.
+- Commits: the commit that adds this entry.
+
 ### D3D9: a static object that comes into view no longer takes a look-alike's place
 A draw streamed through a discarded buffer whose bytes match an object elsewhere took that object's slot, up to `rtx.uniqueObjectDistance` away. Each object entering the view while the camera moved reset a look-alike's history and opacity micromaps for a frame and removed it from its place, which can show as flicker on alpha-tested objects. Such a draw now takes no slot farther away than its own size, and prefers a slot drawn in the previous frame over a stale one.
 - Options: none.
