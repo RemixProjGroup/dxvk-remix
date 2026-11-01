@@ -28,7 +28,8 @@ struct NrdArgs {
   uint isReblurEnabled;
   float missLinearViewZ;
   float maxDirectHitTContribution;
-  uint pad;
+  // Converts this frame's radiance to the pre-exposure of NRD's history (rtx_pre_exposure.h).
+  float frameToDenoiser;
 
   vec4 hitDistanceParams;
 };

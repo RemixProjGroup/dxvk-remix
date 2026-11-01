@@ -1564,6 +1564,13 @@ namespace dxvk {
       outPrimaryDirectNrdArgs.isReblurEnabled = false;
       outPrimaryIndirectNrdArgs.isReblurEnabled = false;
     }
+
+    // Only NRD histories use the denoiser radiance space.
+    if (!getResourceManager().areNrdDenoisingGuideResourcesAllocated()) {
+      outPrimaryDirectNrdArgs.frameToDenoiser = 1.0f;
+      outPrimaryIndirectNrdArgs.frameToDenoiser = 1.0f;
+      outSecondaryNrdArgs.frameToDenoiser = 1.0f;
+    }
   }
 
   void RtxContext::updateRaytraceArgsConstantBuffer(Resources::RaytracingOutput& rtOutput,
@@ -2033,6 +2040,7 @@ namespace dxvk {
       const bool willNrdDenoise = getResourceManager().areNrdDenoisingGuideResourcesAllocated();
       constants.writeSecondaryDenoisingGuides = willNrdDenoise;
       constants.writePrimaryDenoisingNormal = willNrdDenoise;
+      constants.enableDenoiserMissHitDistance = willNrdDenoise;
 
       // The primary virtual motion vector is not an NRD guide alone - RTXDI temporal reuse and gradients,
       // ReSTIR GI temporal reuse and the worldMotion debug screenshot all read it.
@@ -2494,8 +2502,7 @@ namespace dxvk {
       denoiseInput.linearViewZ = &rtOutput.m_primaryLinearViewZ;
       denoiseInput.motionVector = &rtOutput.m_primaryVirtualMotionVector.resource(Resources::AccessType::Read);
       denoiseInput.disocclusionThresholdMix = &rtOutput.m_primaryDisocclusionThresholdMix;
-      // NRD has no pre-exposure input: its history restarts on a pre-exposure step (rtx_pre_exposure.h).
-      denoiseInput.reset = m_resetHistory || PreExposure::stepped();
+      denoiseInput.reset = m_resetHistory || PreExposure::denoiserSpaceChanged();
 
       if (RtxOptions::rtxdiActive() && m_common->metaRtxdiRayQuery().getEnableDenoiserConfidence(*this)) {
         denoiseInput.confidence = &rtOutput.getCurrentRtxdiConfidence().resource(Resources::AccessType::Read);
@@ -2520,8 +2527,7 @@ namespace dxvk {
       denoiseInput.linearViewZ = &rtOutput.m_primaryLinearViewZ;
       denoiseInput.motionVector = &rtOutput.m_primaryVirtualMotionVector.resource(Resources::AccessType::Read);
       denoiseInput.disocclusionThresholdMix = &rtOutput.m_primaryDisocclusionThresholdMix;
-      // NRD has no pre-exposure input: its history restarts on a pre-exposure step (rtx_pre_exposure.h).
-      denoiseInput.reset = m_resetHistory || PreExposure::stepped();
+      denoiseInput.reset = m_resetHistory || PreExposure::denoiserSpaceChanged();
 
       DxvkDenoise::Output denoiseOutput;
       denoiseOutput.diffuse_hitT = &rtOutput.m_primaryIndirectDiffuseRadiance.resource(Resources::AccessType::Write);
@@ -2543,8 +2549,7 @@ namespace dxvk {
       denoiseInput.normal_roughness = &rtOutput.m_secondaryVirtualWorldShadingNormalPerceptualRoughnessDenoising;
       denoiseInput.linearViewZ = &rtOutput.m_secondaryLinearViewZ;
       denoiseInput.motionVector = &rtOutput.m_secondaryVirtualMotionVector.resource(Resources::AccessType::Read);
-      // NRD has no pre-exposure input: its history restarts on a pre-exposure step (rtx_pre_exposure.h).
-      denoiseInput.reset = m_resetHistory || PreExposure::stepped();
+      denoiseInput.reset = m_resetHistory || PreExposure::denoiserSpaceChanged();
 
       DxvkDenoise::Output denoiseOutput;
       denoiseOutput.diffuse_hitT = &rtOutput.m_secondaryCombinedDiffuseRadiance.resource(Resources::AccessType::Write);

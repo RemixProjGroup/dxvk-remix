@@ -418,6 +418,12 @@ void integratePathVertex(
     // Note: True misses going out into infinity will have no hit in the ray interaction and the continue resolving flag set to false. This is in contrast to misses
     // which may require further resolving which may be needed in cases of skipping specific pieces of geometry while still wishing to continue traversal.
 
+    // NRD reads a hit distance of 0 as a skipped lobe, so a sky seen by the first bounce reports a very distant hit instead.
+    if (pathState.bounceIteration == 1 && cb.enableDenoiserMissHitDistance)
+    {
+      pathState.firstBounceHitDistance = float16_t(float16Max);
+    }
+
     float3 skyRadiance;
     if (cb.domeLightArgs.active)
     {

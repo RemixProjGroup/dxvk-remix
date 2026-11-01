@@ -356,7 +356,7 @@ namespace dxvk {
 
     if (showAdvancedSettings) {
       bool presetChanged = RemixGui::Combo("DLSS-RR Preset", &pathTracerPresetObject(), "Default\0ReSTIR Finetuned\0");
-      if (presetChanged) {
+      if (presetChanged && RtxOptions::isRayReconstructionEnabled()) {
         RtxOptions::updatePathTracerPreset(pathTracerPreset());
       }
 

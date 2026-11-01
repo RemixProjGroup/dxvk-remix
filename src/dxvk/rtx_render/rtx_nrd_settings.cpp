@@ -85,9 +85,8 @@ namespace dxvk {
         break;
     }
     reblurSettings.hitDistanceParameters.A *= RtxOptions::getMeterToWorldUnitScale();
-    if (type != dxvk::DenoiserType::DirectLight) {
-      reblurSettings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_3X3;
-    }
+    // Direct specular takes the indirect specular hit distance, which is 0 on pixels that sampled the diffuse lobe.
+    reblurSettings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_3X3;
   }
 
   void setRelaxPresetSettings(nrd::RelaxSettings& relaxSettings, NrdSettings::RelaxSettingsPreset preset, dxvk::DenoiserType type) {
@@ -183,9 +182,8 @@ namespace dxvk {
       default:
         break;
     }
-    if (type != dxvk::DenoiserType::DirectLight) {
-      relaxSettings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_3X3;
-    }
+    // Direct specular takes the indirect specular hit distance, which is 0 on pixels that sampled the diffuse lobe.
+    relaxSettings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_3X3;
   }
 
   void setCommonPresetSettings(nrd::CommonSettings& common, dxvk::DenoiserType type) {
@@ -500,7 +498,18 @@ namespace dxvk {
     // to avoid divide-by-zero on frame 0 in deterministic mode and when advanceTime is off.
     const float fallbackMs = RtxOptions::timeDeltaBetweenFrames() > 0.f ? RtxOptions::timeDeltaBetweenFrames() : 16.6f;
     const float effectiveFrameTimeMs = frameTimeMs > 0.0f ? frameTimeMs : fallbackMs;
-    const uint32_t maxAccumFrameNum = static_cast<uint32_t>(ceil(m_adaptiveAccumulationLengthMs / effectiveFrameTimeMs));
+
+    // NRD's recommended filter, with a 0.2 s time constant at any frame rate (NRDSettings.h).
+    // A hitch counts as at most twice the current average.
+    if (m_smoothedFrameTimeMs <= 0.0f) {
+      m_smoothedFrameTimeMs = effectiveFrameTimeMs;
+    } else {
+      const float smoothedFramesPerTimeConstant = 200.0f / m_smoothedFrameTimeMs;
+      const float clampedFrameTimeMs = std::min(effectiveFrameTimeMs, 2.0f * m_smoothedFrameTimeMs);
+      m_smoothedFrameTimeMs += (clampedFrameTimeMs - m_smoothedFrameTimeMs) / (1.0f + smoothedFramesPerTimeConstant);
+    }
+
+    const uint32_t maxAccumFrameNum = static_cast<uint32_t>(ceil(m_adaptiveAccumulationLengthMs / m_smoothedFrameTimeMs));
     if (m_denoiserDesc.denoiser == nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR) {
       m_reblurSettings.maxAccumulatedFrameNum = Clamp(maxAccumFrameNum, m_adaptiveMinAccumulatedFrameNum, nrd::REBLUR_MAX_HISTORY_FRAME_NUM);
     } else if (m_denoiserDesc.denoiser == nrd::Denoiser::RELAX_DIFFUSE_SPECULAR) {

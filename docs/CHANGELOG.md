@@ -64,6 +64,11 @@ A skinned draw set up no camera, so a view model made only of skinned draws had 
 - Tests: D3D9 scenario skinned-view-model-effect, and check SV2 on skinned-shared-palette.
 - Commits: the commit that adds this entry.
 
+### NRD input fixes for every denoiser
+Fixes that apply to ReLAX and REBLUR alike, none of which touch Ray Reconstruction. Sampling tuned for Ray Reconstruction no longer stays active on the NRD path with FSR, XeSS, TAA-U, NIS or a GPU without DLSS, because every path without Ray Reconstruction now gets the default preset. First-bounce misses report a distant hit instead of 0, which NRD read as a skipped lobe, so reflections of the sky keep their specular tracking. History length follows a low pass filtered frame time, so one hitch no longer cuts it in half. The direct denoiser reconstructs specular hit distance, which holds zeros wherever the diffuse lobe was sampled. NRD receives camera jitter in pixels with the sign it documents, which also corrects its disocclusion threshold bonus. NRD's history now stays at a pre-exposure of its own, so an exposure step no longer clears every denoiser's history; only a drift of more than 4 stops does.
+- Options: `rtx.rayreconstruction.preserveSettingsInNativeMode` now applies only while NRD is not denoising.
+- Commits: this change.
+
 ### D3D9: a draw that changes only its fog is no longer a repeat
 A draw of a scene-owned object whose only change was its fog state was treated as unchanged, so the object kept its old fog and a fog state reached only through such draws never found its USD replacement material. Such a draw now records the new fog and keeps the draw for the replacement, without rebuilding the object.
 - Options: none.

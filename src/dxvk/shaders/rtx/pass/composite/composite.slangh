@@ -70,10 +70,10 @@ void unpackDenoiserRadiance(inout float3 radiance, uint denoiserMode)
   switch (denoiserMode)
   {
     case DENOISER_MODE_RELAX:
-      radiance = RELAX_BackEnd_UnpackRadiance(float4(radiance, 0)).xyz;
+      radiance = RELAX_BackEnd_UnpackRadiance(float4(radiance, 0)).xyz * cb.denoiserToFrame;
       break;
     case DENOISER_MODE_REBLUR:
-      radiance = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(float4(radiance, 0)).xyz;
+      radiance = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(float4(radiance, 0)).xyz * cb.denoiserToFrame;
       break;
   }
 }

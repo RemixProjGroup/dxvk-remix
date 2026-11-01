@@ -86,6 +86,15 @@ What that means for releases:
   in place of the game's per-frame camera depth, and depth/caustic scale in meters from the
   game's units per metre. Nothing else from that commit is used.
 
+## Ideas from other projects
+
+### Denoising
+
+No code from these projects is copied. The ideas are reimplemented here.
+
+- NVIDIA NRD (https://github.com/NVIDIA-RTX/NRD): history length set from a low pass filtered frame rate, and a distant hit distance for sky misses.
+- Based on ideas from OpenRemix (https://github.com/OpenRenderCollective/OpenRemix) by sambow23 (CattaRappa): limiting a hitch to twice the average frame time when smoothing the frame time for history length.
+
 ## Code from other projects
 
 ### NUMOS

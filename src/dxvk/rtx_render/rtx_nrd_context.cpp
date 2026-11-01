@@ -24,6 +24,7 @@
 #include "dxvk_scoped_annotation.h"
 #include "rtx.h"
 #include "rtx_options.h"
+#include "rtx_pre_exposure.h"
 #include "rtx/pass/nrd_args.h"
 #include "../../util/util_string.h"
 #include "../../util/util_global_time.h"
@@ -936,8 +937,10 @@ namespace dxvk {
       commonSettings.motionVectorScale[2] = commonSettings.motionVectorScale[1]; // Enable 2.5D Motion Vector in NRD, we use the scale that matches previous default NRD scale on Z (mv = mv.xyz * mvScale.xyy)
       commonSettings.cameraJitterPrev[0] = commonSettings.cameraJitter[0];
       commonSettings.cameraJitterPrev[1] = commonSettings.cameraJitter[1];
-      commonSettings.cameraJitter[0] = jitterVec[0] / static_cast<float>(width);
-      commonSettings.cameraJitter[1] = jitterVec[1] / static_cast<float>(height);
+      // NRD takes the offset from the pixel center to the sampled position, in pixels.
+      // The camera shifts the image by its jitter, so a ray through a pixel center samples the opposite offset.
+      commonSettings.cameraJitter[0] = -jitterVec[0];
+      commonSettings.cameraJitter[1] = -jitterVec[1];
       commonSettings.timeDeltaBetweenFrames = GlobalTime::get().deltaTimeMs();
       commonSettings.frameIndex = device()->getCurrentFrameId();
       commonSettings.accumulationMode = m_settings.m_resetHistory ? nrd::AccumulationMode::CLEAR_AND_RESTART : nrd::AccumulationMode::CONTINUE;
@@ -1038,6 +1041,7 @@ namespace dxvk {
     args.isReblurEnabled = m_settings.m_denoiserDesc.denoiser == nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
     args.missLinearViewZ = missLinearViewZ;
     args.maxDirectHitTContribution = m_settings.m_groupedSettings.maxDirectHitTContribution;
+    args.frameToDenoiser = PreExposure::frameToDenoiser();
 
     auto getHitDistanceParameters = [](const nrd::HitDistanceParameters& params) {
       return Vector4(params.A, params.B, params.C, params.D);

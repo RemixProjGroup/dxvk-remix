@@ -47,6 +47,11 @@ namespace dxvk {
     static float inverse();
     static float historyRatio();
     static bool stepped() { return historyRatio() != 1.0f; }
+    // NRD has no pre-exposure input, so its history stays at a pre-exposure of its own, which follows P only on a
+    // drift of more than a few stops. Radiance is multiplied by this before denoising and divided by it afterward.
+    static float frameToDenoiser();
+    // True on the frame the denoiser pre-exposure moved. NRD history restarts on that frame.
+    static bool denoiserSpaceChanged();
     // The physical exposure (auto exposure x 2^bias) P was last derived from.
     static float trackedExposure();
 

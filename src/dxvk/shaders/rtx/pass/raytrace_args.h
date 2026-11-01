@@ -207,7 +207,9 @@ struct RaytraceArgs {
   // The number of active Ray Portals (Used for Ray Portal sampling). Always <= RAY_PORTAL_MAX_COUNT
   uint8_t numActiveRayPortals;
   float secondarySpecularFireflyFilteringThreshold;
-  uint secondarySignalPadding;
+  // Paths that miss on their first bounce report a large hit distance, which NRD reads as a hit at infinity.
+  // It stays off for other consumers, which read 0 as a miss.
+  uint enableDenoiserMissHitDistance;
 
   // Note: Packed as float16, uses uint16_t due to being shared on C++ side
   uint16_t emissiveBlendOverrideEmissiveIntensity;

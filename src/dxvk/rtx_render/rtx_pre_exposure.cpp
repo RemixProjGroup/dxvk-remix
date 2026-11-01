@@ -17,6 +17,8 @@ namespace dxvk {
     // Exposure readback ring: the 1x1 exposure texture is copied into the next slot after the auto exposure
     // ran, and read once the GPU is done with it. Never waits.
     constexpr uint32_t kReadbackSlots = 3;
+    // The drift past which NRD history restarts. ReLAX tracks squared radiance in 16 bits, which limits the range.
+    constexpr int32_t kDenoiserExposureStops = 4;
     struct ReadbackSlot {
       Rc<DxvkBuffer> buffer;
       uint64_t sequence = 0;  // 0: never written
@@ -33,6 +35,8 @@ namespace dxvk {
       int32_t log2P = 0;
       float p = 1.0f;
       float ratio = 1.0f;
+      int32_t denoiserLog2P = 0;
+      bool denoiserSpaceChanged = false;
     };
 
     State& state() {
@@ -79,6 +83,11 @@ namespace dxvk {
     s.log2P = k;
     s.p = std::ldexp(1.0f, k);
     s.ratio = s.p / previous;  // a power of two: exact
+
+    s.denoiserSpaceChanged = std::abs(k - s.denoiserLog2P) > kDenoiserExposureStops;
+    if (s.denoiserSpaceChanged) {
+      s.denoiserLog2P = k;
+    }
   }
 
   void PreExposure::queueExposureReadback(DxvkContext* ctx, const Resources::Resource& exposure) {
@@ -122,6 +131,15 @@ namespace dxvk {
 
   float PreExposure::historyRatio() {
     return state().ratio;
+  }
+
+  float PreExposure::frameToDenoiser() {
+    const State& s = state();
+    return std::ldexp(1.0f, s.denoiserLog2P - s.log2P);
+  }
+
+  bool PreExposure::denoiserSpaceChanged() {
+    return state().denoiserSpaceChanged;
   }
 
   float PreExposure::trackedExposure() {

@@ -534,6 +534,8 @@ namespace dxvk {
     compositeArgs.secondaryCombinedDenoiser = !useDenoisedInputs ? DENOISER_MODE_OFF :
       rtOutput.m_raytraceArgs.secondaryCombinedNrd.isReblurEnabled ? DENOISER_MODE_REBLUR : DENOISER_MODE_RELAX;
 
+    compositeArgs.denoiserToFrame = 1.0f / primaryDirectNrdArgs.frameToDenoiser;
+
     compositeArgs.debugViewIdx = rtOutput.m_raytraceArgs.debugView;
 
     compositeArgs.compositePrimaryDirectDiffuse = compositePrimaryDirectDiffuse();

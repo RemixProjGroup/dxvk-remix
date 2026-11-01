@@ -52,6 +52,8 @@ namespace dxvk {
     nrd::ReferenceSettings m_referenceSettings;
     uint32_t m_adaptiveMinAccumulatedFrameNum = 15;
     float m_adaptiveAccumulationLengthMs = 500.f;
+    // Low pass filtered frame time, so a hitch does not cut the history length.
+    float m_smoothedFrameTimeMs = 0.f;
     DenoiserType m_type;
 
     bool m_resetHistory = true;

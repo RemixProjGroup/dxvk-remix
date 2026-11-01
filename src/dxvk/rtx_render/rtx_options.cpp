@@ -399,17 +399,17 @@ namespace dxvk {
     // Code-driven changes for lighting setting (automatically routes to User layer when preset is Custom)
     RtxOptionLayerTarget layerTarget(RtxOptionEditTarget::Derived);
 
-    bool isRayReconstruction = RtxOptions::isRayReconstructionEnabled();
-    bool isDLSS = RtxOptions::isDLSSEnabled();
-    bool isNative = RtxOptions::upscalerType() == UpscalerType::None;
-    if (isRayReconstruction) {
+    if (RtxOptions::isRayReconstructionEnabled()) {
       updatePathTracerPreset(DxvkRayReconstruction::pathTracerPreset());
-    } else if (isDLSS) {
+      return;
+    }
+
+    // NRD always gets the sampling it is tuned for, whichever upscaler runs.
+    // The native mode preserve option only applies while NRD is not denoising.
+    const bool isNative = RtxOptions::upscalerType() == UpscalerType::None;
+    const bool isNrdDenoising = RtxOptions::useDenoiser() && !RtxOptions::useDenoiserReferenceMode();
+    if (isNrdDenoising || !isNative || !DxvkRayReconstruction::preserveSettingsInNativeMode()) {
       updatePathTracerPreset(PathTracerPreset::Default);
-    } else if (isNative) {
-      if (!DxvkRayReconstruction::preserveSettingsInNativeMode()) {
-        updatePathTracerPreset(PathTracerPreset::Default);
-      }
     }
   }
 

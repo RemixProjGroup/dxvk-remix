@@ -74,6 +74,9 @@ void demodulate(
     specularRadiance *= getRoughnessDemodulationFactor(demodulationData.perceptualRoughness, cb.roughnessDemodulationOffset);
   }
 
+  diffuseRadiance *= nrd.frameToDenoiser;
+  specularRadiance *= nrd.frameToDenoiser;
+
   packedDiffuseAndHitT = vec4(0.f);
   packedSpecularAndHitT = vec4(0.f);
   bool sanitize = true;
