@@ -771,15 +771,19 @@ for sc in sys.argv[3:]:
         # Static objects that arrive with the same bytes in another discarded buffer at another offset every frame keep
         # their objects: no new or released object, no slot taken over by a look-alike (a jump resets the history and
         # the opacity micromaps), every draw handed over, and with separate matrices every draw a repeat.
+        # With an identity VIEW the scene's world is view space, so every object moves. An object that leaves the view is
+        # not anti-culled (LifetimePolicy, wasMovingWhenLastSeen), and it comes back at another place as a new object. The
+        # orbit brings an outer mesh into view every 30 frames and takes one out, 10 of each per interval.
+        reentries = 10 if sc == "ring-static-precombined" else 0
         acc, rel = num(on.lastDirect("accepted")), num(on.lastDirect("released"))
-        expect(both(acc, rel, lambda a, b: a == 0 and b == 0), sc, "RS1",
-               "on: accepted=0 released=0 in the last interval (every object keeps its object)", f"accepted={acc} released={rel}")
+        expect(both(acc, rel, lambda a, b: a <= reentries and b <= reentries), sc, "RS1",
+               f"on: accepted<={reentries} released<={reentries} in the last interval (every object in view keeps its object)", f"accepted={acc} released={rel}")
         resets, jumps = num(on.lastDirect("historyResets")), on.historyJumps()
         expect(both(resets, jumps, lambda r, j: r == 0 and j == 0), sc, "RS2",
                "on: historyResets=0 (jumps 0) in the last interval (no draw takes a look-alike's slot)",
                f"historyResets={resets} jumps={jumps} (all intervals: {[on.historyJumps(i) for i in range(len(on.direct))]})")
         hand = on.lastInputsTotal("handovers")
-        expect(None if hand is None else hand == 0, sc, "RS3", "on: handovers=0 in the last [D3D9v2] inputs interval (no object handed over again)",
+        expect(None if hand is None else hand <= reentries, sc, "RS3", f"on: handovers<={reentries} in the last [D3D9v2] inputs interval (no object in view handed over again)",
                f"handovers={hand}")
         dropped = num(on.lastInputs("dropped"))
         expect(None if dropped is None else dropped == 0, sc, "RS4", "on: dropped=0 in the last interval (every draw is handed over)",
