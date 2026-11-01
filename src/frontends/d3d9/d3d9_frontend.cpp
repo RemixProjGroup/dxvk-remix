@@ -858,7 +858,9 @@ namespace dxvk {
         // when its description or world matrix differs from the scene's copy.
         void handover(RtxContext* ctx, const DrawParameters& params, DrawCallState& state, uint64_t handle, bool update,
                       bool verify = false) {
-          totals.handovers++;
+          if (!verify) {
+            totals.handovers++;
+          }
           frontend::SceneInterface scene { *ctx };
           const MaterialData* overrideMaterial = nullptr;
           // A 3D-skybox draw is described as a Main-camera object (Sky category cleared, transforms reprojected). Its
