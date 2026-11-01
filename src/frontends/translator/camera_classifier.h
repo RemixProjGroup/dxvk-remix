@@ -62,7 +62,8 @@ namespace dxvk {
       // reference camera, so the draw's world matrix holds world-view.
       bool preCombined = false;
       // Fixed-function skinning. The draw's view may carry a per-character offset, and the backend places skinned
-      // geometry with the frame's camera (DrawCallState::finalizeSkinningData), so the draw sets up no camera.
+      // geometry with the frame's camera (DrawCallState::finalizeSkinningData), so the draw sets up no Main camera.
+      // A view model can consist of skinned draws only, so such a draw does set up the view-model camera.
       bool skinned = false;
     };
 
@@ -81,7 +82,8 @@ namespace dxvk {
 
       // updatesCamera is false where the matrices describe no camera. The result is then Unknown, or Sky for a
       // Sky-category draw, and the draw sets up no camera.
-      // updatesCamera is also false for a skinned draw once a Main camera is known. Its class is still returned.
+      // updatesCamera is also false for a skinned draw of any class but ViewModel once a Main camera is known. Its class
+      // is still returned.
       // log warns once about a rejected projection, and about fused world-view matrices that do not fit
       // rtx.fusedWorldViewMode.
       CameraClass classify(const CameraInputs& c, const MainCamera& main, bool& updatesCamera, bool log = false);

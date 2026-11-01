@@ -58,6 +58,12 @@ A ten-minute run of a modded D3D9 game went from 1.3 to 10.7 GB of driver usage 
 - Commits: the commit that adds this entry.
 - Docs: [D3D9-Performance.md](D3D9-Performance.md)
 
+### D3D9: a view model of skinned draws always has its camera
+A skinned draw set up no camera, so a view model made only of skinned draws had a view-model camera only in frames with a plain view-model draw, such as a muzzle flash. In those frames the view model moved to its corrected place (`rtx.viewModel.scale` and the field of view) with its original hidden, and after them the copies were dropped while an original that had not changed since stayed hidden, so the view model jumped when firing and could vanish. A skinned draw of the view-model class now sets up the view-model camera, and the first one in a frame stands for the frame. Main-camera skinned draws still set up no camera.
+- Options: none. `[D3D9v2]` lines with `rtx.d3d9v2.log` gain `viewModelFrames` and `viewModelCameraFrames`, and a skinned draw's `changed` line names the parts of its material that changed.
+- Tests: D3D9 scenario skinned-view-model-effect, and check SV2 on skinned-shared-palette.
+- Commits: the commit that adds this entry.
+
 ### D3D9: a draw that changes only its fog is no longer a repeat
 A draw of a scene-owned object whose only change was its fog state was treated as unchanged, so the object kept its old fog and a fog state reached only through such draws never found its USD replacement material. Such a draw now records the new fog and keeps the draw for the replacement, without rebuilding the object.
 - Options: none.

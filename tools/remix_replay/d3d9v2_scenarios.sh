@@ -43,7 +43,7 @@ STRESS_DELAY_US=${STRESS_DELAY_US:-3000}
 STRESS_CHANCE=${STRESS_CHANCE:-0.25}
 STRESS_SLOTS=${STRESS_SLOTS:-True}
 STRESS_CONF=()
-ALL_D3D9="repeat twice twice-overlay twice-overlay-first worldspace skinned skinned-view-root skinned-passenger ring-reorder ring-static ring-static-precombined topology-churn-omm texcoord-index identity-view fused-world fused-view reset no-present sky sky-numos skybox3d terrain terrain-pbr emitter portals rendertarget vtf instancer fog lights replacement-reject per-draw per-draw-declined per-draw-sentinel bad-values bad-values-clean lifecycle multi-output multi-output-single multi-output-extra gbuffer-nrc gbuffer-pom-sss gbuffer-pom-sss-nrc skinned-view-walk skinned-root-motion skinned-parked skinned-uninit skinned-swap skinned-shared-palette ring-props sky-fog sky-fog-numos sky-fog-switch"
+ALL_D3D9="repeat twice twice-overlay twice-overlay-first worldspace skinned skinned-view-root skinned-passenger ring-reorder ring-static ring-static-precombined topology-churn-omm texcoord-index identity-view fused-world fused-view reset no-present sky sky-numos skybox3d terrain terrain-pbr emitter portals rendertarget vtf instancer fog lights replacement-reject per-draw per-draw-declined per-draw-sentinel bad-values bad-values-clean lifecycle multi-output multi-output-single multi-output-extra gbuffer-nrc gbuffer-pom-sss gbuffer-pom-sss-nrc skinned-view-walk skinned-root-motion skinned-parked skinned-uninit skinned-swap skinned-shared-palette skinned-view-model-effect ring-props sky-fog sky-fog-numos sky-fog-switch"
 # The Remix API frontend's runs of the conformance cases.
 ALL_API="api-bad-values api-bad-values-clean api-lifecycle api-caller-threads api-caller-threads-single"
 ALL="$ALL_D3D9 $ALL_API"
@@ -154,6 +154,9 @@ scenario() {
     # A view model of two skinned draws from one palette with its own field of view: the gun recoils and the main
     # camera kicks while it fires, with a plain muzzle-flash draw after the gun.
     skinned-shared-palette) ARGS=(--d3d9 skinned-shared-palette); CONF=("rtx.viewModel.enable=True") ;;
+    # A view model of skinned draws only that fires, holds its pose, and has a plain view-model draw for part of the cycle.
+    # The screenshot is of a frame after the plain draw ended, while the pose has not changed for 30 frames.
+    skinned-view-model-effect) ARGS=(--d3d9 skinned-view-model-effect); CONF=("rtx.viewModel.enable=True" "rtx.viewModel.scale=0.4"); SHOT=1 ;;
     # 16 alpha-tested bushes appended to one dynamic vertex buffer (DISCARD, then NOOVERWRITE), strips from their start
     # vertex and lists with a base vertex, each switching between two and three quads every 30 frames.
     ring-props) ARGS=(--d3d9 ring-props); CONF=("rtx.opacityMicromap.enable=True") ;;
@@ -485,8 +488,8 @@ def dds_rgb(path):
         return None
     return [[pixel(y * width + x) for x in range(0, width, 4)] for y in range(0, height, 4)]
 
-def screenshot_luminance(sc, top, bottom):
-    """The mean Rec. 709 luminance of the rows between the fractions top and bottom of the scenario's screenshot."""
+def screenshot_luminance(sc, top, bottom, left=0.0, right=1.0):
+    """The mean Rec. 709 luminance of the region between the given fractions of the scenario's screenshot."""
     folder = os.path.join(out, f"shots-{sc}-on")
     shots = sorted(f for f in os.listdir(folder) if f.startswith("rtxImagePostTonemapping")) if os.path.isdir(folder) else []
     if not shots:
@@ -495,7 +498,7 @@ def screenshot_luminance(sc, top, bottom):
     if rows is None:
         return None, f"{shots[-1]}: format not read"
     band = rows[int(len(rows) * top):int(len(rows) * bottom)]
-    lum = [0.2126 * r + 0.7152 * g + 0.0722 * b for row in band for (r, g, b) in row]
+    lum = [0.2126 * r + 0.7152 * g + 0.0722 * b for row in band for (r, g, b) in row[int(len(row) * left):int(len(row) * right)]]
     return sum(lum) / len(lum), shots[-1]
 
 def report(status, sc, cid, text, values=""):
@@ -735,6 +738,20 @@ for sc in sys.argv[3:]:
         late = num(on.lastDirect("skinDeferredLate"))
         expect(None if late is None else late == 0, sc, "SV1",
                "on: skinDeferredLate=0 in the last interval (no view-model draw is decomposed with the last frame's camera)", f"skinDeferredLate={late}")
+        frames, cameras = on.lastInputsTotal("viewModelFrames"), on.lastInputsTotal("viewModelCameraFrames")
+        expect(both(frames, cameras, lambda f, c: f > 0 and f == c), sc, "SV2",
+               "on: every frame with a view-model draw sets up the view-model camera", f"viewModelFrames={frames} viewModelCameraFrames={cameras}")
+    elif sc == "skinned-view-model-effect":
+        frames, cameras = on.lastInputsTotal("viewModelFrames"), on.lastInputsTotal("viewModelCameraFrames")
+        expect(both(frames, cameras, lambda f, c: f == 300 and c == 300), sc, "VE1",
+               "on: all 300 frames of the last interval have a view-model draw and set up the view-model camera, with or without the plain draw",
+               f"viewModelFrames={frames} viewModelCameraFrames={cameras}")
+        # The view model covers the right of the screen, so the sky there is darker than the empty sky on the left.
+        covered, shot = screenshot_luminance(sc, 0.05, 0.4, 0.62, 0.9)
+        empty, _ = screenshot_luminance(sc, 0.05, 0.4, 0.1, 0.38)
+        expect(both(covered, empty, lambda c, e: c < 0.5 * e), sc, "VE2",
+               "on: the view model is on screen 30 frames after its last pose change and 10 frames after the plain draw ended",
+               f"right={covered} left={empty} ({shot})")
     elif sc == "ring-props":
         acc = num(on.lastDirect("accepted"))
         expect(None if acc is None else acc == 0, sc, "RP1", "on: accepted=0 in the last interval (each bush keeps its object)", f"accepted={acc}")

@@ -85,6 +85,7 @@ namespace dxvk {
         bool raytracedRenderTarget = false;// draws to or samples a raytraced render target
         bool skyAutoDetected = false;      // the Sky category came from rtx.skyAutoDetect
         translator::FogRecord fog;         // The frame's fog order
+        translator::MaterialIdentityParts materialParts;  // Filled while rtx.d3d9v2.log is on
       };
 
       // The sky auto-detection state at a draw (rtx.skyAutoDetect), so a skip can tell whether the heuristic would

@@ -72,6 +72,10 @@ namespace dxvk {
       }
 
       updatesCamera = !c.skinned || !main.known;
+      const auto viewModel = [&updatesCamera]() {
+        updatesCamera = true;
+        return CameraClass::ViewModel;
+      };
       if (c.drawingToRaytracedRenderTarget) {
         return CameraClass::RenderToTexture;
       }
@@ -81,10 +85,10 @@ namespace dxvk {
       if (RtxOptions::ViewModel::enable()) {
         // The viewport depth test comes first.
         if (c.maxZ <= RtxOptions::ViewModel::maxZThreshold()) {
-          return CameraClass::ViewModel;
+          return viewModel();
         }
         if (main.set && !(std::abs(m_params.fov - main.fov) < kFovToleranceRadians)) {
-          return CameraClass::ViewModel;
+          return viewModel();
         }
       }
       return CameraClass::Main;
@@ -94,6 +98,10 @@ namespace dxvk {
       m_main.known = m_viewFrames[uint32_t(CameraClass::Main)] != 0;
       const CameraClass camera = m_rules.classify(c, m_main, updatesCamera);
       if (!updatesCamera) {
+        return camera;
+      }
+      // The scene keeps the first camera of a frame, and a skinned draw's view may carry its own offset.
+      if (c.skinned && m_viewFrames[uint32_t(camera)] == m_frame + 1) {
         return camera;
       }
       if (camera == CameraClass::Main && !m_main.set) {

@@ -37,6 +37,17 @@
 namespace dxvk {
   namespace translator {
 
+    // The parts of a draw's material identity (DrawInputs::material), for the log of what changed between two draws.
+    struct MaterialIdentityParts {
+      XXH64_hash_t textures = 0;
+      XXH64_hash_t samplers = 0;
+      XXH64_hash_t blend = 0;
+      uint32_t tFactor = 0;
+      uint32_t alphaTest = 0;
+      uint32_t textureOps = 0;
+      uint32_t lighting = 0;
+    };
+
     struct DrawInputs {
       static constexpr uint32_t kMaxStreams = 16;
 

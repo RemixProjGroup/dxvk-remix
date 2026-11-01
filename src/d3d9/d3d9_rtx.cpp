@@ -2030,6 +2030,30 @@ namespace dxvk {
     return true;
   }
 
+  namespace {
+    translator::MaterialIdentityParts materialIdentityParts(const LegacyMaterialData& material) {
+      translator::MaterialIdentityParts parts;
+      const XXH64_hash_t textures[2] = { material.getColorTexture().getImageHash(), material.getColorTexture2().getImageHash() };
+      parts.textures = XXH3_64bits(textures, sizeof(textures));
+      const XXH64_hash_t samplers[2] = {
+        material.getSampler().ptr() != nullptr ? material.getSampler()->info().calculateHash() : kEmptyHash,
+        material.getSampler2().ptr() != nullptr ? material.getSampler2()->info().calculateHash() : kEmptyHash
+      };
+      parts.samplers = XXH3_64bits(samplers, sizeof(samplers));
+      const DxvkBlendMode& b = material.blendMode;
+      const uint32_t blend[8] = { uint32_t(b.enableBlending), uint32_t(b.colorSrcFactor), uint32_t(b.colorDstFactor), uint32_t(b.colorBlendOp),
+                                  uint32_t(b.alphaSrcFactor), uint32_t(b.alphaDstFactor), uint32_t(b.alphaBlendOp), uint32_t(b.writeMask) };
+      parts.blend = XXH3_64bits(blend, sizeof(blend));
+      parts.tFactor = material.tFactor;
+      parts.alphaTest = (uint32_t(material.alphaTestCompareOp) << 8) | material.alphaTestReferenceValue;
+      parts.textureOps = uint32_t(material.textureColorArg1Source) | (uint32_t(material.textureColorArg2Source) << 5) |
+                         (uint32_t(material.textureColorOperation) << 10) | (uint32_t(material.textureAlphaArg1Source) << 15) |
+                         (uint32_t(material.textureAlphaArg2Source) << 20) | (uint32_t(material.textureAlphaOperation) << 25);
+      parts.lighting = (material.isTextureFactorBlend ? 1u : 0u) | (material.isVertexColorBakedLighting ? 2u : 0u);
+      return parts;
+    }
+  }
+
   void D3D9Rtx::observeFrontendInputs(const IndexContext& indexContext, const VertexContext vertexContext[caps::MaxStreams],
                                       const DrawContext& drawContext, bool userPointer, PrepareDrawFlags flags) {
     using translator::DrawInputs;
@@ -2084,6 +2108,9 @@ namespace dxvk {
                                      m_activeDrawCallState.isUsingRaytracedRenderTarget;
     prepared.skyAutoDetected = m_activeDrawCallState.skyAutoDetected;
     prepared.fog = frontendFog();
+    if (m_frontendApp.statsActive()) {
+      prepared.materialParts = materialIdentityParts(m_activeDrawCallState.getMaterialData());
+    }
     m_frontendDecision = m_frontendApp.decide(in, camera, &prepared);
     // The first draw of a camera type in this frame sends the camera, ahead of the
     // draw's own commit. The queued state carries the frontend's camera type for the CS thread's parity check

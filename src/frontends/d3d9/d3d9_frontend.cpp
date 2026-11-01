@@ -1563,6 +1563,8 @@ namespace dxvk {
           uint64_t changed = 0;           // direct, changed: handed back
           uint64_t handovers = 0;
           uint64_t cameraFeeds = 0;       // Cameras sent (first draw of a camera type in a frame)
+          uint64_t viewModelFrames = 0;   // Frames with a view-model draw
+          uint64_t viewModelCameraFrames = 0;  // Frames that sent the view-model camera
           // The early change test
           uint64_t preKeyHits = 0;        // skipped before preparation, unchanged
           uint64_t preKeyMoves = 0;       // skipped before preparation, moved
@@ -1592,6 +1594,7 @@ namespace dxvk {
           uint64_t resetPairs = 0;        // new objects after a device Reset that took over a scene object of the same draw
         } totals;
         uint32_t mismatchLogs = 0;        // [D3D9v2] preKeyMismatch lines written (first 20)
+        uint32_t viewModelDrawnFrame = ~0u;  // The last frame counted in viewModelFrames
         // Skinned lifecycle lines written in this log interval.
         static constexpr uint32_t kSkinEventLinesPerInterval = 40;
         uint32_t skinEventLines = 0;
@@ -1652,6 +1655,7 @@ namespace dxvk {
           uint32_t skinFirstBone = 0;
           uint32_t skinBoneCount = 0;
           XXH64_hash_t skinMaterial = 0;
+          translator::MaterialIdentityParts skinMaterialParts;
           XXH64_hash_t skinObjectKey = 0;
           XXH64_hash_t resetSignature = 0;  // translator::DrawInputs::resetSignature of the last draw (0 = coarse-keyed)
           // The last full preparation's record and derived state.
@@ -1798,7 +1802,8 @@ namespace dxvk {
             " matchContentExact=", perFrame(totals.matchContentExact), " matchContentNear=", perFrame(totals.matchContentNear),
             " skinEvents=", skinEventLines, "/", totals.skinEvents, " (logged/all)",
             " resetPairs=", totals.resetPairs,
-            " | interval totals: skipped=", totals.skipped, " handovers=", totals.handovers, " changed=", totals.changed));
+            " | interval totals: skipped=", totals.skipped, " handovers=", totals.handovers, " changed=", totals.changed,
+            " viewModelFrames=", totals.viewModelFrames, " viewModelCameraFrames=", totals.viewModelCameraFrames));
           // Draws per frame not handed over, per class (non-exclusive).
           std::string notEligibleLine;
           for (uint32_t i = 0; i < kNeCount; ++i) {
@@ -1916,7 +1921,37 @@ namespace dxvk {
           return what.empty() ? std::string("none") : what;
         }
 
-        void noteSkinned(Object& object, XXH64_hash_t key, const translator::DrawInputs& in) {
+        // The parts of a material identity that differ between two draws, with their values where they are readable.
+        static std::string materialChanges(const translator::MaterialIdentityParts& a, const translator::MaterialIdentityParts& b) {
+          std::string what;
+          const auto add = [&](const char* name, const std::string& text) {
+            what += str::format(what.empty() ? "" : ",", name, text);
+          };
+          if (a.textures != b.textures) {
+            add("textures", "");
+          }
+          if (a.samplers != b.samplers) {
+            add("samplers", "");
+          }
+          if (a.blend != b.blend) {
+            add("blend", "");
+          }
+          if (a.tFactor != b.tFactor) {
+            add("tFactor", str::format(":0x", std::hex, a.tFactor, "->0x", b.tFactor));
+          }
+          if (a.alphaTest != b.alphaTest) {
+            add("alphaTest", str::format(":0x", std::hex, a.alphaTest, "->0x", b.alphaTest));
+          }
+          if (a.textureOps != b.textureOps) {
+            add("textureOps", str::format(":0x", std::hex, a.textureOps, "->0x", b.textureOps));
+          }
+          if (a.lighting != b.lighting) {
+            add("lighting", str::format(":", a.lighting, "->", b.lighting));
+          }
+          return what.empty() ? std::string("none") : what;
+        }
+
+        void noteSkinned(Object& object, XXH64_hash_t key, const translator::DrawInputs& in, const PreparedState* prepared) {
           const bool known = object.skinClass != 0;
           const bool changed = known &&
             (object.skinMaterial != in.material || object.skinBoneCount != in.skinBoneCount ||
@@ -1926,6 +1961,9 @@ namespace dxvk {
             what = str::format("was material=0x", std::hex, object.skinMaterial, std::dec, " bones=", object.skinFirstBone,
                                "+", object.skinBoneCount, " counts=", uint32_t(object.skinCounts >> 32), "/",
                                uint32_t(object.skinCounts));
+            if (object.skinMaterial != in.material && prepared != nullptr) {
+              what += str::format(" materialChanges=", materialChanges(object.skinMaterialParts, prepared->materialParts));
+            }
           }
           object.skinVelocity = known ? in.skinPosition - object.skinPosition : Vector3(0.f);
           object.skinPosition = in.skinPosition;
@@ -1934,6 +1972,9 @@ namespace dxvk {
           object.skinFirstBone = in.skinFirstBone;
           object.skinBoneCount = in.skinBoneCount;
           object.skinMaterial = in.material;
+          if (prepared != nullptr) {
+            object.skinMaterialParts = prepared->materialParts;
+          }
           object.skinObjectKey = in.identityKey();
           const XXH64_hash_t skinClass = skinClassOf(in);
           if (object.skinClass != skinClass) {
@@ -2118,6 +2159,11 @@ namespace dxvk {
           if (updatesCamera && cameras.firstOfFrame(type)) {
             decision.feedCamera = true;
             totals.cameraFeeds++;
+            totals.viewModelCameraFrames += type == translator::CameraClass::ViewModel ? 1 : 0;
+          }
+          if (type == translator::CameraClass::ViewModel && viewModelDrawnFrame != frame) {
+            viewModelDrawnFrame = frame;
+            totals.viewModelFrames++;
           }
         }
 
@@ -2523,7 +2569,7 @@ namespace dxvk {
                                                          p.z, ") moved=", length(in.skinPosition - p)));
               }
             }
-            noteSkinned(object, key, in);
+            noteSkinned(object, key, in, prepared);
             // A new skinned object close to a scene-owned character of the same material that was drawn in the previous
             // frame but not yet in this one (its draw moved to other buffers or another key, as when a character becomes
             // a ragdoll) waits one frame, and that character is kept for it. If the character stays undrawn, endFrame

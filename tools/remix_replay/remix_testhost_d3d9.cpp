@@ -1274,6 +1274,10 @@ namespace {
     // and the main camera kicks while it fires (20 of every 60 frames), and a muzzle flash, a plain view-model draw,
     // follows the gun then.
     SharedPalette,
+    // A view model of skinned draws only, with its own field of view. It fires for 20 of every 60 frames, its pose holds
+    // for the rest, and a plain view-model draw, a muzzle flash and its smoke, follows it for the first 40 of the 60. A cycle
+    // starts 10 frames into each 60, so the scenario's screenshot frame is 50 frames into its cycle.
+    ViewModelEffect,
   };
 
   // A column of `segments` boxes. Segment k blends bones first + k and the next two (clamped to the last), with weights
@@ -1404,6 +1408,7 @@ namespace {
       h.begin();
       const float t = float(frame);
       const bool firing = kind == SkinCase::SharedPalette && (frame % 60) < 20;
+      const int effectCycle = (frame + 50) % 60;
       // The main camera kicks up while the gun fires. The view model is drawn with the camera without the kick.
       const D3DMATRIX mainView = firing ? mul(camView, rotationX(0.04f + 0.01f * float(frame % 60))) : camView;
       h.m_device->SetTransform(D3DTS_PROJECTION, &mainProjection);
@@ -1484,6 +1489,20 @@ namespace {
         drawSkin(h, hands, h.texture(Tex::Ground), D3DVBF_2WEIGHTS);
         drawSkin(h, gun, h.texture(Tex::Crate), D3DVBF_2WEIGHTS);
         if (firing) {
+          h.draw(flash, scaled(0.1f, 0.4f, 2.2f, -2.4f), h.texture(Tex::Emitter));
+        }
+        h.m_device->SetTransform(D3DTS_PROJECTION, &mainProjection);
+        break;
+      }
+      case SkinCase::ViewModelEffect: {
+        h.m_device->SetTransform(D3DTS_PROJECTION, &viewModelProjection);
+        const D3DMATRIX place = translation(0.4f, 1.9f, -2.8f);
+        setColumnPose(h, 0, 0.1f, place);
+        const float recoil = effectCycle < 20 ? 0.05f * std::sin(0.5f * float(effectCycle)) : 0.f;
+        setColumnPose(h, 3, 0.05f, mul(translation(0.f, 0.f, -recoil), place));
+        drawSkin(h, hands, h.texture(Tex::Ground), D3DVBF_2WEIGHTS);
+        drawSkin(h, gun, h.texture(Tex::Crate), D3DVBF_2WEIGHTS);
+        if (effectCycle < 40) {
           h.draw(flash, scaled(0.1f, 0.4f, 2.2f, -2.4f), h.texture(Tex::Emitter));
         }
         h.m_device->SetTransform(D3DTS_PROJECTION, &mainProjection);
@@ -2626,6 +2645,8 @@ int runD3D9Scenario(const std::wstring& name, const fs::path& runtime, HWND hwnd
     rc = runSkinCase(host, args, SkinCase::Swap);
   } else if (name == L"skinned-shared-palette") {
     rc = runSkinCase(host, args, SkinCase::SharedPalette);
+  } else if (name == L"skinned-view-model-effect") {
+    rc = runSkinCase(host, args, SkinCase::ViewModelEffect);
   } else if (name == L"ring-props") {
     rc = runRingProps(host, args);
   } else if (name == L"ring-reorder") {
