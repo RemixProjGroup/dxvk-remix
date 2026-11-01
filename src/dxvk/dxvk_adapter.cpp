@@ -43,13 +43,25 @@
 #include <remix/remix_c.h>
 // NV-DXVK end
 
-// NV-DXVK start: FSR 3.1 runtime probe
+// NV-DXVK start: AMD FSR runtime probe
 #include "rtx_render/rtx_fork_hooks.h"
 // NV-DXVK end
 #include "rtx_render/rtx_perf_log.h" // rtx.present.queueGlobalPriority
 #include "rtx_render/rtx_pipeline_stats.h" // rtx.debug.logPipelineStats
 
 namespace dxvk {
+
+  namespace {
+    // VK_EXT_shader_float8 is newer than the Vulkan headers this runtime builds against.
+    constexpr VkStructureType kFsrShaderFloat8FeaturesType = static_cast<VkStructureType>(1000567000);
+
+    struct FsrShaderFloat8Features {
+      VkStructureType sType;
+      void* pNext;
+      VkBool32 shaderFloat8;
+      VkBool32 shaderFloat8CooperativeMatrix;
+    };
+  }
 
   const char* GpuVendorToString(DxvkGpuVendor vendor) {
     switch (vendor) {
@@ -187,7 +199,7 @@ namespace dxvk {
 
     // NV-DXVK start: FSR FG integration
     // Frame interpolation needs its own image-acquire queue and a present queue
-    // that is not the graphics queue. Only claimed when the FidelityFX runtime
+    // that is not the graphics queue. Only claimed when the AMD FSR loader
     // is present, so installs without it get upstream's queue set untouched.
     if (fork_hooks::fsrRuntimeAvailable()) {
       // Prefer a family with transfer support for the acquire queue.
@@ -571,8 +583,8 @@ namespace dxvk {
       extensionsEnabled);
     // NV-DXVK end
 
-    // NV-DXVK start: FSR 3.1 - required by the FidelityFX SDK's internal
-    // allocator. Only requested when the FidelityFX runtime is actually present.
+    // NV-DXVK start: AMD FSR - required by the AMD FSR SDK's internal
+    // allocator. Only requested when the AMD FSR loader is actually present.
     if (fork_hooks::fsrRuntimeAvailable() && m_deviceExtensions.supports(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME))
       extensionsEnabled.add(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME);
     // NV-DXVK end
@@ -689,6 +701,68 @@ namespace dxvk {
       }
       Logger::info(str::format("[DeviceFault] VK_AMD_buffer_marker ", devExtensions.amdBufferMarker ? "enabled" : "not available",
         ", VK_EXT_device_fault ", enableDeviceFault ? "enabled" : "not available"));
+    }
+
+    // The ML versions of AMD FSR run only on AMD GPUs, so other vendors keep their device unchanged.
+    // AMD's SDK does not list what those shaders need. These are the features its Vulkan sample enables
+    // that the runtime does not already enable.
+    // The feature structs live on this function's stack until vkCreateDevice and are unlinked after it.
+    VkPhysicalDeviceCooperativeMatrixFeaturesKHR fsrCooperativeMatrixFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR };
+    FsrShaderFloat8Features fsrFloat8Features = { kFsrShaderFloat8FeaturesType };
+    VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR fsrDerivativesFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR };
+    VkPhysicalDeviceSubgroupSizeControlFeatures fsrSubgroupSizeFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES };
+    const bool enableFsrMlFeatures = fork_hooks::fsrRuntimeAvailable()
+      && m_deviceInfo.core.properties.vendorID == static_cast<uint32_t>(DxvkGpuVendor::Amd);
+    if (enableFsrMlFeatures) {
+      VkPhysicalDeviceFeatures2 features2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+      const bool hasCooperativeMatrix = m_deviceExtensions.supports(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME) != 0;
+      const bool hasFloat8 = m_deviceExtensions.supports(devExtensions.extShaderFloat8.name()) != 0;
+      const bool hasDerivatives = m_deviceExtensions.supports(VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME) != 0;
+      const bool hasSubgroupSizeExtension = m_deviceExtensions.supports(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME) != 0;
+      const bool hasSubgroupSize = hasSubgroupSizeExtension || m_deviceInfo.core.properties.apiVersion >= VK_API_VERSION_1_3;
+      if (hasCooperativeMatrix) {
+        fsrCooperativeMatrixFeatures.pNext = std::exchange(features2.pNext, &fsrCooperativeMatrixFeatures);
+      }
+      if (hasFloat8) {
+        fsrFloat8Features.pNext = std::exchange(features2.pNext, &fsrFloat8Features);
+      }
+      if (hasDerivatives) {
+        fsrDerivativesFeatures.pNext = std::exchange(features2.pNext, &fsrDerivativesFeatures);
+      }
+      if (hasSubgroupSize) {
+        fsrSubgroupSizeFeatures.pNext = std::exchange(features2.pNext, &fsrSubgroupSizeFeatures);
+      }
+      m_vki->vkGetPhysicalDeviceFeatures2(m_handle, &features2);
+
+      // Robust access is left off because the shaders do not ask for it and it can cost performance.
+      fsrCooperativeMatrixFeatures.cooperativeMatrixRobustBufferAccess = VK_FALSE;
+
+      if (fsrCooperativeMatrixFeatures.cooperativeMatrix) {
+        devExtensions.khrCooperativeMatrix.setMode(DxvkExtMode::Optional);
+      }
+      if (fsrFloat8Features.shaderFloat8) {
+        devExtensions.extShaderFloat8.setMode(DxvkExtMode::Optional);
+      }
+      if (fsrDerivativesFeatures.computeDerivativeGroupQuads || fsrDerivativesFeatures.computeDerivativeGroupLinear) {
+        devExtensions.khrComputeShaderDerivatives.setMode(DxvkExtMode::Optional);
+      }
+      if (hasSubgroupSizeExtension && fsrSubgroupSizeFeatures.subgroupSizeControl) {
+        devExtensions.extSubgroupSizeControl.setMode(DxvkExtMode::Optional);
+      }
+      std::array fsrMlExtensions = {
+        &devExtensions.khrCooperativeMatrix,
+        &devExtensions.extShaderFloat8,
+        &devExtensions.khrComputeShaderDerivatives,
+        &devExtensions.extSubgroupSizeControl,
+      };
+      m_deviceExtensions.enableExtensions(fsrMlExtensions.size(), fsrMlExtensions.data(), extensionsEnabled);
+
+      Logger::info(str::format("[FSR] device features for the ML versions: cooperativeMatrix=", fsrCooperativeMatrixFeatures.cooperativeMatrix,
+        " shaderFloat8=", fsrFloat8Features.shaderFloat8, " shaderFloat8CooperativeMatrix=", fsrFloat8Features.shaderFloat8CooperativeMatrix,
+        " computeDerivativeGroupQuads=", fsrDerivativesFeatures.computeDerivativeGroupQuads,
+        " computeDerivativeGroupLinear=", fsrDerivativesFeatures.computeDerivativeGroupLinear,
+        " subgroupSizeControl=", fsrSubgroupSizeFeatures.subgroupSizeControl,
+        " computeFullSubgroups=", fsrSubgroupSizeFeatures.computeFullSubgroups));
     }
 
     // Enable additional extensions if necessary
@@ -876,6 +950,29 @@ namespace dxvk {
       enabledFeatures.khrShaderIntegerDotProduct.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES;
       enabledFeatures.khrShaderIntegerDotProduct.pNext = std::exchange(enabledFeatures.core.pNext, &enabledFeatures.khrShaderIntegerDotProduct);
       enabledFeatures.khrShaderIntegerDotProduct.shaderIntegerDotProduct = VK_TRUE;
+    }
+
+    if (enableFsrMlFeatures) {
+      enabledFeatures.core.features.shaderInt16 |= m_deviceFeatures.core.features.shaderInt16;
+      enabledFeatures.core.features.shaderStorageImageReadWithoutFormat |= m_deviceFeatures.core.features.shaderStorageImageReadWithoutFormat;
+      enabledFeatures.core.features.shaderStorageImageWriteWithoutFormat |= m_deviceFeatures.core.features.shaderStorageImageWriteWithoutFormat;
+      enabledFeatures.vulkan12Features.shaderSubgroupExtendedTypes |= m_deviceFeatures.vulkan12Features.shaderSubgroupExtendedTypes;
+      enabledFeatures.vulkan12Features.subgroupBroadcastDynamicId |= m_deviceFeatures.vulkan12Features.subgroupBroadcastDynamicId;
+      enabledFeatures.vulkan12Features.vulkanMemoryModel |= m_deviceFeatures.vulkan12Features.vulkanMemoryModel;
+      enabledFeatures.vulkan12Features.vulkanMemoryModelDeviceScope |= m_deviceFeatures.vulkan12Features.vulkanMemoryModelDeviceScope;
+
+      if (devExtensions.khrCooperativeMatrix) {
+        fsrCooperativeMatrixFeatures.pNext = std::exchange(enabledFeatures.core.pNext, &fsrCooperativeMatrixFeatures);
+      }
+      if (devExtensions.extShaderFloat8) {
+        fsrFloat8Features.pNext = std::exchange(enabledFeatures.core.pNext, &fsrFloat8Features);
+      }
+      if (devExtensions.khrComputeShaderDerivatives) {
+        fsrDerivativesFeatures.pNext = std::exchange(enabledFeatures.core.pNext, &fsrDerivativesFeatures);
+      }
+      if (fsrSubgroupSizeFeatures.subgroupSizeControl) {
+        fsrSubgroupSizeFeatures.pNext = std::exchange(enabledFeatures.core.pNext, &fsrSubgroupSizeFeatures);
+      }
     }
 
     // Feature structs live on this function's stack until vkCreateDevice.
@@ -1200,6 +1297,30 @@ namespace dxvk {
     }
     if (enableDeviceFault) {
       unlinkDeviceFaultFeatures();
+    }
+
+    // The features for the ML versions of AMD FSR must never cost the device either.
+    // Without them, FSR falls back to its non-ML version.
+    const auto unlinkFsrMlFeatures = [&]() {
+      vk::removeStructFromPNextChain(&enabledFeatures.core.pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR);
+      vk::removeStructFromPNextChain(&enabledFeatures.core.pNext, kFsrShaderFloat8FeaturesType);
+      vk::removeStructFromPNextChain(&enabledFeatures.core.pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR);
+      vk::removeStructFromPNextChain(&enabledFeatures.core.pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES);
+    };
+    if (vr != VK_SUCCESS && enableFsrMlFeatures) {
+      Logger::warn(str::format("[FSR] vkCreateDevice failed (", vr, ") with the features for the ML versions; retrying without them"));
+      unlinkFsrMlFeatures();
+      extensionsEnabled.disableExtension(devExtensions.khrCooperativeMatrix);
+      extensionsEnabled.disableExtension(devExtensions.extShaderFloat8);
+      extensionsEnabled.disableExtension(devExtensions.khrComputeShaderDerivatives);
+      extensionsEnabled.disableExtension(devExtensions.extSubgroupSizeControl);
+      extensionNameList = extensionsEnabled.toNameList();
+      info.enabledExtensionCount      = extensionNameList.count();
+      info.ppEnabledExtensionNames    = extensionNameList.names();
+      vr = m_vki->vkCreateDevice(m_handle, &info, nullptr, &device);
+    }
+    if (enableFsrMlFeatures) {
+      unlinkFsrMlFeatures();
     }
 
     // A diagnostics-only extension must never cost the device.

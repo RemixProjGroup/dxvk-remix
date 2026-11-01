@@ -135,7 +135,7 @@ namespace dxvk {
   enum class FrameGenerationType : int {
     None = 0,    // Frame generation disabled
     DLSS,        // NVIDIA DLSS Frame Generation (DLSS 3.0/4.0)
-    FSR          // AMD FSR 3 Frame Generation
+    FSR          // AMD FSR Frame Generation
   };
 
   namespace fork_hooks {
@@ -695,7 +695,7 @@ namespace dxvk {
                     args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION_ARGS("rtx", FrameGenerationType, frameGenerationType, FrameGenerationType::None,
                     "The frame generation technology, and the control that enables it. 0: None (off), 1: DLSS (NVIDIA "
-                    "DLSS Frame Generation), 2: FSR (AMD FSR 3 Frame Generation). This sets rtx.dlfg.enable and "
+                    "DLSS Frame Generation), 2: FSR (AMD FSR Frame Generation). This sets rtx.dlfg.enable and "
                     "rtx.fsrfg.enable, so do not set those directly.",
                     args.environment = "DXVK_FRAMEGEN_TYPE",
                     args.onChangeCallback = &fork_hooks::applyFrameGenerationType,

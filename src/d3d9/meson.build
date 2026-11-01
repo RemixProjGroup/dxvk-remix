@@ -121,7 +121,7 @@ d3d9_dll = shared_library('d3d9', unified_src, dxvk_version, unified_shaders, d3
   name_prefix         : '',
 
   link_with           : [ util_lib ],
-  link_args           : [ usd_plugin_delay_load_args, fsr3_delay_load_args ],
+  link_args           : [ usd_plugin_delay_load_args, fsr_delay_load_args ],
   cpp_args            : unified_args,
   dependencies        : unified_deps,
   include_directories : [ dxvk_include_path, dxvk_shader_include_path, usd_include_paths, remix_api_include_path, include_directories('../dxvk'), include_directories('../dxgi') ],
@@ -131,16 +131,17 @@ d3d9_dll = shared_library('d3d9', unified_src, dxvk_version, unified_shaders, d3
   install: true
   )
 
-# Copy FSR3 DLL to d3d9 output directory for runtime loading
-fsr3_dll_src = join_paths(global_src_root_norm, 'submodules/FidelityFX-SDK/PrebuiltSignedDLL/amd_fidelityfx_vk.dll')
-fsr3_dll_build = custom_target('copy_fsr3_dll',
-  output: 'amd_fidelityfx_vk.dll',
-  input: fsr3_dll_src,
-  command: [python_interpreter, '-c', 'import shutil; import sys; shutil.copy(sys.argv[1], sys.argv[2])', '@INPUT@', '@OUTPUT@'],
-  build_by_default: true,
-  install: true,
-  install_dir: get_option('bindir')
-)
+# Copy the FSR loader and the effect DLLs it loads to the d3d9 output directory for runtime loading.
+foreach fsr_dll_name : [ 'amd_fidelityfx_loader_vk.dll', 'amd_fidelityfx_upscaler_vk.dll', 'amd_fidelityfx_framegeneration_vk.dll' ]
+  custom_target('copy_' + fsr_dll_name.underscorify(),
+    output: fsr_dll_name,
+    input: join_paths(global_src_root_norm, 'submodules/FidelityFX-SDK/Kits/FidelityFX/signedbin', fsr_dll_name),
+    command: [python_interpreter, '-c', 'import shutil; import sys; shutil.copy(sys.argv[1], sys.argv[2])', '@INPUT@', '@OUTPUT@'],
+    build_by_default: true,
+    install: true,
+    install_dir: get_option('bindir')
+  )
+endforeach
 
 d3d9_dep = declare_dependency(
   link_with           : [ d3d9_dll ],

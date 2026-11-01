@@ -158,15 +158,27 @@ namespace dxvk {
 
           case FrameGenerationType::FSR:
             if (!fsrFrameGen(ctx).supportsFSRFrameGen()) {
-              ImGui::TextColored(kStatusFault, "Status: unavailable - FSR Frame Generation is not supported here.");
-              if (!fsrRuntimeAvailable()) {
-                ImGui::TextWrapped("amd_fidelityfx_vk.dll was not found next to d3d9.dll.");
+              ImGui::TextColored(kStatusFault, "Status: unavailable - AMD FSR Frame Generation is not supported here.");
+              if (!fsrFrameGenerationAvailable()) {
+                ImGui::TextWrapped("%s", str::format(fsrMissingDll(true), " was not found next to d3d9.dll.").c_str());
               }
             } else if (!DxvkFSRFrameGen::enable()) {
               ImGui::TextColored(kStatusFault, "Status: selected but inactive.");
             } else {
-              ImGui::TextColored(kStatusActive, "Status: active - FSR Frame Generation, 2x.");
-              showFsrFrameGenerationReadout(ctx);
+              const DxvkFSRFrameGen::Stats stats = fsrFrameGen(ctx).getStats();
+              if (stats.contextFailed) {
+                ImGui::TextColored(kStatusFault, "Status: unavailable - rendering every frame.");
+                ImGui::TextWrapped("AMD FSR Frame Generation could not start on this GPU. The log has the reason.");
+              } else if (stats.versionName.empty()) {
+                ImGui::TextColored(kStatusOff, "Status: starting.");
+              } else if (ffxVersionMajor(stats.versionName) >= kFfxFirstMlMajorVersion) {
+                ImGui::TextColored(kStatusActive, "Status: active - AMD FSR Frame Generation (ML), 2x.");
+                showFsrFrameGenerationReadout(ctx);
+              } else {
+                ImGui::TextColored(kStatusActive, "Status: active - AMD FSR Frame Generation (non-ML), 2x.");
+                ImGui::TextWrapped("The ML version needs an AMD Radeon RX 9000 Series GPU or later.");
+                showFsrFrameGenerationReadout(ctx);
+              }
             }
             break;
         }
@@ -226,6 +238,48 @@ namespace dxvk {
     }
 
     void showFsrUpscalerSettings(const Rc<DxvkContext>& ctx) {
+      const DxvkFSR& fsr = ctx->getCommonObjects()->metaFSR();
+
+      // The status says what the single FSR entry runs on this GPU, and why it is not the ML version.
+      if (!fsrUpscalerAvailable()) {
+        ImGui::TextColored(kStatusFault, "Status: unavailable - the image is not upscaled.");
+        ImGui::TextWrapped("%s", str::format(fsrMissingDll(false), " was not found next to d3d9.dll.").c_str());
+        return;
+      }
+
+      switch (fsr.getStatus()) {
+        case DxvkFSR::Status::Failed:
+          ImGui::TextColored(kStatusFault, "Status: unavailable - the image is not upscaled.");
+          ImGui::TextWrapped("AMD FSR Upscaling could not start on this GPU. The log has the reason.");
+          return;
+        case DxvkFSR::Status::Pending:
+          ImGui::TextColored(kStatusOff, "Status: starting.");
+          break;
+        case DxvkFSR::Status::MachineLearning:
+          ImGui::TextColored(kStatusActive, "Status: active - AMD FSR Upscaling (ML).");
+          break;
+        case DxvkFSR::Status::NonMachineLearning: {
+          ImGui::TextColored(kStatusActive, "Status: active - AMD FSR Upscaling (non-ML).");
+          const uint32_t vendorId = ctx->getDevice()->adapter()->deviceProperties().vendorID;
+          if (fsr.hasMlVersion()) {
+            if (!DxvkFSR::FSROptions::forceNonMl()) {
+              ImGui::TextWrapped("The ML version did not start on this GPU. The log has the reason.");
+            }
+          } else if (vendorId == static_cast<uint32_t>(DxvkGpuVendor::Amd)) {
+            ImGui::TextWrapped("This AMD GPU or driver does not offer the ML version.");
+          } else {
+            ImGui::TextWrapped("The ML version needs a supported AMD Radeon GPU.");
+          }
+          break;
+        }
+      }
+
+      if (fsr.hasMlVersion()) {
+        RemixGui::Checkbox("Use Non-ML AMD FSR Upscaling", &DxvkFSR::FSROptions::forceNonMlObject());
+        RemixGui::SetTooltipToLastWidgetOnHover(
+          "Uses the non-ML version on this GPU even though it supports the ML version.");
+      }
+
       g_fsrPresetCombo.getKey(&DxvkFSR::FSROptions::presetObject());
 
       if (DxvkFSR::FSROptions::preset() == FSRPreset::Custom) {
@@ -234,7 +288,7 @@ namespace dxvk {
 
       uint32_t inputWidth = 0;
       uint32_t inputHeight = 0;
-      ctx->getCommonObjects()->metaFSR().getInputSize(inputWidth, inputHeight);
+      fsr.getInputSize(inputWidth, inputHeight);
       ImGui::TextWrapped(str::format("Render Resolution: ", inputWidth, "x", inputHeight).c_str());
     }
 

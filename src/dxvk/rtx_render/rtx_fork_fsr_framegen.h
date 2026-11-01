@@ -34,6 +34,7 @@
 #include <array>
 #include <cstdint>
 #include <mutex>
+#include <string>
 
 namespace dxvk {
 
@@ -41,7 +42,10 @@ namespace dxvk {
   class DxvkContext;
 
   /**
-   * \brief FSR 3 frame generation through the FidelityFX Vulkan swapchain proxy.
+   * \brief AMD FSR frame generation through the FFX Vulkan swapchain proxy.
+   *
+   * The AMD FSR SDK picks the newest version the GPU supports. That is the ML version on AMD Radeon RX 9000 Series
+   * GPUs and later, and the analytical non-ML version everywhere else.
    *
    * The renderer queues each frame's inputs with DxvkDevice::setupFrameInterpolation, as for DLSS-G. The
    * presenter then records the prepare pass on the graphics queue, configures the frame and presents it through
@@ -71,12 +75,14 @@ namespace dxvk {
       bool asyncWorkloads = false;
       bool hdr = false;
       VkFormat backBufferFormat = VK_FORMAT_UNDEFINED;
+      bool contextFailed = false;       // The proxy or the frame generation context could not be created.
+      std::string versionName;          // The frame generation version FFX picked. Empty without a context.
     };
 
     explicit DxvkFSRFrameGen(DxvkDevice* device);
     virtual void onDestroy();
 
-    // True when the FidelityFX runtime is loadable and the adapter has the separate present and
+    // True when the AMD FSR DLLs are available and the adapter has the separate present and
     // image-acquire queues the FFX proxy needs.
     bool supportsFSRFrameGen() const;
 
@@ -87,7 +93,7 @@ namespace dxvk {
     Stats getStats() const;
 
     RTX_OPTION_ENV("rtx.fsrfg", bool, enable, false, "RTX_FSRFG_ENABLE",
-      "Enables FSR 3 frame generation, which inserts interpolated frames to raise the frame rate. Set "
+      "Enables AMD FSR frame generation, which inserts interpolated frames to raise the frame rate. Set "
       "rtx.frameGenerationType instead of this option.");
     RTX_OPTION("rtx.fsrfg", bool, interpolateHud, false,
       "Interpolates the whole presented image, HUD included, instead of drawing the current HUD over the generated "
@@ -110,7 +116,8 @@ namespace dxvk {
 
     // Submission thread, right before the proxy present: prepares and configures this frame.
     void beginPresent(VkSwapchainKHR swapchain, const DxvkFrameInterpolationInfo& frame, bool enabled, const vk::PresenterInfo& info);
-    bool prepare(const DxvkFrameInterpolationInfo& frame, uint64_t frameId);
+    bool prepare(const DxvkFrameInterpolationInfo& frame, uint64_t frameId, bool reset);
+    void setContextFailed(bool failed);
     void logStats();
 
     // Runs inside the proxy's present call, on the submission thread.
@@ -130,6 +137,10 @@ namespace dxvk {
     PFN_vkAcquireNextImageKHR m_replacedAcquireNextImageKHR = nullptr;
     PFN_vkQueuePresentKHR m_replacedQueuePresentKHR = nullptr;
     PFN_vkGetSwapchainImagesKHR m_replacedGetSwapchainImagesKHR = nullptr;
+
+    // The proxy swapchain outlives its context, so it is destroyed through this replacement function after the context.
+    void (*m_replacedDestroySwapchain)(VkDevice, VkSwapchainKHR, const VkAllocationCallbacks*, void*) = nullptr;
+    VkSwapchainKHR m_proxySwapchain = VK_NULL_HANDLE;
 
     // Submission thread state.
     uint64_t m_lastFrameId = 0;

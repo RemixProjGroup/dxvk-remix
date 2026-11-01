@@ -315,16 +315,28 @@ namespace dxvk {
       RemixApiDevice*     remixDevice,
       remixapi_VramStats*  out_stats);
 
-    // --- FSR 3.1 upscaling, RCAS sharpening and frame generation -------------
+    // --- AMD FSR upscaling, RCAS sharpening and frame generation -------------
     //
-    // The FidelityFX runtime is delay-loaded (see /DELAYLOAD in src/dxvk/meson.build).
-    // Without amd_fidelityfx_vk.dll these hooks report FSR as unsupported instead of raising
+    // The AMD FSR loader is delay-loaded (see /DELAYLOAD in src/dxvk/meson.build).
+    // Without amd_fidelityfx_loader_vk.dll these hooks report FSR as unsupported instead of raising
     // a delay-load exception.
 
-    // Returns true when amd_fidelityfx_vk.dll loads. The result is probed once and cached.
-    // Every FidelityFX call is gated on it.
+    // Returns true when amd_fidelityfx_loader_vk.dll loads. The result is probed once and cached.
+    // Every FFX call is gated on it.
     // Implementation in rtx_fork_fsr.cpp.
     bool fsrRuntimeAvailable();
+
+    // Returns true when the loader loads and it can find the effect DLL for upscaling.
+    // Implementation in rtx_fork_fsr.cpp.
+    bool fsrUpscalerAvailable();
+
+    // Returns true when the loader loads and it can find the effect DLL for frame generation.
+    // Implementation in rtx_fork_fsr.cpp.
+    bool fsrFrameGenerationAvailable();
+
+    // Returns the name of the DLL that makes upscaling or frame generation unavailable.
+    // Implementation in rtx_fork_fsr.cpp.
+    const char* fsrMissingDll(bool frameGeneration);
 
     // Returns true when FSR is the selected upscaler and its pass is active.
     // Requires friend access to RtxContext::m_common.
@@ -373,7 +385,7 @@ namespace dxvk {
     // Implementation in rtx_fork_upscaler_ui.cpp.
     void showFrameGenerationOptions(const Rc<DxvkContext>& ctx, bool isDlfgSupported);
 
-    // Draws the FSR upscaler settings: the preset combo and the render resolution.
+    // Draws the FSR upscaler settings: the status, the preset combo and the render resolution.
     // Implementation in rtx_fork_upscaler_ui.cpp.
     void showFsrUpscalerSettings(const Rc<DxvkContext>& ctx);
 

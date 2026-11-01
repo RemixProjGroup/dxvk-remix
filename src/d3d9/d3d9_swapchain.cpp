@@ -1189,6 +1189,10 @@ namespace dxvk {
         m_dlfgPresenter = nullptr;
       }
 
+      if (m_fsrfgPresenter != nullptr) {
+        m_fsrfgPresenter = nullptr;
+      }
+
       m_device->waitForSubmission(&m_presentStatus);
       m_device->waitForIdle();
     }

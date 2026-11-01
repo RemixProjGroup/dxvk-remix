@@ -383,6 +383,12 @@ namespace dxvk {
     // which it does on GPUs other than NVIDIA.
     DxvkExt amdBufferMarker                   = { VK_AMD_BUFFER_MARKER_EXTENSION_NAME,                      DxvkExtMode::Disabled };
     DxvkExt extDeviceFault                    = { VK_EXT_DEVICE_FAULT_EXTENSION_NAME,                       DxvkExtMode::Disabled };
+
+    // The ML versions of AMD FSR. Disabled unless DxvkAdapter makes them Optional, which it does on AMD GPUs.
+    DxvkExt khrCooperativeMatrix              = { VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME,                 DxvkExtMode::Disabled };
+    DxvkExt extShaderFloat8                   = { "VK_EXT_shader_float8",                                   DxvkExtMode::Disabled };
+    DxvkExt khrComputeShaderDerivatives       = { VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME,         DxvkExtMode::Disabled };
+    DxvkExt extSubgroupSizeControl            = { VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME,              DxvkExtMode::Disabled };
   };
   
   /**

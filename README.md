@@ -131,7 +131,7 @@ option is listed in [`RtxOptions.md`](RtxOptions.md).
 ### Also in Remix Plus
 
 Carried over from the first Remix Plus release: RemixFX post-processing effects in an ordered stack (with HDR depth of
-field and NTSC/VHS looks), FSR 3 upscaling and frame generation, DLSS-NR, the froxel radiance cache for
+field and NTSC/VHS looks), AMD FSR upscaling and frame generation, DLSS-NR, the froxel radiance cache for
 particles and decals while volumetrics are off, and the Remix API extensions for batched meshes and lights, texture
 hash categories, game values and VRAM control.
 

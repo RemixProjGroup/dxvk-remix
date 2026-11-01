@@ -36,10 +36,10 @@
 #pragma warning(push)
 #pragma warning(disable: 4005)
 
-#include <ffx_api/ffx_api.hpp>
-#include <ffx_api/ffx_framegeneration.hpp>
-#include <ffx_api/vk/ffx_api_vk.hpp>
-#include <ffx_api/vk/ffx_api_vk.h>
+#include <api/include/ffx_api.hpp>
+#include <framegeneration/include/ffx_framegeneration.hpp>
+#include <api/include/vk/ffx_api_vk.hpp>
+#include <framegeneration/include/vk/ffx_api_framegeneration_vk.hpp>
 
 #pragma warning(pop)
 #undef FFX_API_ENTRY
@@ -150,10 +150,10 @@ namespace dxvk {
   }
 
   bool DxvkFSRFrameGen::supportsFSRFrameGen() const {
-    // The FidelityFX DLL is delay-loaded, so this probe must come first:
+    // The FSR loader DLL is delay-loaded, so this probe must come first:
     // without it, every FFX entry point below would raise a delay-load
     // exception rather than returning an error code.
-    if (!fork_hooks::fsrRuntimeAvailable()) {
+    if (!fork_hooks::fsrFrameGenerationAvailable()) {
       return false;
     }
 
@@ -244,8 +244,12 @@ namespace dxvk {
     createSwapChainDesc.presentQueue = { presentQueue.queueHandle, presentQueue.queueFamily, nullptr };
     createSwapChainDesc.imageAcquireQueue = { acquireQueue.queueHandle, acquireQueue.queueFamily, nullptr };
 
+    // Declares the API version this runtime was built against, which the Vulkan swapchain context requires.
+    ffx::CreateContextDescFrameGenerationSwapChainVersionVK swapChainVersionDesc{};
+    swapChainVersionDesc.version = FFX_FRAMEGENERATION_SWAPCHAIN_VK_VERSION;
+
     const VkSwapchainKHR originalSwapchain = *pSwapchain;
-    ffx::ReturnCode retCode = ffx::CreateContext(asContext(m_swapChainContext), nullptr, createSwapChainDesc);
+    ffx::ReturnCode retCode = ffx::CreateContext(asContext(m_swapChainContext), nullptr, createSwapChainDesc, swapChainVersionDesc);
     if (retCode != ffx::ReturnCode::Ok) {
       Logger::err(str::format("FSR FG: Failed to create swapchain context: ", static_cast<int>(retCode)));
       m_swapChainContext = nullptr;
@@ -265,12 +269,21 @@ namespace dxvk {
     m_replacedAcquireNextImageKHR = replacementFunctions.pOutAcquireNextImageKHR;
     m_replacedQueuePresentKHR = replacementFunctions.pOutQueuePresentKHR;
     m_replacedGetSwapchainImagesKHR = replacementFunctions.pOutGetSwapchainImagesKHR;
+    m_replacedDestroySwapchain = replacementFunctions.pOutDestroySwapchainFFXAPI;
+    m_proxySwapchain = *pSwapchain;
     m_asyncWorkloadsSupported = asyncQueue.queueHandle != VK_NULL_HANDLE;
     m_swapchainSize = info.imageExtent;
+
+    Logger::info(str::format("[FSRFG] swapchain proxy created: version=", ffxProviderVersionName(asContext(m_swapChainContext))));
 
     // Without a frame generation context the proxy still presents, with generation off.
     createFrameGenContext(info);
     return true;
+  }
+
+  void DxvkFSRFrameGen::setContextFailed(bool failed) {
+    std::lock_guard<std::mutex> lock(m_statsMutex);
+    m_stats.contextFailed = failed;
   }
 
   bool DxvkFSRFrameGen::createFrameGenContext(const vk::PresenterInfo& info) {
@@ -282,9 +295,13 @@ namespace dxvk {
     }
 
     ffx::CreateBackendVKDesc backendDesc{};
-    backendDesc.vkDevice = m_device->handle();
-    backendDesc.vkPhysicalDevice = m_device->adapter()->handle();
-    backendDesc.vkDeviceProcAddr = vkGetDeviceProcAddr;
+    backendDesc.deviceContext.vkDevice = m_device->handle();
+    backendDesc.deviceContext.vkPhysicalDevice = m_device->adapter()->handle();
+    backendDesc.deviceContext.vkDeviceProcAddr = vkGetDeviceProcAddr;
+
+    // Declares the API version this runtime was built against, which turns on the V2 prepare dispatch.
+    ffx::CreateContextDescFrameGenerationVersion versionDesc{};
+    versionDesc.version = FFX_FRAMEGENERATION_VERSION;
 
     ffx::CreateContextDescFrameGeneration createFg{};
     createFg.displaySize = { info.imageExtent.width, info.imageExtent.height };
@@ -316,15 +333,18 @@ namespace dxvk {
         " cannot hold a HUD-less copy; the HUD is interpolated with the scene."));
     }
 
-    const ffx::ReturnCode retCode = ffx::CreateContext(asContext(m_frameGenContext), nullptr, createFg, backendDesc);
+    const ffx::ReturnCode retCode = ffx::CreateContext(asContext(m_frameGenContext), nullptr, createFg, versionDesc, backendDesc);
     if (retCode != ffx::ReturnCode::Ok) {
       Logger::err(str::format("FSR FG: Failed to create frame gen context: ", static_cast<int>(retCode)));
       m_frameGenContext = nullptr;
+      setContextFailed(true);
       return false;
     }
 
     m_configuredEnabled = false;
     m_resetNext = true;
+    const std::string versionName = ffxProviderVersionName(asContext(m_frameGenContext));
+    const bool usesMl = ffxVersionMajor(versionName) >= kFfxFirstMlMajorVersion;
 
     {
       std::lock_guard<std::mutex> lock(m_hudLessMutex);
@@ -341,9 +361,15 @@ namespace dxvk {
       m_stats.asyncWorkloads = m_asyncWorkloadsSupported;
       m_stats.hdr = m_hdr;
       m_stats.backBufferFormat = backBufferFormat;
+      m_stats.contextFailed = false;
+      m_stats.versionName = versionName;
     }
 
-    Logger::info(str::format("[FSRFG] context created: display=", info.imageExtent.width, "x", info.imageExtent.height,
+    if (!usesMl) {
+      Logger::info("[FSRFG] the ML version needs an AMD Radeon RX 9000 Series GPU or later, so this context uses the non-ML version.");
+    }
+    Logger::info(str::format("[FSRFG] context created: path=", usesMl ? "ML" : "non-ML", " version=", versionName,
+      " display=", info.imageExtent.width, "x", info.imageExtent.height,
       " backBufferFormat=", static_cast<int>(backBufferFormat), " colorSpace=", static_cast<int>(info.format.colorSpace),
       " hdr=", m_hdr, " depthInverted=", m_depthInverted, " depthInfinite=", m_depthInfinite,
       " async=", m_asyncWorkloadsSupported, " hudLessCopy=", hudLessCopy));
@@ -365,6 +391,11 @@ namespace dxvk {
     ffx::DestroyContext(asContext(m_frameGenContext));
     m_frameGenContext = nullptr;
 
+    {
+      std::lock_guard<std::mutex> lock(m_statsMutex);
+      m_stats.versionName.clear();
+    }
+
     std::lock_guard<std::mutex> lock(m_hudLessMutex);
     m_hudLessFormat = VK_FORMAT_UNDEFINED;
     m_hudLessRing = {};
@@ -374,9 +405,16 @@ namespace dxvk {
     destroyFrameGenContext();
 
     if (m_swapChainContext != nullptr) {
-      // This destroys the proxy and the real swapchain behind it.
       ffx::DestroyContext(asContext(m_swapChainContext));
       m_swapChainContext = nullptr;
+
+      // The proxy and the real swapchain behind it outlive the context. Left alive, they keep the
+      // window in use and the next swapchain fails with VK_ERROR_NATIVE_WINDOW_IN_USE_KHR.
+      if (m_proxySwapchain != VK_NULL_HANDLE && m_replacedDestroySwapchain != nullptr) {
+        m_replacedDestroySwapchain(m_device->handle(), m_proxySwapchain, nullptr, nullptr);
+      }
+      m_proxySwapchain = VK_NULL_HANDLE;
+      m_replacedDestroySwapchain = nullptr;
       m_replacedAcquireNextImageKHR = nullptr;
       m_replacedQueuePresentKHR = nullptr;
       m_replacedGetSwapchainImagesKHR = nullptr;
@@ -436,7 +474,7 @@ namespace dxvk {
     return slot;
   }
 
-  bool DxvkFSRFrameGen::prepare(const DxvkFrameInterpolationInfo& frame, uint64_t frameId) {
+  bool DxvkFSRFrameGen::prepare(const DxvkFrameInterpolationInfo& frame, uint64_t frameId, bool reset) {
     ScopedCpuProfileZone();
     const Rc<vk::DeviceFn>& vkd = m_device->vkd();
 
@@ -457,7 +495,7 @@ namespace dxvk {
     const uint32_t renderWidth = frame.motionVectors->imageInfo().extent.width;
     const uint32_t renderHeight = frame.motionVectors->imageInfo().extent.height;
 
-    ffx::DispatchDescFrameGenerationPrepare prepareDesc{};
+    ffx::DispatchDescFrameGenerationPrepareV2 prepareDesc{};
     prepareDesc.commandList = cmdBuffer;
     prepareDesc.frameID = frameId;
     prepareDesc.flags = debugFlags();
@@ -473,21 +511,19 @@ namespace dxvk {
     prepareDesc.viewSpaceToMetersFactor = depthConvention.viewSpaceToMeters;
     prepareDesc.depth = createFfxResource(frame.depth, frame.depthLayout);
     prepareDesc.motionVectors = createFfxResource(frame.motionVectors, frame.motionVectorsLayout);
-    // FFX ignores the prepare reset. The reset reaches the interpolation dispatch through the callback.
-    prepareDesc.unused_reset = false;
+    // The ML version reads this reset. The interpolation dispatch gets it through the callback as well.
+    prepareDesc.reset = reset;
 
-    ffx::DispatchDescFrameGenerationPrepareCameraInfo cameraInfo{};
     const Vector3 cameraPos = frame.camera.getPosition(false);
     const Vector3 cameraUp = frame.camera.getUp(false);
     const Vector3 cameraRight = frame.camera.getRight(false);
     const Vector3 cameraForward = frame.camera.getDirection(false);
     for (uint32_t i = 0; i < 3; ++i) {
-      cameraInfo.cameraPosition[i] = cameraPos[i];
-      cameraInfo.cameraUp[i] = cameraUp[i];
-      cameraInfo.cameraRight[i] = cameraRight[i];
-      cameraInfo.cameraForward[i] = cameraForward[i];
+      prepareDesc.cameraPosition[i] = cameraPos[i];
+      prepareDesc.cameraUp[i] = cameraUp[i];
+      prepareDesc.cameraRight[i] = cameraRight[i];
+      prepareDesc.cameraForward[i] = cameraForward[i];
     }
-    prepareDesc.header.pNext = &cameraInfo.header;
 
     const ffx::ReturnCode retCode = ffx::Dispatch(asContext(m_frameGenContext), prepareDesc);
 
@@ -565,11 +601,12 @@ namespace dxvk {
     const uint64_t frameId = m_lastFrameId + 1;
     m_lastFrameId = frameId;
 
-    const bool prepared = enabled && frame.valid() && prepare(frame, frameId);
+    // The configure comes before the prepare dispatch, since FSR Frame Generation requires that order.
+    const bool hasInputs = enabled && frame.valid();
     bool reset = true;
 
     std::unique_lock<std::mutex> lock(m_statsMutex);
-    if (prepared) {
+    if (hasInputs) {
       reset = frame.resetHistory || m_resetNext;
       if (frame.resetHistory) {
         ++m_stats.resetsHistory;
@@ -579,8 +616,8 @@ namespace dxvk {
       m_resetNext = false;
       m_consecutiveSkips = 0;
     } else {
-      // No inputs for this present: a frame without ray tracing (a menu or a loading screen), a second present
-      // of the same frame, or a failed prepare.
+      // No inputs for this present: a frame without ray tracing (a menu or a loading screen) or a second present
+      // of the same frame.
       m_resetNext = true;
       ++m_consecutiveSkips;
       ++m_stats.skipped;
@@ -588,12 +625,12 @@ namespace dxvk {
 
     // Frame generation stays configured on through short gaps, since every enable change makes the proxy wait
     // for its presents and restart its pacing thread.
-    const bool generate = enabled && (prepared || m_consecutiveSkips <= kMaxConsecutiveSkips);
+    const bool generate = enabled && (hasInputs || m_consecutiveSkips <= kMaxConsecutiveSkips);
     if (!generate) {
       ++m_stats.disabled;
     }
     ++m_stats.presents;
-    m_stats.hudLess = prepared && frame.hudLessColor != nullptr;
+    m_stats.hudLess = hasInputs && frame.hudLessColor != nullptr;
     const bool logNow = m_stats.presents % kLogIntervalPresents == 0;
     lock.unlock();
 
@@ -605,7 +642,7 @@ namespace dxvk {
     config.frameGenerationCallbackUserContext = this;
     config.presentCallback = nullptr;
     config.presentCallbackUserContext = nullptr;
-    config.HUDLessColor = prepared && frame.hudLessColor != nullptr
+    config.HUDLessColor = hasInputs && frame.hudLessColor != nullptr
       ? createFfxResource(frame.hudLessColor, frame.hudLessColor->info().format, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS)
       : FfxApiResource({});
     config.flags = debugFlags();
@@ -625,6 +662,15 @@ namespace dxvk {
     const ffx::ReturnCode retCode = ffx::Configure(asContext(m_frameGenContext), config);
     if (retCode != ffx::ReturnCode::Ok) {
       Logger::err(str::format("[FSRFG] configure failed: ", static_cast<int>(retCode)));
+    }
+
+    // A failed prepare leaves this frame without valid inputs, so its generated frame repeats the real one.
+    if (hasInputs && !prepare(frame, frameId, reset)) {
+      reset = true;
+      lock.lock();
+      m_resetNext = true;
+      ++m_stats.skipped;
+      lock.unlock();
     }
 
     m_presentingReset = reset;
@@ -701,12 +747,14 @@ namespace dxvk {
     if (::GetModuleHandleA("winevulkan.dll") != nullptr) {
       Logger::warn("FSR FG Presenter: winevulkan detected, disabling FSR FG for this session to avoid present deadlocks");
       m_disableForSession = true;
+      m_device->getCommon()->metaFSRFrameGen().setContextFailed(true);
       return;
     }
 
     DxvkFSRFrameGen& fsrFrameGen = m_device->getCommon()->metaFSRFrameGen();
     if (!fsrFrameGen.createContexts(&m_swapchain, m_info, m_surface)) {
       m_disableForSession = true;
+      fsrFrameGen.setContextFailed(true);
       return;
     }
     m_proxyActive = true;
@@ -762,7 +810,7 @@ namespace dxvk {
     }
     m_proxyActive = false;
 
-    // Destroying the swapchain context destroyed the proxy and the real swapchain behind it, so the base presenter
+    // destroyContexts destroyed the proxy and the real swapchain behind it, so the base presenter
     // must not destroy the handle again. The views and semaphores are still the presenter's.
     for (const auto& img : m_images) {
       m_vkd->vkDestroyImageView(m_vkd->device(), img.view, nullptr);

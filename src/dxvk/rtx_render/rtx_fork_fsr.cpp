@@ -60,6 +60,74 @@ namespace dxvk {
     constexpr float kInfiniteFarRatio = 1.0e6f;
 
     constexpr uint64_t kLogIntervalDispatches = 600;
+
+    constexpr const char* kFfxLoaderDll = "amd_fidelityfx_loader_vk.dll";
+    constexpr const char* kFfxUpscalerDll = "amd_fidelityfx_upscaler_vk.dll";
+    constexpr const char* kFfxFrameGenerationDll = "amd_fidelityfx_framegeneration_vk.dll";
+
+    struct FfxVersion {
+      uint64_t id;
+      std::string name;
+    };
+
+    // Returns the upscaler versions this device offers, in the order FFX lists them.
+    // Returns an empty list when the query fails.
+    std::vector<FfxVersion> queryUpscalerVersions(VkDeviceContext& deviceContext) {
+      uint64_t count = 0;
+      ffx::QueryDescGetVersions query{};
+      query.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+      query.device = &deviceContext;
+      query.outputCount = &count;
+      if (ffx::Query(query) != ffx::ReturnCode::Ok || count == 0) {
+        return {};
+      }
+
+      std::vector<uint64_t> ids(count);
+      std::vector<const char*> names(count);
+      query.versionIds = ids.data();
+      query.versionNames = names.data();
+      if (ffx::Query(query) != ffx::ReturnCode::Ok) {
+        return {};
+      }
+
+      std::vector<FfxVersion> versions;
+      for (uint64_t i = 0; i < count; ++i) {
+        versions.push_back({ ids[i], names[i] != nullptr ? names[i] : "" });
+      }
+      return versions;
+    }
+
+    // The loader looks for an effect DLL among the loaded modules, next to the executable and next to itself.
+    bool ffxEffectDllFound(const char* name) {
+      if (::GetModuleHandleA(name) != nullptr) {
+        return true;
+      }
+
+      const auto existsNextTo = [name](HMODULE module) {
+        wchar_t path[MAX_PATH];
+        const DWORD length = ::GetModuleFileNameW(module, path, MAX_PATH);
+        if (length == 0 || length >= MAX_PATH) {
+          return false;
+        }
+        std::error_code error;
+        return std::filesystem::exists(std::filesystem::path(path).parent_path() / name, error);
+      };
+      return existsNextTo(nullptr) || existsNextTo(::GetModuleHandleA(kFfxLoaderDll));
+    }
+  }
+
+  uint32_t ffxVersionMajor(const std::string& versionName) {
+    const size_t digit = versionName.find_first_of("0123456789");
+    return digit != std::string::npos ? static_cast<uint32_t>(std::atoi(versionName.c_str() + digit)) : 0;
+  }
+
+  std::string ffxProviderVersionName(ffx::Context& context) {
+    ffxQueryGetProviderVersion query{};
+    query.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
+    if (ffx::Query(context, query) != ffx::ReturnCode::Ok || query.versionName == nullptr) {
+      return std::string();
+    }
+    return query.versionName;
   }
 
   FfxDepthConvention getFfxDepthConvention(const RtCamera& camera) {
@@ -107,15 +175,15 @@ namespace dxvk {
   }
 
   bool DxvkFSR::isEnabled() const {
-    // The FidelityFX DLL is delay-loaded: activating this pass without it would
+    // The FSR loader DLL is delay-loaded: activating this pass without it would
     // raise a delay-load exception at the first FFX call in dispatch(), so the
     // probe has to gate activation, not just the frame-generation path.
-    return RtxOptions::isFSREnabled() && fork_hooks::fsrRuntimeAvailable();
+    return RtxOptions::isFSREnabled() && fork_hooks::fsrUpscalerAvailable();
   }
 
   bool DxvkFSR::onActivation(Rc<DxvkContext>& ctx) {
     m_recreate = true;
-    Logger::info("FSR3: Activated successfully");
+    Logger::info("FSR: Activated successfully");
     return true;
   }
 
@@ -124,6 +192,17 @@ namespace dxvk {
       destroyFSRContext();
     }
     m_initialized = false;
+    m_unavailable = false;
+  }
+
+  DxvkFSR::Status DxvkFSR::getStatus() const {
+    if (m_unavailable) {
+      return Status::Failed;
+    }
+    if (!m_initialized) {
+      return Status::Pending;
+    }
+    return ffxVersionMajor(m_versionName) >= kFfxFirstMlMajorVersion ? Status::MachineLearning : Status::NonMachineLearning;
   }
 
   float DxvkFSR::getUpscaleFactor(FSRPreset preset) const {
@@ -213,7 +292,7 @@ namespace dxvk {
     outRenderSize[0] = m_inputSize.width;
     outRenderSize[1] = m_inputSize.height;
     
-    Logger::debug(str::format("FSR3: setSetting display=", displaySize[0], "x", displaySize[1], 
+    Logger::debug(str::format("FSR: setSetting display=", displaySize[0], "x", displaySize[1],
                               " render=", m_inputSize.width, "x", m_inputSize.height,
                               " preset=", fsrPresetToString(actualPreset)));
   }
@@ -226,13 +305,18 @@ namespace dxvk {
     }
 
     m_targetExtent = targetExtent;
+    m_unavailable = false;
+    m_contextForceNonMl = FSROptions::forceNonMl();
 
     // Create Vulkan backend
     ffx::CreateBackendVKDesc backendDesc{};
-    backendDesc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
-    backendDesc.vkDevice = device()->handle();
-    backendDesc.vkPhysicalDevice = device()->adapter()->handle();
-    backendDesc.vkDeviceProcAddr = vkGetDeviceProcAddr;
+    backendDesc.deviceContext.vkDevice = device()->handle();
+    backendDesc.deviceContext.vkPhysicalDevice = device()->adapter()->handle();
+    backendDesc.deviceContext.vkDeviceProcAddr = vkGetDeviceProcAddr;
+
+    // Declares the API version this runtime was built against.
+    ffx::CreateContextDescUpscaleVersion versionDesc{};
+    versionDesc.version = FFX_UPSCALER_VERSION;
 
     // Create upscale context
     ffx::CreateContextDescUpscale createDesc{};
@@ -248,20 +332,79 @@ namespace dxvk {
       createDesc.flags |= FFX_UPSCALE_ENABLE_DEPTH_INFINITE;
     }
 
-    ffx::ReturnCode retCode = ffx::CreateContext(m_upscalingContext, nullptr, createDesc, backendDesc);
-    
-    if (retCode != ffx::ReturnCode::Ok) {
-      Logger::err(str::format("FSR3: Failed to create upscaling context: ", static_cast<uint32_t>(retCode)));
+    const std::vector<FfxVersion> versions = queryUpscalerVersions(backendDesc.deviceContext);
+    std::string versionList;
+    m_hasMlVersion = false;
+    for (const FfxVersion& version : versions) {
+      versionList += str::format(versionList.empty() ? "" : ", ", version.name);
+      m_hasMlVersion = m_hasMlVersion || ffxVersionMajor(version.name) >= kFfxFirstMlMajorVersion;
+    }
+
+    // Returns true when the context was created, with the given version or else with the one FFX picks.
+    const auto create = [&](const FfxVersion* pVersion) {
       m_upscalingContext = nullptr;
+      ffx::ReturnCode retCode;
+      if (pVersion != nullptr) {
+        ffx::CreateContextDescOverrideVersion overrideDesc{};
+        overrideDesc.versionId = pVersion->id;
+        retCode = ffx::CreateContext(m_upscalingContext, nullptr, createDesc, versionDesc, backendDesc, overrideDesc);
+      } else {
+        retCode = ffx::CreateContext(m_upscalingContext, nullptr, createDesc, versionDesc, backendDesc);
+      }
+      if (retCode != ffx::ReturnCode::Ok) {
+        Logger::warn(str::format("[FSR] context creation failed with ", pVersion != nullptr ? pVersion->name : "the default version",
+          ": ", static_cast<uint32_t>(retCode)));
+        m_upscalingContext = nullptr;
+        return false;
+      }
+      return true;
+    };
+
+    // The non-ML versions from 3 on are the fallback when the default version cannot start.
+    const auto createNonMl = [&]() {
+      for (const FfxVersion& version : versions) {
+        const uint32_t major = ffxVersionMajor(version.name);
+        if (major >= 3 && major < kFfxFirstMlMajorVersion && create(&version)) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const bool created = m_contextForceNonMl && m_hasMlVersion
+      ? createNonMl() || create(nullptr)
+      : create(nullptr) || createNonMl();
+
+    if (!created) {
+      Logger::err(str::format("[FSR] AMD FSR Upscaling could not start on this GPU, so the image is not upscaled. Versions offered: ",
+        versionList.empty() ? "none" : versionList));
       m_initialized = false;
+      m_unavailable = true;
+      m_versionName.clear();
       return;
     }
 
     m_initialized = true;
     m_contextDepth = depthConvention;
+    m_versionName = ffxProviderVersionName(m_upscalingContext);
 
-    Logger::info(str::format("[FSR] context created: display=", targetExtent.width, "x", targetExtent.height,
+    const bool usesMl = ffxVersionMajor(m_versionName) >= kFfxFirstMlMajorVersion;
+    const uint32_t vendorId = device()->adapter()->deviceProperties().vendorID;
+    Logger::info(str::format("[FSR] context created: path=", usesMl ? "ML" : "non-ML", " version=", m_versionName,
+      " offered=", versionList.empty() ? "none" : versionList, " vendorId=", vendorId,
+      " display=", targetExtent.width, "x", targetExtent.height,
       " depthInverted=", depthConvention.inverted, " depthInfinite=", depthConvention.infinite, " hdr=1"));
+    if (!usesMl) {
+      if (m_contextForceNonMl && m_hasMlVersion) {
+        Logger::info("[FSR] the ML version is turned off by rtx.fsr.forceNonMl.");
+      } else if (m_hasMlVersion) {
+        Logger::warn("[FSR] the ML version did not start, so this context uses the non-ML version.");
+      } else if (vendorId == static_cast<uint32_t>(DxvkGpuVendor::Amd)) {
+        Logger::info("[FSR] this AMD GPU or driver does not offer the ML version, so this context uses the non-ML version.");
+      } else {
+        Logger::info("[FSR] the ML version needs a supported AMD Radeon GPU, so this context uses the non-ML version.");
+      }
+    }
   }
 
   void DxvkFSR::destroyFSRContext() {
@@ -270,6 +413,7 @@ namespace dxvk {
       m_upscalingContext = nullptr;
     }
     m_initialized = false;
+    m_versionName.clear();
   }
 
   void DxvkFSR::dispatch(
@@ -280,7 +424,7 @@ namespace dxvk {
     bool resetHistory,
     float deltaTimeMs) {
     
-    ScopedGpuProfileZone(renderContext, "FSR3 Upscale");
+    ScopedGpuProfileZone(renderContext, "FSR Upscale");
 
     if (!isActive()) {
       // Fallback: just copy input to output
@@ -302,8 +446,13 @@ namespace dxvk {
       m_recreate = true;
     }
 
-    // Initialize FSR if needed
-    if (m_recreate || !m_initialized) {
+    // The ML version can be turned on and off while the pass runs.
+    if (m_initialized && m_contextForceNonMl != FSROptions::forceNonMl()) {
+      m_recreate = true;
+    }
+
+    // Initialize FSR if needed. A device that cannot run FSR is not asked again on every frame.
+    if (m_recreate || (!m_initialized && !m_unavailable)) {
       VkExtent3D targetExtent;
       if (m_fsrOutputSize.width > 0 && m_fsrOutputSize.height > 0) {
         targetExtent = { 
@@ -323,7 +472,7 @@ namespace dxvk {
       resetHistory = true;
     }
 
-    if (!m_initialized || !m_upscalingContext) {
+    if (m_unavailable || !m_initialized || !m_upscalingContext) {
       // Fallback: just copy input to output
       renderContext->copyImage(
         rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image,
@@ -480,8 +629,10 @@ namespace dxvk {
     ffx::ReturnCode retCode = ffx::Dispatch(m_upscalingContext, dispatchDesc);
     
     if (retCode != ffx::ReturnCode::Ok) {
-      Logger::warn(str::format("FSR3: Dispatch failed: ", static_cast<uint32_t>(retCode)));
-      
+      Logger::err(str::format("[FSR] dispatch failed with version ", m_versionName, ": ", static_cast<uint32_t>(retCode),
+        ". The image is not upscaled."));
+      m_unavailable = true;
+
       // Fallback to simple copy on failure
       renderContext->copyImage(
         rtOutput.m_finalOutput.resource(Resources::AccessType::Write).image,
@@ -514,22 +665,56 @@ namespace dxvk {
   namespace fork_hooks {
 
     bool fsrRuntimeAvailable() {
-      // amd_fidelityfx_vk.dll is delay-loaded (see the /DELAYLOAD link arg in
-      // src/dxvk/meson.build). Probing it here — and keeping the handle for the
-      // process lifetime — means a missing DLL surfaces as "FSR unsupported"
-      // instead of a delay-load exception the first time an FFX entry point is
-      // touched, and cannot make d3d9.dll itself fail to load.
+      // The loader DLL is delay-loaded (see the /DELAYLOAD link arg in src/dxvk/meson.build).
+      // Probing it here and keeping the handle for the process lifetime means a missing DLL
+      // surfaces as "FSR unsupported" instead of a delay-load exception the first time an
+      // FFX entry point is touched, and cannot make d3d9.dll itself fail to load.
       static const bool available = [] {
-        if (::LoadLibraryA("amd_fidelityfx_vk.dll") == nullptr) {
-          Logger::warn("FSR: amd_fidelityfx_vk.dll could not be loaded; "
-                       "FSR upscaling and FSR Frame Generation are unavailable. "
-                       "Ship it alongside d3d9.dll to enable them.");
+        if (::LoadLibraryA(kFfxLoaderDll) == nullptr) {
+          Logger::warn(str::format("FSR: ", kFfxLoaderDll, " could not be loaded; "
+                       "AMD FSR Upscaling and AMD FSR Frame Generation are unavailable. "
+                       "Ship it alongside d3d9.dll to enable them."));
           return false;
         }
-        Logger::info("FSR: amd_fidelityfx_vk.dll loaded.");
+        Logger::info(str::format("FSR: ", kFfxLoaderDll, " loaded."));
         return true;
       }();
       return available;
+    }
+
+    bool fsrUpscalerAvailable() {
+      static const bool available = [] {
+        if (!fsrRuntimeAvailable()) {
+          return false;
+        }
+        if (!ffxEffectDllFound(kFfxUpscalerDll)) {
+          Logger::warn(str::format("FSR: ", kFfxUpscalerDll, " was not found; AMD FSR Upscaling is unavailable."));
+          return false;
+        }
+        return true;
+      }();
+      return available;
+    }
+
+    bool fsrFrameGenerationAvailable() {
+      static const bool available = [] {
+        if (!fsrRuntimeAvailable()) {
+          return false;
+        }
+        if (!ffxEffectDllFound(kFfxFrameGenerationDll)) {
+          Logger::warn(str::format("FSR: ", kFfxFrameGenerationDll, " was not found; AMD FSR Frame Generation is unavailable."));
+          return false;
+        }
+        return true;
+      }();
+      return available;
+    }
+
+    const char* fsrMissingDll(bool frameGeneration) {
+      if (!fsrRuntimeAvailable()) {
+        return kFfxLoaderDll;
+      }
+      return frameGeneration ? kFfxFrameGenerationDll : kFfxUpscalerDll;
     }
 
     bool isFsrUpscalerActive(RtxContext& ctx) {
@@ -538,6 +723,12 @@ namespace dxvk {
 
     void setFsrDownscaleExtent(RtxContext& ctx, const VkExtent3D& upscaleExtent, VkExtent3D& downscaleExtent) {
       DxvkFSR& fsr = ctx.m_common->metaFSR();
+
+      // The frame renders at the output resolution when FSR cannot run, since nothing would scale it up.
+      if (!fsrUpscalerAvailable() || !fsr.canUpscale()) {
+        downscaleExtent = upscaleExtent;
+        return;
+      }
 
       const uint32_t displaySize[2] = { upscaleExtent.width, upscaleExtent.height };
       uint32_t renderSize[2] = { upscaleExtent.width, upscaleExtent.height };

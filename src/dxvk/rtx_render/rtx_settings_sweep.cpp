@@ -415,8 +415,8 @@ namespace dxvk {
     if ((requirements & kNeedsDlfg) && !common->metaDLFG().supportsDLFG()) {
       return "DLSS frame generation is not available";
     }
-    if ((requirements & kNeedsFsr) && !fork_hooks::fsrRuntimeAvailable()) {
-      return "the FidelityFX runtime is not installed";
+    if ((requirements & kNeedsFsr) && !fork_hooks::fsrUpscalerAvailable()) {
+      return "the AMD FSR DLLs are not installed";
     }
     if ((requirements & kNeedsFsrFrameGen) && !common->metaFSRFrameGen().supportsFSRFrameGen()) {
       return "FSR frame generation is not available";

@@ -75,6 +75,15 @@ Fixes that apply to ReLAX and REBLUR alike, none of which touch Ray Reconstructi
 - Options: `rtx.rayreconstruction.preserveSettingsInNativeMode` now applies only while NRD is not denoising.
 - Commits: this change.
 
+### AMD FSR SDK 2.4.0: FSR 4 on Vulkan
+The FSR submodule moves from FidelityFX SDK 1.1.4 to AMD FSR SDK 2.4.0, ported from `d8146a274` by KingVulpes, so `rtx.upscalerType` 5 and `rtx.frameGenerationType` 2 run the newest version the GPU supports. AMD lists the ML upscaler for RX 6000, 7000 and 9000 discrete GPUs and selected Ryzen processors, and ML frame generation for RX 9000 GPUs and later. NVIDIA, Intel and older AMD GPUs get the non-ML FSR 3.1.6 upscaler and frame generation 3.1.6 with swapchain 3.1.7. The ML path has not been run yet because the test machine has no supported GPU.
+- On AMD GPUs the device enables the features AMD's Vulkan sample enables for ML (cooperative matrix, 8-bit float, compute derivatives, subgroup size control), and retries without them if device creation fails. Other vendors' devices are unchanged.
+- The menus and the log say which path runs and why it is not ML. If no version can start or the DLLs are missing, the frame renders at the output resolution without upscaling, and the menus and the log say so. A version that fails to start falls back to the non-ML version.
+- Frame generation now configures before its prepare dispatch, the order FSR Frame Generation requires, and passes the reset to the prepare dispatch.
+- `amd_fidelityfx_vk.dll` is replaced by `amd_fidelityfx_loader_vk.dll`, `amd_fidelityfx_upscaler_vk.dll` and `amd_fidelityfx_framegeneration_vk.dll`, about 73 MB against 9 MB. A deploy has to copy all three.
+- Options: added `rtx.fsr.forceNonMl` (default off), shown only on GPUs that offer the ML version. The `rtx.upscalerType` values are unchanged.
+- Commits: the commit that adds this entry.
+
 ### D3D9: a draw that changes only its fog is no longer a repeat
 A draw of a scene-owned object whose only change was its fog state was treated as unchanged, so the object kept its old fog and a fog state reached only through such draws never found its USD replacement material. Such a draw now records the new fog and keeps the draw for the replacement, without rebuilding the object.
 - Options: none.

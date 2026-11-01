@@ -580,24 +580,24 @@ if not dxvk_is_woa
   )
 endif
 
-# FSR3 (FidelityFX SDK) dependency
-# Link against the prebuilt import library for the signed DLL.
-fsr3_lib_path = join_paths(global_src_root_norm, 'submodules/FidelityFX-SDK/PrebuiltSignedDLL')
-fsr3_include_dir = include_directories(
-  '../../submodules/FidelityFX-SDK/ffx-api/include'
+# AMD FSR SDK dependency
+# Link against the import library of the signed loader DLL, which loads the effect DLLs at runtime.
+fsr_lib_path = join_paths(global_src_root_norm, 'submodules/FidelityFX-SDK/Kits/FidelityFX/signedbin')
+fsr_include_dir = include_directories(
+  '../../submodules/FidelityFX-SDK/Kits/FidelityFX'
 )
-fsr3_lib = dxvk_compiler.find_library('amd_fidelityfx_vk', dirs : fsr3_lib_path, required : true)
-fsr3_dep = declare_dependency(
-  dependencies : [ fsr3_lib ],
-  include_directories : fsr3_include_dir
+fsr_lib = dxvk_compiler.find_library('amd_fidelityfx_loader_vk', dirs : fsr_lib_path, required : true)
+fsr_dep = declare_dependency(
+  dependencies : [ fsr_lib ],
+  include_directories : fsr_include_dir
 )
 
-# amd_fidelityfx_vk.dll is delay-loaded rather than statically imported: without
-# this, a missing/blocked FidelityFX DLL makes the whole of d3d9.dll fail to
+# amd_fidelityfx_loader_vk.dll is delay-loaded rather than statically imported: without
+# this, a missing/blocked FSR DLL makes the whole of d3d9.dll fail to
 # load and the game will not start at all. Delay-loading downgrades that to
 # "FSR reports unsupported", which is what fork_hooks::fsrRuntimeAvailable()
 # probes for before any FFX entry point is called.
-fsr3_delay_load_args = [ '/DELAYLOAD:amd_fidelityfx_vk.dll' ]
+fsr_delay_load_args = [ '/DELAYLOAD:amd_fidelityfx_loader_vk.dll' ]
 
 nrc_lib = dxvk_compiler.find_library('NRC_Vulkan', dirs : nrc_lib_path, required : true)
 
@@ -665,11 +665,11 @@ if not dxvk_is_woa
   dxvk_deps += xess_dep
 endif
 
-# NV-DXVK start: FSR 3.1
+# NV-DXVK start: AMD FSR
 # Appended on its own line rather than inlined into the dxvk_deps literal above:
 # upstream rewrites that literal (e.g. moving xess_dep under a Windows-on-ARM
 # guard), and an inlined entry turns every such edit into a merge conflict.
-dxvk_deps += [ fsr3_dep ]
+dxvk_deps += [ fsr_dep ]
 # NV-DXVK end
 
 dxvk_deps += [ numos_dep ]

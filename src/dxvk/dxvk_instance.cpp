@@ -75,7 +75,7 @@
 #include "dxvk_extensions.h"
 // NV-DXVK end
 
-// NV-DXVK start: FSR 3.1 runtime probe
+// NV-DXVK start: AMD FSR runtime probe
 #include "rtx_render/rtx_fork_hooks.h"
 // NV-DXVK end
 
@@ -828,8 +828,8 @@ namespace dxvk {
     extensionsAvailable.enableExtensions(dlfgExtList.size(), dlfgExtList.data(), extensionsEnabled);
     // NV-DXVK end
 
-    // NV-DXVK start: FSR 3.1 - the FidelityFX Vulkan backend uses debug-utils
-    // object naming. Only requested when the FidelityFX runtime is actually
+    // NV-DXVK start: AMD FSR - the FFX Vulkan backend uses debug-utils
+    // object naming. Only requested when the AMD FSR loader is actually
     // present, so installs without it are byte-identical to upstream.
     if (fork_hooks::fsrRuntimeAvailable() && extensionsAvailable.supports(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
       extensionsEnabled.add(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);

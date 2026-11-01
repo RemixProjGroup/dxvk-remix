@@ -570,7 +570,7 @@ endif
 
 xess_dll_path = join_paths(global_src_root_norm, 'submodules/xess/bin/')
 
-fsr3_dll_path = join_paths(global_src_root_norm, 'submodules/FidelityFX-SDK/PrebuiltSignedDLL/')
+fsr_dll_path = join_paths(global_src_root_norm, 'submodules/FidelityFX-SDK/Kits/FidelityFX/signedbin/')
 
 # NRD is built from the unmodified submodule while configuring, because the runtime's headers and shaders need its
 # generated config header and the install step needs the DLL. See scripts-common/build_nrd.py.
@@ -764,7 +764,9 @@ if dxvk_is_ninja or dxvk_is_woa_ec
       install_data(join_paths(xess_dll_path, 'libxess.dll'), install_dir : output_path, install_tag: target_suffix)
     endif
 
-    install_data(join_paths(fsr3_dll_path, 'amd_fidelityfx_vk.dll'), install_dir : output_path, install_tag: target_suffix)
+    foreach fsr_dll_name : [ 'amd_fidelityfx_loader_vk.dll', 'amd_fidelityfx_upscaler_vk.dll', 'amd_fidelityfx_framegeneration_vk.dll' ]
+      install_data(join_paths(fsr_dll_path, fsr_dll_name), install_dir : output_path, install_tag: target_suffix)
+    endforeach
 
     install_data(join_paths(dlss_bin_path, 'nvngx_dlss.dll'), install_dir : output_path, install_tag: target_suffix) 
     install_data(join_paths(dlss_bin_path, 'nvngx_dlssd.dll'), install_dir : output_path, install_tag: target_suffix) 

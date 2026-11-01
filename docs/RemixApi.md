@@ -220,7 +220,7 @@ export before the consumer goes away.
 The image holds the back buffer: the frame after tone mapping and upscaling,
 in the presented, display-encoded values. It does not hold the developer menu
 or other overlays drawn into the swapchain image, or frames made by frame
-generation (DLSS-G or FSR 3). With frame generation on, the export carries the
+generation (DLSS-G or AMD FSR). With frame generation on, the export carries the
 rendered frames only. A back buffer resized without a new call is scaled into
 the existing image.
 
