@@ -113,6 +113,9 @@ namespace dxvk {
       // translation when that cannot be read. A draw whose vertices are already in world space has an identity world
       // matrix, so its translation does not tell its objects apart. Not part of any key.
       Vector3 anchor;
+      // A kContent draw's size in world units: the diagonal of its vertices' box, or 0 when it is not known. Not part of
+      // any key.
+      float extent = 0.f;
 
       uint8_t flags = 0;
 

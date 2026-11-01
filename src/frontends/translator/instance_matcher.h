@@ -26,6 +26,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <unordered_map>
 #include <vector>
 
@@ -47,13 +48,16 @@ namespace dxvk {
         // A slot whose last material differs is taken only when it was drawn in the previous frame and is this close:
         // the same object, whose material the game changed.
         float otherMaterialDistanceSqr = 0.f;
+        // A slot farther than this is another object that left its place, and is not taken.
+        float maxDistanceSqr = std::numeric_limits<float>::infinity();
         // The draw is identified by what it draws (DrawInputs::coarseKey), so look-alike objects share its key. A slot
         // with the draw's content signature ranks above every slot without it, whatever their distances, and a slot
         // without it is taken only when it was drawn in the previous frame.
         bool shapeFirst = false;
         // The bytes the draw draws (DrawInputs::contentKey), or 0 when they are not known. A slot whose last draw had
-        // the same content and signature is taken before any other, at exactly this position first, else the nearest,
-        // wherever its occurrence index is. A draw whose bytes changed finds no such slot.
+        // the same content and signature is taken before any other, at exactly this position first, else the nearest
+        // of those drawn in the previous frame, else the nearest stale one, wherever its occurrence index is. A draw whose
+        // bytes changed finds no such slot.
         XXH64_hash_t content = 0;
         // The draw's position is not known (its bones are not finite): it takes the slot of its material drawn in the
         // previous frame nearest to its occurrence index, which keeps its last position, or a new slot without one.

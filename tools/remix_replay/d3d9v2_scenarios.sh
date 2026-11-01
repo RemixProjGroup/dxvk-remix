@@ -125,7 +125,7 @@ done < <("$TH" --d3d9-hashes | tr -d '\r')
 
 # scenario NAME: sets ARGS (testhost) and CONF (user.conf keys for both modes).
 scenario() {
-  ARGS=(); CONF=(); SHOT=0
+  ARGS=(); CONF=(); SHOT=0; EXTRA_FRAMES=0
   case $1 in
     repeat)        ARGS=(--d3d9 repeat); CONF=("rtx.antiCulling.object.enable=True") ;;
     twice)         ARGS=(--d3d9 twice) ;;
@@ -163,10 +163,11 @@ scenario() {
     # 72 static alpha-tested objects (48 identical quads, 24 meshes, 24 second passes) streamed through 8 dynamic vertex
     # and index buffer pairs, each draw discarding the next pair at an offset that changes every frame, drawn in a
     # rotated order under an orbiting camera, which skips the objects outside its view (anti-culled). Opacity
-    # micromaps are on.
-    ring-static)   ARGS=(--d3d9 ring-static); CONF=("rtx.antiCulling.object.enable=True" "rtx.opacityMicromap.enable=True") ;;
+    # micromaps are on. The orbit shows the last of the outer meshes for the first time near frame 356, so 300 more frames
+    # put the last interval (frames 600-899) after every object's first draw.
+    ring-static)   ARGS=(--d3d9 ring-static); EXTRA_FRAMES=300; CONF=("rtx.antiCulling.object.enable=True" "rtx.opacityMicromap.enable=True") ;;
     # The same with world * view in WORLD and an identity VIEW.
-    ring-static-precombined) ARGS=(--d3d9 ring-static --precombined); CONF=("rtx.fusedWorldViewMode=2" "rtx.antiCulling.object.enable=True" "rtx.opacityMicromap.enable=True") ;;
+    ring-static-precombined) ARGS=(--d3d9 ring-static --precombined); EXTRA_FRAMES=300; CONF=("rtx.fusedWorldViewMode=2" "rtx.antiCulling.object.enable=True" "rtx.opacityMicromap.enable=True") ;;
     # An alpha-tested fence of cutout quads in one dynamic buffer, drawn with 14 triangles on even frames and 20 on odd
     # ones, with opacity micromaps on.
     topology-churn-omm) ARGS=(--d3d9 topology-churn-omm); CONF=("rtx.opacityMicromap.enable=True") ;;
@@ -276,7 +277,7 @@ for sc in $SCENARIOS; do
     mkdir -p "$OUT/shots-$name"
     export DXVK_DUMP_SCREENSHOT_FRAME=$SHOT_FRAME DXVK_SCREENSHOT_PATH="$(cygpath -m "$OUT/shots-$name")/"
   fi
-  timeout $TIMEOUT "$TH" --runtime "$RT" --frames $FRAMES "${ARGS[@]}" > "$OUT/out-$name.txt" 2>&1
+  timeout $TIMEOUT "$TH" --runtime "$RT" --frames $((FRAMES + EXTRA_FRAMES)) "${ARGS[@]}" > "$OUT/out-$name.txt" 2>&1
   rc=$?
   unset DXVK_DUMP_SCREENSHOT_FRAME DXVK_SCREENSHOT_PATH
   if [ -f "$LOG" ]; then cp "$LOG" "$OUT/log-$name.txt"; else : > "$OUT/log-$name.txt"; fi

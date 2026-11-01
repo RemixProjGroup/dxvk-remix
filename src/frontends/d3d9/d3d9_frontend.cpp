@@ -1841,6 +1841,8 @@ namespace dxvk {
         // its bone extent (skinPairBound), since another character of the same mesh may have left the view nearby. Other
         // draws take a stale slot within rtx.uniqueObjectDistance and one of another material within a twentieth of it.
         // A coarse-keyed draw takes a slot of its own shape first (InstanceMatcher::Query::shapeFirst).
+        // A draw of known bytes takes no slot farther away than its own size, the reach of RetainedScene's rigid jump
+        // test, since an object that comes into view would otherwise take the slot of a look-alike elsewhere.
         static SlotQuery slotQuery(const translator::DrawInputs& in) {
           SlotQuery query;
           query.material = in.material;
@@ -1850,6 +1852,9 @@ namespace dxvk {
           query.shapeFirst = in.usesCoarseKey();
           // The bones of a fixed-function skinned draw are not in its bytes, so look-alike characters have one content.
           query.content = in.usesCoarseKey() && !(in.flags & translator::DrawInputs::kSkinned) ? in.contentKey() : 0;
+          if (query.content != 0 && in.extent > 0.f) {
+            query.maxDistanceSqr = in.extent * in.extent;
+          }
           query.positionUnknown = in.skinNonFinite;
           query.predict = (in.flags & translator::DrawInputs::kSkinned) != 0;
           return query;

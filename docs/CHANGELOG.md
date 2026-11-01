@@ -30,6 +30,12 @@ Entry format:
 
 ## 2026-11-01
 
+### D3D9: a static object that comes into view no longer takes a look-alike's place
+A draw streamed through a discarded buffer whose bytes match an object elsewhere took that object's slot, up to `rtx.uniqueObjectDistance` away. Each object entering the view while the camera moved reset a look-alike's history and opacity micromaps for a frame and removed it from its place, which can show as flicker on alpha-tested objects. Such a draw now takes no slot farther away than its own size, and prefers a slot drawn in the previous frame over a stale one.
+- Options: none.
+- Measured: `ring-static` scenario, per 300 frames: history resets 13 -> 0, micromap topology resets 6 -> 0. All 73 objects stay in the scene, where 63 did.
+- Commits: the commit that adds this entry.
+
 ### D3D9: a draw that changes only its fog is no longer a repeat
 A draw of a scene-owned object whose only change was its fog state was treated as unchanged, so the object kept its old fog and a fog state reached only through such draws never found its USD replacement material. Such a draw now records the new fog and keeps the draw for the replacement, without rebuilding the object.
 - Options: none.

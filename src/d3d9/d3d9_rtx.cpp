@@ -26,7 +26,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace dxvk {
   static const bool s_isDxvkResolutionEnvVarSet = (env::getEnvVar("DXVK_RESOLUTION_WIDTH") != "") || (env::getEnvVar("DXVK_RESOLUTION_HEIGHT") != "");
@@ -51,6 +53,28 @@ namespace dxvk {
       camera.objectToView = transforms.objectToView;
       camera.preCombined = RtxOptions::resolvePreCombinedMatrices() && isIdentityExact(camera.worldToView);
       return camera;
+    }
+
+    // Returns the diagonal of the box of the vertices at pFirst, in world units.
+    // Returns 0 when the vertices do not fit the buffer or the size is not finite.
+    float drawnExtent(const RasterBuffer& positions, const float* pFirst, uint32_t vertexCount, const Matrix4& objectToWorld) {
+      const VkDeviceSize end = positions.offsetFromSlice() + VkDeviceSize(positions.stride()) * (VkDeviceSize(vertexCount) - 1) + 3 * sizeof(float);
+      if (vertexCount == 0 || end > positions.length()) {
+        return 0.f;
+      }
+      Vector3 low(std::numeric_limits<float>::infinity());
+      Vector3 high(-std::numeric_limits<float>::infinity());
+      const uint8_t* pVertex = reinterpret_cast<const uint8_t*>(pFirst);
+      for (uint32_t i = 0; i < vertexCount; ++i, pVertex += positions.stride()) {
+        const float* pPosition = reinterpret_cast<const float*>(pVertex);
+        for (uint32_t axis = 0; axis < 3; ++axis) {
+          low[axis] = std::min(low[axis], pPosition[axis]);
+          high[axis] = std::max(high[axis], pPosition[axis]);
+        }
+      }
+      const float scale = std::max({ length(objectToWorld[0].xyz()), length(objectToWorld[1].xyz()), length(objectToWorld[2].xyz()) });
+      const float extent = scale * length(high - low);
+      return std::isfinite(extent) ? extent : 0.f;
     }
   }
 #endif
@@ -2032,6 +2056,9 @@ namespace dxvk {
         : nullptr;
       if (first != nullptr && std::isfinite(first[0]) && std::isfinite(first[1]) && std::isfinite(first[2])) {
         in.anchor = (camera.objectToWorld * Vector4(first[0], first[1], first[2], 1.f)).xyz();
+      }
+      if (first != nullptr && (in.flags & DrawInputs::kContent)) {
+        in.extent = drawnExtent(positions, first, m_activeDrawCallState.getGeometryData().vertexCount, camera.objectToWorld);
       }
     }
     in.textureTransform = transforms.textureTransform;

@@ -70,10 +70,12 @@ namespace dxvk {
         if (chosen != ~0u) {
           query.tier = Query::Tier::ContentExact;
         } else {
-          // The same bytes elsewhere: the nearest slot within the limits of the search below, lowest slot on a tie.
+          // The same bytes elsewhere: the nearest slot within the limits of the search below, lowest slot on a tie. A slot
+          // drawn in the previous frame ranks above a stale one, which a look-alike can have left in the draw's path.
+          bool bestRecent = false;
           const auto sameContent = m_contentSlots.find(contentGroup);
           if (sameContent != m_contentSlots.end() && sameContent->second.size() <= kContentNearLimit) {
-            const float maxDistanceSqr = RtxOptions::getUniqueObjectDistanceSqr();
+            const float maxDistanceSqr = std::min(RtxOptions::getUniqueObjectDistanceSqr(), query.maxDistanceSqr);
             float best = std::numeric_limits<float>::infinity();
             for (const uint32_t slot : sameContent->second) {
               if (!claimable(slot) || !sameMaterialAs(slot)) {
@@ -84,8 +86,9 @@ namespace dxvk {
               if (!(distance <= maxDistanceSqr) || (!recent && distance > query.staleDistanceSqr)) {
                 continue;
               }
-              if (chosen == ~0u || distance < best || (distance == best && slot < chosen)) {
+              if (chosen == ~0u || (recent != bestRecent ? recent : distance < best || (distance == best && slot < chosen))) {
                 best = distance;
+                bestRecent = recent;
                 chosen = slot;
               }
             }
@@ -113,7 +116,7 @@ namespace dxvk {
           sameMaterialAs(index)) {
         chosen = index;
       } else if (count != 0) {
-        const float maxDistanceSqr = RtxOptions::getUniqueObjectDistanceSqr();
+        const float maxDistanceSqr = std::min(RtxOptions::getUniqueObjectDistanceSqr(), query.maxDistanceSqr);
         float best = std::numeric_limits<float>::infinity();
         bool bestSameMaterial = false;
         bool bestSameSignature = false;
