@@ -109,6 +109,11 @@ What that means for releases:
   Halo CE path-tracer addon's `composite.hlsl`. MIT: Copyright (c) 2026 TheGreatHmmmmm. The addon
   builds on Prism, so Prism's notice is included too.
 
+### HDR output
+
+- **HDR10 output**: by TheGreatHmmmmm. MIT: Copyright (c) 2026 TheGreatHmmmmm (the notice is in
+  `ThirdPartyLicenses.txt`).
+
 ### PQ ICC profile of HDR screenshots
 
 - `rtx_screenshot_pq_icc.h`: a libjxl-generated PQ ICC profile (desc `RGB_D65_202_Rel_PeQ`, 4344 bytes), the one

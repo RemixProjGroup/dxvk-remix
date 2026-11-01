@@ -4089,7 +4089,7 @@ Unless required by applicable law or agreed to in writing, software
 The tone curve and color grade are by TheGreatHmmmmm, inspired by Prism by Jon
 (OopyDoopy / KickFister / Jon). This notice also covers the auto-exposure meter
 (auto_exposure_halo_meter.comp.slang, auto_exposure_halo_resolve.comp.slang), ported from
-TheGreatHmmmmm's halocedlaart Halo CE path-tracer addon.
+TheGreatHmmmmm's halocedlaart Halo CE path-tracer addon, and the HDR10 output.
 
 MIT License
 

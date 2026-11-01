@@ -289,6 +289,7 @@ With code and ideas from:
 | Tone curve and color grade | TheGreatHmmmmm | MIT |
 | Prism, which inspired the tone curve | Jon (OopyDoopy / KickFister), for RenoDX; shoulder curve by Musa Haji | MIT |
 | Auto-exposure meter, from the halocedlaart Halo CE path-tracer addon | TheGreatHmmmmm | MIT |
+| HDR10 output | TheGreatHmmmmm | MIT |
 | Retained instance table | doodlum (`doodlum/dxvk-remix`) | MIT |
 | Host world origin | CattaRappa (sambow23, BetaRT) | MIT |
 | Underwater look | Mochabeanproto (`Mochabeanproto/dxvk-remix`) | MIT, used with permission |
