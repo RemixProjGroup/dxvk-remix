@@ -414,7 +414,7 @@ This file is generated from the source by `scripts/gen_rtx_options_md.py`. Run `
 |rtx.di.disocclusionSamples|int|4|||The number of spatial reuse samples in disocclusion areas\.|
 |rtx.di.enableBestLightSampling|bool|True|||Whether to include a single best light from the previous frame's pixel neighborhood into initial sampling\.|
 |rtx.di.enableCrossPortalLight|bool|True||||
-|rtx.di.enableDenoiserConfidence|bool|True||||
+|rtx.di.enableDenoiserConfidence|bool|False|||Whether RTXDI computes a confidence signal that makes ReLAX drop history where direct lighting changes\.|
 |rtx.di.enableDenoiserGradient|bool|True|||Enable gradient calculation, which is used by confidence calculation and GI sample validation\.|
 |rtx.di.enableDiscardEnlargedPixels|bool|True||||
 |rtx.di.enableDiscardInvisibleSamples|bool|True|||Whether to discard reservoirs that are determined to be invisible in final shading\.|

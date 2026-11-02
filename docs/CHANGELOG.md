@@ -64,6 +64,11 @@ A skinned draw set up no camera, so a view model made only of skinned draws had 
 - Tests: D3D9 scenario skinned-view-model-effect, and check SV2 on skinned-shared-palette.
 - Commits: the commit that adds this entry.
 
+### RTXDI denoiser confidence is off by default
+Without Ray Reconstruction, RTXDI's confidence signal could swing across a whole room several times a second in a still scene, and ReLAX blurred direct shadows away each time. It is now off by default, which Ray Reconstruction's settings already did. ReLAX may respond more slowly where direct lighting changes.
+- Options: default flipped `rtx.di.enableDenoiserConfidence` to False.
+- Commits: this change.
+
 ### NRD 4.18 from source
 NRD moves from the prebuilt 4.13 package to version 4.18.0, built from an unmodified `submodules/nrd` submodule while configuring (`scripts-common/build_nrd.py`, SPIR-V only, encodings 2 and 1, quad intrinsics off because the runtime does not enable `VK_KHR_compute_shader_derivatives`). A build needs CMake 3.30 or newer, a Vulkan SDK for its SPIR-V compiler, and network access on the first configure to fetch NRD's pinned MathLib and ShaderMake. Denoiser choices are unchanged. NRD's inputs now get their own copies, because 4.18 uses its outputs as scratch while reading its inputs, and the runtime used to pass one image as both. Switching the denoiser at runtime now recreates the NRD instance, so the ImGui switch really changes denoisers.
 - Options: removed REBLUR's performance mode, hit distance D, hit distance anti-lag and specular probability thresholds, which NRD removed. Added controls for REBLUR's fast history clamp and responsive accumulation minimum.

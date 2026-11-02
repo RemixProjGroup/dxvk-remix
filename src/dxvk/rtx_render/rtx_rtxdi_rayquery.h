@@ -63,7 +63,7 @@ namespace dxvk {
     RTX_OPTION("rtx.di", bool, enableTemporalReuse, true, "Whether to apply temporal reuse.");
     RTX_OPTION("rtx.di", bool, enableDiscardInvisibleSamples, true, "Whether to discard reservoirs that are determined to be invisible in final shading.");
     RTX_OPTION("rtx.di", bool, enableDiscardEnlargedPixels, true, "");
-    RTX_OPTION_ARGS("rtx.di", bool, enableDenoiserConfidence, true, "",
+    RTX_OPTION_ARGS("rtx.di", bool, enableDenoiserConfidence, false, "Whether RTXDI computes a confidence signal that makes ReLAX drop history where direct lighting changes.",
                     args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION("rtx.di", bool, enableDenoiserGradient, true, "Enable gradient calculation, which is used by confidence calculation and GI sample validation.");
     RTX_OPTION_ARGS("rtx.di", uint32_t, initialSampleCount, 4, "The number of lights randomly selected from the global pool to consider when selecting a light with RTXDI.",
