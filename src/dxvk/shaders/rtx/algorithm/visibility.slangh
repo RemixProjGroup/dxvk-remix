@@ -132,8 +132,12 @@ vec3 handleVisibilityVertex<let VisibilityMode : uint>(Ray ray, RayHitInfo rayHi
   }
 
   const MemoryPolymorphicSurfaceMaterial memoryPolymorphicSurfaceMaterial = surfaceMaterials[rayInteraction.surfaceIndex];
-  
-  const uint8_t polymorphicType = rayInteraction.materialType;
+
+  // A hit on the previous frame's TLAS carries that frame's material type, while the record is this frame's,
+  // so the record's own type decides how it is read.
+  const uint8_t polymorphicType = usePreviousTLAS
+    ? uint8_t(memoryPolymorphicSurfaceMaterial.data[0].x & surfaceMaterialTypeMask)
+    : rayInteraction.materialType;
 
   if (polymorphicType == surfaceMaterialTypeOpaque)
   {

@@ -3904,15 +3904,24 @@ namespace dxvk {
       m_uploadedSurfaceData.clear();
     }
 
-    // Previous -> current surface index mapping, written in slot order.
+    // Previous -> current surface index mapping, written in slot order. An index counts only when the previous
+    // frame's table held this instance there. A stored index goes stale while an instance is out of the table, and
+    // would otherwise take over the entry of the instance the previous frame's TLAS has at that index.
     surfaceIndexMapping.resize(maxPreviousSurfaceIndex + 1);
     std::fill(surfaceIndexMapping.begin(), surfaceIndexMapping.end(), SURFACE_INDEX_INVALID);
+    uint32_t staleMappings = 0;
     for (uint32_t i = 0; i < surfaceCount; ++i) {
       const uint32_t prev = slotPrevIndex[i];
-      if (prev != SURFACE_INDEX_INVALID) {
+      if (prev == SURFACE_INDEX_INVALID) {
+        continue;
+      }
+      if (previousSurfaceSlotHeldBy(prev, m_reorderedSurfaces[i])) {
         surfaceIndexMapping[prev] = i;
+      } else {
+        ++staleMappings;
       }
     }
+    noteStaleSurfaceMappings(staleMappings);
 
     // [PerfCpu] prep.merge.surfaceUpload.gpuData: the parallel pass (everything before the ordered part).
     m_mergeSubMs[8] += std::chrono::duration<double, std::milli>(gpuDataStart - passStart).count();
@@ -4088,7 +4097,21 @@ namespace dxvk {
     // Allocate and initialize the surface mapping buffer
     surfaceIndexMapping.resize(maxPreviousSurfaceIndex + 1);
     std::fill(surfaceIndexMapping.begin(), surfaceIndexMapping.end(), SURFACE_INDEX_INVALID);
-    
+
+    // A previous index counts only when the previous frame's table held this instance there (see the parallel path).
+    uint32_t staleMappings = 0;
+    const auto mapPreviousSurface = [&](const RtInstance& instance, uint32_t surfaceIndex) {
+      const uint32_t prev = instance.getPreviousSurfaceIndex();
+      if (prev == SURFACE_INDEX_INVALID) {
+        return;
+      }
+      if (previousSurfaceSlotHeldBy(prev, &instance)) {
+        surfaceIndexMapping[prev] = surfaceIndex;
+      } else {
+        ++staleMappings;
+      }
+    };
+
     // Assign surface indices to instances that don't have one yet (i.e. those that
     // entered m_reorderedSurfaces via addBlas or bucket insertion rather than the
     // early setSurfaceIndex path for zero-mask OMM/billboard instances).
@@ -4102,20 +4125,17 @@ namespace dxvk {
         // For PointInstancers, all instances share a single surface entry
         if (surface.surface.instancesToObject) {
           assert(surfaceIndex == surface.surface.surfaceIndexOfFirstInstance);
-          if (surface.getPreviousSurfaceIndex() != SURFACE_INDEX_INVALID) {
-            surfaceIndexMapping[surface.getPreviousSurfaceIndex()] = surfaceIndex;
-          }
+          mapPreviousSurface(surface, surfaceIndex);
           surface.setPreviousSurfaceIndex(surfaceIndex);
         }
       }
 
       if (surface.getBillboardCount() == 0 && !surface.surface.instancesToObject) {
-        if (surface.getPreviousSurfaceIndex() != SURFACE_INDEX_INVALID) {
-          surfaceIndexMapping[surface.getPreviousSurfaceIndex()] = surfaceIndex;
-        }
+        mapPreviousSurface(surface, surfaceIndex);
         surface.setPreviousSurfaceIndex(surfaceIndex);
       }
     }
+    noteStaleSurfaceMappings(staleMappings);
     } // !rtx.parallelSurfaceUpload
 
     if (RtxOptions::trackParticleObjects()) {
@@ -4147,6 +4167,22 @@ namespace dxvk {
 
       ctx->writeToBuffer(m_surfaceMappingBuffer, 0, surfaceIndexMapping.size() * sizeof(surfaceIndexMapping[0]), surfaceIndexMapping.data());
     }
+
+    // This frame's table, which next frame's mapping is checked against.
+    m_previousFrameSurfaces.assign(m_reorderedSurfaces.begin(), m_reorderedSurfaces.end());
+  }
+
+  // [SurfaceMappingCheck] (rtx.accelIncrementalSelfCheckFrames): stored previous surface indices that the previous
+  // frame's table does not confirm. Each would have sent the previous frame's TLAS hits at that index to the wrong
+  // instance's surface and material records. The entries are dropped from the mapping either way.
+  void AccelManager::noteStaleSurfaceMappings(uint32_t count) {
+    if (count == 0 || RtxOptions::accelIncrementalSelfCheckFrames() == 0) {
+      return;
+    }
+    m_surfaceMappingCheckMismatches += count;
+    Logger::warn(str::format("[SurfaceMappingCheck] frame ", m_device->getCurrentFrameId(), ": ", count,
+      " stored previous surface indices are not held by their instance in the previous frame's table and were dropped "
+      "from the mapping. Total so far ", m_surfaceMappingCheckMismatches, "."));
   }
 
   void AccelManager::buildBlases(Rc<DxvkContext> ctx,

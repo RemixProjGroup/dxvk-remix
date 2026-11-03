@@ -743,6 +743,15 @@ private:
   VkQueryPool m_compactionQueryPool = VK_NULL_HANDLE;
   std::vector<CompactionQuery> m_compactionQueries;
   std::vector<uint32_t> m_freeCompactionSlots;
+  // The instances the previous frame's surface table held, by surface index. A previous -> current mapping entry is
+  // accepted only when the table held the instance there, since the previous frame's TLAS resolves its hits through
+  // these indices. Entries are compared by pointer only: an instance may have been freed since.
+  std::vector<RtInstance*> m_previousFrameSurfaces;
+  uint32_t m_surfaceMappingCheckMismatches = 0;
+  bool previousSurfaceSlotHeldBy(uint32_t previousIndex, const RtInstance* instance) const {
+    return previousIndex < m_previousFrameSurfaces.size() && m_previousFrameSurfaces[previousIndex] == instance;
+  }
+  void noteStaleSurfaceMappings(uint32_t count);
   std::vector<std::pair<Rc<DxvkAccelStructure>, uint32_t>> m_retiredAccelStructures;
   // The BLAS addresses the last built TLASes reference, kept while rtx.accelIncrementalSelfCheckFrames is on.
   std::unordered_set<uint64_t> m_previousTlasBlasReferences;

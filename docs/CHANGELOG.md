@@ -30,6 +30,11 @@ Entry format:
 
 ## 2026-11-03
 
+### Device loss in the temporal passes: stale surface indices no longer reach the previous frame's TLAS
+A hit on the previous frame's TLAS is resolved through the previous-to-current surface index mapping, which was built from each instance's stored previous index. That index goes stale while an instance is out of the surface table (hidden, culled or toggled), and when the instance returned it took over the mapping entry of the instance the previous TLAS really has at that index, so those hits read another instance's surface and material records, decoded with the wrong layout, and the garbage texture and sampler indices faulted the GPU. The mapping now accepts an index only when the previous frame's table held that instance there, a stored index is cleared on every frame the instance is out of the table, and the visibility shader reads a previous-TLAS hit's material with the record's own type. With `rtx.accelIncrementalSelfCheckFrames` on, stale indices are reported as `[SurfaceMappingCheck]`.
+- Options: none added.
+- Commits: the commit that adds this entry.
+
 ### The previous frame's TLAS can be kept out of the temporal passes
 RTXDI temporal bias correction and the denoiser gradients trace visibility rays against the previous frame's TLAS when ray reconstruction is off; `rtx.accel.usePreviousTlas` turns that off, so those rays trace the current TLAS from the previous positions, which is what they already do with ray reconstruction on.
 - Options: added `rtx.accel.usePreviousTlas` (default on, the previous behavior).

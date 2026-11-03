@@ -2055,8 +2055,14 @@ namespace dxvk {
   }
 
   void InstanceManager::resetSurfaceIndices() {
-    for (auto instance : m_instances)
+    for (auto instance : m_instances) {
+      // An instance that was not in this frame's surface table is not in this frame's TLAS either, so its previous
+      // index must not map a hit on that TLAS next frame.
+      if (instance->m_surfaceIndex == SURFACE_INDEX_INVALID) {
+        instance->m_previousSurfaceIndex = SURFACE_INDEX_INVALID;
+      }
       instance->m_surfaceIndex = SURFACE_INDEX_INVALID;
+    }
   }
 
   inline bool isFpSpecial(float x) {
