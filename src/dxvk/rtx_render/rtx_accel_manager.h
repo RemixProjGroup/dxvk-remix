@@ -150,6 +150,11 @@ class AccelManager : public CommonDeviceObject {
   };
 
 public:
+  RTX_OPTION("rtx.accel", bool, usePreviousTlas, true,
+             "Lets the temporal passes trace visibility rays against the previous frame's TLAS when ray reconstruction "
+             "is off or ReSTIR GI is on (RTXDI temporal bias correction and the denoiser gradients). Off, those rays "
+             "trace the current frame's TLAS from the previous frame's positions, as they do with ray reconstruction. "
+             "Turn it off to see whether a device loss follows the previous frame's TLAS.");
   RTX_OPTION("rtx.accel", bool, tlasRefit, true,
              "Updates (refits) each TLAS instead of rebuilding it while its instance list keeps the same "
              "length, order and BLASes, so only transforms and masks change. A full build still happens every "

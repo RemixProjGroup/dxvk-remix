@@ -4964,6 +4964,7 @@ namespace dxvk {
         RemixGui::Checkbox("Compact Stable BLAS", &RtxOptions::compactStableBlasObject());
         RemixGui::DragInt("Compact BLAS Unchanged for N Frames", &RtxOptions::compactStableBlasFramesObject(), 1.f, 1, 100000);
         RemixGui::DragInt("Rebuild BLAS After N Refits (0 = never)", &RtxOptions::maxBlasRefitsBeforeRebuildObject(), 1.f, 0, 100000);
+        RemixGui::Checkbox("Temporal Passes Trace the Previous Frame's TLAS", &AccelManager::usePreviousTlasObject());
         RemixGui::Checkbox("Refit TLAS While Instances Are Unchanged", &AccelManager::tlasRefitObject());
         RemixGui::DragInt("TLAS: Full Build After N Refits", &AccelManager::tlasRefitRebuildFramesObject(), 1.f, 1, 1000);
         RemixGui::DragFloat("TLAS: Full Build When Moved Fraction Exceeds", &AccelManager::tlasRefitMovedFractionObject(), 0.01f, 0.f, 1.f, "%.2f");

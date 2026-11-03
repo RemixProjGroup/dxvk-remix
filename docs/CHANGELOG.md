@@ -30,6 +30,11 @@ Entry format:
 
 ## 2026-11-03
 
+### The previous frame's TLAS can be kept out of the temporal passes
+RTXDI temporal bias correction and the denoiser gradients trace visibility rays against the previous frame's TLAS when ray reconstruction is off; `rtx.accel.usePreviousTlas` turns that off, so those rays trace the current TLAS from the previous positions, which is what they already do with ray reconstruction on.
+- Options: added `rtx.accel.usePreviousTlas` (default on, the previous behavior).
+- Commits: the commit that adds this entry.
+
 ### A refit-limit rebuild never lands in a BLAS the previous TLAS references
 With `rtx.maxBlasRefitsBeforeRebuild` set, a per-geometry BLAS that reached the limit was rebuilt in place, while the previous frame's TLAS, which the temporal passes still traverse, referenced it. The rebuild now goes into a fresh BLAS like every other full build. With `rtx.accelIncrementalSelfCheckFrames` on, a full build into any BLAS the previous frame's TLAS references is reported as `[AccelGuard]`.
 - Options: none added; `rtx.maxBlasRefitsBeforeRebuild` keeps its default of 0.

@@ -1740,7 +1740,8 @@ namespace dxvk {
     constants.translucentDecalAlbedoFactor = RtxOptions::translucentDecalAlbedoFactor();
     constants.enablePlayerModelInPrimarySpace = RtxOptions::PlayerModel::enableInPrimarySpace();
     constants.enablePlayerModelPrimaryShadows = RtxOptions::PlayerModel::enablePrimaryShadows();
-    constants.enablePreviousTLAS = RtxOptions::enablePreviousTLAS() && m_common->getSceneManager().isPreviousFrameSceneAvailable();
+    constants.enablePreviousTLAS = RtxOptions::enablePreviousTLAS() && AccelManager::usePreviousTlas()
+      && m_common->getSceneManager().isPreviousFrameSceneAvailable();
 
     constants.pomMode = getSceneManager().getActivePOMCount() > 0 ? RtxOptions::Displacement::mode() : DisplacementMode::Off;
     if (constants.pomMode == DisplacementMode::Off) {
