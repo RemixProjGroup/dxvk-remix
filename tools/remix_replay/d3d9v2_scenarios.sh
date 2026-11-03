@@ -746,10 +746,11 @@ for sc in sys.argv[3:]:
         expect(both(frames, cameras, lambda f, c: f == 300 and c == 300), sc, "VE1",
                "on: all 300 frames of the last interval have a view-model draw and set up the view-model camera, with or without the plain draw",
                f"viewModelFrames={frames} viewModelCameraFrames={cameras}")
-        # The view model covers the right of the screen, so the sky there is darker than the empty sky on the left.
+        # The view model covers the right of the screen, so that region differs from the empty sky on the left. The sky is
+        # brighter than the view model under a sky provider and black without one.
         covered, shot = screenshot_luminance(sc, 0.05, 0.4, 0.62, 0.9)
         empty, _ = screenshot_luminance(sc, 0.05, 0.4, 0.1, 0.38)
-        expect(both(covered, empty, lambda c, e: c < 0.5 * e), sc, "VE2",
+        expect(both(covered, empty, lambda c, e: abs(c - e) > 0.5 * max(c, e)), sc, "VE2",
                "on: the view model is on screen 30 frames after its last pose change and 10 frames after the plain draw ended",
                f"right={covered} left={empty} ({shot})")
     elif sc == "ring-props":
