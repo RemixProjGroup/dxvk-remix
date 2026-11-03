@@ -30,6 +30,11 @@ Entry format:
 
 ## 2026-11-03
 
+### A refit-limit rebuild never lands in a BLAS the previous TLAS references
+With `rtx.maxBlasRefitsBeforeRebuild` set, a per-geometry BLAS that reached the limit was rebuilt in place, while the previous frame's TLAS, which the temporal passes still traverse, referenced it. The rebuild now goes into a fresh BLAS like every other full build. With `rtx.accelIncrementalSelfCheckFrames` on, a full build into any BLAS the previous frame's TLAS references is reported as `[AccelGuard]`.
+- Options: none added; `rtx.maxBlasRefitsBeforeRebuild` keeps its default of 0.
+- Commits: the commit that adds this entry.
+
 ### Device-loss diagnostics on NVIDIA without Aftermath
 The VK_AMD_buffer_marker pass markers and the VK_EXT_device_fault report, which other GPUs always get, can be turned on for NVIDIA GPUs, and the report names the buffer that holds or recently held each faulting address, from a registry of buffer device addresses kept while the option is on. The `[GpuStall]` line after a long fence wait no longer calls it a recovery, since a device reset signals fences too.
 - Options: added `rtx.deviceFaultDiagnostics` (default off; env `DXVK_DEVICE_FAULT_DIAGNOSTICS`; restart required).

@@ -739,6 +739,8 @@ private:
   std::vector<CompactionQuery> m_compactionQueries;
   std::vector<uint32_t> m_freeCompactionSlots;
   std::vector<std::pair<Rc<DxvkAccelStructure>, uint32_t>> m_retiredAccelStructures;
+  // The BLAS addresses the last built TLASes reference, kept while rtx.accelIncrementalSelfCheckFrames is on.
+  std::unordered_set<uint64_t> m_previousTlasBlasReferences;
   void processBlasCompaction(Rc<DxvkContext> ctx);
   VkBuildAccelerationStructureFlagsKHR compactionBuildFlag() const;
   // rtx.vramBudget.drainSparseChunks: copies in-use BLASes whose memory lies in a draining

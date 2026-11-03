@@ -2170,6 +2170,16 @@ namespace dxvk {
         build = true;
       }
 
+      // rtx.maxBlasRefitsBeforeRebuild: after this many consecutive refits the BLAS is rebuilt to restore trace
+      // quality. The rebuild goes into a fresh BLAS below, like every full build. The previous frame's TLAS still
+      // references the current one, and ray tracing traverses that TLAS this frame, so no full build may land in it.
+      const uint32_t maxRefits = optMaxBlasRefitsBeforeRebuild;
+      if (update && !build && maxRefits != 0 && selectedBlas->refitCount >= maxRefits) {
+        update = false;
+        build = true;
+        m_buildStats.refitLimitRebuilds++;
+      }
+
       // There is no such BLAS - create one
       if (build) {
         if (selectedBlas.ptr()) {
@@ -2183,15 +2193,6 @@ namespace dxvk {
       assert(selectedBlas.ptr());
       selectedBlas->frameLastTouched = currentFrame;
       blasEntry->dynamicBlas->opacityMicromapSourceHash = boundOpacityMicromapHash;
-
-      // rtx.maxBlasRefitsBeforeRebuild: after N consecutive refits, rebuild in place (same
-      // buffer, same size, since the build info is unchanged) to restore trace quality.
-      const uint32_t maxRefits = optMaxBlasRefitsBeforeRebuild;
-      if (update && !build && maxRefits != 0 && selectedBlas->refitCount >= maxRefits) {
-        update = false;
-        build = true; // no new BLAS: selectedBlas was already chosen above
-        m_buildStats.refitLimitRebuilds++;
-      }
 
       if (update || build) {
         if (update && !build) {
@@ -3049,6 +3050,7 @@ namespace dxvk {
       }
 
       // There is no such BLAS - create one and put it into the pool
+      const bool freshBlas = selectedBlas == nullptr;
       if (!selectedBlas) {
         auto newBlas = createPooledBlas(sizeInfo.accelerationStructureSize, "BLAS Merged");
 
@@ -3057,6 +3059,16 @@ namespace dxvk {
         m_blasPool.push_back(std::move(newBlas));
       }
       assert(selectedBlas);
+      // Self-check (rtx.accelIncrementalSelfCheckFrames): the previous frame's TLAS is traversed this frame, so a
+      // BLAS it references must not take a full build. The pool search above keeps such a BLAS out by its last
+      // touched frame. This names any that slipped through, with the frame the stamp claims it was last used.
+      if (!freshBlas && !m_previousTlasBlasReferences.empty() &&
+          buildInfo.mode == VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR &&
+          m_previousTlasBlasReferences.count(selectedBlas->accelerationStructureReference) != 0) {
+        Logger::warn(str::format("[AccelGuard] frame ", currentFrame, ": a merged bucket takes a full build into BLAS 0x",
+          std::hex, selectedBlas->accelerationStructureReference, std::dec, " (", selectedBlas->accelStructure->info().size,
+          " bytes) that the previous frame's TLAS references; its last touched frame is ", selectedBlas->frameLastTouched));
+      }
       selectedBlas->frameLastTouched = currentFrame;
       selectedBlas->topologyHash = newTopologyHash;
 
@@ -4336,6 +4348,21 @@ namespace dxvk {
       VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
       VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
       VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+
+    // Self-check (rtx.accelIncrementalSelfCheckFrames): the BLASes this frame's TLASes reference.
+    // Next frame they are the previous TLASes, which ray tracing still traverses, so createBlasBuffersAndInstances
+    // reports a full build into any of them.
+    m_previousTlasBlasReferences.clear();
+    if (RtxOptions::accelIncrementalSelfCheckFrames() != 0) {
+      for (const auto& list : m_mergedInstances) {
+        for (const VkAccelerationStructureInstanceKHR& instance : list) {
+          m_previousTlasBlasReferences.insert(instance.accelerationStructureReference);
+        }
+      }
+      for (const PointInstancerBatch& batch : m_pointInstancerBatches) {
+        m_previousTlasBlasReferences.insert(batch.blasReference);
+      }
+    }
 
     m_scratchRequiredThisFrame = std::max(m_scratchRequiredThisFrame, VkDeviceSize(totalScratchSize));
     m_scratchRequiredLastFrame = m_scratchRequiredThisFrame;
