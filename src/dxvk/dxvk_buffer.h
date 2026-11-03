@@ -21,6 +21,7 @@
 */
 #pragma once
 
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -96,6 +97,9 @@ namespace dxvk {
   struct DxvkBufferHandle {
     VkBuffer      buffer = VK_NULL_HANDLE;
     DxvkMemory    memory;
+    // The buffer's device address and size, kept while the device-loss diagnostics track addresses. Otherwise 0.
+    VkDeviceAddress address = 0;
+    VkDeviceSize    size = 0;
   };
   
 
@@ -365,6 +369,8 @@ namespace dxvk {
     DxvkBufferHandle        m_buffer;
     DxvkBufferSliceHandle   m_physSlice;
     VkDeviceAddress         m_deviceAddress = 0;
+    // The name the device-loss diagnostics report for this buffer's address ranges. Empty while they are off.
+    std::string             m_diagnosticName;
 
     uint32_t                m_vertexStride = 0;
 

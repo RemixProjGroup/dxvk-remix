@@ -23,6 +23,7 @@
 #include "dxvk_barrier.h"
 #include "dxvk_buffer.h"
 #include "dxvk_device.h"
+#include "rtx_render/rtx_gpu_breadcrumbs.h"
 
 #include <algorithm>
 #include <numeric>
@@ -57,6 +58,11 @@ namespace dxvk {
     m_physSliceMaxCount = MaxBufferSize >= m_physSliceStride
       ? MaxBufferSize / m_physSliceStride
       : 1;
+
+    // The device-loss diagnostics name the buffer that holds a faulting address.
+    if (GpuBreadcrumbs* breadcrumbs = device->gpuBreadcrumbs(); breadcrumbs != nullptr && breadcrumbs->tracksAddresses()) {
+      m_diagnosticName = name != nullptr ? name : "";
+    }
 
     // Allocate the initial set of buffer slices
     m_buffer = allocBuffer(m_physSliceCount, category);
@@ -96,6 +102,13 @@ namespace dxvk {
     // NV-DXVK end
 
     const auto& vkd = m_device->vkd();
+
+    if (GpuBreadcrumbs* breadcrumbs = m_device->gpuBreadcrumbs()) {
+      for (const auto& buffer : m_buffers) {
+        breadcrumbs->noteBufferDestroyed(buffer.address, buffer.size, m_diagnosticName.c_str());
+      }
+      breadcrumbs->noteBufferDestroyed(m_buffer.address, m_buffer.size, m_diagnosticName.c_str());
+    }
 
     for (const auto& buffer : m_buffers)
       vkd->vkDestroyBuffer(vkd->device(), buffer.buffer, nullptr);
@@ -238,7 +251,17 @@ namespace dxvk {
     if (vkd->vkBindBufferMemory(vkd->device(), handle.buffer,
         handle.memory.memory(), handle.memory.offset()) != VK_SUCCESS)
       throw DxvkError("DxvkBuffer: Failed to bind device memory");
-    
+
+    // The device-loss diagnostics match a faulting address to the buffer that holds it.
+    if (GpuBreadcrumbs* breadcrumbs = m_device->gpuBreadcrumbs();
+        breadcrumbs != nullptr && breadcrumbs->tracksAddresses() && (info.usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)) {
+      VkBufferDeviceAddressInfo addressInfo { VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+      addressInfo.buffer = handle.buffer;
+      handle.address = vkd->vkGetBufferDeviceAddress(vkd->device(), &addressInfo);
+      handle.size = info.size;
+      breadcrumbs->noteBufferCreated(handle.address, handle.size, m_diagnosticName.c_str());
+    }
+
     return handle;
   }
 

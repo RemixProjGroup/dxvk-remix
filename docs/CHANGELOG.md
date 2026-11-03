@@ -28,6 +28,12 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-03
+
+### Device-loss diagnostics on NVIDIA without Aftermath
+The VK_AMD_buffer_marker pass markers and the VK_EXT_device_fault report, which other GPUs always get, can be turned on for NVIDIA GPUs, and the report names the buffer that holds or recently held each faulting address, from a registry of buffer device addresses kept while the option is on. The `[GpuStall]` line after a long fence wait no longer calls it a recovery, since a device reset signals fences too.
+- Options: added `rtx.deviceFaultDiagnostics` (default off; env `DXVK_DEVICE_FAULT_DIAGNOSTICS`; restart required).
+- Logs: `[DeviceFault]` lines in remix-dxvk.log after a device loss.
 ## 2026-11-04
 
 ### Ray tracing waits for the TLAS build

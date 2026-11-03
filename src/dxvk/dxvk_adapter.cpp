@@ -48,6 +48,7 @@
 // NV-DXVK end
 #include "rtx_render/rtx_perf_log.h" // rtx.present.queueGlobalPriority
 #include "rtx_render/rtx_pipeline_stats.h" // rtx.debug.logPipelineStats
+#include "rtx_render/rtx_gpu_breadcrumbs.h" // rtx.deviceFaultDiagnostics
 
 namespace dxvk {
 
@@ -677,12 +678,15 @@ namespace dxvk {
       }
     }
 
-    // Device-loss diagnostics (GpuBreadcrumbs) on GPUs other than NVIDIA, which use Aftermath instead.
-    // VK_AMD_buffer_marker marks pass boundaries and VK_EXT_device_fault reports the faulting address.
+    // Device-loss diagnostics (GpuBreadcrumbs): VK_AMD_buffer_marker marks pass boundaries and VK_EXT_device_fault
+    // reports the faulting address. GPUs other than NVIDIA always get them. NVIDIA GPUs get them with
+    // rtx.deviceFaultDiagnostics, next to Aftermath when that is on as well.
     // The feature struct lives on this function's stack until vkCreateDevice and is unlinked after it.
     VkPhysicalDeviceFaultFeaturesEXT deviceFaultFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT };
     bool enableDeviceFault = false;
-    if (m_deviceInfo.core.properties.vendorID != static_cast<uint32_t>(DxvkGpuVendor::Nvidia)) {
+    const bool deviceFaultDiagnostics = m_deviceInfo.core.properties.vendorID != static_cast<uint32_t>(DxvkGpuVendor::Nvidia)
+      || GpuBreadcrumbs::deviceFaultDiagnostics();
+    if (deviceFaultDiagnostics) {
       if (m_deviceExtensions.supports(VK_AMD_BUFFER_MARKER_EXTENSION_NAME) != 0) {
         devExtensions.amdBufferMarker.setMode(DxvkExtMode::Optional);
         std::array markerExtensions = { &devExtensions.amdBufferMarker };

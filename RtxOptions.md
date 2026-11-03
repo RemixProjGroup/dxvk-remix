@@ -406,6 +406,7 @@ This file is generated from the source by `scripts/gen_rtx_options_md.py`. Run `
 |rtx.denoiser.maxDirectHitTContribution|float|-1||||
 |rtx.denoiserIndirectMode|int|14|||Environment variable: DXVK\_DENOISER\_INDIRECT\_NRD\_MODE|
 |rtx.denoiserMode|int|14|||Environment variable: DXVK\_DENOISER\_NRD\_MODE|
+|rtx.deviceFaultDiagnostics|bool|False|||Turns the device\-loss diagnostics on for NVIDIA GPUs as well \(other GPUs always have them\): VK\_AMD\_buffer\_marker pass markers and VK\_EXT\_device\_fault\. After a device loss, remix\-dxvk\.log gets \[DeviceFault\] lines with the driver's fault description, every faulting GPU address, the buffer that holds or recently held that address, and the pass the GPU was in\. Takes effect after a restart\. Costs two marker writes per GPU profiler zone and one bookkeeping step per buffer created or freed\. Use it for a device loss that does not reproduce with Aftermath on\.<br>Environment variable: DXVK\_DEVICE\_FAULT\_DIAGNOSTICS|
 |rtx.di.confidenceGradientPower|float|8||||
 |rtx.di.confidenceGradientScale|float|6||||
 |rtx.di.confidenceHistoryLength|float|8||||

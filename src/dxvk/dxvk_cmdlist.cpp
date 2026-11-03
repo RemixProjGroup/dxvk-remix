@@ -266,7 +266,9 @@ namespace dxvk {
     uint32_t prevMax = perf::g_gpuStallMaxWaitMs.load(std::memory_order_relaxed);
     while (uint32_t(waitedMs) > prevMax && !perf::g_gpuStallMaxWaitMs.compare_exchange_weak(prevMax, uint32_t(waitedMs))) { }
     if (stalled) {
-      Logger::warn(str::format("[GpuStall] recovered: fence signaled after ", waitedMs, " ms (cmdlist frame ",
+      // A device reset signals the fence too. Only the next submission tells the two apart.
+      Logger::warn(str::format("[GpuStall] fence signaled after ", waitedMs, " ms: the GPU caught up, or a device reset "
+        "signaled it and the next submission reports VK_ERROR_DEVICE_LOST (cmdlist frame ",
         m_perfInfo.frameId, ", injectRTX ", m_perfInfo.injectRtx ? 1 : 0, m_perfInfo.preGate ? " (pre-gate)" : "",
         ", accel builds ", m_perfInfo.accelBuilds,
         ", last stage ", m_perfInfo.lastStage ? m_perfInfo.lastStage : "(none)", ")"));

@@ -54,6 +54,7 @@
 #include "rtx_render/rtx_hash_collision_detection.h"
 #include "rtx_render/rtx_options.h"
 #include "rtx_render/rtx_pipeline_stats.h"
+#include "rtx_render/rtx_gpu_breadcrumbs.h"
 #include "rtx_render/rtx_stress.h"
 #include "rtx_render/rtx_fork_api_recorder.h"
 #include "rtx_render/rtx_scene_interface.h"
@@ -4151,6 +4152,11 @@ namespace dxvk {
       RemixGui::DragInt("API Retained: Self-Check Steady Path Every N Frames (0 = off)", &RtxOptions::retainedSteadySelfCheckFramesObject(), 1.f, 0, 100000);
       RemixGui::DragInt("Scene: Self-Check Every N Frames (0 = off)", &scene::Options::selfCheckFramesObject(), 1.f, 0, 100000);
       RemixGui::Checkbox("Log Sampled GPU Stage Timings (verbose)", &RtxContext::gpuStagesObject());
+      RemixGui::Checkbox("Device Fault Diagnostics on NVIDIA (restart required)", &GpuBreadcrumbs::deviceFaultDiagnosticsObject());
+      RemixGui::SetTooltipToLastWidgetOnHover(
+        "rtx.deviceFaultDiagnostics. Restart required: the Vulkan extensions are enabled at device creation (save rtx.conf first).\n"
+        "After a device loss, remix-dxvk.log gets [DeviceFault] lines: the driver's fault description, each faulting GPU address\n"
+        "with the buffer that holds or recently held it, and the pass the GPU was in. GPUs other than NVIDIA always have this.");
       frontend_ui::drawPanels(frontend_ui::Group::SelfChecks);
       ImGui::Unindent();
     }

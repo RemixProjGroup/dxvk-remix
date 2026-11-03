@@ -51,8 +51,13 @@ namespace dxvk {
 
     std::unique_ptr<GpuBreadcrumbs> result(new GpuBreadcrumbs(device));
     const bool markersReady = markers && result->initMarkers();
+    // Without the fault report there is no address to match, so the ranges are not kept.
+    result->m_trackAddresses = fault;
+    if (fault) {
+      result->m_freedRanges.resize(kFreedRanges);
+    }
     Logger::info(str::format("[DeviceFault] Device-loss diagnostics: pass markers ", markersReady ? "on" : "off",
-      ", VK_EXT_device_fault ", fault ? "on" : "off"));
+      ", VK_EXT_device_fault ", fault ? "on" : "off", ", buffer address ranges ", fault ? "on" : "off"));
     return result;
   }
 
@@ -193,6 +198,114 @@ namespace dxvk {
     const uint32_t slot = seq & (kSlots - 1);
     m_vkd->vkCmdWriteBufferMarkerAMD(cmdBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_buffer,
                                      VkDeviceSize(kSlots + slot) * sizeof(uint32_t), seq);
+  }
+
+
+  void GpuBreadcrumbs::noteBufferCreated(VkDeviceAddress address, VkDeviceSize size, const char* name) {
+    if (!m_trackAddresses || address == 0) {
+      return;
+    }
+    AddressRange range;
+    range.begin = address;
+    range.size = size;
+    range.frame = m_device->getCurrentFrameId();
+    std::strncpy(range.name, name != nullptr ? name : "?", kNameLength - 1);
+
+    std::lock_guard<dxvk::mutex> lock(m_addressMutex);
+    m_liveRanges[address] = range;
+  }
+
+
+  void GpuBreadcrumbs::noteBufferDestroyed(VkDeviceAddress address, VkDeviceSize size, const char* name) {
+    if (!m_trackAddresses || address == 0) {
+      return;
+    }
+    const uint32_t frame = m_device->getCurrentFrameId();
+
+    std::lock_guard<dxvk::mutex> lock(m_addressMutex);
+    AddressRange range;
+    auto it = m_liveRanges.find(address);
+    if (it != m_liveRanges.end()) {
+      range = it->second;
+      m_liveRanges.erase(it);
+    } else {
+      range.begin = address;
+      range.size = size;
+      std::strncpy(range.name, name != nullptr ? name : "?", kNameLength - 1);
+    }
+    range.frame = frame;
+    m_freedRanges[m_freedCursor] = range;
+    m_freedCursor = (m_freedCursor + 1) % kFreedRanges;
+  }
+
+
+  std::string GpuBreadcrumbs::describeAddress(VkDeviceAddress address, uint64_t precision) {
+    // The driver rounds the address down to its precision, which the specification says is a power of two.
+    const bool powerOfTwo = precision != 0 && (precision & (precision - 1)) == 0;
+    const uint64_t lo = powerOfTwo ? (address & ~(precision - 1)) : address;
+    const uint64_t hi = lo + std::max<uint64_t>(precision, 1);
+    const auto contains = [address](const AddressRange& r) {
+      return address >= r.begin && address - r.begin < r.size;
+    };
+    const auto overlaps = [lo, hi](const AddressRange& r) {
+      return r.begin < hi && lo < r.begin + r.size;
+    };
+    const auto describe = [](const AddressRange& r, const char* frameWord) {
+      return str::format("\"", r.name, "\" [", hex(r.begin), ", ", hex(r.begin + r.size), ") ", r.size, " bytes, ",
+        frameWord, " frame ", r.frame);
+    };
+
+    std::lock_guard<dxvk::mutex> lock(m_addressMutex);
+    std::string s;
+    auto it = m_liveRanges.upper_bound(address);
+    if (it != m_liveRanges.begin() && contains((--it)->second)) {
+      s = "in live buffer " + describe(it->second, "created");
+    }
+
+    // The freed buffers that held the address, newest first.
+    std::vector<const AddressRange*> freed;
+    for (const AddressRange& r : m_freedRanges) {
+      if (r.size != 0 && contains(r)) {
+        freed.push_back(&r);
+      }
+    }
+    std::sort(freed.begin(), freed.end(), [](const AddressRange* a, const AddressRange* b) { return a->frame > b->frame; });
+    if (!freed.empty()) {
+      s += s.empty() ? "held by freed buffer" : "; held before by freed buffer";
+      for (size_t i = 0; i < freed.size() && i < 4; ++i) {
+        s += (i == 0 ? " " : " | ") + describe(*freed[i], "freed");
+      }
+      if (freed.size() > 4) {
+        s += str::format(" | ... ", freed.size() - 4, " more");
+      }
+    }
+    if (!s.empty()) {
+      return s;
+    }
+
+    // No buffer holds the exact address, so list what the imprecise range overlaps.
+    uint32_t shown = 0;
+    for (const auto& [begin, r] : m_liveRanges) {
+      if (begin >= hi) {
+        break;
+      }
+      if (overlaps(r) && shown < 4) {
+        s += (shown == 0 ? "no buffer holds the address; the reported range overlaps live buffer " : " | live ")
+          + describe(r, "created");
+        ++shown;
+      }
+    }
+    for (const AddressRange& r : m_freedRanges) {
+      if (r.size != 0 && overlaps(r) && shown < 8) {
+        s += (shown == 0 ? "no buffer holds the address; the reported range overlaps freed buffer " : " | freed ")
+          + describe(r, "freed");
+        ++shown;
+      }
+    }
+    if (s.empty()) {
+      s = "no buffer with a device address holds or recently held it (images and driver-internal memory are not tracked)";
+    }
+    return s;
   }
 
 
@@ -370,6 +483,9 @@ namespace dxvk {
       const uint64_t lo = a.reportedAddress & ~(precision - 1);
       Logger::err(str::format("[DeviceFault]   address #", i, ": ", faultAddressTypeName(a.addressType), " ",
         hex(a.reportedAddress), " (range [", hex(lo), ", ", hex(lo + precision), "))"));
+      if (m_trackAddresses) {
+        Logger::err(str::format("[DeviceFault]     ", describeAddress(a.reportedAddress, precision)));
+      }
     }
     for (uint32_t i = 0; i < counts.vendorInfoCount && i < vendors.size(); ++i) {
       const VkDeviceFaultVendorInfoEXT& vendor = vendors[i];
