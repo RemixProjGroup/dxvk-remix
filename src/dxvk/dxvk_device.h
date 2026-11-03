@@ -718,6 +718,10 @@ namespace dxvk {
     DxvkDeviceInfo              m_properties;
     
     DxvkDevicePerfHints         m_perfHints;
+    // Declared before the common objects, which create the first buffers: DxvkBuffer reports its address ranges
+    // here, so this is null until the constructor fills it, and it outlives every buffer and the submission
+    // queue's threads.
+    std::unique_ptr<GpuBreadcrumbs> m_gpuBreadcrumbs;
     DxvkObjects                 m_objects;
 
     sync::Spinlock              m_d3d9DeviceLock;
@@ -734,9 +738,6 @@ namespace dxvk {
     
     DxvkRecycler<DxvkCommandList,    16> m_recycledCommandLists;
     DxvkRecycler<DxvkDescriptorPool, 16> m_recycledDescriptorPools;
-
-    // Declared before the submission queue so it outlives the queue's threads.
-    std::unique_ptr<GpuBreadcrumbs> m_gpuBreadcrumbs;
 
     DxvkSubmissionQueue m_submissionQueue;
 
