@@ -4128,6 +4128,7 @@ namespace dxvk {
     if (RemixGui::CollapsingHeader("Shader Variants", collapsingHeaderClosedFlags)) {
       ImGui::Indent();
       RemixGui::Checkbox("Slim Indirect Variants Keep POM", &DxvkPathtracerIntegrateIndirect::slimKeepPomObject());
+      RemixGui::Checkbox("SER SHARC Update on Displacement Frames", &DxvkPathtracerIntegrateIndirect::sharcUpdateSerWithPomObject());
       showVariantTablesImguiSettings();
       showFrameFeaturesImguiSettings();
       RemixGui::Checkbox("Log Pipeline Shader Stats (restart required)", &RtxPipelineStats::logPipelineStatsObject());

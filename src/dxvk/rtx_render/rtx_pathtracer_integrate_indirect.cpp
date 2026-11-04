@@ -869,7 +869,7 @@ namespace dxvk {
   bool DxvkPathtracerIntegrateIndirect::sharcUpdateSerPossible(const bool serEnabled, const bool ommEnabled, const bool wboitEnabled,
                                                                const bool includePortals) {
     // The TraceRay + SER update variants exist for the deferred flush (WBOIT, no OMM 2-state) without
-    // portals; the caller also needs a Full / Slim / Lean level on a frame without POM and the deferred-flush buffer.
+    // portals; the caller also needs a Full / Slim / Lean level that allows it (see the update dispatch) and the deferred-flush buffer.
     // The SER update is used wherever these hold.
     return serEnabled && !includePortals && sharcDeferredFlushPossible(ommEnabled, wboitEnabled);
   }
@@ -1374,11 +1374,13 @@ namespace dxvk {
         noteSlimLevel(SlimPass::SharcUpdate, updateSlimLevel);
         // The same update through TraceRay with SER, where the variants exist:
         // the deferred flush is bound, a Full / Slim / Lean level (the POM-kept levels keep the inline update), and for Full no
-        // POM this frame (its hit shader has no POM, like the query hit while POM is off). Everything else: the RayQuery update.
+        // POM this frame, or rtx.integrateIndirect.sharcUpdateSerWithPom with indirect hits that ignore POM (its hit shader has
+        // no POM, like the query hit while POM is off). Everything else: the RayQuery update.
         const bool updateSer = deferredFlush &&
           sharcUpdateSerPossible(serEnabled, ommEnabled, wboitEnabled, includePortals) &&
           (updateSlimLevel == SlimLevel::Slim || updateSlimLevel == SlimLevel::Lean ||
-           (updateSlimLevel == SlimLevel::Full && !ctx->getFrameFeatures().has(RtFrameFeatures::kScenePom)));
+           (updateSlimLevel == SlimLevel::Full && (!ctx->getFrameFeatures().has(RtFrameFeatures::kScenePom) ||
+             (sharcUpdateSerWithPom() && !RtxOptions::Displacement::enableIndirectHit()))));
         ctx->bindRaytracingPipelineShaders(updateSer
           ? getSharcUpdateSerPipelineShaders(depth4, ommEnabled, updateSlimLevel)
           : getSharcUpdatePipelineShaders(depth4, ommEnabled, wboitEnabled, updateSlimLevel, deferredFlush));
