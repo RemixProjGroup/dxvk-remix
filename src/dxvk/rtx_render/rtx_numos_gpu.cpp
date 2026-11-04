@@ -459,9 +459,12 @@ namespace dxvk {
     return p.shader;
   }
 
-  void NumosGpu::prewarmShaders() {
+  void NumosGpu::prewarmShaders(numos::PassId cloudRender) {
     for (uint32_t pass = 0; pass < numos::passCount(); ++pass) {
-      if (numos::PassId(pass) != numos::PassId::cloud_render_reference) {
+      const numos::PassId id = numos::PassId(pass);
+      const bool cloudRenderVariant = id == numos::PassId::cloud_render || id == numos::PassId::cloud_render_fast ||
+                                      id == numos::PassId::cloud_render_reference;
+      if (!cloudRenderVariant || id == cloudRender) {
         shaderFor(pass);
       }
     }

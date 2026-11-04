@@ -48,8 +48,9 @@ namespace dxvk {
     bool shadersValid() const { return !m_shaderLoadFailed; }
 
     // Creates the shader of every pass a frame can dispatch. Creating a shader registers it for compilation on the
-    // state cache workers. The reference cloud pass is left out: it runs only in a cloud profiling mode.
-    void prewarmShaders();
+    // state cache workers. Of the cloud render variants only `cloudRender` is created, the one the settings select.
+    // Another variant is created when a frame first dispatches it.
+    void prewarmShaders(numos::PassId cloudRender);
 
     // numos::IGpu
     numos::GpuHandle createTexture(const numos::TextureDesc& desc) override;

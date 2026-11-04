@@ -50,6 +50,14 @@ namespace dxvk {
       }
       return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     }
+
+    // The cloud render variant NUMOS dispatches with these settings, as Renderer::Impl::dispatchCloudRender picks it.
+    numos::PassId cloudRenderPass(const numos::Settings& settings) {
+      if (settings.cloudProfilingMode == 9) {
+        return numos::PassId::cloud_render_reference;
+      }
+      return settings.cloudPerformancePreset == 1 ? numos::PassId::cloud_render_fast : numos::PassId::cloud_render;
+    }
   }
 
   struct RtxNumos::Impl {
@@ -107,7 +115,7 @@ namespace dxvk {
 
   void RtxNumos::prewarmShaders() {
     if (RtxOptions::skyMode() == SkyMode::Numos) {
-      m_impl->gpu.prewarmShaders();
+      m_impl->gpu.prewarmShaders(cloudRenderPass(NumosSettings::resolved()));
     }
   }
 

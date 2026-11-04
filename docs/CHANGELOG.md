@@ -30,6 +30,11 @@ Entry format:
 
 ## 2026-11-04
 
+### The shader prewarm compiles one NUMOS cloud render variant
+The startup prewarm compiled both on-screen cloud passes, `cloud_render` and `cloud_render_fast`, although a frame uses only the one `rtx.atmosphere.cloudPerformancePreset` selects. Both are very large shaders: `cloud_render` alone took 97 minutes to compile on an RX 6700 XT. The prewarm now registers only the selected variant (the reference variant while `rtx.atmosphere.cloudProfilingMode` is 9), and the other compiles when a setting change selects it.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ### SER SHARC update on frames with displacement
 On a frame with displacement the SHARC update ran inline with displacement compiled in, so it marched the height field at every hit on a displaced surface although `rtx.displacement.enableIndirectHit` was off, and it got no SER. With the option on, such frames bind the existing Full TraceRay and SER update, whose hit shader has no displacement, as SHARC query hits already do. The launch from the primary surface keeps its displacement attenuation. The POM-kept slim levels (`rtx.integrateIndirect.slimKeepPom`) keep the inline update.
 - Options: added `rtx.integrateIndirect.sharcUpdateSerWithPom` (default off). Not set by the graphics presets: screenshots so far show no difference above frame noise, from one exterior view only.

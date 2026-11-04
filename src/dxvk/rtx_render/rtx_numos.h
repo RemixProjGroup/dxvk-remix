@@ -62,7 +62,8 @@ namespace dxvk {
     // True while rtx.skyMode selects NUMOS and its shaders loaded.
     bool active() const;
 
-    // Registers every NUMOS pass for compilation while rtx.skyMode selects NUMOS (RtxInitializer's shader prewarm).
+    // Registers every NUMOS pass the settings can dispatch for compilation while rtx.skyMode selects NUMOS
+    // (RtxInitializer's shader prewarm). Only the selected cloud render variant is registered.
     void prewarmShaders();
 
     void beginFrame(RtxContext& ctx, RaytraceArgs& constants);
