@@ -37,6 +37,12 @@ On a frame with displacement the SHARC update ran inline with displacement compi
 - Credit: Anton Putrin (vidrug), pull request #3.
 - Commits: the commit that adds this entry.
 
+### Low graphics preset traces one indirect bounce
+The Low preset now traces one indirect bounce instead of two, because Low measured no faster than Medium. With SHARC, the query at the first indirect vertex still returns the cache's multi-bounce radiance and the update paths follow `rtx.sharc.updateBounces`, so only cache misses lose their second bounce. Where the presets select ReSTIR GI, Low becomes single-bounce GI.
+- Options: none added. Per preset, `rtx.pathMaxBounces` is Ultra 4, High 4, Medium 2, Low 1 (was 2).
+- Measured before the change (RTX 5080 Laptop, 2560x1600, DLSS Balanced, volumetrics off): Medium 20.4 ms, Low 20.6 ms GPU.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-01
 
 ### GPU device loss when a BLAS drops an opacity micromap in flight

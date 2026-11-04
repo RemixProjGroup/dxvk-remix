@@ -652,6 +652,9 @@ namespace dxvk {
 
       lowGraphicsPresetCommonSettings();
 
+      // One indirect bounce. SHARC still adds the further bounces from its cache at that vertex.
+      pathMaxBounces.setDeferred(1);
+
       russianRouletteMaxContinueProbability.setDeferred(0.7f);
       russianRoulette1stBounceMinContinueProbability.setDeferred(0.4f);
 
