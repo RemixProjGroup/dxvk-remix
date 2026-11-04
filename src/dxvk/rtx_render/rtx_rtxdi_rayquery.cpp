@@ -179,6 +179,7 @@ namespace dxvk {
         TEXTURE2D(RTXDI_REUSE_BINDING_BEST_LIGHTS_INPUT)
         TEXTURE2D(RTXDI_REUSE_BINDING_ACTIVE_LOCAL_PIXEL_COORDS_INPUT)
         STRUCTURED_BUFFER(RTXDI_REUSE_BINDING_ACTIVE_PIXEL_LIST_INPUT)
+        TEXTURE2D(RTXDI_REUSE_BINDING_ACTIVE_PIXEL_MASK_INPUT)
 
         // Inputs / Outputs
         RW_STRUCTURED_BUFFER(RTXDI_REUSE_BINDING_RTXDI_RESERVOIR_INPUT_OUTPUT)
@@ -188,7 +189,7 @@ namespace dxvk {
         RW_TEXTURE2D(RTXDI_REUSE_BINDING_REPROJECTION_CONFIDENCE_OUTPUT)
         RW_TEXTURE2D(RTXDI_REUSE_BINDING_BSDF_FACTOR_OUTPUT)
         RW_TEXTURE2D(RTXDI_REUSE_BINDING_TEMPORAL_POSITION_OUTPUT)
-        
+
       END_PARAMETER()
     };
 
@@ -520,6 +521,7 @@ namespace dxvk {
       ctx->bindResourceView(RTXDI_REUSE_BINDING_SHARED_FLAGS_INPUT, rtOutput.m_sharedFlags.view, nullptr);
       ctx->bindResourceView(RTXDI_REUSE_BINDING_ACTIVE_LOCAL_PIXEL_COORDS_INPUT, rtOutput.m_sparseRenderingActiveLocalPixelCoords.view, nullptr);
       ctx->bindResourceBuffer(RTXDI_REUSE_BINDING_ACTIVE_PIXEL_LIST_INPUT, sparseRendering.getActivePixelListSlice());
+      ctx->bindResourceView(RTXDI_REUSE_BINDING_ACTIVE_PIXEL_MASK_INPUT, rtOutput.m_sparseRenderingActivePixelMask.view, nullptr);
 
       // Inputs / Outputs
 

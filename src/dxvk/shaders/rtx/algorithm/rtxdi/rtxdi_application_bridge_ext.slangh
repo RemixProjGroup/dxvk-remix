@@ -69,9 +69,21 @@ RAB_Surface RAB_GetGBufferSurface(ivec2 pixel, bool previousFrame)
 // The reservoir buffer is zero-filled on creation, and a zero record would unpack as a valid reservoir for light 0.
 // Sparse rendering reuses pixels that have not written a reservoir since then, so a zero record is read as empty.
 // A written reservoir for light 0 is not affected, since holding a sample makes its M at least 1, which keeps data1 nonzero.
+// With RAB_SKIP_INACTIVE_PIXEL_RESERVOIRS, a pass that loads only this frame's spatial input page reads an inactive
+// pixel's reservoir as empty while RTXDI reuse for inactive pixels is off. Nothing writes that pixel's slot this frame,
+// so it holds an older frame's reservoir, with that frame's light indices, or the transmission PSR payload the G-buffer
+// parks in the page (rtxdi_reservoir_pages.slangh).
 RTXDI_Reservoir RAB_LoadReservoir(int2 pixel, int page)
 {
 #ifdef RAB_HAS_RTXDI_RESERVOIRS
+#ifdef RAB_SKIP_INACTIVE_PIXEL_RESERVOIRS
+  if (cb.sparseRenderingArgs.mode != SparseRenderingMode::Off && !cb.sparseRenderingArgs.enableRtxdiReuseForInactivePixels &&
+      !isActivePixelFromMask(SparseRenderingActivePixelMask, uvec2(pixel)))
+  {
+    return RTXDI_EmptyReservoir();
+  }
+#endif
+
   const RTXDI_PackedReservoir packedReservoir = RtxdiReservoirBuffer[RTXDI_ReservoirPositionToPointer(pixel, cb.camera.resolution, page)];
   if (all((packedReservoir.data0 | packedReservoir.data1) == 0u))
   {

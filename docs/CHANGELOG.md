@@ -58,6 +58,11 @@ The saved `.remix-pipeline-cache` was discarded whenever the runtime DLL changed
 - Options: none.
 - Commits: the commit that adds this entry.
 
+### Sparse rendering: RTXDI spatial reuse no longer reads inactive neighbors
+With sparse rendering on and `rtx.sparseRendering.enableRtxdiReuseForInactivePixels` off, nothing writes an inactive pixel's slot in the reservoir page that spatial reuse reads, so the slot holds an older frame's reservoir, with that frame's light indices and sample count, or the transmission PSR payload the G-buffer parks in that page. Spatial reuse took those slots from neighbors as reservoirs, which can pick the wrong light and carry it forward through temporal reuse. It now reads an inactive neighbor as an empty reservoir. This is the suspected cause of colored light building up at sampling rates around 0.6, not yet confirmed in game.
+- Options: none. Frames without sparse rendering, or with RTXDI reuse for inactive pixels on, are unchanged.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-01
 
 ### GPU device loss when a BLAS drops an opacity micromap in flight

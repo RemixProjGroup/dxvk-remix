@@ -42,6 +42,8 @@
 #define RAB_HAS_CURRENT_GBUFFER 1
 #define SHADOW_TERMINATOR_FIX_ALLOWED 1
 #define RAB_HAS_RTXDI_RESERVOIRS 1
+// Inactive neighbors hold no reservoir of this frame while RTXDI reuse for inactive pixels is off.
+#define RAB_SKIP_INACTIVE_PIXEL_RESERVOIRS 1
 // Spatial reuse picks random neighbor offsets per pixel. Wave-uniform offsets correlate the reuse across a whole wave,
 // and with the clamp to the screen bounds whole strips reuse one edge pixel, which shows as streaks on hard shadow edges
 // and along the screen border.
@@ -53,6 +55,7 @@
 
 #include "rtx/pass/common_bindings.slangh"
 #include "rtx/pass/rtxdi/rtxdi_reuse_bindings.slangh"
+#include "rtx/pass/sparse_rendering/sparse_rendering.slangh"
 
 #include "rtx/utility/common.slangh"
 #include "rtx/utility/noise.slangh"

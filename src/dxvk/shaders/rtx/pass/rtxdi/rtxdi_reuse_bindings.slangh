@@ -91,6 +91,9 @@ Texture2D<uint16_t> ActiveLocalPixelCoords;
 layout(binding = RTXDI_REUSE_BINDING_ACTIVE_PIXEL_LIST_INPUT)
 StructuredBuffer<uint> ActivePixelList;
 
+layout(binding = RTXDI_REUSE_BINDING_ACTIVE_PIXEL_MASK_INPUT)
+Texture2D<uint> SparseRenderingActivePixelMask;
+
 // Inputs / Outputs
 
 layout(binding = RTXDI_REUSE_BINDING_RTXDI_RESERVOIR_INPUT_OUTPUT)
