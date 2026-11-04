@@ -718,8 +718,10 @@ namespace dxvk {
       PreExposure::beginFrame(m_device.ptr());
       LightBvh::latchFrame();  // the dedicated sun sample's sky-provider condition, fixed for this frame
       // The persisted pipeline cache (dxvk_pipecache.h): summary and background save once compiles settle.
-      m_device->getCommon()->pipelineManager().pipelineCache()->onFrame(
-        m_device->getCommon()->pipelineManager().remixShaderCompilationCount());
+      // Background compiles count too: the save waits for every pipeline in creation, and holds up new ones meanwhile.
+      DxvkPipelineManager& pipelineManager = m_device->getCommon()->pipelineManager();
+      pipelineManager.pipelineCache()->onFrame(
+        pipelineManager.remixShaderCompilationCount() + pipelineManager.backgroundShaderCompilationCount());
       m_device->getCommon()->getRtxInitializer().onRaytracedFrame();
 
       // Update all the GPU buffers needed to describe the scene

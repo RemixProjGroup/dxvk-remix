@@ -334,7 +334,9 @@ namespace dxvk {
 
       // NV-DXVK start: do not compile same shader multiple times
       if (m_workerItemsInFlight.count(item.inFlightKey()) == 0) {
-        if (item.isRemixShader) {
+        if (item.isBackground) {
+          ++m_workerCompilingBackgroundShaders;
+        } else if (item.isRemixShader) {
           ++m_workerCompilingRemixShaders;
           ++m_remixItemsQueued;
         }
@@ -355,6 +357,7 @@ namespace dxvk {
         item.cp.cs = shader;
         item.cp.forceNoSpecConstants = true;
         item.isRemixShader = true;
+        item.isBackground = shader->compilesInBackground();
 
         addWorkerItem(item);
     } else {
@@ -1097,13 +1100,15 @@ namespace dxvk {
         m_workerQueue.pop();
       }
 
-      if (item.isRemixShader)
+      if (item.isRemixShader && !item.isBackground)
         m_workerRemixStartMs[workerIndex].store(steadyMilliseconds(), std::memory_order_relaxed);
       compilePipelines(item);
       m_workerRemixStartMs[workerIndex].store(0, std::memory_order_relaxed);
 
 // NV-DXVK start
-      if (item.isRemixShader) {
+      if (item.isBackground) {
+        --m_workerCompilingBackgroundShaders;
+      } else if (item.isRemixShader) {
         --m_workerCompilingRemixShaders;
       }
 // NV-DXVK end

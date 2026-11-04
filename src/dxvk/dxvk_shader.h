@@ -292,6 +292,17 @@ namespace dxvk {
       return m_remixShader;
     }
 
+    // Set before a Remix shader is registered when nothing waits for its pipeline. Its compile does not count in
+    // DxvkPipelineManager::remixShaderCompilationCount, so it holds up neither the prewarm wait screen nor ray traced
+    // frames. Whoever dispatches it checks that the pipeline is ready first (RtxContext::isComputeShaderPipelineReady).
+    void markBackgroundCompile() {
+      m_backgroundCompile = true;
+    }
+
+    bool compilesInBackground() const {
+      return m_backgroundCompile;
+    }
+
     /**
      * \brief Get lookup hash for a shader
      *
@@ -332,6 +343,7 @@ namespace dxvk {
     // NV-DXVK end
 
     bool m_remixShader = false;
+    bool m_backgroundCompile = false;
 
     static void eliminateInput(SpirvCodeBuffer& code, uint32_t location);
 

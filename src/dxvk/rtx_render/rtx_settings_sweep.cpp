@@ -705,7 +705,9 @@ namespace dxvk {
     const uint32_t stepNumber = static_cast<uint32_t>(m_stepIndex + 1);
 
     if (!m_stepReady) {
-      const uint32_t compiles = ctx.getCommonObjects()->pipelineManager().remixShaderCompilationCount();
+      // Background compiles count too, so a step measures with every pass its settings run.
+      const DxvkPipelineManager& pipelineManager = ctx.getCommonObjects()->pipelineManager();
+      const uint32_t compiles = pipelineManager.remixShaderCompilationCount() + pipelineManager.backgroundShaderCompilationCount();
       if (compiles > 0) {
         m_sawCompile = true;
         m_peakCompiles = std::max(m_peakCompiles, compiles);

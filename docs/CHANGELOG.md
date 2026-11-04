@@ -30,6 +30,11 @@ Entry format:
 
 ## 2026-11-04
 
+### NUMOS shaders compile in the background
+The prewarm wait screen no longer waits for the NUMOS passes, and frames no longer skip ray tracing while they compile. On an RX 6700 XT with a cold cache the wait screen stayed up 101 minutes, and closed one second after `cloud_render` finished. The NUMOS passes still start compiling at startup, but no frame waits for them. Until NUMOS's small core passes are ready the sky has no NUMOS sky, sun or moon, as when its shaders fail to load. Until the on-screen cloud pass is ready the directly visible sky has no clouds. Until the cloud dome pass is ready reflections and indirect light have no clouds. These passes are held back by switching off, for that frame only, the NUMOS settings that dispatch them, so NUMOS restarts their temporal history when they first run. The log names each held-back pass and when it becomes ready. The pipeline cache still saves only once no compile is in flight.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ### The shader prewarm compiles one NUMOS cloud render variant
 The startup prewarm compiled both on-screen cloud passes, `cloud_render` and `cloud_render_fast`, although a frame uses only the one `rtx.atmosphere.cloudPerformancePreset` selects. Both are very large shaders: `cloud_render` alone took 97 minutes to compile on an RX 6700 XT. The prewarm now registers only the selected variant (the reference variant while `rtx.atmosphere.cloudProfilingMode` is 9), and the other compiles when a setting change selects it.
 - Options: none.

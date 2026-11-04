@@ -224,9 +224,14 @@ namespace dxvk {
       cacheResult == DxvkPipelineCache::LoadResult::Loaded ? "they should load from the caches" :
       cacheResult == DxvkPipelineCache::LoadResult::Disabled ? "only the driver's own cache can serve them" :
       "a full compile is expected";
+    // Pipelines marked for a background compile (the NUMOS passes) are not part of the prewarm: no frame waits for them.
+    const uint32_t background = pipelineManager.backgroundShaderCompilationCount();
     Logger::info(str::format("[ShaderPrewarm] startup prewarm: ", pipelineManager.remixShaderQueuedCount() - m_startupPrewarmQueuedBase,
                              " pipelines queued for the active settings; ", DxvkPipelineCache::describe(cacheResult),
-                             ", so ", expectation));
+                             ", so ", expectation,
+                             background > 0
+                               ? str::format(". ", background, " more compile in the background, and no frame waits for them")
+                               : std::string()));
   }
 
   void RtxInitializer::registerPrewarmShaders() {

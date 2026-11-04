@@ -58,6 +58,22 @@ namespace dxvk {
       }
       return settings.cloudPerformancePreset == 1 ? numos::PassId::cloud_render_fast : numos::PassId::cloud_render;
     }
+
+    // Passes NUMOS renders without while their pipelines compile: RtxNumos::holdBackUncompiledPasses switches off
+    // the settings that dispatch them.
+    bool isOptionalPass(numos::PassId pass) {
+      switch (pass) {
+      case numos::PassId::cloud_render:
+      case numos::PassId::cloud_render_fast:
+      case numos::PassId::cloud_render_reference:
+      case numos::PassId::cloud_denoise:
+      case numos::PassId::cloud_sample_statistics:
+      case numos::PassId::cloud_secondary_lut:
+        return true;
+      default:
+        return false;
+      }
+    }
   }
 
   struct RtxNumos::Impl {
@@ -65,6 +81,13 @@ namespace dxvk {
     numos::Renderer renderer;
     std::vector<numos::LocalLight> localLights;
     RtLight* lights[numos::kMaxMoons + 2] = {};
+
+    // Per pass, whether RtxNumos::pipelineReady found its pipeline compiled. A compiled pipeline stays compiled.
+    std::vector<bool> passPipelineReady = std::vector<bool>(numos::passCount(), false);
+    bool corePipelinesReady = false;
+    bool coreWaitLogged = false;
+    bool cloudRenderHeldBack = false;
+    bool secondaryLutHeldBack = false;
 
     explicit Impl(DxvkDevice* device) : gpu(device, env::getDllDirectory() + "/numos/spirv") { }
   };
@@ -116,6 +139,78 @@ namespace dxvk {
   void RtxNumos::prewarmShaders() {
     if (RtxOptions::skyMode() == SkyMode::Numos) {
       m_impl->gpu.prewarmShaders(cloudRenderPass(NumosSettings::resolved()));
+    }
+  }
+
+  bool RtxNumos::pipelineReady(RtxContext& ctx, numos::PassId pass) {
+    const uint32_t index = uint32_t(pass);
+    if (!m_impl->passPipelineReady[index]) {
+      const Rc<DxvkShader> shader = m_impl->gpu.shaderFor(index);
+      // Without the state cache workers nothing compiles ahead of use, so the dispatch compiles the pipeline itself.
+      m_impl->passPipelineReady[index] = shader != nullptr &&
+        (!ctx.getCommonObjects()->pipelineManager().hasStateCache() || ctx.isComputeShaderPipelineReady(shader));
+    }
+    return m_impl->passPipelineReady[index];
+  }
+
+  bool RtxNumos::corePipelinesReady(RtxContext& ctx) {
+    if (m_impl->corePipelinesReady) {
+      return true;
+    }
+    // Every core pass is asked, so that each one's shader is created and queued for compilation.
+    bool ready = true;
+    for (uint32_t pass = 0; pass < numos::passCount(); ++pass) {
+      if (!isOptionalPass(numos::PassId(pass))) {
+        ready = pipelineReady(ctx, numos::PassId(pass)) && ready;
+      }
+    }
+    if (!ready) {
+      if (!m_impl->coreWaitLogged) {
+        m_impl->coreWaitLogged = true;
+        Logger::info("[NUMOS] Its shaders are compiling in the background. Until they are ready, there is no NUMOS sky, sun or moon.");
+      }
+      return false;
+    }
+    m_impl->corePipelinesReady = true;
+    if (m_impl->coreWaitLogged) {
+      Logger::info("[NUMOS] Its shaders are compiled, and it draws the sky from this frame on.");
+    }
+    return true;
+  }
+
+  void RtxNumos::holdBackUncompiledPasses(RtxContext& ctx, numos::Settings& settings) {
+    // NUMOS treats a held-back pass as switched off. Without the on-screen cloud pass the directly visible sky has
+    // no clouds, and its temporal history restarts when it first runs. Without the dome, reflections and indirect
+    // light see a cloudless sky, and the dome is rebuilt whole when it first runs.
+    if (settings.debugDispatchCloudRender) {
+      const numos::PassId cloudPass = cloudRenderPass(settings);
+      const bool renderReady = pipelineReady(ctx, cloudPass);
+      const bool denoiseReady = pipelineReady(ctx, numos::PassId::cloud_denoise);
+      const bool statisticsReady = pipelineReady(ctx, numos::PassId::cloud_sample_statistics);
+      const bool heldBack = !(renderReady && denoiseReady && statisticsReady);
+      if (heldBack) {
+        settings.cloudRenderRTEnable = false;
+        settings.debugDispatchCloudRender = false;
+      }
+      if (heldBack != m_impl->cloudRenderHeldBack) {
+        m_impl->cloudRenderHeldBack = heldBack;
+        Logger::info(heldBack
+          ? str::format("[NUMOS] The on-screen cloud pass (", numos::passInfo(cloudPass).name,
+                        ") is compiling in the background. Until it is ready, the sky shows no clouds.")
+          : std::string("[NUMOS] The on-screen cloud pass is compiled, and the sky shows its clouds."));
+      }
+    }
+    if (settings.cloudSecondaryLutEnable) {
+      const bool heldBack = !pipelineReady(ctx, numos::PassId::cloud_secondary_lut);
+      if (heldBack) {
+        settings.cloudSecondaryLutEnable = false;
+      }
+      if (heldBack != m_impl->secondaryLutHeldBack) {
+        m_impl->secondaryLutHeldBack = heldBack;
+        Logger::info(heldBack
+          ? "[NUMOS] The cloud dome pass (cloud_secondary_lut) is compiling in the background. Until it is ready, reflections show no clouds."
+          : "[NUMOS] The cloud dome pass is compiled, and reflections show clouds.");
+      }
     }
   }
 
@@ -215,12 +310,15 @@ namespace dxvk {
       m_argsCleared = true;
     }
 
-    if (!active()) {
+    const bool shadersLoaded = active();
+    if (!shadersLoaded || !corePipelinesReady(ctx)) {
       if (RtxOptions::skyMode() == SkyMode::Numos) {
-        // NUMOS was chosen but cannot run (its shaders did not load): the shaders must not treat the
-        // sky as NUMOS's either, or every miss would read args nobody wrote.
+        // NUMOS was chosen but cannot run (its shaders did not load or are still compiling): the shaders
+        // must not treat the sky as NUMOS's either, or every miss would read args nobody wrote.
         constants.skyMode = 0u;
-        ONCE(Logger::err("[NUMOS] rtx.skyMode is NUMOS but its shaders did not load; the sky falls back to the skybox."));
+        if (!shadersLoaded) {
+          ONCE(Logger::err("[NUMOS] rtx.skyMode is NUMOS but its shaders did not load; the sky falls back to the skybox."));
+        }
       }
       if (m_rendering) {
         dropLights();
@@ -235,8 +333,10 @@ namespace dxvk {
     loadNightSky();
     // The user's settings with the weather presets blended over them (rtx_numos_weather.h). The weather
     // reaches NUMOS inside the settings, so FrameInputs::weather stays null.
-    m_impl->renderer.setSettings(ctx.getCommonObjects()->metaNumosWeather().update(NumosSettings::resolved(),
-                                                                                    GlobalTime::get().deltaTime()));
+    numos::Settings settings = ctx.getCommonObjects()->metaNumosWeather().update(NumosSettings::resolved(),
+                                                                                 GlobalTime::get().deltaTime());
+    holdBackUncompiledPasses(ctx, settings);
+    m_impl->renderer.setSettings(settings);
 
     Rc<DxvkContext> dxvkCtx = &ctx;
     const uint32_t deviceFrame = ctx.getDevice()->getCurrentFrameId();

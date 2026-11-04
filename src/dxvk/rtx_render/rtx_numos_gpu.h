@@ -49,8 +49,13 @@ namespace dxvk {
 
     // Creates the shader of every pass a frame can dispatch. Creating a shader registers it for compilation on the
     // state cache workers. Of the cloud render variants only `cloudRender` is created, the one the settings select.
-    // Another variant is created when a frame first dispatches it.
+    // Another variant is created when the settings first select it.
     void prewarmShaders(numos::PassId cloudRender);
+
+    // The pass's shader, created on first use. Its pipeline compiles in the background
+    // (DxvkShader::markBackgroundCompile), so RtxNumos checks that it is ready before a frame dispatches the pass.
+    // Returns null when the pass's SPIR-V did not load.
+    Rc<DxvkShader> shaderFor(uint32_t pass);
 
     // numos::IGpu
     numos::GpuHandle createTexture(const numos::TextureDesc& desc) override;
@@ -101,7 +106,6 @@ namespace dxvk {
     numos::GpuHandle add(Resource&& resource);
     Rc<DxvkImageView> viewFor(Texture& texture, uint32_t mip, uint32_t mipCount, numos::BindingDim dim, bool storage);
     Rc<DxvkImageView> placeholder(numos::BindingDim dim, bool storage, uint32_t spirvFormat);
-    Rc<DxvkShader> shaderFor(uint32_t pass);
 
     DxvkDevice* m_device;
     std::string m_spirvDirectory;

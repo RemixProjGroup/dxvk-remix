@@ -152,6 +152,10 @@ namespace dxvk {
     // Remix pipelines queued for compilation since the device was created, finished or not.
     uint32_t remixShaderQueuedCount() const;
 
+    // Pipelines of shaders marked with DxvkShader::markBackgroundCompile that are queued or compiling.
+    // remixShaderCompilationCount leaves them out.
+    uint32_t backgroundShaderCompilationCount() const;
+
     // The pipeline cache every pipeline is created through (persisted, dxvk_pipecache.h).
     DxvkPipelineCache* pipelineCache() const { return m_cache.ptr(); }
 // NV-DXVK end

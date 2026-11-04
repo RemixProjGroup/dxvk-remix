@@ -215,7 +215,7 @@ namespace dxvk {
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - createStart).count(),
       (feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT) == 0 ? -1
         : (feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT) != 0 ? 1 : 0,
-      m_shaders.cs->isRemixShader());
+      m_shaders.cs->isRemixShader() && !m_shaders.cs->compilesInBackground());
 
     // Creation has completed on this thread; query the captured statistics.
     if (unlikely(info.flags & VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR))

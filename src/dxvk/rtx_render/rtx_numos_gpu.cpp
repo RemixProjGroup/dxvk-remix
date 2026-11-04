@@ -455,6 +455,7 @@ namespace dxvk {
                               DxvkShaderOptions(), DxvkShaderConstData());
     p.shader->setDebugName(info.name);
     p.shader->generateShaderKey();
+    p.shader->markBackgroundCompile();
     m_device->registerShader(p.shader, true);
     return p.shader;
   }

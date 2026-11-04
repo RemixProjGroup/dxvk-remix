@@ -171,6 +171,10 @@ namespace dxvk {
   uint32_t DxvkPipelineManager::remixShaderCompilationCount() const {
     return m_stateCache != nullptr ? m_stateCache->remixShaderCompilationCount() : 0;
   }
+
+  uint32_t DxvkPipelineManager::backgroundShaderCompilationCount() const {
+    return m_stateCache != nullptr ? m_stateCache->backgroundShaderCompilationCount() : 0;
+  }
 // NV-DXVK end
 
 

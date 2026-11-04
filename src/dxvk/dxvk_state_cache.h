@@ -142,6 +142,12 @@ namespace dxvk {
       return m_remixItemsQueued.load();
     }
 
+    // Pipelines of shaders marked with DxvkShader::markBackgroundCompile that are queued or compiling.
+    // The Remix counts above leave them out.
+    uint32_t backgroundShaderCompilationCount() const {
+      return m_workerCompilingBackgroundShaders.load();
+    }
+
   private:
 
     using WriterItem = DxvkStateCacheEntry;
@@ -156,6 +162,8 @@ namespace dxvk {
       // NV-DXVK start
       bool isRemixShader = false;
       // NV-DXVK end
+      // A Remix compute shader marked with DxvkShader::markBackgroundCompile.
+      bool isBackground = false;
 
       // NV-DXVK start: do not compile same shader multiple times
       size_t hash() const {
@@ -218,6 +226,7 @@ namespace dxvk {
     std::atomic<uint32_t>             m_workerCompilingRemixShaders;
     // NV-DXVK end
     std::atomic<uint32_t>             m_remixItemsQueued = { 0 };
+    std::atomic<uint32_t>             m_workerCompilingBackgroundShaders = { 0 };
     std::vector<dxvk::thread>         m_workerThreads;
     // Per worker, the steady_clock time (ms) its current Remix pipeline started, 0 when idle.
     std::unique_ptr<std::atomic<int64_t>[]> m_workerRemixStartMs;
