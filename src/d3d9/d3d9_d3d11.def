@@ -1,0 +1,40 @@
+LIBRARY D3D9.DLL
+EXPORTS
+  Direct3DShaderValidatorCreate9 @24
+
+  PSGPError @25
+  PSGPSampleTexture @26
+
+  D3DPERF_BeginEvent @27
+  D3DPERF_EndEvent @28
+  D3DPERF_GetStatus @29
+  D3DPERF_QueryRepeatFrame @30
+  D3DPERF_SetMarker @31
+  D3DPERF_SetOptions @32
+  D3DPERF_SetRegion @33
+
+  DebugSetLevel @34
+  DebugSetMute @35
+
+  Direct3D9EnableMaximizedWindowedModeShim @36
+
+  Direct3DCreate9 @37
+  Direct3DCreate9Ex @38
+
+  QueryFeatureVersion @39
+
+; D3D11 / DXGI entry points. This module hosts those frontends too so that
+; the game's D3D11 device and Remix's D3D9 device can share one DxvkDevice;
+; d3d11.dll and dxgi.dll are forwarders to the names below. No explicit
+; ordinals -- the ones the standalone DLLs used collide with D3D9's, and the
+; forwarders resolve by name anyway.
+  D3D11CoreCreateDevice
+  D3D11CreateDevice
+  D3D11CreateDeviceAndSwapChain
+  D3D11On12CreateDevice
+
+  CreateDXGIFactory
+  CreateDXGIFactory1
+  CreateDXGIFactory2
+  DXGIDeclareAdapterRemovalSupport
+  DXGIGetDebugInterface1
