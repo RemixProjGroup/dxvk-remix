@@ -4130,6 +4130,10 @@ namespace dxvk {
       ImGui::Indent();
       RemixGui::Checkbox("Slim Indirect Variants Keep POM", &DxvkPathtracerIntegrateIndirect::slimKeepPomObject());
       RemixGui::Checkbox("SER SHARC Update on Displacement Frames", &DxvkPathtracerIntegrateIndirect::sharcUpdateSerWithPomObject());
+      RemixGui::Checkbox("Indirect Ray Query Mode Runs the Compute Kernel on NVIDIA", &DxvkPathtracerIntegrateIndirect::rayQueryComputeKernelObject());
+      RemixGui::SetTooltipToLastWidgetOnHover(
+        "rtx.integrateIndirect.rayQueryComputeKernel. Off, Ray Query mode traces the ray query kernel as a ray generation shader\n"
+        "on NVIDIA GPUs, where the compute dispatch of this kernel faults the device. Other GPUs always run the compute kernel.");
       showVariantTablesImguiSettings();
       showFrameFeaturesImguiSettings();
       RemixGui::Checkbox("Log Pipeline Shader Stats (restart required)", &RtxPipelineStats::logPipelineStatsObject());

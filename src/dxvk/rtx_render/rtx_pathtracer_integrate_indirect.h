@@ -66,10 +66,21 @@ namespace dxvk {
                "slightly. Needs SER, the deferred flush and the full update shaders, so "
                "rtx.integrateIndirect.slimKeepPom keeps the inline update.");
 
+    RTX_OPTION("rtx.integrateIndirect", bool, rayQueryComputeKernel, false,
+               "Runs the Ray Query indirect integration (rtx.renderPassIntegrateIndirectRaytraceMode = 0) as a compute "
+               "shader on NVIDIA GPUs. Off, Ray Query mode traces the same ray query kernel as a ray generation shader "
+               "there, because the compute dispatch of this kernel faults the device (a read of an invalid address on "
+               "its first frame) where the ray generation shader built from the same code does not. Other GPUs always "
+               "run the compute kernel, which keeps the indirect pass off ray tracing pipelines on them.");
+
     explicit DxvkPathtracerIntegrateIndirect(DxvkDevice* device);
     ~DxvkPathtracerIntegrateIndirect() = default;
 
     void prewarmShaders(DxvkPipelineManager& pipelineManager) const;
+
+    // True when Ray Query mode traces the ray query kernel as a ray generation shader: NVIDIA GPUs with
+    // rtx.integrateIndirect.rayQueryComputeKernel off.
+    bool rayQueryUsesRaygen() const;
 
     // Requires current GBuffer, sparse mask, direct-generated rays and NEE cache.
     // Produces primary indirect lobes and raw radiance retained for secondary demodulation.
@@ -124,6 +135,8 @@ namespace dxvk {
     void logSlimLevels(const uint32_t frameId);
 
     IntegrateIndirectMode m_integrateIndirectMode;
+    // The ray generation routing of Ray Query mode is logged once.
+    bool m_rayQueryRaygenLogged = false;
     std::array<int32_t, (uint32_t) SlimPass::Count> m_frameSlimLevels = { -1, -1, -1 };
     std::array<int32_t, (uint32_t) SlimPass::Count> m_loggedSlimLevels = { -1, -1, -1 };
     uint32_t m_lastSlimLogFrame = UINT32_MAX;

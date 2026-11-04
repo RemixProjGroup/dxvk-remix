@@ -30,6 +30,11 @@ Entry format:
 
 ## 2026-11-03
 
+### Device loss on the first ray-traced frame with Ray Query indirect integration on NVIDIA
+With `rtx.renderPassIntegrateIndirectRaytraceMode` = 0 (Ray Query) and an indirect mode other than SHARC, the indirect integration ran as a compute shader, and that dispatch faulted the device on its first frame (a read of an invalid address, the same address every run) on an RTX 5080 Laptop, while the ray generation shader built from the same code (mode 1) runs clean. The SPIR-V of the two kernels is identical apart from the execution model, and so are their descriptor sets, so the fault is in the driver's compute path, not in the kernel. On NVIDIA GPUs, Ray Query mode now traces the same ray query kernel as a ray generation shader; other GPUs keep the compute kernel. The non-NVIDIA presets select ReSTIR GI with Ray Query, which is this path.
+- Options: added `rtx.integrateIndirect.rayQueryComputeKernel` (default off; on, NVIDIA runs the compute kernel again).
+- Commits: the commit that adds this entry.
+
 ### Device loss in the temporal passes: stale surface indices no longer reach the previous frame's TLAS
 A hit on the previous frame's TLAS is resolved through the previous-to-current surface index mapping, which was built from each instance's stored previous index. That index goes stale while an instance is out of the surface table (hidden, culled or toggled), and when the instance returned it took over the mapping entry of the instance the previous TLAS really has at that index, so those hits read another instance's surface and material records, decoded with the wrong layout, and the garbage texture and sampler indices faulted the GPU. The mapping now accepts an index only when the previous frame's table held that instance there, a stored index is cleared on every frame the instance is out of the table, and the visibility shader reads a previous-TLAS hit's material with the record's own type. With `rtx.accelIncrementalSelfCheckFrames` on, stale indices are reported as `[SurfaceMappingCheck]`.
 - Options: none added.

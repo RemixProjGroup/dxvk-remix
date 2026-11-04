@@ -651,6 +651,11 @@ namespace dxvk {
     , m_integrateIndirectMode(IntegrateIndirectMode::Count) {
   }
 
+  bool DxvkPathtracerIntegrateIndirect::rayQueryUsesRaygen() const {
+    return !rayQueryComputeKernel()
+      && m_device->adapter()->deviceProperties().vendorID == static_cast<uint32_t>(DxvkGpuVendor::Nvidia);
+  }
+
   void DxvkPathtracerIntegrateIndirect::prewarmShaders(DxvkPipelineManager& pipelineManager) const {
     ScopedCpuProfileZoneN("Indirect Integrate Shader Prewarming");
 
@@ -722,7 +727,11 @@ namespace dxvk {
           DxvkComputePipelineShaders shaders;
           switch (RtxOptions::renderPassIntegrateIndirectRaytraceMode()) {
           case RaytraceMode::RayQuery:
-            getComputeShader(useNeeCache, nrcEnabled, wboitEnabled);
+            if (rayQueryUsesRaygen()) {
+              pipelineManager.registerRaytracingShaders(getPipelineShaders(true, serEnabled, ommEnabled, useNeeCache, includesPortals, pomEnabled, nrcEnabled, wboitEnabled));
+            } else {
+              getComputeShader(useNeeCache, nrcEnabled, wboitEnabled);
+            }
             break;
           case RaytraceMode::RayQueryRayGen:
             pipelineManager.registerRaytracingShaders(getPipelineShaders(true, serEnabled, ommEnabled, useNeeCache, includesPortals, pomEnabled, nrcEnabled, wboitEnabled));
@@ -1546,6 +1555,18 @@ namespace dxvk {
 
       switch (RtxOptions::renderPassIntegrateIndirectRaytraceMode()) {
       case RaytraceMode::RayQuery:
+        // NVIDIA traces the ray query kernel as a ray generation shader (rayQueryUsesRaygen); the compute
+        // dispatch of the same kernel faults the device there.
+        if (rayQueryUsesRaygen()) {
+          if (!m_rayQueryRaygenLogged) {
+            m_rayQueryRaygenLogged = true;
+            Logger::info("[IntegrateIndirect] Ray Query mode traces the ray query kernel as a ray generation shader on this GPU "
+                         "(rtx.integrateIndirect.rayQueryComputeKernel runs the compute kernel instead).");
+          }
+          ctx->bindRaytracingPipelineShaders(getPipelineShaders(true, serEnabled, ommEnabled, neeCacheEnabled, includePortals, pomEnabled, nrcEnabled, wboitEnabled));
+          ctx->traceRays(rayDims.width, rayDims.height, rayDims.depth);
+          break;
+        }
         ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, getComputeShader(neeCacheEnabled, nrcEnabled, wboitEnabled));
         ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
         break;
