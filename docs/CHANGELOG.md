@@ -58,6 +58,9 @@ The VK_AMD_buffer_marker pass markers and the VK_EXT_device_fault report, which 
 
 ### Ray tracing waits for the TLAS build
 The barrier after the TLAS builds ordered them only against later acceleration structure builds, so ray tracing and compute ray queries could start reading a TLAS before its build finished. It now covers the ray tracing and compute shader stages, like the barriers after BLAS compaction. This is a candidate cause of a device loss on an AMD Radeon 610M on the first ray traced frame of a session (a read of an unmapped address in the first pass that traces); that is not yet confirmed.
+
+### No crash or hang when the window is minimized during a present
+When acquiring a swap chain image returned suboptimal or out of date while the window had a zero-sized client area, for example during alt-tab or a minimize, the present recreated a swap chain that could not exist. With suboptimal it then read the semaphores of the destroyed swap chain, and the runtime crashed with `std::out_of_range` in `Presenter::getSync`. With out of date it retried in a busy loop until the window was restored. The present now skips the frame until the window is restored, still firing its frame latency signal. A New Vegas RTX player on an Intel Arc B580 hit the crash.
 - Options: none.
 - Commits: the commit that adds this entry.
 

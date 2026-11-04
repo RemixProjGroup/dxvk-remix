@@ -101,6 +101,10 @@ namespace dxvk::vk {
                                        ) {
     ScopedCpuProfileZone();
 
+    // A window with a zero-sized client area, such as a minimized one, has no swap chain and no semaphores.
+    if (!m_swapchain)
+      return VK_ERROR_OUT_OF_DATE_KHR;
+
     // NV-DXVK start: DLFG integration
     if (isDlfgPresenting) {
       // DLFG manages swapchain images directly and can have more than one acquire outstanding at a time
@@ -759,6 +763,10 @@ namespace dxvk::vk {
     m_images.clear();
 
     m_swapchain = VK_NULL_HANDLE;
+
+    // An image acquired from the destroyed swap chain can't be presented, so the next present acquires again.
+    m_imageIndex = 0;
+    m_acquireStatus = VK_NOT_READY;
   }
 
 

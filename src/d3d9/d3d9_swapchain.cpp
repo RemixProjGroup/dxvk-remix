@@ -1338,7 +1338,11 @@ namespace dxvk {
 
       while (status != VK_SUCCESS) {
         RecreateSwapChain(m_vsync);
-        
+
+        // A window with a zero-sized client area, such as a minimized one, gets no swap chain until it is restored.
+        if (!presenter->hasSwapChain())
+          break;
+
         // NV-DXVK start: DLFG integration
         info = presenter->info();
         status = presenter->acquireNextImage(sync, imageIndex);
@@ -1346,6 +1350,19 @@ namespace dxvk {
 
         if (status == VK_SUBOPTIMAL_KHR)
           break;
+      }
+
+      if (!presenter->hasSwapChain()) {
+        // The frame is not presented, but its frame latency signal still fires, because the next frame's
+        // SyncFrameLatency waits for it.
+        m_context->beginRecording(
+          m_device->createCommandList());
+        m_context->signal(m_frameLatencySignal, m_frameId);
+        m_parent->EmitCs([this, cCommandList = m_context->endRecording()] (DxvkContext* ctx) {
+          m_device->submitCommandList(cCommandList, VK_NULL_HANDLE, VK_NULL_HANDLE);
+        });
+        m_parent->FlushCsChunk();
+        break;
       }
 
       m_context->beginRecording(
