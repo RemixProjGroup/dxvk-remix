@@ -998,7 +998,7 @@ This file is generated from the source by `scripts/gen_rtx_options_md.py`. Run `
 |rtx.photometer.enable|bool|False|||Photometer \(dev menu\): reads the centre of the screen every frame and shows its luminance \(cd/m^2\), the illuminance on the surface \(lux\) and the scene EV100, in physical units\. Not saved\.|
 |rtx.pipeline.useDeferredOperations|bool|True||||
 |rtx.pipelineCache.maxSizeMB|int|2048|||The largest pipeline cache file kept, in MB\. A cache that grows past this is not saved and the old file is removed, so the next run starts a new one\.|
-|rtx.pipelineCache.persist|bool|True|||Keeps the runtime's compiled compute and ray tracing pipelines on disk between runs \(\<exe\>\.remix\-pipeline\-cache, next to the DXVK state cache\), so startup does not recompile pipelines the driver's shader cache has evicted\. The file is checked against the GPU, driver and runtime build, and a mismatched or damaged file is discarded and rebuilt\. Read when the device is created\.|
+|rtx.pipelineCache.persist|bool|True|||Keeps the runtime's compiled compute and ray tracing pipelines on disk between runs \(\<exe\>\.remix\-pipeline\-cache, next to the DXVK state cache\), so startup does not recompile pipelines the driver's shader cache has evicted\. The file is checked against the GPU and driver, and a mismatched or damaged file is discarded and rebuilt\. Read when the device is created\.|
 |rtx.pixelHighlightReuseStrength|float|0.5|||The specular portion when we reuse last frame's pixel value\.|
 |rtx.playerModel.backwardOffset|float|0||||
 |rtx.playerModel.enableInPrimarySpace|bool|False||||

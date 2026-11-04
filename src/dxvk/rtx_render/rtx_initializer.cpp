@@ -218,7 +218,7 @@ namespace dxvk {
     AutoShaderPipelinePrewarmer::prewarmComputePipelines(pipelineManager);
 
     // The prewarm always registers every pipeline the active settings use. The pipeline cache decides whether they
-    // load or compile. It is keyed on the GPU, the driver and the runtime build, so an update compiles them all.
+    // load or compile. It is keyed on the GPU and the driver, so an update compiles only the shaders it changed.
     const DxvkPipelineCache::LoadResult cacheResult = pipelineManager.pipelineCache()->loadResult();
     const char* expectation =
       cacheResult == DxvkPipelineCache::LoadResult::Loaded ? "they should load from the caches" :

@@ -43,6 +43,11 @@ The Low preset now traces one indirect bounce instead of two, because Low measur
 - Measured before the change (RTX 5080 Laptop, 2560x1600, DLSS Balanced, volumetrics off): Medium 20.4 ms, Low 20.6 ms GPU.
 - Commits: the commit that adds this entry.
 
+### The pipeline cache survives runtime updates
+The saved `.remix-pipeline-cache` was discarded whenever the runtime DLL changed, so every update compiled every Remix pipeline again, over 90 minutes on an RX 6700 XT. The file is now checked against the GPU and driver only (vendor, device, driver version and `pipelineCacheUUID`), as the Vulkan pipeline cache data itself is: the driver keys each pipeline by its shader code and state, so an update compiles only the shaders it changed. Files saved by earlier builds load too. The `rtx.pipelineCache.maxSizeMB` cap still applies, so a cache that outgrows it across many updates is dropped and rebuilt.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-01
 
 ### GPU device loss when a BLAS drops an opacity micromap in flight

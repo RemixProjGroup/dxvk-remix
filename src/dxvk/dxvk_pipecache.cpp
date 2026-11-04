@@ -24,27 +24,9 @@ namespace dxvk {
   namespace {
     constexpr char kMagic[8] = { 'R', 'M', 'X', 'P', 'S', 'O', '0', '1' };
 
-    // The identity starts with the device part: vendor, device and driver version, then the pipelineCacheUUID.
+    // The identity: vendor, device and driver version, then the pipelineCacheUUID. A saved file may carry more
+    // identity bytes after these, such as the runtime build. They are ignored.
     constexpr size_t kDeviceIdentitySize = 3 * sizeof(uint32_t) + VK_UUID_SIZE;
-
-    // The runtime build: this module's size and last write time. A rebuilt runtime is a new build.
-    void appendBuildIdentity(std::vector<uint8_t>& out) {
-#ifdef _WIN32
-      HMODULE module = nullptr;
-      if (::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                               reinterpret_cast<LPCWSTR>(&appendBuildIdentity), &module)) {
-        wchar_t path[MAX_PATH + 1] = {};
-        const DWORD len = ::GetModuleFileNameW(module, path, MAX_PATH);
-        WIN32_FILE_ATTRIBUTE_DATA attributes = {};
-        if (len > 0 && ::GetFileAttributesExW(path, GetFileExInfoStandard, &attributes)) {
-          const uint32_t fields[4] = { attributes.nFileSizeHigh, attributes.nFileSizeLow,
-                                       attributes.ftLastWriteTime.dwHighDateTime, attributes.ftLastWriteTime.dwLowDateTime };
-          const uint8_t* bytes = reinterpret_cast<const uint8_t*>(fields);
-          out.insert(out.end(), bytes, bytes + sizeof(fields));
-        }
-      }
-#endif
-    }
   }
 
   DxvkPipelineCache::DxvkPipelineCache(DxvkDevice* device)
@@ -100,7 +82,6 @@ namespace dxvk {
     const uint8_t* bytes = reinterpret_cast<const uint8_t*>(fields);
     m_identity.assign(bytes, bytes + sizeof(fields));
     m_identity.insert(m_identity.end(), p.pipelineCacheUUID, p.pipelineCacheUUID + VK_UUID_SIZE);
-    appendBuildIdentity(m_identity);
   }
 
 
@@ -122,19 +103,18 @@ namespace dxvk {
       reason = "short file";
     } else if (std::memcmp(header.magic, kMagic, sizeof(kMagic)) != 0) {
       reason = "not a Remix pipeline cache";
-    } else if (header.identitySize != m_identity.size()
+    } else if (header.identitySize < kDeviceIdentitySize
             || std::streamoff(sizeof(Header)) + std::streamoff(header.identitySize) + std::streamoff(header.dataSize) != fileSize) {
-      reason = "size mismatch (partial file or another build)";
+      reason = "size mismatch (partial file)";
     } else {
       identity.resize(header.identitySize);
       data.resize(size_t(header.dataSize));
       if (!file.read(reinterpret_cast<char*>(identity.data()), std::streamsize(identity.size()))
        || !file.read(reinterpret_cast<char*>(data.data()), std::streamsize(data.size()))) {
         reason = "read failed";
-      } else if (identity != m_identity) {
-        const bool sameDevice = std::equal(identity.begin(), identity.begin() + kDeviceIdentitySize, m_identity.begin());
-        reason = sameDevice ? "another runtime build" : "another GPU or driver";
-        m_loadResult = sameDevice ? LoadResult::BuildChanged : LoadResult::DeviceChanged;
+      } else if (!std::equal(m_identity.begin(), m_identity.end(), identity.begin())) {
+        reason = "another GPU or driver";
+        m_loadResult = LoadResult::DeviceChanged;
       } else if (XXH3_64bits(data.data(), data.size()) != header.dataHash) {
         reason = "checksum mismatch";
       }
@@ -218,7 +198,6 @@ namespace dxvk {
     case LoadResult::Disabled: return "pipeline cache not kept on disk (rtx.pipelineCache.persist is off)";
     case LoadResult::Missing: return "cache missing";
     case LoadResult::Loaded: return "cache current";
-    case LoadResult::BuildChanged: return "build changed";
     case LoadResult::DeviceChanged: return "GPU or driver changed";
     case LoadResult::Damaged: return "cache damaged";
     }

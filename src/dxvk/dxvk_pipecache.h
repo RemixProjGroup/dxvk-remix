@@ -31,9 +31,10 @@ namespace dxvk {
    * (<exe>.dxvk-cache) it complements: the state cache records which pipelines a game needs, this one holds their
    * compiled code, so a run no longer depends on the driver's shared disk cache (on NVIDIA one 1 GiB LRU for every
    * Vulkan/OpenGL application). The file starts with a header checked against the device (vendor, device, driver
-   * version, pipelineCacheUUID) and the runtime build (its module's size and write time), and a checksum of the
-   * data; any mismatch, a short file or a bad checksum discards it and the cache is rebuilt. It is saved after the
-   * runtime's compiles settle and at shutdown, through a temporary file renamed over the old one.
+   * version, pipelineCacheUUID) and a checksum of the data; any mismatch, a short file or a bad checksum discards it
+   * and the cache is rebuilt. It is not tied to the runtime build: the driver keys each pipeline by its shader code and
+   * state, so a new runtime reuses the pipelines of every shader it did not change. It is saved after the runtime's
+   * compiles settle and at shutdown, through a temporary file renamed over the old one.
    */
   class DxvkPipelineCache : public RcObject {
 
@@ -41,7 +42,7 @@ namespace dxvk {
     RTX_OPTION("rtx.pipelineCache", bool, persist, true,
                "Keeps the runtime's compiled compute and ray tracing pipelines on disk between runs "
                "(<exe>.remix-pipeline-cache, next to the DXVK state cache), so startup does not recompile pipelines the "
-               "driver's shader cache has evicted. The file is checked against the GPU, driver and runtime build, and a "
+               "driver's shader cache has evicted. The file is checked against the GPU and driver, and a "
                "mismatched or damaged file is discarded and rebuilt. Read when the device is created.");
     RTX_OPTION("rtx.pipelineCache", uint32_t, maxSizeMB, 2048,
                "The largest pipeline cache file kept, in MB. A cache that grows past this is not saved and the old file "
@@ -68,8 +69,7 @@ namespace dxvk {
     enum class LoadResult {
       Disabled,       // rtx.pipelineCache.persist is off.
       Missing,        // No file was saved yet.
-      Loaded,         // The file matched this GPU, driver and runtime build.
-      BuildChanged,   // The file came from another runtime build, so every Remix pipeline compiles again.
+      Loaded,         // The file matched this GPU and driver.
       DeviceChanged,  // The file came from another GPU or driver.
       Damaged,        // The file was short, corrupt or refused by the driver.
     };
