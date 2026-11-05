@@ -4330,10 +4330,11 @@ namespace dxvk {
       m_tlasRefit[Tlas::SSS].valid = false;
     }
 
+    // Ray tracing and ray queries in compute shaders read the TLAS after its build.
     ctx->emitMemoryBarrier(0,
       VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
       VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-      VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+      VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
       VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
 
     m_scratchRequiredThisFrame = std::max(m_scratchRequiredThisFrame, VkDeviceSize(totalScratchSize));
