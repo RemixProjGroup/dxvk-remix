@@ -28,6 +28,14 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-06
+
+### RemixFX shader guide
+A developer guide for people new to RemixFX: setup, a first effect explained line by line, scene inputs, passes, history and file textures, porting from ReShade, debugging, performance, shipping precompiled SPIR-V, and control through the Remix API. A new `vignette` example is the guide's first effect. `RemixFx.md` now matches the loader on unlisted metadata failures, compiler search, defines, include paths, rebuild granularity, error prefixes and when the persisted options are read, and `lut_color_grade` states that it indexes its LUT with linear values.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixFx-Shader-Guide.md](../documentation/RemixFx-Shader-Guide.md), [RemixFx.md](RemixFx.md)
+
 ## 2026-11-03
 
 ### Device loss on the first ray-traced frame with Ray Query indirect integration on NVIDIA

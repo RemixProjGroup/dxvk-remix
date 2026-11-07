@@ -49,7 +49,11 @@ static const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
 // step table then drops in without a second number to keep in step with it.
 //
 // This is the layout ReShade's LUT.fx uses, so a table ported from there needs
-// no repacking.
+// no repacking. It does need its encoding checked: this effect runs in the
+// display domain, where colors are linear, and it indexes the table with those
+// linear values. A table authored for gamma-encoded input, as ReShade tables
+// are, has to be converted to linear-indexed input first, or the shader has to
+// encode the color before the lookup. The neutral table is the same either way.
 float3 sampleLut(float3 color) {
   uint width = 0u;
   uint height = 0u;

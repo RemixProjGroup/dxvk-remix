@@ -512,7 +512,7 @@ iface.SetConfigVariable("rtx.fogColorScale",            "0.25");
 
 For the full list of available keys, see [`RtxOptions.md`](../RtxOptions.md).
 For the architecture (config layers, priority, persistence), see
-[`RemixConfig.md`](RemixConfig.md). For fork-side `rtx.*` namespaces
+[`RemixConfig.md`](../documentation/RemixConfig.md). For fork-side `rtx.*` namespaces
 that exist specifically as plugin-tuning surfaces (e.g.
 `rtx.weather.*`), see [Convention namespaces](#convention-namespaces).
 
@@ -812,6 +812,6 @@ For the dated change log, see
 - [`RemixApi-Performance.md`](RemixApi-Performance.md) — getting the best CPU and GPU performance from an integration.
 - [`RemixSDK.md`](RemixSDK.md) — SDK setup, mental model, minimal C example.
 - [`RemixApiChangelog.md`](RemixApiChangelog.md) — dated API change log.
-- [`RemixConfig.md`](RemixConfig.md) — `RtxOptions` config-layer architecture.
+- [`RemixConfig.md`](../documentation/RemixConfig.md) — `RtxOptions` config-layer architecture.
 - [`RtxOptions.md`](../RtxOptions.md) — auto-generated complete `rtx.*` reference.
 - [`RemixSkyAPI.md`](RemixSkyAPI.md) — Sky / atmosphere plugin surface (sun, stars, moons, clouds) plus weather preset blender.

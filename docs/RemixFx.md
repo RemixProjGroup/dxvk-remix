@@ -14,7 +14,9 @@ which a post-process running on the swapchain cannot see.
 
 This is written for someone who has written a compute shader before and has
 never seen this format. Every line quoted below is from a working effect in
-[`examples/remixfx/`](../examples/remixfx/README.md).
+[`examples/remixfx/`](../examples/remixfx/README.md). For a step-by-step
+introduction, from setup to shipping an effect, read the
+[RemixFX shader guide](../documentation/RemixFx-Shader-Guide.md) first.
 
 ---
 
@@ -27,8 +29,10 @@ under **External Effect Files**. It is created if it does not exist.
 
 Compilation shells out to `slangc.exe`, searched for beside the Remix DLL and
 beside the game executable (directly or in a `slang/` subdirectory), in
-`external/slang/`, and on `PATH`;
-`rtx.postfx.external.slangCompilerPath` overrides the search. Each entry point
+`external/slang/` under the process's current working directory, and on
+`PATH`. `rtx.postfx.external.slangCompilerPath` overrides the search: when it
+is set, only that path is tried, and a relative path resolves from the game
+executable's directory. Each entry point
 is compiled separately - slangc takes one `-o` per invocation - and each module
 is cached beside the source as:
 
@@ -44,8 +48,11 @@ cached module is reused whenever it is at least as new as the source and
 everything the source includes; with no compiler present it is used even when
 it is older, and the pane says so.
 
-An effect that fails to load still appears in the list, with the reason in its
-settings pane, and does not dispatch.
+An effect whose shader fails to compile, validate or find its images still
+appears in the list, with the reason in its settings pane, and does not
+dispatch. An effect whose **metadata** fails to parse, or whose `effect.id`
+duplicates one found earlier, is not listed at all: the error is only in the
+log, and the reload status line counts it as failed.
 
 ---
 
@@ -224,7 +231,9 @@ the middle shifts every offset after it, which is the one thing to watch while
 editing a live effect.
 
 Parameter ids are C identifiers - no `.`, and not starting with a digit -
-because they become dotted key prefixes and are handed to slangc as defines.
+because they become dotted key prefixes. They are not passed to slangc: values
+arrive at run time through the parameter buffer, and only texture ids become
+`-DREMIXFX_TEX_<name>` defines.
 
 ---
 
@@ -422,9 +431,12 @@ void main(uint2 pixel : SV_DispatchThreadID) {
 
 [`remixfx_bindings.slangh`](../examples/remixfx/remixfx_bindings.slangh) is
 self-contained and can be shipped beside an effect without the Remix source
-tree. It is found through `-I <the effect's own directory>`, so it has to sit
-next to the effect. Editing it rebuilds every effect that includes it, because
-slangc records what it opened in a `-depfile` beside each module.
+tree. `#include "remixfx_bindings.slangh"` finds it through
+`-I <the effect's own directory>`, so with that line it sits next to the
+effect; an effect in a subdirectory can instead include it by a relative path
+such as `"../remixfx_bindings.slangh"`. Editing it rebuilds every effect that
+includes it, because slangc records what it opened in a `-depfile` beside each
+module.
 
 `sepia` is the exception: it declares inline the handful of bindings it needs,
 which is what makes it a single-file template you can copy anywhere.
@@ -755,9 +767,10 @@ Compilation runs on a low-priority worker thread, so a save never stalls the
 frame, and the finished result is swapped in on the render thread **between**
 effect dispatches - never between two passes of one effect, which would leave
 half a frame bound against a layout the other half no longer has. Only stale
-modules are rebuilt: each pass records what slangc opened, so saving one effect
+effects are rebuilt: each pass records what slangc opened, so saving one effect
 does not recompile the other nine, and saving `remixfx_bindings.slangh`
-recompiles all of them.
+recompiles all of them. Within an effect, one missing or stale module
+recompiles every pass of that effect.
 
 **Reload External Effects** in the panel forces a full rebuild of everything.
 
@@ -789,8 +802,13 @@ same as discovering nothing.
 
 ## 10. Errors you will actually hit
 
-All of these appear in the effect's settings pane and in the log. A manifest
-error names its line; the rest name the pass or the texture.
+A manifest error names its line and appears only in the log, because an
+effect whose metadata does not parse is not listed (section 1). Everything
+else appears in the effect's settings pane and in the log. Binding errors are
+prefixed with the pass, as `pass '<id>': ...`, a single-pass effect's pass
+being `main`; compile errors of a multi-pass effect are prefixed the same way.
+Only the first 4096 characters of slangc's output are kept, in the pane and in
+the log.
 
 ### Manifest
 
@@ -839,7 +857,7 @@ error names its line; the rest name the pass or the texture.
 | Message | What happened |
 |---|---|
 | `slangc.exe exited with code N` | followed by slangc's own diagnostics, which name the line |
-| `slangc.exe was not found and no precompiled .remixfx.spv file exists` | set a compiler path, or ship the cached modules. The files it is actually looking for are named `<basename>.remixfx.<entry>.spv` |
+| `slangc.exe was not found and no precompiled '<name>.remixfx.<entry>.spv' exists (one per pass entry point)` | set a compiler path, or ship the cached modules |
 | `Source is newer than cached SPIR-V; configure slangc.exe to rebuild it.` | the effect is running an older build of itself |
 | `...; using cached SPIR-V.` | the compile failed, and the cached module still matches the manifest |
 | `...; using the previous shader.` | the compile failed, the layout is unchanged, and what is on screen keeps running |
@@ -861,18 +879,24 @@ error names its line; the rest name the pass or the texture.
 | `rtx.postfx.external.effectSearchPath` | `remix-shaders` | searched recursively; relative paths resolve from the game executable |
 | `rtx.postfx.external.slangCompilerPath` | *(empty)* | explicit `slangc.exe`; empty means search |
 | `rtx.postfx.external.hotReload` | `True` | recompile an effect when its source, or a file it includes, is saved |
-| `rtx.postfx.external.effectEnabledStates` | *(empty)* | persisted checkboxes, written by the panel |
-| `rtx.postfx.external.effectParameterValues` | *(empty)* | persisted parameter values, written by the panel |
+| `rtx.postfx.external.effectEnabledStates` | *(empty)* | persisted checkboxes, `<id>=1;<id>=0`, written by the panel |
+| `rtx.postfx.external.effectParameterValues` | *(empty)* | persisted parameter values, `<id>/<param>=<v1> <v2>;...`, written by the panel |
 | `rtx.postfx.stackOrder` | the built-in order | the whole stack's order; an external effect appears as `external:<id>` |
 
 An external effect is also governed by **Post FX Enabled**, the stack's master
 switch for optional effects.
 
+`effectEnabledStates`, `effectParameterValues`, `effectSearchPath` and
+`slangCompilerPath` are read only when effects are loaded: on first use, on
+**Reload External Effects**, on a hot reload, and after the device is
+recreated. Setting them at any other time, from a config file or the Remix
+API, takes effect at the next load. The other options are read every frame.
+
 ---
 
 ## 12. Worked examples
 
-Fourteen effects in `examples/remixfx/`, from a single-file template to an
+Fifteen effects in `examples/remixfx/`, from a single-file template to an
 eight-pass bloom pyramid, each one demonstrating a specific part of this
 document. The tour is in
 [`examples/remixfx/README.md`](../examples/remixfx/README.md). They are the

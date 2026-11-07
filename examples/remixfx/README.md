@@ -1,13 +1,15 @@
 # RemixFX sample effects
 
-Fourteen working effects: twelve in the tour below, ordered from a single-file
-template to an eight-pass bloom pyramid, plus two diagnostics. Each one exists
+Fifteen working effects: twelve in the tour below, ordered from a single-file
+template to an eight-pass bloom pyramid, two diagnostics, and `vignette`, the
+first effect of the [shader guide](../../documentation/RemixFx-Shader-Guide.md). Each one exists
 to demonstrate a specific part of the format, and between them they exercise
 every binding, every parameter type and every pass shape the runtime supports.
 Read the tour in order and you have seen the whole ABI.
 
 The format reference is [`docs/RemixFx.md`](../../docs/RemixFx.md). These files
-are the authority where the two disagree.
+are the authority where the two disagree. To learn the format step by step,
+start with the [shader guide](../../documentation/RemixFx-Shader-Guide.md).
 
 ## Installing them
 
@@ -189,7 +191,9 @@ written out:
 wrapping the strip folds the brightest blue slice back onto the darkest. `srgb`
 is off because the table's texels are output colours, not light. The table is
 an N x N x N cube unrolled along x, which is the layout ReShade's `LUT.fx`
-uses, so a ported table needs no repacking; the edge length is read off the
+uses, so a ported table needs no repacking. It is indexed with **linear**
+display values, though, so a table authored for gamma-encoded input, as
+ReShade tables are, needs converting first; the edge length is read off the
 image height rather than declared, so a 16, 32 or 64 step table drops straight
 in.
 
@@ -364,6 +368,7 @@ tests on purpose.
 | To see | Read |
 |---|---|
 | the minimum viable effect | `sepia` |
+| a first effect, explained line by line | `vignette`, with the [shader guide](../../documentation/RemixFx-Shader-Guide.md) |
 | a parameter of each type | `sepia` (float, color3), `deband` (bool), `color_vision_assist` (int + items) |
 | labels, tooltips, sticky categories | `cinematic_aspect`, `deband`, `scene_outline` |
 | `Sampler2D` vs `Texture2D` at the call site | `film_grain` and `lut_color_grade` vs `bloom_pyramid` and `focus_peaking` |
