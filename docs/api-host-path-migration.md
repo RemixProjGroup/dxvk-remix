@@ -99,7 +99,7 @@ Each of these shows up as a specific symptom.
 | Re-creating a mesh handle to update it | The update never appears; the host still paid the copy | Use `MeshInfoRefreshGeometryEXT`. |
 | Synchronous `CreateMesh` from the game thread | Rare crashes inside the runtime's command stream | Use `CreateMeshBatched`. |
 | Writing into a texture after importing it | A full copy per texture on the first write (copy-on-write) | Import textures whose content is final. Re-import or `ReplaceD3D11TextureEx` on real changes. |
-| Lights never marked dynamic | Lights freeze after about 50 updates, for example a light attached to the player stays behind | Mark lights that move or change as dynamic. |
+| Destroying and re-creating a light to change it | Lost temporal history; within one frame, the light disappears, because the destroy applies at the end of the frame, after the create | Use `UpdateLightDefinition`. API lights have no static-light sleep, so every update applies. |
 | Gating work on raw driver VRAM usage | Loading stops for good; the game's own renderer shows through | Use `remixapi_GetMemoryPressure`. The runtime discounts free space inside its allocator chunks. |
 
 ## Compatibility and fallback

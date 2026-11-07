@@ -33,7 +33,8 @@ After a successful build, the necessary SDK files will be located in the public/
 
 # Using the Remix SDK in your application
 
-> *Note: the API described below is under development and may be subject to changes.*
+> *For a step-by-step guide to writing a plugin, with a complete first-frame example, see the
+> [Remix API plugin guide](RemixApi-Plugin-Guide.md).*
 
 As with other rendering engines, there are common steps of
 initialiazation, resource registration (meshes, materials, lights), and submitting the said resources to each frame to be rendered.
@@ -82,8 +83,7 @@ initialiazation, resource registration (meshes, materials, lights), and submitti
     * When a target application (e.g. `.exe`) is being compiled with the API header, the version numbers `REMIXAPI_VERSION_*` are statically bound into the compiled target app binaries.
     That way, the target app is compatible only with specific versions of Remix Renderer binaries (`d3d9.dll`). 
     
-    * The Renderer binaries loosely follows the [Semantic Versioning](https://semver.org/), with the main difference on the development `0.y.z` versions:
-    `0.a.b` and `0.c.d` are not compatible if `a != c`.
+    * The runtime accepts a caller whose major version equals its own and whose minor version is at most its own. The patch is not compared. A 1.x runtime also accepts 0.1000.x callers (the previous Remix Plus release), whose table and structs are the same. Other 0.x callers, such as NVIDIA dxvk-remix and other forks, are rejected. See [RemixApi-Migration.md](../docs/RemixApi-Migration.md#2-version-and-compatibility).
 
     * If a target app is not compatible with a given Remix Renderer binaries, initialization will return `REMIXAPI_ERROR_CODE_INCOMPATIBLE_VERSION` error code.
 
@@ -112,6 +112,7 @@ Material:
 * To register, call `remixapi_Interface::CreateMaterial` specifying `remixapi_MaterialInfo`, but `.pNext` must be a pointer to one of:
     * `remixapi_MaterialInfoOpaqueEXT` -- for a generic material
     * `remixapi_MaterialInfoTranslucentEXT` -- for a glass material
+    * `remixapi_MaterialInfoPortalEXT` -- for a ray portal
 * For the default values, corresponding default constructors can be examined in the C++ wrapper [remix.h](/public/include/remix/remix.h)
 * *Note: at the time of writing, the material API is still not refined to work with non-file image data, and overall structure just reflects the internal representation of materials, which might be not as simple to use. The primary subject to change.*
 
@@ -124,7 +125,7 @@ Light:
     * `remixapi_LightInfoDistantEXT` -- distant (sun)
     * `remixapi_LightInfoDomeEXT` - dome (sky)
 * `.hash` should be a unique ID, it is used to identify the light source between the current and previous frame for a more stable denoising / light sampling
-* Since lights are usually changing a lot (they move, their intensity varies, etc), to update a light with the new parameters, recreate it by calling `remixapi_Interface::DestroyLight` + `remixapi_Interface::CreateLight` but with the same `.hash` value as the old one
+* A created light stays in the scene every frame until `remixapi_Interface::DestroyLight`. To change its parameters, call `remixapi_Interface::UpdateLightDefinition` with the same handle. Do not destroy and re-create the same `.hash` in one frame: the destroy is applied at the end of the frame, after the create.
 
 ---
 
@@ -138,7 +139,7 @@ Push a camera, mesh instances and lights to define a scene for the *current* fra
 
 * Call `remixapi_Interface::DrawInstance` to push a mesh instance with a corresponding transform. There can be many instances that reference a single `remixapi_MeshHandle` (instancing).
 
-* Call `remixapi_Interface::DrawLightInstance` to push a light to the scene.
+* Lights created with `CreateLight` are in every frame already. `remixapi_Interface::DrawLightInstance` is optional.
 
 * Call `remixapi_Interface::Present` to render a frame and present to the window
 
@@ -153,7 +154,7 @@ Push a camera, mesh instances and lights to define a scene for the *current* fra
 # Remix API in the existing Direct3D 9 apps
 
 While the given example is D3D9-agnostic, the API can be used interchangeably with D3D9. 
-The main constraint is that Remix API is 64-bit only, which means that the game also must be built for 64-bit.
+The steps below are for a 64-bit game. A 32-bit game reaches a subset of the API through the bridge, with `exposeRemixApi = True` in `bridge.conf`; see the [plugin guide](RemixApi-Plugin-Guide.md#a-32-bit-game-through-the-bridge).
 
 So given an existing 64-bit D3D9 application, here are the steps to integrate Remix API:
 

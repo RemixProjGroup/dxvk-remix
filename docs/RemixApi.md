@@ -6,6 +6,9 @@ grouped by purpose. The header itself
 ([`public/include/remix/remix_c.h`](../public/include/remix/remix_c.h))
 is the source of truth; this page exists to make it discoverable.
 
+To write a plugin from scratch, start with the step-by-step
+[Remix API plugin guide](../documentation/RemixApi-Plugin-Guide.md).
+
 To move an integration from the public `rebased-9-19` runtime to this API, see
 [`RemixApi-Migration.md`](RemixApi-Migration.md).
 
@@ -13,7 +16,7 @@ To get the best CPU and GPU performance from an integration, see
 [`RemixApi-Performance.md`](RemixApi-Performance.md).
 
 For SDK setup and the high-level mental model, see
-[`RemixSDK.md`](RemixSDK.md). For per-subsystem string-keyed conventions
+[`RemixSDK.md`](../documentation/RemixSDK.md). For per-subsystem string-keyed conventions
 that ride on top of the API (weather, etc.), see the
 [Convention namespaces](#convention-namespaces) section.
 
@@ -29,7 +32,7 @@ here apply to both.
 The recommended pattern is to **vendor `remix_c.h` directly into your
 project's `extern/` tree and include it as the type definition source**.
 Do not hand-type the structs, do not generate bindings — the header is
-small (~1KLOC), self-contained (no dependencies beyond `<stdint.h>`
+small (about 1,800 lines), self-contained (no dependencies beyond `<stdint.h>`
 and optionally `<windows.h>`), and ABI-stable within a major version.
 
 A working CMake setup looks like this:
@@ -107,7 +110,9 @@ remixapi_ErrorCode Shutdown(void);
 `Startup` activates the renderer for a given HWND. Optional flags on
 `remixapi_StartupInfo` control sRGB conversion, swapchain ownership
 (`forceNoVkSwapchain` for OpenGL / external present paths), and editor
-mode. `Shutdown` tears down all resources; safe to call repeatedly.
+mode. `Shutdown` releases the registered D3D9 device and everything the runtime holds
+for the host; a second call does nothing. It releases the device until it is destroyed,
+so a plugin that registered a game's own device must not call it while the game runs.
 
 ### `Present`
 
@@ -138,9 +143,11 @@ runtime's frame timing without owning the render loop.
 remixapi_ErrorCode AutoInstancePersistentLights(void);
 ```
 
-Re-emits a `DrawLightInstance` for every still-live light handle this
-frame. Lets a plugin define lights once and let the runtime keep them
-alive without per-frame draw calls.
+Applies the work that waits for the end of a frame (batched mesh and light
+creates, light updates and destroys) and keeps every live light handle in the
+frame. `Present`, `remixapi_RenderD3D11` and the D3D9 device's own `Present` call
+it, so a host rarely needs to. Lights created with `CreateLight` are persistent
+without it.
 
 ---
 
@@ -153,10 +160,10 @@ DXGI-shared D3D11 texture for cross-API compositing.
 | Function | Purpose |
 | :-- | :-- |
 | `dxvk_CreateD3D9` | Create the runtime's `IDirect3D9Ex`. |
-| `dxvk_RegisterD3D9Device` | Bind an `IDirect3DDevice9Ex` (must come from `dxvk_CreateD3D9`). |
+| `dxvk_RegisterD3D9Device` | Bind an `IDirect3DDevice9Ex` created by the runtime's `d3d9.dll`: one from `dxvk_CreateD3D9`, or a D3D9 game's own device. Any other device returns `REGISTERING_NON_REMIX_D3D9_DEVICE`. |
 | `dxvk_GetExternalSwapchain` | Hand the app a `VkImage` + sync semaphores so it can present (e.g. via OpenGL interop). Requires `forceNoVkSwapchain=true` at startup. |
 | `dxvk_GetVkImage` | Map a D3D9 surface to its underlying `VkImage`. |
-| `dxvk_GetSharedD3D11TextureHandle` | Get an NT shared handle for the final-color render target, openable by D3D11 / D3D12. |
+| `dxvk_GetSharedD3D11TextureHandle` | Not implemented: returns `GENERAL_FAILURE` for valid arguments. Use the [external frame](#external-frame) or `remixapi_RenderD3D11`. |
 | `dxvk_CopyRenderingOutput` | Blit one of the runtime's intermediate outputs (final color, depth, normals, object-picking ID) into a D3D9 surface the caller owns. |
 | `dxvk_SetDefaultOutput` | Set the clear value the runtime uses when an intermediate output isn't produced this frame. |
 | `dxvk_GetTextureHash` | Compute the runtime's content hash for a D3D9 texture (matches what `RtxOptions` keys would see). |
@@ -242,7 +249,7 @@ Returns:
   created or exported.
 
 If the back buffer stops being copyable later, the export stops with a warning
-in the log. The developer menu's Development tab shows the state as
+in the log. The developer menu's Dev Settings tab shows the state as
 "External frame: off", the size, or "unavailable" with the reason.
 
 ---
@@ -305,13 +312,17 @@ is the base; attach exactly one of the type-specific extensions:
 | Extension | When to use |
 | :-- | :-- |
 | `remixapi_MaterialInfoOpaqueEXT` | Standard PBR opaque (albedo / roughness / metallic / normal / height / emissive). |
-| `remixapi_MaterialInfoOpaqueSubsurfaceEXT` | Foliage / skin — chains *after* `OpaqueEXT`. See [`FoliageSystem.md`](FoliageSystem.md). |
+| `remixapi_MaterialInfoOpaqueSubsurfaceEXT` | Foliage / skin — chains *after* `OpaqueEXT`. See [`FoliageSystem.md`](../documentation/FoliageSystem.md). |
 | `remixapi_MaterialInfoTranslucentEXT` | Glass, water, refractive media. |
 | `remixapi_MaterialInfoPortalEXT` | Ray portals. |
 
-The runtime uses `info->hash` to dedupe and to bind replacement assets
-from your USD captures; pick a stable hash that survives content
-reloads.
+`info->hash` is the material's handle: a repeated create with the same hash
+and description returns at once, and one with a different description replaces
+the material. Replacement assets are looked up by the material's runtime content
+hash, not by `info->hash`, unless the material carries an
+[asset key](#asset-keys-remixapi_assetkeyext). A zero-filled
+`remixapi_MaterialInfoOpaqueEXT` has `alphaTestType` 0 (never passes), which hides
+the surface; use 7 (always) for opaque surfaces.
 
 ---
 
@@ -332,7 +343,8 @@ remixapi_ErrorCode DestroyMesh(remixapi_MeshHandle handle);
 `CreateMesh` allocates DXVK buffers and registers replacement assets
 synchronously on the calling thread. `CreateMeshBatched` deep-copies
 the info and defers both steps to the next render-thread flush point
-(`DrawInstance`, `Present`, `AutoInstancePersistentLights`) — use it
+(`DrawInstance`, a retained-instance create or description update, `Present`,
+`remixapi_RenderD3D11`, `AutoInstancePersistentLights`) — use it
 when registering many meshes at once so the registration cost
 amortizes onto the render thread.
 
@@ -410,8 +422,12 @@ remixapi_ErrorCode CreateLightBatched(
 remixapi_ErrorCode DestroyLight(remixapi_LightHandle handle);
 ```
 
-Same `Batched` semantics as meshes — defers registration to the next
-render-thread flush. `remixapi_LightInfo` is the base; attach one of:
+`CreateLight` registers a persistent light: it stays in every frame until
+`DestroyLight`. `CreateLightBatched` queues the create until the end of the frame
+(`Present`, `remixapi_RenderD3D11` or the D3D9 device's own `Present`).
+`DestroyLight` is queued the same way, and destroys apply before creates, so do not
+destroy and re-create a hash within one frame: use `UpdateLightDefinition`.
+`remixapi_LightInfo` is the base; attach one of:
 
 | Extension | Light shape |
 | :-- | :-- |
@@ -433,8 +449,8 @@ focus exponent.
 remixapi_ErrorCode DrawLightInstance(remixapi_LightHandle lightHandle);
 ```
 
-Re-emits the light for the current frame. Call once per frame per
-visible light — or use `AutoInstancePersistentLights` to do it in bulk.
+Adds the light to the current frame. Lights from `CreateLight` are already in
+every frame, so this call is optional.
 
 ### `UpdateLightDefinition`
 
@@ -444,9 +460,9 @@ remixapi_ErrorCode UpdateLightDefinition(
     const remixapi_LightInfo* info);
 ```
 
-Queues a definition update for an existing handle, applied next frame
-on the render thread. Cheaper than destroy + recreate when only the
-parameters change.
+Queues a definition update for an existing handle, applied at the end of the
+frame on the render thread, in place. It keeps the light's identity for temporal
+reuse, which destroy + recreate loses.
 
 ---
 
@@ -501,8 +517,12 @@ remixapi_ErrorCode SetConfigVariable(const char* key, const char* value);
 The string-keyed escape hatch into the runtime's `RtxOptions` system.
 Any option in [`RtxOptions.md`](../RtxOptions.md) — every `rtx.*` knob
 the runtime exposes — is reachable through this single function.
-Values are stringified the same way they appear in `dxvk.conf`
-(numbers, booleans as `true`/`false`, vectors as `x, y, z`).
+Values are stringified the same way they appear in `rtx.conf`
+(numbers, booleans as `true`/`false`, vectors as `x, y, z`). The value goes into
+the user layer, which wins over `rtx.conf` and loses to a selected graphics preset,
+and the render thread applies it at a frame boundary. A key that is not an option
+returns `GENERAL_FAILURE` (through the bridge the call returns `SUCCESS` regardless).
+Options documented as taking effect after a restart do not change at runtime.
 
 ```c
 iface.SetConfigVariable("rtx.bloom.enable",            "true");
@@ -777,7 +797,7 @@ independently of the typed C API.
 When a new fork-side subsystem starts publishing a `__<ns>.*`
 GameStateStore convention or a `rtx.<ns>.*` ConfigVariable namespace
 intended as a plugin-tuning surface, add it to this table and create a
-matching `Remix<Ns>API.md` spoke page. See `dxvk-remix/CLAUDE.md` for
+matching `Remix<Ns>API.md` spoke page. See [`AGENTS.md`](../AGENTS.md) for
 the doc-update discipline.
 
 ---
@@ -802,16 +822,17 @@ new EXT structs is a minor-version event; changing the layout of an
 existing struct is a major-version event.
 
 For the dated change log, see
-[`RemixApiChangelog.md`](RemixApiChangelog.md).
+[`RemixApiChangelog.md`](../documentation/RemixApiChangelog.md).
 
 ---
 
 ## See also
 
+- [`RemixApi-Plugin-Guide.md`](../documentation/RemixApi-Plugin-Guide.md) — writing a plugin step by step, from loading the runtime to a first frame.
 - [`RemixApi-Migration.md`](RemixApi-Migration.md) — moving an integration from `rebased-9-19` to this API.
 - [`RemixApi-Performance.md`](RemixApi-Performance.md) — getting the best CPU and GPU performance from an integration.
-- [`RemixSDK.md`](RemixSDK.md) — SDK setup, mental model, minimal C example.
-- [`RemixApiChangelog.md`](RemixApiChangelog.md) — dated API change log.
+- [`RemixSDK.md`](../documentation/RemixSDK.md) — SDK setup, mental model, minimal C example.
+- [`RemixApiChangelog.md`](../documentation/RemixApiChangelog.md) — dated API change log.
 - [`RemixConfig.md`](../documentation/RemixConfig.md) — `RtxOptions` config-layer architecture.
 - [`RtxOptions.md`](../RtxOptions.md) — auto-generated complete `rtx.*` reference.
 - [`RemixSkyAPI.md`](RemixSkyAPI.md) — Sky / atmosphere plugin surface (sun, stars, moons, clouds) plus weather preset blender.

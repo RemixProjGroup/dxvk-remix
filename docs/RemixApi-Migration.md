@@ -588,13 +588,16 @@ its input. For `CreateTexture` pixel data, keep the buffer alive until the call 
 `exposeRemixApi = True` in `bridge.conf`. It fills only these slots: `CreateMaterial`, `DestroyMaterial`,
 `CreateTexture`, `DestroyTexture`, `CreateMesh`, `DestroyMesh`, `DrawInstance`, `CreateLight`, `DestroyLight`,
 `DrawLightInstance`, `SetConfigVariable`, `dxvk_CreateD3D9`, `dxvk_RegisterD3D9Device`, `SetGameValue` and
-`GetGameValue`. `GetUIState`, `SetUIState`, `AutoInstancePersistentLights` and `UpdateLightDefinition` are stubs that
-log once and do nothing. Every other slot, `SetupCamera`, `Startup` and `Present` included, is null: the game's own
-D3D9 device drives the frame. The client exports `remixapi_RegisterCallbacks` but none of the named exports in
-section 4. It forwards these chained structs: on materials the opaque, subsurface, translucent and portal
-extensions; on instances object picking, blend, bone transforms and particle systems; on lights all shapes, dome and
-USD. Everything else in a chain, including asset keys, mesh refresh, spec/gloss, albedo tint and the material
-override, is dropped with a warning.
+`GetGameValue`. `dxvk_CreateD3D9` and `dxvk_RegisterD3D9Device` return `GENERAL_FAILURE`, because the server
+registers the game's device itself. `GetUIState`, `SetUIState`, `AutoInstancePersistentLights` and
+`UpdateLightDefinition` are stubs that log once and do nothing. Every other slot, `SetupCamera`, `Startup` and
+`Present` included, is null: the game's own D3D9 device drives the frame. Of the named exports, the client exports
+only `remixapi_RegisterCallbacks` and the five color grading calls (section 4.13). It forwards these chained structs:
+on materials the opaque, subsurface, translucent and portal extensions; on instances object picking, blend, bone
+transforms and particle systems; on lights all shapes, dome and USD. Everything else in a material, instance or
+light chain, including asset keys, spec/gloss, albedo tint, GPU instancing and the material override, is dropped
+with a warning. It forwards no mesh extension, so keep `remixapi_MeshInfo::pNext` null, and it does not handle
+skinned meshes yet. Bridge handles are numbers the client counts up, not your hashes.
 
 **Bridge versions.** The client checks the game's version with the same rule as the runtime. The 64-bit bridge
 server initializes the runtime with its own compiled version, so build the client, the server and the runtime from

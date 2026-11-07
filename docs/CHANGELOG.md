@@ -30,6 +30,12 @@ Entry format:
 
 ## 2026-11-06
 
+### Remix API plugin guide
+A step-by-step developer guide for writing a game plugin or wrapper against the Remix API: the 64-bit and bridge ways in, version negotiation, the hosting modes, a first frame, materials, textures, skinning, categories, lights, retained instances, config variables, identity and history, debugging, mods and the threading and lifetime rules. A new `examples/remixapi/first_frame.c` is the guide's complete first frame. `RemixApi.md`, `RemixSDK.md`, `RemixApi-Migration.md` and `api-host-path-migration.md` now match the code on light persistence and updates, material replacement keys, `dxvk_RegisterD3D9Device`, `dxvk_GetSharedD3D11TextureHandle`, `SetConfigVariable`, the version rule and what the bridge forwards.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApi-Plugin-Guide.md](../documentation/RemixApi-Plugin-Guide.md), [RemixApi.md](RemixApi.md)
+
 ### RemixFX shader guide
 A developer guide for people new to RemixFX: setup, a first effect explained line by line, scene inputs, passes, history and file textures, porting from ReShade, debugging, performance, shipping precompiled SPIR-V, and control through the Remix API. A new `vignette` example is the guide's first effect. `RemixFx.md` now matches the loader on unlisted metadata failures, compiler search, defines, include paths, rebuild granularity, error prefixes and when the persisted options are read, and `lut_color_grade` states that it indexes its LUT with linear values.
 - Options: none.

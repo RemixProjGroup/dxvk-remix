@@ -190,6 +190,8 @@ keeps every setting as you set it.
 
 ## For modders and API developers
 
+- [Remix API plugin guide](documentation/RemixApi-Plugin-Guide.md): writing a game plugin or wrapper step by step,
+  from loading the runtime to a first frame, with a complete [example](examples/remixapi/first_frame.c).
 - [Remix API reference](docs/RemixApi.md), with the [SDK setup](documentation/RemixSDK.md) and the
   [generated API surface](RemixApiSurface.md).
 - [Migrating to the Remix Plus API](docs/RemixApi-Migration.md) from the previous Remix Plus release: what changed,
