@@ -104,6 +104,13 @@ namespace dxvk {
     void dispatchSkinning(const SceneDraw& drawCallState, const RaytraceGeometry& geo);
 
     /**
+     * \brief Generates smooth normals from the skinned positions of geometry skinned by dispatchSkinning.
+     * Recorded on the skinning context after the skinning dispatch, so it reads the new pose and skinning
+     * does not overwrite its normals.
+     */
+    void dispatchSkinnedSmoothNormals(const RasterGeometry& input, RaytraceGeometry& geo);
+
+    /**
      * \brief The skinning batch recorded but not submitted yet, or 0 when none is pending.
      */
     uint64_t pendingSkinningBatch() const { return m_skinningCommands > 0 ? m_skinningBatch : 0; }
@@ -275,11 +282,14 @@ namespace dxvk {
       * the geometry's normal buffer.
       *
       * Requires valid position, index, and normal buffers in the geometry.
+      * The CPU path of small meshes reads the input's positions. Set gpuOnly when the geometry's
+      * positions differ from them, such as after skinning.
       */
     void dispatchSmoothNormals(
       const Rc<DxvkContext>& ctx,
       const RasterGeometry& input,
-      RaytraceGeometry& geo);
+      RaytraceGeometry& geo,
+      bool gpuOnly = false);
 
     inline void flushCommandList() {
       if (m_skinningContext->getCommandList() != nullptr && m_skinningCommands > 0) {

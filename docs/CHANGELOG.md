@@ -77,6 +77,11 @@ Updated vertex-captured and rewritten meshes queued their vertex copy or interle
 - Measured: Cry of Fear on an RTX 3080 and Ryzen 7 7700X, separate runs in the same scene: render thread 11.8 → 11.4 ms per frame (the function held 6.3% of render-thread samples before).
 - Commits: the commit that adds this entry.
 
+### Smooth normals on skinned geometry
+Geometry in the smooth-normals texture category that Remix skins itself lost its smoothing: the smooth normals were generated from the bind pose, and the skinning pass then overwrote every normal. They are now generated after skinning, on the skinning context and from the skinned positions, so they follow each new pose. Unskinned geometry is unchanged.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-06
 
 ### Remix API plugin guide

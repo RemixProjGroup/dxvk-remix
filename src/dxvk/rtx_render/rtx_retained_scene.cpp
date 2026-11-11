@@ -1299,16 +1299,26 @@ namespace dxvk {
       return;
     }
     // As processDrawCallState does after a build or vertex update.
-    if (drawCall.getCategoryFlags().test(InstanceCategories::SmoothNormals)) {
-      m_scene.device()->getCommon()->metaGeometryUtils().dispatchSmoothNormals(ctx, drawCall.getGeometryData(), blas.modifiedGeometryData);
+    RtxGeometryUtils& geometryUtils = m_scene.device()->getCommon()->metaGeometryUtils();
+    const RasterGeometry& input = drawCall.getGeometryData();
+    const bool smoothNormals = drawCall.getCategoryFlags().test(InstanceCategories::SmoothNormals);
+    const bool skinning = drawCall.getSkinningState().numBones > 0 && input.numBonesPerVertex > 0;
+    // Skinning rewrites every normal, so the smooth normals of skinned geometry are generated after it, from the pose.
+    const bool skinnedSmoothNormals = smoothNormals && skinning && input.blendWeightBuffer.defined();
+    if (smoothNormals && !skinnedSmoothNormals) {
+      geometryUtils.dispatchSmoothNormals(ctx, input, blas.modifiedGeometryData);
       blas.modifiedGeometryData.smoothNormalsApplied = true;
       m_scene.syncLinkedInstances(&blas);
       blas.frameLastUpdated = blas.frameLastTouched;
       m_scene.m_instanceManager.notifySceneChanged();
     }
-    if (drawCall.getSkinningState().numBones > 0 && drawCall.getGeometryData().numBonesPerVertex > 0) {
-      RtxGeometryUtils& geometryUtils = m_scene.device()->getCommon()->metaGeometryUtils();
+    if (skinning) {
       geometryUtils.dispatchSkinning(drawCall, blas.modifiedGeometryData);
+      if (skinnedSmoothNormals) {
+        geometryUtils.dispatchSkinnedSmoothNormals(input, blas.modifiedGeometryData);
+        blas.modifiedGeometryData.smoothNormalsApplied = true;
+        m_scene.syncLinkedInstances(&blas);
+      }
       blas.skinnedPose = drawCall.getSkinningState().boneHash;
       blas.skinnedBatch = geometryUtils.pendingSkinningBatch();
       blas.frameLastUpdated = blas.frameLastTouched;
