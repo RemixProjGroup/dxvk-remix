@@ -51,6 +51,7 @@
 #include "rtx_render/rtx_shader_manager.h"
 #include "rtx_render/rtx_camera.h"
 #include "rtx_render/rtx_context.h"
+#include "rtx_render/rtx_geometry_utils.h"
 #include "rtx_render/rtx_pathtracer_integrate_direct.h"
 #include "rtx_render/rtx_pathtracer_gbuffer.h"
 #include "rtx_render/rtx_hash_collision_detection.h"
@@ -5130,6 +5131,7 @@ namespace dxvk {
       RemixGui::DragInt("Max Prims in Merged BLAS", &RtxOptions::maxPrimsInMergedBLASObject(), 1.f, 100, 0);
       RemixGui::Checkbox("Force Merge All Meshes", &RtxOptions::forceMergeAllMeshesObject());
       RemixGui::Checkbox("Minimize BLAS Merging", &RtxOptions::minimizeBlasMergingObject());
+      RemixGui::Checkbox("Defer Deforming Geometry Uploads", &RtxGeometryUtils::deferVertexUploadsObject());
       if (RemixGui::CollapsingHeader("Acceleration Structure Tuning", collapsingHeaderClosedFlags)) {
         ImGui::Indent();
         RemixGui::DragInt("Share Small BLAS at N Instances (0 = off)", &RtxOptions::minInstancesToShareSmallBlasObject(), 1.f, 0, 4096);

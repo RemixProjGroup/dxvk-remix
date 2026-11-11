@@ -65,6 +65,12 @@ Every graphics preset now selects the SHARC radiance cache on any GPU with its d
 - Commits: the commit that adds this entry.
 - Docs: [SharcRadianceCache.md](../documentation/SharcRadianceCache.md)
 
+### Deferred uploads for deforming geometry
+Updated vertex-captured and rewritten meshes queued their vertex copy or interleave dispatch in the middle of the game's draws, and each one ended the game's render pass, so the next draw started it again. With the option on, those writes are recorded together at the start of scene preparation and again before the BLAS builds, which is before anything reads the buffers on the GPU. Smooth-normal, Remix-skinned and history-invalidating updates still write at once.
+- Options: added `rtx.deferVertexUploads` (default off). Preset-independent: the traced result is the same.
+- Measured: Cry of Fear (D3D9, vertex-shader skinning, ~415 updated meshes per frame) on an RTX 3080 and Ryzen 7 7700X, in-run A/B over 30 s windows: 52.7 → 82.1 fps, GPU busy 19.0 → 12.2 ms per frame, render thread 10.1 → 8.6 ms, frame time p99 22.4 → 15.9 ms.
+- Commits: the commit that adds this entry.
+
 ### Cached legacy default material
 `LegacyMaterialData::createDefault` ran once per legacy draw and called eleven setters, each of which re-sanitizes and rehashes the whole material. It now keeps the built material per thread and rebuilds it only when one of the `rtx.legacyMaterial.*` options it reads changes.
 - Options: none.
