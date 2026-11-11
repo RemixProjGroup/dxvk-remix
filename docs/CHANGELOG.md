@@ -28,6 +28,13 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-11
+
+### Smooth normals on skinned geometry
+Geometry in the smooth-normals texture category that Remix skins itself lost its smoothing: the smooth normals were generated from the bind pose, and the skinning pass then overwrote every normal. They are now generated after skinning, on the skinning context and from the skinned positions, so they follow each new pose. Unskinned geometry is unchanged.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-06
 
 ### Remix API plugin guide

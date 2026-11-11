@@ -343,6 +343,15 @@ namespace dxvk {
     m_skinningContext = nullptr;
   }
 
+  void RtxGeometryUtils::dispatchSkinnedSmoothNormals(const RasterGeometry& input, RaytraceGeometry& geo) {
+    const Rc<DxvkContext>& ctx = m_skinningContext;
+    if (ctx->getCommandList() == nullptr) {
+      ctx->beginRecording(ctx->getDevice()->createCommandList());
+    }
+    dispatchSmoothNormals(ctx, input, geo, true);
+    ++m_skinningCommands;
+  }
+
   void RtxGeometryUtils::dispatchSkinning(const SceneDraw& drawCallState,
                                           const RaytraceGeometry& geo) {
     const Rc<DxvkContext>& ctx = m_skinningContext;
@@ -1378,7 +1387,8 @@ namespace dxvk {
     return std::sqrtf(maxUvTileSizeSqr);
   }
 
-  void RtxGeometryUtils::dispatchSmoothNormals(const Rc<DxvkContext>& ctx, const RasterGeometry& input, RaytraceGeometry& geo) {
+  void RtxGeometryUtils::dispatchSmoothNormals(const Rc<DxvkContext>& ctx, const RasterGeometry& input, RaytraceGeometry& geo,
+                                               bool gpuOnly) {
     ScopedGpuProfileZone(ctx, "smoothNormals");
 
     if (!geo.positionBuffer.defined() || !geo.indexBuffer.defined() || !geo.normalBuffer.defined()) {
@@ -1417,7 +1427,7 @@ namespace dxvk {
     const bool pendingGpuWrite = input.positionBuffer.isPendingGpuWrite() || input.indexBuffer.isPendingGpuWrite();
 
     const uint32_t kMaxTrianglesForCPU = 512;
-    const bool useCPU = numTriangles <= kMaxTrianglesForCPU && !pendingGpuWrite && !mustUseGPU;
+    const bool useCPU = numTriangles <= kMaxTrianglesForCPU && !pendingGpuWrite && !mustUseGPU && !gpuOnly;
 
     if (useCPU) {
       // --- CPU path: uses the same shared functions as the GPU shader ---
