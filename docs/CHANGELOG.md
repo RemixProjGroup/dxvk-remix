@@ -28,6 +28,14 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-11
+
+### Cached legacy default material
+`LegacyMaterialData::createDefault` ran once per legacy draw and called eleven setters, each of which re-sanitizes and rehashes the whole material. It now keeps the built material per thread and rebuilds it only when one of the `rtx.legacyMaterial.*` options it reads changes.
+- Options: none.
+- Measured: Cry of Fear on an RTX 3080 and Ryzen 7 7700X, separate runs in the same scene: render thread 11.8 → 11.4 ms per frame (the function held 6.3% of render-thread samples before).
+- Commits: the commit that adds this entry.
+
 ## 2026-11-06
 
 ### Remix API plugin guide

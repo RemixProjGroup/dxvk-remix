@@ -176,18 +176,69 @@ float getDisplacementOutFactor() {
 }
 
 dxvk::OpaqueMaterialData LegacyMaterialData::createDefault() {
+  struct Defaults {
+    float anisotropy;
+    float emissiveIntensity;
+    Vector3 albedoConstant;
+    float opacityConstant;
+    float roughnessConstant;
+    float metallicConstant;
+    Vector3 emissiveColorConstant;
+    bool enableEmissive;
+    bool enableThinFilm;
+    bool alphaIsThinFilmThickness;
+    float thinFilmThicknessConstant;
+
+    bool operator==(const Defaults& r) const {
+      return anisotropy == r.anisotropy && emissiveIntensity == r.emissiveIntensity && albedoConstant == r.albedoConstant &&
+             opacityConstant == r.opacityConstant && roughnessConstant == r.roughnessConstant &&
+             metallicConstant == r.metallicConstant && emissiveColorConstant == r.emissiveColorConstant &&
+             enableEmissive == r.enableEmissive && enableThinFilm == r.enableThinFilm &&
+             alphaIsThinFilmThickness == r.alphaIsThinFilmThickness && thinFilmThicknessConstant == r.thinFilmThicknessConstant;
+    }
+  };
+
+  const Defaults current {
+    LegacyMaterialDefaults::anisotropy(),
+    LegacyMaterialDefaults::emissiveIntensity(),
+    LegacyMaterialDefaults::albedoConstant(),
+    LegacyMaterialDefaults::opacityConstant(),
+    LegacyMaterialDefaults::roughnessConstant(),
+    LegacyMaterialDefaults::metallicConstant(),
+    LegacyMaterialDefaults::emissiveColorConstant(),
+    LegacyMaterialDefaults::enableEmissive(),
+    LegacyMaterialDefaults::enableThinFilm(),
+    LegacyMaterialDefaults::alphaIsThinFilmThickness(),
+    LegacyMaterialDefaults::thinFilmThicknessConstant()
+  };
+
+  // Every setter re-sanitizes and rehashes the whole material, and legacy draws ask for these defaults once per draw.
+  // The material is rebuilt only when one of the options it reads changes.
+  struct Cache {
+    bool valid = false;
+    Defaults key {};
+    OpaqueMaterialData material;
+  };
+  thread_local Cache cache;
+  if (cache.valid && cache.key == current) {
+    return cache.material;
+  }
+
   OpaqueMaterialData opaqueMat;
-  opaqueMat.setAnisotropyConstant(LegacyMaterialDefaults::anisotropy());
-  opaqueMat.setEmissiveIntensity(LegacyMaterialDefaults::emissiveIntensity());
-  opaqueMat.setAlbedoConstant(LegacyMaterialDefaults::albedoConstant());
-  opaqueMat.setOpacityConstant(LegacyMaterialDefaults::opacityConstant());
-  opaqueMat.setRoughnessConstant(LegacyMaterialDefaults::roughnessConstant());
-  opaqueMat.setMetallicConstant(LegacyMaterialDefaults::metallicConstant());
-  opaqueMat.setEmissiveColorConstant(LegacyMaterialDefaults::emissiveColorConstant());
-  opaqueMat.setEnableEmission(LegacyMaterialDefaults::enableEmissive());
-  opaqueMat.setEnableThinFilm(LegacyMaterialDefaults::enableThinFilm());
-  opaqueMat.setAlphaIsThinFilmThickness(LegacyMaterialDefaults::alphaIsThinFilmThickness());
-  opaqueMat.setThinFilmThicknessConstant(LegacyMaterialDefaults::thinFilmThicknessConstant());
+  opaqueMat.setAnisotropyConstant(current.anisotropy);
+  opaqueMat.setEmissiveIntensity(current.emissiveIntensity);
+  opaqueMat.setAlbedoConstant(current.albedoConstant);
+  opaqueMat.setOpacityConstant(current.opacityConstant);
+  opaqueMat.setRoughnessConstant(current.roughnessConstant);
+  opaqueMat.setMetallicConstant(current.metallicConstant);
+  opaqueMat.setEmissiveColorConstant(current.emissiveColorConstant);
+  opaqueMat.setEnableEmission(current.enableEmissive);
+  opaqueMat.setEnableThinFilm(current.enableThinFilm);
+  opaqueMat.setAlphaIsThinFilmThickness(current.alphaIsThinFilmThickness);
+  opaqueMat.setThinFilmThicknessConstant(current.thinFilmThicknessConstant);
+  cache.valid = true;
+  cache.key = current;
+  cache.material = opaqueMat;
   return opaqueMat;
 }
 
