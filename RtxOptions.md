@@ -399,6 +399,7 @@ This file is generated from the source by `scripts/gen_rtx_options_md.py`. Run `
 |rtx.debugView.samplerType|int|2|||Sampler type for debug views that sample from a texture \(applies only to a subset of debug views\)\.<br>Supported types are: 0 = Nearest, 1 = Normalized Nearest, 2 = Normalized Linear|
 |rtx.debugView.showFirstGBufferHit|bool|False|||Show information of the first hit surface\.<br>|
 |rtx.defaultToAdvancedUI|bool|False|||Whether to default to the Advanced UI when opening the developer menu\.|
+|rtx.deferVertexUploads|bool|False|||Records the vertex uploads of updated deforming geometry, such as vertex\-captured or rewritten meshes, together before the scene is built instead of between the game's draws\. Each upload recorded between draws ends the current render pass, so this reduces both render\-thread CPU time and GPU time in scenes with many animated meshes\. The traced result is the same\.|
 |rtx.demodulate.demodulateRoughness|bool|True|||Demodulate roughness to improve specular details\.|
 |rtx.demodulate.demodulateRoughnessOffset|float|0.1|||Strength of roughness demodulation, lower values are stronger\.|
 |rtx.demodulate.directLightBoilingThreshold|float|5|||Remove direct light sample when its luminance is higher than the average one multiplied by this threshold \.|

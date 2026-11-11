@@ -739,7 +739,15 @@ namespace dxvk {
           output.historyBuffer[0] = m_device->createBuffer(desc, memoryProperty, DxvkMemoryStats::Category::RTXSceneGeometry, "Geometry Buffer");
         }
 
-        RtxGeometryUtils::cacheVertexDataOnGPU(ctx, input, output, forceNormals);
+        // rtx.deferVertexUploads: the write waits for flushVertexDataUploads (prepareSceneData).
+        // Smooth normals and skinning read or write the buffer right after this, and invalidateHistory copies it.
+        const bool deferUpload = RtxGeometryUtils::deferVertexUploads() && !invalidateHistory && !needsSmoothNormals &&
+          drawCallState.getSkinningState().numBones == 0;
+        if (deferUpload) {
+          m_device->getCommon()->metaGeometryUtils().queueVertexDataUpload(input, output, forceNormals);
+        } else {
+          RtxGeometryUtils::cacheVertexDataOnGPU(ctx, input, output, forceNormals);
+        }
 
         // Sometimes, we need to invalidate history, do that here by copying the current buffer to the previous..
         if (invalidateHistory) {
@@ -809,6 +817,9 @@ namespace dxvk {
 
   void SceneManager::onFrameEnd(Rc<DxvkContext> ctx, bool raytracedThisFrame) {
     ScopedCpuProfileZone();
+
+    // A frame without ray tracing never reached prepareSceneData.
+    m_device->getCommon()->metaGeometryUtils().flushVertexDataUploads(ctx);
 
     // Commit this frame's texture registrations for preserve next frame. Must run before
     // manageTextureVram(), which may clear the cache and bump the generation so the
@@ -1574,6 +1585,8 @@ namespace dxvk {
         geo.positionBuffer.vertexFormat() != old.positionBuffer.vertexFormat()) {
       return false;
     }
+    // The copy below reads the other geometry's current buffer, which may still wait for its upload.
+    m_device->getCommon()->metaGeometryUtils().flushVertexDataUploads(ctx);
     if (geo.historyBuffer[1] == nullptr || geo.historyBuffer[1]->info().size != geo.historyBuffer[0]->info().size ||
         isAliasableGeometryBuffer(*geo.historyBuffer[1])) {
       DxvkBufferCreateInfo desc = geo.historyBuffer[0]->info();
@@ -2881,6 +2894,8 @@ namespace dxvk {
 
   void SceneManager::prepareSceneData(Rc<RtxContext> ctx, DxvkBarrierSet& execBarriers) {
     ScopedGpuProfileZone(ctx, "Build Scene");
+    // Everything below may read the geometry buffers on the GPU.
+    m_device->getCommon()->metaGeometryUtils().flushVertexDataUploads(ctx);
     // [Perf] CPU breakdown of this function (see takeScenePrepPhases).
     auto prepPhaseStart = std::chrono::steady_clock::now();
     const auto prepPhase = [&](uint32_t phase) {
@@ -3128,6 +3143,8 @@ namespace dxvk {
 
     prepPhase(2);
     ctx->recordGpuStageTiming("SceneSetup");
+    // Uploads queued while the scene was prepared, before the BLAS builds read them.
+    m_device->getCommon()->metaGeometryUtils().flushVertexDataUploads(ctx);
     m_accelManager.mergeInstancesIntoBlas(ctx, execBarriers, textureManager.getTextureTable(), m_cameraManager, m_instanceManager, m_opacityMicromapManager.get());
     // The OmmBakeAndBuild marker inside mergeInstancesIntoBlas splits OMM work from the BLAS builds.
     ctx->recordGpuStageTiming("BlasBuild");
