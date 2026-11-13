@@ -4175,6 +4175,7 @@ namespace dxvk {
         std::make_shared<const std::vector<Matrix4>>(std::move(state.gpuInstancingTransforms));
       state.drawCall.modifyTransformData().instancesFromHost = true;
     }
+    state.drawCall.decalSortOrder = state.sortOrder;
   }
 
   const MaterialData& SceneManager::prepareExternalSubmeshDrawCall(ExternalDrawState& state,

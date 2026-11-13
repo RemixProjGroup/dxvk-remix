@@ -408,6 +408,10 @@ namespace remix_record {
     io.handle(HandleKind::Material, s.material);
   }
 
+  template<class IO> void ioExt(IO& io, remixapi_InstanceInfoDecalOrderEXT& s) {
+    io.pod(s.sortOrder);
+  }
+
   template<class IO> void ioRetainedUpdate(IO& io, remixapi_RetainedInstanceUpdate& s) {
     io.handle(HandleKind::Retained, s.handle);
     io.pod(s.transform);
@@ -542,6 +546,7 @@ namespace remix_record {
   X(REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_PARTICLE_SYSTEM_EXT,    remixapi_InstanceInfoParticleSystemEXT)  \
   X(REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT,     remixapi_InstanceInfoGpuInstancingEXT)   \
   X(REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_MATERIAL_OVERRIDE_EXT,  remixapi_InstanceInfoMaterialOverrideEXT)\
+  X(REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT,        remixapi_InstanceInfoDecalOrderEXT)      \
   X(REMIXAPI_STRUCT_TYPE_CAMERA_INFO_PARAMETERIZED_EXT,        remixapi_CameraInfoParameterizedEXT)     \
   X(REMIXAPI_STRUCT_TYPE_CAMERA_INFO_FRAME_EVENTS_EXT,         remixapi_CameraInfoFrameEventsEXT)       \
   X(REMIXAPI_STRUCT_TYPE_ASSET_KEY_EXT,                        remixapi_AssetKeyEXT)                    \

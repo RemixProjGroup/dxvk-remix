@@ -81,12 +81,14 @@ namespace dxvk {
     struct {
       XXH64_hash_t legacyMaterial;
       uint32_t drawCallId;
-      uint32_t doubleSided;
+      uint16_t doubleSided;
+      uint16_t sortOrder;  // 0x100 when unset
       XXH64_hash_t instancing;
     } data {};
     data.legacyMaterial = state.drawCall.getMaterialData().getHash();
     data.drawCallId = state.drawCall.drawCallID;
     data.doubleSided = state.doubleSided ? 1u : 0u;
+    data.sortOrder = state.sortOrder.has_value() ? uint16_t(*state.sortOrder) : uint16_t(0x100);
     if (!state.gpuInstancingTransforms.empty()) {
       data.instancing = XXH3_64bits(state.gpuInstancingTransforms.data(), state.gpuInstancingTransforms.size() * sizeof(Matrix4));
     }

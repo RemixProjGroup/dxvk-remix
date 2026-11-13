@@ -289,6 +289,11 @@ namespace {
         return dxvk::SceneInput::Data;
       }
     }
+    if (auto decalOrder = pnext::find<remixapi_InstanceInfoDecalOrderEXT>(&info)) {
+      if (decalOrder->sortOrder > 0xFFu) {
+        return dxvk::SceneInput::Data;
+      }
+    }
     return dxvk::SceneInput::Count;
   }
 
@@ -1097,6 +1102,10 @@ namespace {
       }
       if (auto extMaterialOverride = pnext::find<remixapi_InstanceInfoMaterialOverrideEXT>(&info)) {
         desc.materialOverride = reinterpret_cast<frontend::MaterialHandle>(extMaterialOverride->material);
+      }
+      // checkInstanceInfo has rejected orders past 255.
+      if (auto extDecalOrder = pnext::find<remixapi_InstanceInfoDecalOrderEXT>(&info)) {
+        desc.sortOrder = static_cast<uint8_t>(extDecalOrder->sortOrder);
       }
       return desc;
     }

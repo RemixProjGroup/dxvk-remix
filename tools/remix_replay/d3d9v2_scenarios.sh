@@ -531,7 +531,7 @@ def reference(sc):
 # The [SceneInput] counts each conformance case injects (docs/frontend-conformance.md). Every other run injects none.
 SCENE_INPUT = {
     "bad-values": {"transform": 2, "vertexRange": 2, "position": 1},
-    "api-bad-values": {"transform": 5, "camera": 1, "empty": 2, "data": 2, "position": 1, "index": 1, "boneIndex": 1,
+    "api-bad-values": {"transform": 5, "camera": 1, "empty": 2, "data": 4, "position": 1, "index": 1, "boneIndex": 1,
                        "bone": 1, "bonesLimit": 1, "bonesMissing": 10},
     "api-lifecycle": {"unknownInstance": 4, "unknownMesh": 2, "liveMesh": 1},
 }

@@ -60,6 +60,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requestHostRelease` is set from level 2 (High) by default.
 
 ### Added
+- 2026-11-03: `remixapi_InstanceInfoDecalOrderEXT`
+  (`REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT` = 0x4E560007), chained on
+  `remixapi_InstanceInfo` for `DrawInstance`, `CreateRetainedInstance(s)` and
+  `UpdateRetainedInstance`. It sets a decal instance's draw order, 0 to 255: overlapping
+  decals composite from the lowest order up. A value past 255 returns
+  `REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS`. Instances without a `DECAL_*` category ignore it,
+  and without the struct decals keep the runtime's order. The bridge does not forward it.
+  `remixapi_Interface` and `REMIXAPI_VERSION` are unchanged. docs/RemixApi.md, "Decal order".
 - 2026-10-27: color grading, as named exports: `remixapi_SetColorGradePreset`,
   `remixapi_SetColorGrade`, `remixapi_MixColorGradePresets`, `remixapi_GetColorGrade` and
   `remixapi_SaveColorGradePreset`, with `remixapi_ColorGradeEXT`

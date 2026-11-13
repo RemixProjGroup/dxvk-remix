@@ -22,7 +22,11 @@
 
 #define RTX_REMIX_PNEXT_CHECK_STRUCTS
 
+#include <cstring>
+#include <vector>
+
 #include "../../../src/dxvk/rtx_render/rtx_remix_pnext.h"
+#include "../../../src/dxvk/rtx_render/rtx_fork_api_record_format.h"
 
 // Note: including C++ wrapper to check consistency with C API
 #include <remix/remix.h>
@@ -185,6 +189,83 @@ namespace pnext_test_app {
     static_assert(helper::HasSTypePNext< GoodType >);
   }
 
+  void test_decalOrder() {
+    auto order = remixapi_InstanceInfoDecalOrderEXT {};
+    {
+      order.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT;
+      order.pNext = nullptr;
+      order.sortOrder = 200;
+    }
+    auto blend = remixapi_InstanceInfoBlendEXT {};
+    {
+      blend.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_BLEND_EXT;
+      blend.pNext = &order;
+    }
+    auto info = remixapi_InstanceInfo {};
+    {
+      info.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
+      info.pNext = &blend;
+    }
+
+    static_assert(REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT == 0x4E560007);
+    if (pnext::find< remixapi_InstanceInfoDecalOrderEXT >(&info) != &order) {
+      throw dxvk::DxvkError { ERROR_INTRO
+        "pnext::find< remixapi_InstanceInfoDecalOrderEXT > must find the struct behind another extension" };
+    }
+    info.pNext = nullptr;
+    if (pnext::find< remixapi_InstanceInfoDecalOrderEXT >(&info) != nullptr) {
+      throw dxvk::DxvkError { ERROR_INTRO
+        "pnext::find< remixapi_InstanceInfoDecalOrderEXT > must return null without the struct" };
+    }
+  }
+
+  // Writes and reads the fields of plain values, as the recorder and the replayer do. Other kinds of fields are not
+  // used by the structs this test sends through it.
+  struct BytesIO {
+    std::vector<uint8_t> bytes;
+    size_t cursor = 0;
+    bool isReading = false;
+
+    template<class T> void pod(T& value) {
+      if (isReading) {
+        std::memcpy(&value, bytes.data() + cursor, sizeof(T));
+        cursor += sizeof(T);
+      } else {
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(&value);
+        bytes.insert(bytes.end(), p, p + sizeof(T));
+      }
+    }
+    template<class T> void handle(remix_record::HandleKind, T&) { }
+    template<class T, class C> void podArray(T*&, C&) { }
+    template<class T, class C> void blobArray(T*&, C&) { }
+    void blobBytes(const void*&, uint64_t&) { }
+    template<class T, class C, class F> void structArray(T*&, C&, F&&) { }
+    template<class T> void optPod(const T*&) { }
+    void wstr(const wchar_t*&) { }
+    void chain(void*&) { }
+    uint64_t apiVersion() const { return REMIXAPI_VERSION_MAKE(REMIXAPI_VERSION_MAJOR, REMIXAPI_VERSION_MINOR, REMIXAPI_VERSION_PATCH); }
+    bool reading() const { return isReading; }
+  };
+
+  void test_decalOrderRecord() {
+    if (remix_record::extensionSize(REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT) != sizeof(remixapi_InstanceInfoDecalOrderEXT)) {
+      throw dxvk::DxvkError { ERROR_INTRO "The recording format must know the size of remixapi_InstanceInfoDecalOrderEXT" };
+    }
+    auto written = remixapi_InstanceInfoDecalOrderEXT {};
+    written.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT;
+    written.sortOrder = 173;
+    BytesIO io;
+    if (!remix_record::ioExtension(io, written.sType, &written)) {
+      throw dxvk::DxvkError { ERROR_INTRO "The recording format must write remixapi_InstanceInfoDecalOrderEXT" };
+    }
+    io.isReading = true;
+    auto read = remixapi_InstanceInfoDecalOrderEXT {};
+    remix_record::ioExtension(io, written.sType, &read);
+    if (read.sortOrder != written.sortOrder || io.cursor != io.bytes.size()) {
+      throw dxvk::DxvkError { ERROR_INTRO "remixapi_InstanceInfoDecalOrderEXT must read back as it was written" };
+    }
+  }
+
   remixapi_ErrorCode emulated(const remixapi_Rect2D* pixelRegion,
                               PFN_remixapi_pick_RequestObjectPickingUserCallback callback,
                               void* callbackUserData) {
@@ -231,6 +312,8 @@ int main() {
     pnext_test_app::test_const();
     pnext_test_app::test_getPNext();
     pnext_test_app::test_memberDetection();
+    pnext_test_app::test_decalOrder();
+    pnext_test_app::test_decalOrderRecord();
     pnext_test_app::test_wrapper();
   }
   catch (const dxvk::DxvkError& error) {

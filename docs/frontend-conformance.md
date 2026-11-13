@@ -36,7 +36,7 @@ line every 300 frames, when anything was counted:
 | `transform` | reject | `prepareInstance` (object-to-world, GPU-instance copies), `setTransform` |
 | `camera` | reject | `setupCamera`, `applyDrawCamera`: a non-finite matrix, or a view that does not invert |
 | `empty` | reject | `createMesh` and the API's mesh creates: no vertices, or a mesh without surfaces |
-| `data` | reject | the API: null arrays with counts, too few blend indices or weights for the vertices |
+| `data` | reject | the API: null arrays with counts, too few blend indices or weights for the vertices, a decal order past 255 |
 | `unknownInstance` | reject | every call that names an instance handle that is not live, and an API update-describe of one |
 | `liveInstance` | reject | an API create of a live handle |
 | `unknownMesh` | reject | an API destroy of a mesh that is not live |
@@ -88,7 +88,8 @@ draw. `--clean` sends the same calls with valid values.
 | Index past the vertex buffer | one index of 5000 in a 24-vertex buffer | (the API copies only the vertices it is given, see the row above) | | `vertexRange` = 1 of the 2 (D3D9), rasterized |
 | A vertex stream shorter than the draw | the crate's texcoords in a second stream that holds 23 of its 24 vertices | (the same as the row above) | | `vertexRange` = 2 and `rasterFallback=2` (D3D9) with the row above: rasterized, never dropped, never ray traced |
 | Empty draws | `DrawIndexedPrimitive` with no primitives: dropped by the D3D9 runtime | a mesh with one empty surface beside a good one, a mesh without surfaces | | `empty` = 2 (API), 0 (D3D9) |
-| Arrays that do not match their counts | (none in D3D9) | too few blend indices for the vertices, a bone array of null with a count of 2 | | `data` = 2 (API) |
+| Arrays that do not match their counts | (none in D3D9) | too few blend indices for the vertices, a bone array of null with a count of 2 | | `data` = 2 (API), 4 with the next row |
+| A value out of its range | (none: the D3D9 frontend makes its own decal orders) | decal order 256 in `InstanceInfoDecalOrderEXT` on `DrawInstance` and `CreateRetainedInstance` | | counted in `data`; the API returns `INVALID_ARGUMENTS` for both |
 | Blend index past the bone limit | (D3D9 indices are bytes) | blend index 300 in a skinned `CreateMesh` | | `boneIndex` = 1 (API) |
 | Bones past the set range | blend index 5 while the game sets bones 0-2: unset D3D9 bones are identity in the device state, which the frontend sends | a skinned mesh naming bones 0-1 drawn with one bone, for ten frames | | `bonesMissing` = 10 (API), 0 (D3D9) |
 | Non-finite bone | (none: D3D9 bones are world matrices, covered above) | a NaN in bone 1 | | `bone` = 1 (API) |

@@ -98,6 +98,7 @@ namespace pnext::detail {
     remixapi_InstanceInfoParticleSystemLegacyEXT,
     remixapi_InstanceInfoGpuInstancingEXT,
     remixapi_InstanceInfoMaterialOverrideEXT,
+    remixapi_InstanceInfoDecalOrderEXT,
     remixapi_CameraInfo,
     remixapi_CameraInfoParameterizedEXT,
     remixapi_CameraInfoFrameEventsEXT,
@@ -131,6 +132,7 @@ namespace pnext::detail {
   template<> constexpr auto ToEnum< remixapi_InstanceInfoParticleSystemEXT  > = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_PARTICLE_SYSTEM_EXT;
   template<> constexpr auto ToEnum< remixapi_InstanceInfoGpuInstancingEXT   > = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT;
   template<> constexpr auto ToEnum< remixapi_InstanceInfoMaterialOverrideEXT> = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_MATERIAL_OVERRIDE_EXT;
+  template<> constexpr auto ToEnum< remixapi_InstanceInfoDecalOrderEXT      > = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT;
   template<> constexpr auto ToEnum< remixapi_CameraInfo                     > = REMIXAPI_STRUCT_TYPE_CAMERA_INFO;
   template<> constexpr auto ToEnum< remixapi_CameraInfoParameterizedEXT     > = REMIXAPI_STRUCT_TYPE_CAMERA_INFO_PARAMETERIZED_EXT;
   template<> constexpr auto ToEnum< remixapi_CameraInfoFrameEventsEXT       > = REMIXAPI_STRUCT_TYPE_CAMERA_INFO_FRAME_EVENTS_EXT;
@@ -159,6 +161,7 @@ namespace pnext::detail {
   template<>           struct Root< remixapi_InstanceInfoParticleSystemLegacyEXT >{ using Type = remixapi_InstanceInfo;         };
   template<>           struct Root< remixapi_InstanceInfoGpuInstancingEXT   >{ using Type = remixapi_InstanceInfo;              };
   template<>           struct Root< remixapi_InstanceInfoMaterialOverrideEXT>{ using Type = remixapi_InstanceInfo;              };
+  template<>           struct Root< remixapi_InstanceInfoDecalOrderEXT      >{ using Type = remixapi_InstanceInfo;              };
   template<>           struct Root< remixapi_CameraInfoParameterizedEXT     >{ using Type = remixapi_CameraInfo;                };
   template<>           struct Root< remixapi_CameraInfoFrameEventsEXT       >{ using Type = remixapi_CameraInfo;                };
   // clang-format on

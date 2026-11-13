@@ -401,10 +401,48 @@ for additional behavior:
 | `remixapi_InstanceInfoObjectPickingEXT` | Tags the instance with a 32-bit ID readable via the picking API. |
 | `remixapi_InstanceInfoParticleSystemEXT` | Spawns a GPU particle system bound to this instance. |
 | `remixapi_InstanceInfoGpuInstancingEXT` | Submits N GPU-instanced copies in one call. |
+| `remixapi_InstanceInfoDecalOrderEXT` | Sets the draw order of a decal instance (see below). |
 
 The full list of category bits is `remixapi_InstanceCategoryBit` in the
 header. Most plugins only need `WORLD_MATTE`, `SKY`, `PARTICLE`, the
 decal bits, and the `IGNORE_*` modifiers.
+
+### Decal order (`remixapi_InstanceInfoDecalOrderEXT`)
+
+```c
+typedef struct remixapi_InstanceInfoDecalOrderEXT {
+  remixapi_StructType sType;      // REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT
+  void*               pNext;
+  uint32_t            sortOrder;  // 0..255
+} remixapi_InstanceInfoDecalOrderEXT;
+```
+
+Chain it on `remixapi_InstanceInfo` for `DrawInstance`,
+`CreateRetainedInstance(s)` and `UpdateRetainedInstance` to choose how
+overlapping decals stack, for example blood over a bullet hole over a
+painted sign on one wall.
+
+- Where decals overlap, the runtime composites them from the lowest
+  `sortOrder` up, so a higher order lands on top. Decals with equal
+  orders fall back to an arbitrary but stable order (geometry and
+  primitive index). At most four decal layers are kept per pixel. When
+  more overlap, nearly transparent layers are dropped first, then the
+  lowest orders.
+- `sortOrder` is 0 to 255. A larger value makes the call return
+  `REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS` and counts as `data` in the
+  runtime log's `[SceneInput]` line, with or without a decal category.
+- It applies only to instances with a `DECAL_*` category bit. Other
+  instances ignore it.
+- Without the struct, the runtime picks the order: retained instances get
+  one at creation, and `DrawInstance` decals get their draw order within
+  the frame. Both wrap at 256.
+- `UpdateRetainedInstance` replaces the whole description. To keep an
+  order, send the struct with every update; an update without it returns
+  the instance to a runtime order.
+- The 32-bit bridge does not forward this struct. Its `DrawInstance`
+  skips it with a warning, so decals drawn through the bridge keep the
+  runtime's order.
+- A runtime that predates the struct ignores it.
 
 ---
 
@@ -442,6 +480,17 @@ destroy and re-create a hash within one frame: use `UpdateLightDefinition`.
 `remixapi_LightInfoLightShaping` (used inside the sphere/rect/disk
 EXTs) gives spotlight-style cone shaping with cone angle / softness /
 focus exponent.
+
+The sphere, rect, disk, cylinder and distant EXTs carry
+`volumetricRadianceScale`. The runtime multiplies the light's radiance
+by it only in the volumetrics passes (froxel integration and its light
+sampling), and every other pass uses the unscaled radiance. Set it to 0
+for lights that belong to a first-person view, such as a flashlight or a
+muzzle flash, to keep them out of fog and volumetric scattering without
+changing how they light surfaces. The light still takes part in the
+volumetrics passes' light sampling, where it adds nothing. 1 is the
+neutral value. The developer option
+`rtx.volumetrics.debugDisableRadianceScaling` treats every scale as 1.
 
 ### `DrawLightInstance`
 

@@ -44,7 +44,7 @@ namespace dxvk {
     Transform,        // A non-finite object-to-world, GPU-instance or update transform.
     Camera,           // A non-finite camera, or a view that does not invert.
     Empty,            // A mesh or surface without vertices.
-    Data,             // Missing data, or counts that do not match the data.
+    Data,             // Missing data, counts that do not match the data, or a value out of its range.
     UnknownInstance,  // An update, describe or destroy of an instance that does not exist.
     LiveInstance,     // A create of an instance that exists.
     UnknownMesh,      // A destroy of a mesh that does not exist.

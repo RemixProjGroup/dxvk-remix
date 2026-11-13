@@ -1176,7 +1176,10 @@ namespace dxvk {
     currentInstance.isFrontFaceFlipped = (currentInstance.m_vkInstance.flags & VK_GEOMETRY_INSTANCE_TRIANGLE_FLIP_FACING_BIT_KHR) != 0;
 
     // Apply the decal sort index for this instance so we can approximate order correctness on the GPU in AHS
-    if (currentInstance.surface.alphaState.isDecal) {
+    // A frontend's own order wins.
+    if (currentInstance.surface.alphaState.isDecal && drawCall.decalSortOrder.has_value()) {
+      currentInstance.surface.decalSortOrder = *drawCall.decalSortOrder;
+    } else if (currentInstance.surface.alphaState.isDecal) {
       currentInstance.surface.decalSortOrder = m_decalSortOrderCounter++;
 #if !NDEBUG
       if (m_decalSortOrderCounter > 255) {

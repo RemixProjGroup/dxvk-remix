@@ -171,6 +171,12 @@ Self-contained D3D9 correctness and compatibility fixes and game config entries 
   - A buffer's last lock flags start at zero instead of uninitialized memory (a7977232).
 - Commits: the commit that adds each fix line.
 
+### Remix API: decal draw order for API instances
+`remixapi_InstanceInfoDecalOrderEXT` (sType 0x4E560007) lets a host set a decal instance's draw order (0-255, higher on top) on `DrawInstance`, `CreateRetainedInstance(s)` and `UpdateRetainedInstance`, so overlapping API decals stack as the host intends instead of by creation or draw order, which wraps at 256. A value past 255 is rejected with `INVALID_ARGUMENTS`. The docs also note that a light's `volumetricRadianceScale` of 0 keeps it out of the volumetrics without changing its direct lighting.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApi.md](RemixApi.md)
+
 ## 2026-11-02
 
 ### Bindless buffer table: updates follow the changed slots

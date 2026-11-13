@@ -152,6 +152,7 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_ASSET_KEY_EXT                        = 0x4E560002,
     REMIXAPI_STRUCT_TYPE_EXTERNAL_FRAME_EXT                   = 0x4E560003,
     REMIXAPI_STRUCT_TYPE_COLOR_GRADE_EXT                      = 0x4E560004,
+    REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT        = 0x4E560007,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
     //       and only extend this enum by appending, never adjust the order of these 
     //       as that will break backwards compatibility.
@@ -1732,6 +1733,23 @@ typedef struct remixapi_InstanceInfoMaterialOverrideEXT {
 // Returns the supported revision of remixapi_InstanceInfoMaterialOverrideEXT
 // (currently 1). Optional named export ("remixapi_GetInstanceMaterialOverrideVersion").
 typedef uint32_t (REMIXAPI_CALL* PFN_remixapi_GetInstanceMaterialOverrideVersion)(void);
+
+// Decal draw order. Chain on remixapi_InstanceInfo (DrawInstance,
+// CreateRetainedInstance(s), UpdateRetainedInstance) of an instance with a
+// DECAL_* category bit. Where decals overlap, they are composited from the
+// lowest sortOrder up, so a higher order lands on top. sortOrder is 0..255.
+// A larger value makes the call return INVALID_ARGUMENTS, with or without a
+// decal category. Without the struct a decal gets an order from the runtime:
+// retained instances by creation, DrawInstance by draw order within the frame,
+// both wrapping at 256. Instances without a decal category ignore it.
+// UpdateRetainedInstance replaces the whole description, so an update without
+// the struct returns the instance to a runtime order. The 32-bit bridge does
+// not forward it. A runtime that predates it ignores the struct.
+typedef struct remixapi_InstanceInfoDecalOrderEXT {
+  remixapi_StructType sType;      // REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT
+  void*               pNext;
+  uint32_t            sortOrder;  // 0..255
+} remixapi_InstanceInfoDecalOrderEXT;
 
 // Device-local memory pressure as seen by the runtime's VRAM budget
 // (rtx.vramBudget). budgetBytes is the driver's budget for the whole process

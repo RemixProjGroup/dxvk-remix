@@ -1409,6 +1409,20 @@ int wmain(int argc, wchar_t** argv) {
       ii.pNext = &gi;
       ii.transform = translate(0.f, 3.f, 2.f, 0.3f);
       bad.expect(g_remix.DrawInstance(&ii), rejected, "DrawInstance NaN GPU-instance transform");
+      // A decal order past 255. The clean run sends the highest valid order.
+      remixapi_InstanceInfoDecalOrderEXT order {};
+      order.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT;
+      order.sortOrder = clean ? 255u : 256u;
+      ii.pNext = &order;
+      ii.categoryFlags = REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_STATIC;
+      ii.transform = translate(0.f, 3.f, 3.f, 0.3f);
+      bad.expect(g_remix.DrawInstance(&ii), rejected, "DrawInstance decal order 256");
+      created = 0;
+      bad.expect(createRetained(&ii, &created), rejected, "CreateRetainedInstance decal order 256");
+      if (created != 0) {
+        destroyRetained(&created, 1);
+      }
+      ii.categoryFlags = 0;
       ii.pNext = nullptr;
       // A second camera after the good one, which is rejected without touching the good one.
       remixapi_CameraInfoParameterizedEXT cam = *static_cast<const remixapi_CameraInfoParameterizedEXT*>(goodCamera.pNext);
