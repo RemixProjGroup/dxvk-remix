@@ -33,6 +33,7 @@
 // is returned to a free-list when the last release() fires. Slots left in the table by
 // free-listed entries are default-constructed (not defined()), which causes
 // BindlessResourceManager to write a dummy descriptor for that slot — safe.
+// Every registered buffer's backing is pinned, because a descriptor is only rewritten when its slot changes.
 template<typename BufferType>
 class RetainedBufferTable {
   struct Key {
@@ -63,6 +64,7 @@ public:
       ++m_refCounts[it->second];
       return it->second;
     }
+    buffer.buffer()->pinBacking();
     uint32_t slot;
     if (!m_freeSlots.empty()) {
       slot = m_freeSlots.back();
@@ -73,8 +75,10 @@ public:
       slot = static_cast<uint32_t>(m_table.size());
       m_table.push_back(buffer);
       m_refCounts.push_back(1);
+      m_updatedSlotFlags.push_back(0);
     }
     it->second = slot;
+    markUpdated(slot);
     return slot;
   }
 
@@ -93,6 +97,7 @@ public:
       m_indexMap.erase(makeKey(m_table[slot]));
       m_table[slot] = BufferType{};
       m_freeSlots.push_back(slot);
+      markUpdated(slot);
     }
   }
 
@@ -111,15 +116,37 @@ public:
     m_table.clear();
     m_refCounts.clear();
     m_freeSlots.clear();
+    m_updatedSlots.clear();
+    m_updatedSlotFlags.clear();
   }
 
   const std::vector<BufferType>& getObjectTable() const { return m_table; }
+
+  // Returns the slots that were acquired or released since the last clearUpdatedSlots() call.
+  const std::vector<uint32_t>& getUpdatedSlots() const { return m_updatedSlots; }
+
+  void clearUpdatedSlots() {
+    for (uint32_t slot : m_updatedSlots) {
+      m_updatedSlotFlags[slot] = 0;
+    }
+    m_updatedSlots.clear();
+  }
+
   uint32_t getActiveCount() const { return static_cast<uint32_t>(m_indexMap.size()); }
   uint32_t getTotalCount()  const { return static_cast<uint32_t>(m_table.size()); }
 
 private:
+  void markUpdated(uint32_t slot) {
+    if (!m_updatedSlotFlags[slot]) {
+      m_updatedSlotFlags[slot] = 1;
+      m_updatedSlots.push_back(slot);
+    }
+  }
+
   std::unordered_map<Key, uint32_t, KeyHash> m_indexMap;
   std::vector<BufferType> m_table;
   std::vector<uint32_t>   m_refCounts;
   std::vector<uint32_t>   m_freeSlots;
+  std::vector<uint32_t>   m_updatedSlots;
+  std::vector<uint8_t>    m_updatedSlotFlags;
 };

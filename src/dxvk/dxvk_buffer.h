@@ -250,12 +250,29 @@ namespace dxvk {
      * \returns Previous buffer slice
      */
     DxvkBufferSliceHandle rename(const DxvkBufferSliceHandle& slice) {
+      assert(!m_backingPinned);
+
       // Our cached device address may no longer be valid
       m_deviceAddress = 0;
 
       return std::exchange(m_physSlice, slice);
     }
     
+    /**
+     * \brief Keeps the backing resource for the rest of the buffer's life
+     *
+     * Full-buffer writes then go to the current backing resource instead of
+     * renaming the buffer. A descriptor that is only written once, such as a
+     * bindless table entry, relies on this to stay valid.
+     */
+    void pinBacking() {
+      m_backingPinned = true;
+    }
+
+    bool isBackingPinned() const {
+      return m_backingPinned;
+    }
+
     /**
      * \brief Transform feedback vertex stride
      * 
@@ -373,6 +390,7 @@ namespace dxvk {
     std::string             m_diagnosticName;
 
     uint32_t                m_vertexStride = 0;
+    bool                    m_backingPinned = false;
 
     alignas(CACHE_LINE_SIZE)
     sync::Spinlock          m_freeMutex;

@@ -1964,6 +1964,10 @@ namespace dxvk {
     const Rc<DxvkBuffer>& buffer,
     const DxvkBufferSliceHandle& slice) {
     ScopedCpuProfileZone();
+    if (unlikely(buffer->isBackingPinned())) {
+      ONCE(Logger::err("Renaming a buffer whose backing is pinned leaves its descriptors stale."));
+    }
+
     // Allocate new backing resource
     DxvkBufferSliceHandle prevSlice = buffer->rename(slice);
     m_cmd->freeBufferSlice(buffer, prevSlice);
@@ -6042,6 +6046,10 @@ namespace dxvk {
     if (buffer->info().usage & VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR)
       return false;
     // NV-DXVK end
+
+    if (buffer->isBackingPinned()) {
+      return false;
+    }
 
     // Suspend the current render pass if transform feedback is active prior to
     // invalidating the buffer, since otherwise we may invalidate a bound buffer.

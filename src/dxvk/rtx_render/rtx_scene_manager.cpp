@@ -327,6 +327,7 @@ namespace dxvk {
     verifyAndReleaseBufferCache();
 
     // We still need to clear caches even if the scene wasn't rendered
+    m_bindlessResourceManager.releaseBufferDescriptors(ctx, needWfi);
     m_bufferCache.clear();
     m_preCreationSurfaceMaterialMap.clear();
     m_volumeMaterialCache.clear();
@@ -2974,7 +2975,11 @@ namespace dxvk {
     auto& textureManager = m_device->getCommon()->getTextureManager();
     {
       const auto bindlessStart = std::chrono::steady_clock::now();
-      m_bindlessResourceManager.prepareSceneData(ctx, textureManager.getTextureTable(), getBufferTable(), getSamplerTable());
+      if (m_bindlessResourceManager.prepareSceneData(
+            ctx, textureManager.getTextureTable(), getBufferTable(),
+            m_bufferCache.getUpdatedSlots(), getSamplerTable())) {
+        m_bufferCache.clearUpdatedSlots();
+      }
       addPrepNestedMs(kPrepNestedBindless,
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bindlessStart).count());
     }

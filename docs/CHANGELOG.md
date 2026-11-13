@@ -171,6 +171,14 @@ Self-contained D3D9 correctness and compatibility fixes and game config entries 
   - A buffer's last lock flags start at zero instead of uninitialized memory (a7977232).
 - Commits: the commit that adds each fix line.
 
+## 2026-11-02
+
+### Bindless buffer table: updates follow the changed slots
+The bindless buffer table no longer compares every slot with the descriptor sets each frame. The buffer table records the slots it changes, a CPU mirror holds the descriptors and buffer references, and each frame in flight's descriptor set receives only the slots it has not seen yet. A descriptor is now written only when its slot changes, so a registered buffer's backing is pinned: a full-buffer write through the context no longer renames it, and a rename of a pinned buffer logs an error. A material or micromap table written whole therefore reaches the current frame's bindless reads at once. Texture and sampler tables keep their comparison.
+- Options: none. `rtx.trackBindlessResourcesOnChange` off still tracks every registered buffer each frame. `rtx.parallelBindlessUpdate` now covers only the texture and sampler tables.
+- Measured: pending.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-01
 
 ### GPU device loss when a BLAS drops an opacity micromap in flight

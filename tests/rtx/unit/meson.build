@@ -57,6 +57,18 @@ exe = executable('test_intersection_helper_sat',  files('test_intersection_helpe
 test('test_intersection_helper_sat', exe, env: test_env)
 tests += exe
 
+exe = executable('test_retained_buffer_table',  files('test_retained_buffer_table.cpp'), include_directories : test_include_path, dependencies : test_unit_deps, win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_retained_buffer_table', exe, env: test_env)
+tests += exe
+
+exe = executable('test_pending_slot_queues',  files('test_pending_slot_queues.cpp'), include_directories : test_include_path, dependencies : test_unit_deps, win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_pending_slot_queues', exe, env: test_env)
+tests += exe
+
+exe = executable('test_bindless_buffer_mirror',  files('test_bindless_buffer_mirror.cpp'), include_directories : test_include_path, dependencies : test_unit_deps, win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_bindless_buffer_mirror', exe, env: test_env)
+tests += exe
+
 exe = executable('test_color_grade',  files('test_color_grade.cpp'), win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
 test('test_color_grade', exe, env: test_env)
 tests += exe

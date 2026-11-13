@@ -55,18 +55,11 @@ namespace dxvk {
     return m_tables[type][currentIdx()]->bindlessDescSet;
   }
 
-  template<VkDescriptorType Type, typename T, typename U>
-  void BindlessResourceManager::createDescriptorSet(const Rc<DxvkContext>& ctx, const std::vector<U>& engineObjects, const T& dummyDescriptor) {
-    constexpr Table tableType = Type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ? Table::Textures
-      : Type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ? Table::Buffers : Table::Samplers;
+  template<VkDescriptorType Type, typename U>
+  void BindlessResourceManager::createDescriptorSet(const Rc<DxvkContext>& ctx, const std::vector<U>& engineObjects, const VkDescriptorImageInfo& dummyDescriptor) {
+    constexpr Table tableType = Type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ? Table::Textures : Table::Samplers;
     BindlessTable& table = *m_tables[tableType][currentIdx()];
-    auto& descriptorInfos = [&]() -> std::vector<T>& {
-      if constexpr (std::is_same_v<T, VkDescriptorImageInfo>) {
-        return table.imageDescriptors;
-      } else {
-        return table.bufferDescriptors;
-      }
-    }();
+    std::vector<VkDescriptorImageInfo>& descriptorInfos = table.imageDescriptors;
 
     const uint32_t numDescriptors = uint32_t(std::max(size_t(1), engineObjects.size()));
     assert(numDescriptors <= kMaxBindlessResources);
@@ -77,7 +70,7 @@ namespace dxvk {
     // to the current command list. That list completes after every earlier
     // one that could have read the old descriptor, so the resource outlives
     // its last GPU use. Bindless reads only need lifetime: views carry no
-    // use count anyone checks, and the buffers are Remix's own geometry copies.
+    // use count anyone checks.
     const bool trackOnChangeOnly = RtxOptions::trackBindlessResourcesOnChange();
     const auto retire = [&](Rc<DxvkResource>& outgoing) {
       if (trackOnChangeOnly && outgoing != nullptr) {
@@ -126,7 +119,7 @@ namespace dxvk {
       concurrency::parallel_for<uint32_t>(0, chunkCount, [&](uint32_t chunk) {
         const uint32_t end = std::min(numDescriptors, (chunk + 1) * kChunk);
         for (uint32_t idx = chunk * kChunk; idx < end; ++idx) {
-          T descriptor = dummyDescriptor;
+          VkDescriptorImageInfo descriptor = dummyDescriptor;
           DxvkResource* resource = nullptr;
           if (idx < engineObjects.size()) {
             const auto& engineObject = engineObjects[idx];
@@ -134,11 +127,6 @@ namespace dxvk {
               if (DxvkImageView* imageView = engineObject.getImageView()) {
                 descriptor = { VK_NULL_HANDLE, imageView->handle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
                 resource = imageView;
-              }
-            } else if constexpr (Type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
-              if (engineObject.defined()) {
-                descriptor = engineObject.getDescriptor().buffer;
-                resource = engineObject.buffer().ptr();
               }
             } else if constexpr (Type == VK_DESCRIPTOR_TYPE_SAMPLER) {
               if (engineObject != nullptr) {
@@ -148,15 +136,11 @@ namespace dxvk {
               }
             }
           }
-          const T& previous = descriptorInfos[idx];
+          const VkDescriptorImageInfo& previous = descriptorInfos[idx];
           const bool resourceChanged = table.descriptorResources[idx].ptr() != resource;
           bool changed = idx >= previousCount || resourceChanged;
-          if constexpr (std::is_same_v<T, VkDescriptorImageInfo>) {
-            changed |= previous.sampler != descriptor.sampler || previous.imageView != descriptor.imageView
-              || previous.imageLayout != descriptor.imageLayout;
-          } else {
-            changed |= previous.buffer != descriptor.buffer || previous.offset != descriptor.offset || previous.range != descriptor.range;
-          }
+          changed |= previous.sampler != descriptor.sampler || previous.imageView != descriptor.imageView
+            || previous.imageLayout != descriptor.imageLayout;
           descriptorInfos[idx] = descriptor;
           newResources[idx] = resource;
           flags[idx] = uint8_t((changed ? 1 : 0) | (resourceChanged ? 2 : 0));
@@ -178,7 +162,7 @@ namespace dxvk {
     }
 
     for (uint32_t idx = 0; !parallelCompare && idx < numDescriptors; ++idx) {
-      T descriptor = dummyDescriptor;
+      VkDescriptorImageInfo descriptor = dummyDescriptor;
       DxvkResource* resource = nullptr;
       if (idx < engineObjects.size()) {
         const auto& engineObject = engineObjects[idx];
@@ -188,14 +172,6 @@ namespace dxvk {
             resource = imageView;
             if (!trackOnChangeOnly) {
               ctx->getCommandList()->trackResource<DxvkAccess::Read>(imageView);
-            }
-          }
-        } else if constexpr (Type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
-          if (engineObject.defined()) {
-            descriptor = engineObject.getDescriptor().buffer;
-            resource = engineObject.buffer().ptr();
-            if (!trackOnChangeOnly) {
-              ctx->getCommandList()->trackResource<DxvkAccess::Read>(engineObject.buffer());
             }
           }
         } else if constexpr (Type == VK_DESCRIPTOR_TYPE_SAMPLER) {
@@ -208,18 +184,14 @@ namespace dxvk {
             }
           }
         } else {
-          static_assert(Type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE || Type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER || Type == VK_DESCRIPTOR_TYPE_SAMPLER);
+          static_assert(Type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE || Type == VK_DESCRIPTOR_TYPE_SAMPLER);
         }
       }
 
-      const T& previous = descriptorInfos[idx];
+      const VkDescriptorImageInfo& previous = descriptorInfos[idx];
       bool changed = idx >= previousCount || table.descriptorResources[idx].ptr() != resource;
-      if constexpr (std::is_same_v<T, VkDescriptorImageInfo>) {
-        changed |= previous.sampler != descriptor.sampler || previous.imageView != descriptor.imageView
-          || previous.imageLayout != descriptor.imageLayout;
-      } else {
-        changed |= previous.buffer != descriptor.buffer || previous.offset != descriptor.offset || previous.range != descriptor.range;
-      }
+      changed |= previous.sampler != descriptor.sampler || previous.imageView != descriptor.imageView
+        || previous.imageLayout != descriptor.imageLayout;
       descriptorInfos[idx] = descriptor;
       if (table.descriptorResources[idx].ptr() != resource) {
         retire(table.descriptorResources[idx]);
@@ -238,11 +210,7 @@ namespace dxvk {
       writes[0].descriptorCount = numDescriptors;
     }
     for (uint32_t idx = 0; idx < writeCount; ++idx) {
-      if constexpr (std::is_same_v<T, VkDescriptorImageInfo>) {
-        writes[idx].pImageInfo = descriptorInfos.data() + writes[idx].dstArrayElement;
-      } else {
-        writes[idx].pBufferInfo = descriptorInfos.data() + writes[idx].dstArrayElement;
-      }
+      writes[idx].pImageInfo = descriptorInfos.data() + writes[idx].dstArrayElement;
     }
     if (writeCount != 0 && !table.updateDescriptors(writeCount, writes.data())) {
       descriptorInfos.clear();
@@ -253,11 +221,16 @@ namespace dxvk {
     }
   }
 
-  void BindlessResourceManager::prepareSceneData(const Rc<DxvkContext> ctx, const std::vector<TextureRef>& rtTextures, const std::vector<RaytraceBuffer>& rtBuffers, const std::vector<Rc<DxvkSampler>>& samplers) {
+  bool BindlessResourceManager::prepareSceneData(
+      const Rc<DxvkContext> ctx,
+      const std::vector<TextureRef>& rtTextures,
+      const std::vector<RaytraceBuffer>& rtBuffers,
+      const std::vector<uint32_t>& updatedBufferSlots,
+      const std::vector<Rc<DxvkSampler>>& samplers) {
     ScopedCpuProfileZone();
     if (m_frameLastUpdated == m_device->getCurrentFrameId()) {
       Logger::debug("Updating bindless tables multiple times per frame...");
-      return;
+      return false;
     }
 
     // Increment
@@ -267,11 +240,79 @@ namespace dxvk {
     const VkDescriptorBufferInfo dummyBuffer = m_device->getCommon()->dummyResources().bufferDescriptor();
     const VkDescriptorImageInfo dummySampler = m_device->getCommon()->dummyResources().samplerDescriptor();
 
-    createDescriptorSet<VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE>(ctx, rtTextures, dummyImage);
-    createDescriptorSet<VK_DESCRIPTOR_TYPE_STORAGE_BUFFER>(ctx, rtBuffers, dummyBuffer);
-    createDescriptorSet<VK_DESCRIPTOR_TYPE_SAMPLER>(ctx, samplers, dummySampler);
+    {
+      ScopedCpuProfileZoneN("Bindless Textures");
+      createDescriptorSet<VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE>(ctx, rtTextures, dummyImage);
+    }
+    {
+      ScopedCpuProfileZoneN("Bindless Buffers");
+      updateBufferTable(ctx, rtBuffers, updatedBufferSlots, dummyBuffer);
+    }
+    {
+      ScopedCpuProfileZoneN("Bindless Samplers");
+      createDescriptorSet<VK_DESCRIPTOR_TYPE_SAMPLER>(ctx, samplers, dummySampler);
+    }
 
     m_frameLastUpdated = m_device->getCurrentFrameId();
+    return true;
+  }
+
+  void BindlessResourceManager::updateBufferTable(
+      const Rc<DxvkContext>& ctx,
+      const std::vector<RaytraceBuffer>& rtBuffers,
+      const std::vector<uint32_t>& updatedSlots,
+      const VkDescriptorBufferInfo& dummyDescriptor) {
+    m_bufferMirror.update(rtBuffers, updatedSlots, dummyDescriptor);
+    trackRetiredBuffers(ctx);
+
+    if (!RtxOptions::trackBindlessResourcesOnChange()) {
+      for (const RaytraceBuffer& buffer : rtBuffers) {
+        if (buffer.defined()) {
+          ctx->getCommandList()->trackResource<DxvkAccess::Read>(buffer.buffer());
+        }
+      }
+    }
+
+#ifndef NDEBUG
+    // A slot that changed without passing through the updated-slot list shows up here.
+    const std::vector<VkDescriptorBufferInfo>& mirrored = m_bufferMirror.descriptors();
+    for (size_t slot = 0; slot < rtBuffers.size(); ++slot) {
+      const VkDescriptorBufferInfo expected = rtBuffers[slot].defined() ? rtBuffers[slot].getDescriptor().buffer : dummyDescriptor;
+      assert(slot < mirrored.size() && mirrored[slot].buffer == expected.buffer &&
+             mirrored[slot].offset == expected.offset && mirrored[slot].range == expected.range);
+    }
+#endif
+
+    m_bufferWrites.clear();
+    m_bufferMirror.takeWrites(currentIdx(), [this](uint32_t firstSlot, uint32_t count, const VkDescriptorBufferInfo* pDescriptors) {
+      VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+      write.dstArrayElement = firstSlot;
+      write.descriptorCount = count;
+      write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+      write.pBufferInfo = pDescriptors;
+      m_bufferWrites.push_back(write);
+    });
+
+    BindlessTable& table = *m_tables[Table::Buffers][currentIdx()];
+    if (!m_bufferWrites.empty() && !table.updateDescriptors(static_cast<uint32_t>(m_bufferWrites.size()), m_bufferWrites.data())) {
+      m_bufferMirror.requeueCopy(currentIdx());
+    }
+  }
+
+  void BindlessResourceManager::trackRetiredBuffers(const Rc<DxvkContext>& ctx) {
+    for (Rc<DxvkResource>& resource : m_bufferMirror.takeRetired()) {
+      ctx->getCommandList()->trackResource<DxvkAccess::None>(std::move(resource));
+    }
+  }
+
+  void BindlessResourceManager::releaseBufferDescriptors(const Rc<DxvkContext>& ctx, bool gpuIdle) {
+    m_bufferMirror.release();
+
+    if (gpuIdle) {
+      m_bufferMirror.takeRetired();
+    } else if (ctx != nullptr) {
+      trackRetiredBuffers(ctx);
+    }
   }
 
   BindlessResourceManager::BindlessTable::~BindlessTable() {

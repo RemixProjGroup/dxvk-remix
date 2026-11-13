@@ -1635,7 +1635,7 @@ namespace dxvk {
                "buckets, so a change in their number does not shift every surface index after them. Most of the surface "
                "table then stays unchanged from frame to frame. The traced result is the same.");
     RTX_OPTION("rtx", bool, parallelBindlessUpdate, true,
-               "Reduces CPU cost: with rtx.trackBindlessResourcesOnChange, compares the bindless texture and buffer "
+               "Reduces CPU cost: with rtx.trackBindlessResourcesOnChange, compares the bindless texture and sampler "
                "tables with the descriptor sets on worker threads. The descriptors are the same.");
     RTX_OPTION("rtx", bool, parallelScenePrepScans, true,
                "Reduces CPU cost: runs the whole-scene scans of scene preparation (the merged BLAS instance scan and "
