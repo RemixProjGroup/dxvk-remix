@@ -1543,13 +1543,15 @@ namespace dxvk {
   }
 
   void OpacityMicromapManager::dropMicromapsOfChangedTextures(const std::vector<TextureRef>& textures) {
-    if (!OpacityMicromapOptions::rebakeOnTextureChange() || m_ommCache.empty()) {
-      return;
-    }
     const int maxDrops = OpacityMicromapOptions::maxTextureChangeRebakesPerFrame();
-    if (maxDrops <= 0) {
+    if (!OpacityMicromapOptions::rebakeOnTextureChange() || m_ommCache.empty() || maxDrops <= 0) {
       return;
     }
+    // remixapi_UpdateTexture keeps a texture's view and size, so its patches are numbered rather than found below.
+    const RtxTextureManager& textureManager = m_device->getCommon()->getTextureManager();
+    const auto patchedAfter = [&textureManager](XXH64_hash_t bakedHash, uint64_t bakeStart) {
+      return bakedHash != 0 && textureManager.lastTexturePatch() > bakeStart && textureManager.texturePatch(bakedHash) > bakeStart;
+    };
     // Only the baked-from texture re-pointed at a larger image (a streamed placeholder upgraded in place) is a change.
     // These are not:
     //  - The slot was reused by another texture after the baked-from one was released. The slot stops being watched.
@@ -1582,16 +1584,18 @@ namespace dxvk {
     };
     std::vector<XXH64_hash_t> drops;
     for (auto& [ommSrcHash, item] : m_ommCache) {
-      // A bake in progress restarts by itself when its texture changes (bakeOpacityMicromapArray).
+      // A bake in progress restarts by itself when its texture changes or is patched (bakeOpacityMicromapArray).
       if (item.cacheState == OpacityMicromapCacheState::eStep0_Unprocessed ||
           item.cacheState == OpacityMicromapCacheState::eStep1_Baking) {
         continue;
       }
+      const bool anyPatched = patchedAfter(item.bakedOpacityImageHash, item.bakeTexturePatch) ||
+                              patchedAfter(item.bakedSecondaryOpacityImageHash, item.bakeTexturePatch);
       const bool primaryChanged = changed(item.bakedOpacityTextureIndex, item.bakedOpacityViewCookie,
         item.bakedOpacityImageHash, item.bakedOpacityWidth, item.bakedOpacityHeight);
       const bool secondaryChanged = changed(item.bakedSecondaryOpacityTextureIndex, item.bakedSecondaryOpacityViewCookie,
         item.bakedSecondaryOpacityImageHash, item.bakedSecondaryOpacityWidth, item.bakedSecondaryOpacityHeight);
-      if (primaryChanged || secondaryChanged) {
+      if (primaryChanged || secondaryChanged || anyPatched) {
         drops.push_back(ommSrcHash);
         if (drops.size() >= size_t(maxDrops)) {
           break;
@@ -2601,10 +2605,19 @@ namespace dxvk {
       const DxvkImageView* secondaryView = viewAt(secondaryIndex);
       const uint64_t opacityCookie = opacityView != nullptr ? opacityView->cookie() : 0;
       const uint64_t secondaryCookie = secondaryView != nullptr ? secondaryView->cookie() : 0;
+      // A patch keeps the view (remixapi_UpdateTexture), so it is found by its sequence number.
+      const RtxTextureManager& textureManager = m_device->getCommon()->getTextureManager();
+      const auto patchedSinceStart = [&](const DxvkImageView* view, uint32_t index) {
+        return view != nullptr && textureManager.texturePatch(textures[index].getImageHash()) > ommCacheItem.bakeTexturePatch;
+      };
       if (ommCacheItem.bakingState.initialized &&
           (ommCacheItem.bakedOpacityViewCookie != opacityCookie ||
-           ommCacheItem.bakedSecondaryOpacityViewCookie != secondaryCookie)) {
+           ommCacheItem.bakedSecondaryOpacityViewCookie != secondaryCookie ||
+           patchedSinceStart(opacityView, opacityIndex) || patchedSinceStart(secondaryView, secondaryIndex))) {
         ommCacheItem.bakingState = RtxGeometryUtils::BakeOpacityMicromapState {};
+      }
+      if (!ommCacheItem.bakingState.initialized) {
+        ommCacheItem.bakeTexturePatch = textureManager.lastTexturePatch();
       }
       ommCacheItem.bakedOpacityTextureIndex = opacityIndex;
       ommCacheItem.bakedSecondaryOpacityTextureIndex = secondaryIndex;

@@ -112,12 +112,14 @@ upstream live from `0x4E560000` on, a range upstream does not use, so a future u
 | `REMIXAPI_STRUCT_TYPE_ASSET_KEY_EXT` | `0x4E560002` |
 | `REMIXAPI_STRUCT_TYPE_EXTERNAL_FRAME_EXT` | `0x4E560003` |
 | `REMIXAPI_STRUCT_TYPE_COLOR_GRADE_EXT` | `0x4E560004` |
+| `REMIXAPI_STRUCT_TYPE_CONFIG_LAYER_INFO_EXT` | `0x4E560005` |
 
 The structs added earlier in this line took the next upstream numbers (29 to 33: refresh geometry, spec/gloss,
 albedo tint, material override, texture host import). They keep those values.
 
 Fork error codes use the same range. The first one is `REMIXAPI_ERROR_CODE_FEATURE_UNAVAILABLE` (`0x4E560001`),
 returned by the external frame (section 4.12) when the device cannot export the frame.
+`REMIXAPI_ERROR_CODE_BUFFER_TOO_SMALL` (`0x4E560002`) comes from `remixapi_GetConfigValue` (section 4.14).
 
 ### Probing optional named exports
 
@@ -526,6 +528,27 @@ They are named exports. See [`RemixApi.md`](RemixApi.md), "Color grading (named 
 - Preset files take matching `grade.anchor` and `grade.shoulder` keys, and a missing key is the default. Contrast
   pivots on mid gray (0.18), wherever the anchor is.
 - The bridge forwards all five, so 32-bit games need the bridge client and server from the same build.
+
+### 4.13b In-place material updates
+
+`remixapi_UpdateMaterial(handle, info)` changes a live material's parameters and textures without rebuilding what uses
+it, where `CreateMaterial` with a live hash rebuilds every user. See [`RemixApi.md`](RemixApi.md), "`remixapi_UpdateMaterial`".
+
+### 4.13c Partial texture updates
+
+`remixapi_UpdateTexture` writes rectangles of a `CreateTexture` texture in place and regenerates the lower mips of the
+changed area. `CreateTexture` textures with mips in an uncompressed format now carry the transfer source usage for this,
+with no change in memory. See [`RemixApi.md`](RemixApi.md), "`remixapi_UpdateTexture`".
+
+### 4.14 Config layers
+
+`remixapi_CreateConfigLayer`, `remixapi_SetConfigLayerBlends`, `remixapi_DestroyConfigLayer` and
+`remixapi_GetConfigValue` load a sparse `.conf`, or key and value pairs from memory, as an option layer that the host fades. They replace a host's own loop
+that writes interpolated values with `SetConfigVariable`. See [`RemixApi.md`](RemixApi.md), "Config layers (named
+exports)".
+
+`SetConfigVariable` now writes an option flagged `NoSave` to the Derived layer rather than the User layer, so the
+runtime's menus can change it afterwards. Reads are unchanged, and other options still go to the User layer.
 
 ## 5. Removed or deprecated
 

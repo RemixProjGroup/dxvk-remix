@@ -78,6 +78,9 @@ namespace dxvk::perf {
     SetConfigVariable,
     Present,
     RenderD3D11,
+    ConfigLayer,        // items = layers or blends
+    UpdateMaterial,
+    UpdateTexture,      // items = textures
     // Standard D3D9 draw path (D3D9 app / bridge server thread). D3D9Draw is a whole
     // Draw*Primitive* call; the others are nested stages of D3D9Rtx::PrepareDrawGeometryForRT.
     D3D9Draw,
@@ -96,7 +99,7 @@ namespace dxvk::perf {
     "DrawInstance", "CreateMesh", "CreateMeshBatched", "DestroyMesh", "CreateMaterial", "DestroyMaterial",
     "CreateTexture", "DestroyTexture", "PrepareD3D11Texture", "ImportD3D11Texture", "ReplaceD3D11Texture", "CreateLight", "DestroyLight",
     "DrawLightInstance", "CreateRetained", "UpdateRetained", "UpdateRetainedBatch", "DestroyRetained",
-    "DrawRetained", "SetupCamera", "SetConfigVariable", "Present", "RenderD3D11",
+    "DrawRetained", "SetupCamera", "SetConfigVariable", "Present", "RenderD3D11", "ConfigLayer", "UpdateMaterial", "UpdateTexture",
     "D3D9Draw", "D3D9PrepareRT", "D3D9Index", "D3D9Textures", "D3D9Vertices", "D3D9HashSchedule",
     "D3D9VertexCapture", "D3D9Commit", "D3D9PreKey"
   };

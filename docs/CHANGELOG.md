@@ -192,6 +192,24 @@ Opaque and translucent materials can scale, mirror, rotate, offset and scroll al
 - Commits: the commit that adds this entry.
 - Docs: [TextureTransforms.md](../documentation/TextureTransforms.md)
 
+### Remix API: partial texture updates
+`remixapi_UpdateTexture` writes rectangles of a `CreateTexture` texture in place and regenerates the lower mips of only the changed area, so cost follows changed pixels rather than texture size. Materials, meshes and BLASes are untouched. A patch drops the opacity micromaps baked from that texture under `rtx.opacityMicromap.rebakeOnTextureChange`.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApi.md](RemixApi.md)
+
+### Remix API: in-place material updates
+`remixapi_UpdateMaterial` changes a live material and keeps its handle. Parameters and textures other than the albedo write the material's GPU data and rebuild nothing, so a host can drive wetness, emissive changes and tints per frame. Changes that BLAS flags or opacity micromaps depend on fall back to rebuilding the users. API materials now hold surface material slots of their own instead of sharing them by content, and the `[MaterialUpdate]` log line counts both paths. A material is written in place while it has no users too, and a write is uploaded even in a frame whose scene is unchanged.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApi.md](RemixApi.md)
+
+### Remix API: config layers
+A host can load a sparse `.conf`, or key and value pairs from memory under a name of its own, as an option layer and fade it, for authored looks such as weather and interiors, with `remixapi_CreateConfigLayer`, `remixapi_SetConfigLayerBlends` and `remixapi_DestroyConfigLayer`. Blends persist until the host changes them, and a player's settings always win. `remixapi_GetConfigValue` reads a resolved value, and `SetConfigVariable` now writes `NoSave` options to the Derived layer, so the runtime's menus can still change them.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApi.md](RemixApi.md)
+
 ## 2026-11-01
 
 ### GPU device loss when a BLAS drops an opacity micromap in flight

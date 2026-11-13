@@ -264,6 +264,19 @@ namespace dxvk {
       RemixApiDevice*     remixDevice,
       remixapi_TextureHandle handle);
 
+    // remixapi_UpdateTexture. The caller does not hold apiMutex. It is taken only to queue the write.
+    remixapi_ErrorCode updateTexture(
+      RemixApiDevice*     remixDevice,
+      dxvk::mutex&        apiMutex,
+      const remixapi_TextureUpdateInfo* infos,
+      uint32_t            count);
+    // Marks a handle as a D3D11 import, which remixapi_UpdateTexture rejects.
+    void noteImportedTexture(remixapi_TextureHandle handle);
+    // The size of one texel of a texture remixapi_UpdateTexture can write, or 0.
+    uint32_t updatableTextureElementSize(remixapi_TextureHandle handle);
+    // A new device starts with no known textures.
+    void forgetApiTextures();
+
     // Fires the beginScene callback once per frame, on the first API submission of the frame.
     // Called from the instance, light and retained draw entry points before they take s_mutex.
     // Implementation in rtx_fork_api_entry.cpp.

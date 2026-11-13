@@ -99,24 +99,21 @@ namespace dxvk {
       m_pendingEnabledRequest = EnabledRequest::NoRequest;
     }
     
-    // Resolve blend strength if any component made a request
     // Only set m_blendStrengthDirty, not m_dirty - blend changes don't require re-reading config values
-    if (m_pendingMaxBlendStrength > kRtxOptionLayerEmptyBlendStrengthRequest) {
-      if (m_blendStrength != m_pendingMaxBlendStrength) {
-        m_blendStrength = m_pendingMaxBlendStrength;
-        m_blendStrengthDirty = true;
-      }
-      m_pendingMaxBlendStrength = kRtxOptionLayerEmptyBlendStrengthRequest;
+    const RtxOptionLayerHostBlend* hostBlend = m_hasHostBlend ? &m_hostBlend : nullptr;
+    const float strength = resolveLayerBlendStrength(m_blendStrength, m_pendingMaxBlendStrength, hostBlend);
+    if (m_blendStrength != strength) {
+      m_blendStrength = strength;
+      m_blendStrengthDirty = true;
     }
-    
-    // Resolve blend threshold if any component made a request
-    if (m_pendingMinBlendThreshold < kRtxOptionLayerEmptyBlendThresholdRequest) {
-      if (m_blendThreshold != m_pendingMinBlendThreshold) {
-        m_blendThreshold = m_pendingMinBlendThreshold;
-        m_blendStrengthDirty = true;
-      }
-      m_pendingMinBlendThreshold = kRtxOptionLayerEmptyBlendThresholdRequest;
+    m_pendingMaxBlendStrength = kRtxOptionLayerEmptyBlendStrengthRequest;
+
+    const float threshold = resolveLayerBlendThreshold(m_blendThreshold, m_pendingMinBlendThreshold, hostBlend);
+    if (m_blendThreshold != threshold) {
+      m_blendThreshold = threshold;
+      m_blendStrengthDirty = true;
     }
+    m_pendingMinBlendThreshold = kRtxOptionLayerEmptyBlendThresholdRequest;
   }
 
   bool RtxOptionLayer::applyPendingChanges() {

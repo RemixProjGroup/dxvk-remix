@@ -120,6 +120,22 @@ public:
   }
   // NV-DXVK end
 
+  // Stores obj at an index in use, so everything that recorded the index reads obj from now on.
+  // Returns false and changes nothing when another index holds an object equal to obj.
+  bool overwrite(const uint32_t idx, const T& obj) {
+    auto equal = m_bufferMap.find(obj);
+    if (equal != m_bufferMap.end() && equal->second != idx) {
+      return false;
+    }
+    auto current = m_bufferMap.find(m_objects.at(idx));
+    if (current != m_bufferMap.end() && current->second == idx) {
+      m_bufferMap.erase(current);
+    }
+    m_objects.at(idx) = obj;
+    m_bufferMap.insert({ obj, idx });
+    return true;
+  }
+
   uint32_t getActiveCount() const { return m_objects.size() - m_freeBuffers.size(); }
   uint32_t getTotalCount() const { return m_objects.size(); }
 

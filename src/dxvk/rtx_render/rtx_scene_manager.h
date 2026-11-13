@@ -474,6 +474,13 @@ public:
   void trackReplacementMaterialHash(XXH64_hash_t materialHash);
   bool isReplacementMaterialHashUsedThisFrame(XXH64_hash_t materialHash) const;
   uint32_t getReplacementMaterialHashUsageCount(XXH64_hash_t materialHash) const;
+  // remixapi_UpdateMaterial, on the CS thread. Without rebuildUsers, the material's surface materials are written in
+  // place: no instance, geometry or BLAS changes, and every user samples the new data next frame.
+  // With rebuildUsers, or when that cannot reach all users, it is the same as creating the material again.
+  // See docs/RemixApi.md, "UpdateMaterial".
+  void updateExternalMaterial(DxvkContext& ctx, remixapi_MaterialHandle handle, MaterialData&& material, bool rebuildUsers);
+  void forgetLiveMaterial(remixapi_MaterialHandle handle);
+
   void clearFrameReplacementMaterialHashes();
 
   // Mesh hash tracking
@@ -540,6 +547,53 @@ private:
   const RtSurfaceMaterial& createSurfaceMaterial(const MaterialData& renderMaterialData,
                                                  const SurfaceMaterialInputs& draw,
                                                  uint32_t* out_indexInCache = nullptr);
+
+  // What a surface material takes from its material's draw, besides the material.
+  struct SurfaceMaterialBuild {
+    uint32_t samplerIndex = 0;
+    uint32_t samplerIndex2 = UINT32_MAX;
+    bool hasTexcoords = false;
+    bool raytracedRenderTarget = false;
+    bool hairCards = false;
+    uint64_t liveKey = 0;
+  };
+  struct LiveMaterialSlot {
+    uint32_t slot = 0;
+    uint32_t extensionSlot = SURFACE_INDEX_INVALID;
+    // The material hash the slot was made under. A slot of an older hash is reached only through its content.
+    XXH64_hash_t materialHash = kEmptyHash;
+    SurfaceMaterialBuild build;
+  };
+  std::unordered_map<uint64_t, std::vector<LiveMaterialSlot>> m_liveMaterialSlots;
+  // API materials with an instance whose surface material was made from a patched copy, which updates rebuild.
+  std::unordered_set<uint64_t> m_liveMaterialsWithPatchedUsers;
+  // The instances bound to each surface material slot.
+  std::vector<uint32_t> m_surfaceMaterialUsers;
+  // Set when a live slot is written in place. The material tables are then uploaded even in a frame whose scene is
+  // unchanged. They are device-local buffers written on the command stream, so one upload reaches every later frame.
+  bool m_liveMaterialUploadPending = false;
+  // Logged as [MaterialUpdate].
+  struct MaterialUpdateStats {
+    uint64_t inPlace = 0;
+    uint64_t rebuilt = 0;
+    uint64_t slotsPatched = 0;
+    // Uploads that only a slot write caused, in frames whose scene was unchanged.
+    uint64_t staticUploads = 0;
+    bool dirty = false;
+  };
+  MaterialUpdateStats m_materialUpdateStats;
+  // The extension entry of a live slot. An entry in use is written in place, once the caller is ready.
+  struct SurfaceExtensionPatch {
+    uint32_t slot = SURFACE_INDEX_INVALID;
+    std::optional<RtSurfaceMaterial> pending;
+  };
+  RtSurfaceMaterial buildSurfaceMaterial(const MaterialData& renderMaterialData, const SurfaceMaterialBuild& build,
+                                         SurfaceExtensionPatch* extensionPatch);
+  uint32_t trackSurfaceExtension(RtSurfaceMaterial extension, uint64_t liveKey, SurfaceExtensionPatch* patch);
+  void noteLiveMaterialSlot(uint64_t handle, uint32_t slot, XXH64_hash_t materialHash, const SurfaceMaterialBuild& build,
+                            const RtSurfaceMaterial& material);
+  // Writes the surface materials of a live material in place, and returns false when one has to be rebuilt instead.
+  bool patchLiveMaterialSlots(uint64_t handle, const MaterialData& material);
 
   // Retain / release all resources associated with the surface material at the given cache index:
   // texture ref counts (via RtxTextureManager) and scene-wide feature counts (POM, SSS, thin-opaque).
@@ -769,6 +823,8 @@ private:
     Matrix4 replayedObjectToWorld;   // rebased transform of the last replay
     std::weak_ptr<const std::vector<RasterGeometry>> replayedSubmeshes;
     XXH64_hash_t replayedMaterialHash = 0;
+    // An API material updated in place keeps its hash, so two handles can share a hash and differ in content.
+    uint64_t replayedMaterialHandle = 0;
     // rtx.retainedHiddenPolicy 2 hid its instances from the TLAS.
     bool hiddenFromTlas = false;
     // rtx.retainedSteadyFastPath: the replacement instance and submesh bounds the last full

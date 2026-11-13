@@ -20,7 +20,9 @@
 #include "../imgui/dxvk_imgui.h"          // ImGUI::switchMenu, ImGUI::AddTexture
 #include "rtx_scene_manager.h"            // SceneManager::requestVramCompaction, requestTextureVramFree
 #include "rtx_asset_replacer.h"           // AssetReplacer::noteTextureReplaced
+#include "rtx_texture_update.h"           // TextureRegion, validateTexturePatch, textureMipBlit
 
+#include "../../util/util_once.h"         // ONCE
 #include "../../util/xxHash/xxhash.h"     // XXH64_hash_t
 
 #include <remix/remix_c.h>                // remixapi_ErrorCode, REMIXAPI_ERROR_CODE_*
@@ -44,6 +46,8 @@ extern "C" {
 #include <cstring>                        // memcpy
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace dxvk {
 namespace {
@@ -261,6 +265,248 @@ namespace fork_hooks {
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
+  namespace {
+    // What remixapi_UpdateTexture needs of a live texture. The mutex is the innermost lock of the API.
+    struct ApiTexture {
+      uint32_t width = 0;
+      uint32_t height = 0;
+      uint32_t mipLevels = 1;
+      uint32_t elementSize = 0;
+      remixapi_ErrorCode updateResult = REMIXAPI_ERROR_CODE_SUCCESS;
+    };
+    std::unordered_map<uint64_t, ApiTexture> s_apiTextures;
+    dxvk::mutex s_apiTexturesMutex;
+
+    // Logged as [TextureUpdate]. CS thread.
+    struct TextureUpdateStats {
+      uint64_t batches = 0;
+      uint64_t rects = 0;
+      uint64_t texels = 0;
+      uint64_t mipTexels = 0;
+      uint64_t dropped = 0;
+    };
+    TextureUpdateStats s_textureUpdateStats;
+
+    // A rectangle's rows in the staging buffer, tightly packed.
+    struct StagedTextureRect {
+      TextureRegion region;
+      VkDeviceSize offset = 0;
+    };
+    struct StagedTextureUpdate {
+      uint64_t hash = 0;
+      // The texel size the rows were staged with.
+      uint32_t elementSize = 0;
+      std::vector<StagedTextureRect> rects;
+    };
+
+    // Returns the offset rounded up to a multiple of the texel size, which a buffer to image copy needs.
+    // The texel size need not be a power of two.
+    VkDeviceSize alignToTexel(VkDeviceSize offset, uint32_t elementSize) {
+      return (offset + elementSize - 1) / elementSize * elementSize;
+    }
+
+    // CS thread. Writes the staged rectangles, then rebuilds the lower mips of what changed one level at a time.
+    void applyTextureUpdate(DxvkContext* ctx, const StagedTextureUpdate& update, const Rc<DxvkBuffer>& staging) {
+      auto& textureManager = ctx->getCommonObjects()->getTextureManager();
+      TextureRef found;
+      const DxvkImageView* view = nullptr;
+      if (textureManager.findTextureByUniqueKey(size_t(update.hash), found)) {
+        view = found.getImageView();
+      }
+      if (view == nullptr) {
+        s_textureUpdateStats.dropped += 1;
+        return;
+      }
+      const Rc<DxvkImage> image = view->image();
+      const DxvkImageCreateInfo& info = image->info();
+
+      // The texture can be one that a create made after this batch was validated, in another format.
+      const DxvkFormatInfo* formatInfo = imageFormatInfo(info.format);
+      if (formatInfo == nullptr || formatInfo->elementSize != update.elementSize ||
+          formatInfo->flags.test(DxvkFormatFlag::BlockCompressed)) {
+        ONCE(Logger::warn(str::format("[TextureUpdate] texture 0x", std::hex, update.hash, std::dec,
+                                      " changed format since the update was made. The update is dropped.")));
+        s_textureUpdateStats.dropped += 1;
+        return;
+      }
+
+      constexpr VkImageAspectFlags kColor = VK_IMAGE_ASPECT_COLOR_BIT;
+      std::vector<TextureRegion> changed;
+      changed.reserve(update.rects.size());
+      for (const StagedTextureRect& rect : update.rects) {
+        // The table entry can be a replacement made since this batch was validated, smaller or imported.
+        if (rect.region.x1 > info.extent.width || rect.region.y1 > info.extent.height || (info.usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) == 0) {
+          s_textureUpdateStats.dropped += 1;
+          return;
+        }
+      }
+      // Shaders read the texture through the bindless table, which the context does not track. The layout change waits
+      // for every shader stage the image is used in, so no earlier read sees the new texels.
+      const VkImageLayout readLayout = info.layout;
+      ctx->changeImageLayout(image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+      for (const StagedTextureRect& rect : update.rects) {
+        ctx->copyBufferToImage(image, VkImageSubresourceLayers { kColor, 0, 0, 1 },
+                               VkOffset3D { int32_t(rect.region.x0), int32_t(rect.region.y0), 0 },
+                               VkExtent3D { rect.region.width(), rect.region.height(), 1 },
+                               staging, rect.offset, 0, 0);
+        changed.push_back(rect.region);
+        s_textureUpdateStats.texels += rect.region.area();
+      }
+      s_textureUpdateStats.rects += update.rects.size();
+
+      if (info.mipLevels > 1 && (info.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0) {
+        constexpr VkComponentMapping kIdentity = { VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                                                   VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY };
+        std::vector<TextureRegion> regions = planTextureMipRegions(changed);
+        uint32_t width = info.extent.width;
+        uint32_t height = info.extent.height;
+        for (uint32_t level = 1; level < info.mipLevels; ++level) {
+          for (TextureRegion& region : regions) {
+            const TextureMipBlit blit = textureMipBlit(region, width, height);
+            VkImageBlit vkBlit = {};
+            vkBlit.srcSubresource = { kColor, level - 1, 0, 1 };
+            vkBlit.srcOffsets[0] = { int32_t(blit.src.x0), int32_t(blit.src.y0), 0 };
+            vkBlit.srcOffsets[1] = { int32_t(blit.src.x1), int32_t(blit.src.y1), 1 };
+            vkBlit.dstSubresource = { kColor, level, 0, 1 };
+            vkBlit.dstOffsets[0] = { int32_t(blit.dst.x0), int32_t(blit.dst.y0), 0 };
+            vkBlit.dstOffsets[1] = { int32_t(blit.dst.x1), int32_t(blit.dst.y1), 1 };
+            // A blit of an sRGB format filters in linear space and encodes the result again.
+            ctx->blitImage(image, kIdentity, image, kIdentity, vkBlit, VK_FILTER_LINEAR);
+            s_textureUpdateStats.mipTexels += blit.dst.area();
+            region = blit.dst;
+          }
+          width = std::max(width >> 1, 1u);
+          height = std::max(height >> 1, 1u);
+        }
+      }
+      ctx->changeImageLayout(image, readLayout);
+
+      textureManager.notePatchedTexture(found.getImageHash());
+    }
+  }
+
+  void noteImportedTexture(remixapi_TextureHandle handle) {
+    std::lock_guard lock { s_apiTexturesMutex };
+    s_apiTextures[reinterpret_cast<uint64_t>(handle)].updateResult = REMIXAPI_ERROR_CODE_FEATURE_UNAVAILABLE;
+  }
+
+  uint32_t updatableTextureElementSize(remixapi_TextureHandle handle) {
+    std::lock_guard lock { s_apiTexturesMutex };
+    auto found = s_apiTextures.find(reinterpret_cast<uint64_t>(handle));
+    return found != s_apiTextures.end() && found->second.updateResult == REMIXAPI_ERROR_CODE_SUCCESS ? found->second.elementSize : 0;
+  }
+
+  void forgetApiTextures() {
+    std::lock_guard lock { s_apiTexturesMutex };
+    s_apiTextures.clear();
+  }
+
+  remixapi_ErrorCode updateTexture(
+      RemixApiDevice*     remixDevice,
+      dxvk::mutex&        apiMutex,
+      const remixapi_TextureUpdateInfo* infos,
+      uint32_t            count) {
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (count == 0) {
+      return REMIXAPI_ERROR_CODE_SUCCESS;
+    }
+    if (!infos) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    // The staging copy runs on what validation saw. A texture destroyed or replaced since is dropped on the CS thread.
+    std::vector<uint32_t> elementSizes(count);
+    VkDeviceSize total = 0;
+    {
+      std::lock_guard lock { s_apiTexturesMutex };
+      for (uint32_t i = 0; i < count; ++i) {
+        const remixapi_TextureUpdateInfo& update = infos[i];
+        if (update.rects_count != 0 && !update.rects_values) {
+          return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+        }
+        auto found = s_apiTextures.find(reinterpret_cast<uint64_t>(update.texture));
+        if (found == s_apiTextures.end()) {
+          return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+        }
+        const ApiTexture& texture = found->second;
+        if (texture.updateResult != REMIXAPI_ERROR_CODE_SUCCESS) {
+          return texture.updateResult;
+        }
+        elementSizes[i] = texture.elementSize;
+        for (uint32_t r = 0; r < update.rects_count; ++r) {
+          const remixapi_TextureUpdateRect& rect = update.rects_values[r];
+          if (!rect.pixels || !validateTexturePatch(texture.width, texture.height, texture.elementSize,
+                                                    rect.x, rect.y, rect.width, rect.height, rect.rowPitch)) {
+            return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+          }
+          total = alignToTexel(total, texture.elementSize) + VkDeviceSize(rect.width) * rect.height * texture.elementSize;
+        }
+      }
+    }
+    if (total == 0) {
+      return REMIXAPI_ERROR_CODE_SUCCESS;
+    }
+
+    DxvkBufferCreateInfo stagingInfo = {};
+    stagingInfo.size   = total;
+    stagingInfo.usage  = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    stagingInfo.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT;
+    stagingInfo.access = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_HOST_WRITE_BIT;
+    Rc<DxvkBuffer> staging = remixDevice->GetDXVKDevice()->createBuffer(
+      stagingInfo,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+      DxvkMemoryStats::Category::RTXBuffer,
+      "Remix API texture update staging");
+    if (staging == nullptr) {
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+
+    auto stagingSlice = DxvkBufferSlice { staging };
+    unsigned char* out = static_cast<unsigned char*>(stagingSlice.mapPtr(0));
+    VkDeviceSize offset = 0;
+    std::vector<StagedTextureUpdate> updates;
+    updates.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+      const remixapi_TextureUpdateInfo& update = infos[i];
+      if (update.rects_count == 0) {
+        continue;
+      }
+      StagedTextureUpdate staged;
+      staged.hash = reinterpret_cast<uint64_t>(update.texture);
+      staged.elementSize = elementSizes[i];
+      staged.rects.reserve(update.rects_count);
+      for (uint32_t r = 0; r < update.rects_count; ++r) {
+        const remixapi_TextureUpdateRect& rect = update.rects_values[r];
+        const size_t rowBytes = size_t(rect.width) * elementSizes[i];
+        const size_t pitch = rect.rowPitch != 0 ? rect.rowPitch : rowBytes;
+        offset = alignToTexel(offset, elementSizes[i]);
+        staged.rects.push_back({ TextureRegion { rect.x, rect.y, rect.x + rect.width, rect.y + rect.height }, offset });
+        const unsigned char* in = static_cast<const unsigned char*>(rect.pixels);
+        for (uint32_t row = 0; row < rect.height; ++row) {
+          std::memcpy(out + offset, in + pitch * row, rowBytes);
+          offset += rowBytes;
+        }
+      }
+      updates.push_back(std::move(staged));
+    }
+
+    std::lock_guard apiLock { apiMutex };
+    auto devLock = remixDevice->LockDevice();
+    remixDevice->EmitCs([cUpdates = std::move(updates), cStaging = std::move(staging)](DxvkContext* ctx) {
+      for (const StagedTextureUpdate& update : cUpdates) {
+        applyTextureUpdate(ctx, update, cStaging);
+      }
+      TextureUpdateStats& stats = s_textureUpdateStats;
+      if ((++stats.batches % 64) == 1) {
+        Logger::info(str::format("[TextureUpdate] totals: batches=", stats.batches, " rects=", stats.rects, " texels=", stats.texels,
+                                 " mipTexels=", stats.mipTexels, " dropped=", stats.dropped));
+      }
+    });
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   remixapi_ErrorCode createTexture(
       RemixApiDevice*         remixDevice,
       dxvk::mutex&            apiMutex,
@@ -339,6 +585,31 @@ namespace fork_hooks {
                           | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
     imageInfo.access      = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
     imageInfo.tiling      = VK_IMAGE_TILING_OPTIMAL;
+
+    // remixapi_UpdateTexture regenerates mips by blitting between levels, which only needs the usage flag on an
+    // uncompressed format with mips. It costs no memory.
+    ApiTexture apiTexture;
+    apiTexture.width = info->width;
+    apiTexture.height = info->height;
+    apiTexture.mipLevels = imageInfo.mipLevels;
+    const DxvkFormatInfo* formatInfo = imageFormatInfo(vkFormat);
+    if (formatInfo->flags.test(DxvkFormatFlag::BlockCompressed) || formatInfo->flags.test(DxvkFormatFlag::MultiPlane) ||
+        formatInfo->aspectMask != VK_IMAGE_ASPECT_COLOR_BIT) {
+      apiTexture.updateResult = REMIXAPI_ERROR_CODE_FEATURE_UNAVAILABLE;
+    } else {
+      apiTexture.elementSize = uint32_t(formatInfo->elementSize);
+      if (imageInfo.mipLevels > 1) {
+        constexpr VkFormatFeatureFlags kBlitFeatures = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
+                                                       VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+        const VkFormatProperties properties = remixDevice->GetDXVKDevice()->adapter()->formatProperties(vkFormat);
+        if ((properties.optimalTilingFeatures & kBlitFeatures) == kBlitFeatures) {
+          imageInfo.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+          imageInfo.access |= VK_ACCESS_TRANSFER_READ_BIT;
+        } else {
+          apiTexture.updateResult = REMIXAPI_ERROR_CODE_FEATURE_UNAVAILABLE;
+        }
+      }
+    }
     imageInfo.layout      = VK_IMAGE_LAYOUT_UNDEFINED;
 
     Rc<DxvkImage> image = remixDevice->GetDXVKDevice()->createImage(
@@ -389,6 +660,16 @@ namespace fork_hooks {
     std::lock_guard apiLock { apiMutex };
     auto devLock = remixDevice->LockDevice();
 
+    // A create without the replace flag over a live hash keeps the live image (addTexture), so the entry stays too.
+    const bool replaces = hostImport && (hostImport->flags & REMIXAPI_TEXTURE_HOST_IMPORT_FLAG_REPLACE) != 0;
+    {
+      std::lock_guard lock { s_apiTexturesMutex };
+      auto [entry, isNew] = s_apiTextures.try_emplace(info->hash, apiTexture);
+      if (!isNew && replaces) {
+        entry->second = apiTexture;
+      }
+    }
+
     remixDevice->EmitCs([
       cHash          = info->hash,
       cImage         = image,
@@ -399,7 +680,7 @@ namespace fork_hooks {
       cDataSize      = info->dataSize,
       cFormat        = vkFormat,
       cEncoding      = hostEncoding,
-      cReplace       = hostImport && (hostImport->flags & REMIXAPI_TEXTURE_HOST_IMPORT_FLAG_REPLACE) != 0
+      cReplace       = replaces
     ](DxvkContext* ctx) mutable {
 
       ctx->changeImageLayout(cImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -471,6 +752,11 @@ namespace fork_hooks {
     }
 
     auto devLock = remixDevice->LockDevice();
+
+    {
+      std::lock_guard lock { s_apiTexturesMutex };
+      s_apiTextures.erase(reinterpret_cast<uint64_t>(handle));
+    }
 
     remixDevice->EmitCs([cHash = reinterpret_cast<uint64_t>(handle)](DxvkContext* ctx) {
       auto& textureManager = ctx->getCommonObjects()->getTextureManager();

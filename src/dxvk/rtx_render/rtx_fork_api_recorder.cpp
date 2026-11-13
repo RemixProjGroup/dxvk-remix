@@ -24,6 +24,8 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -994,6 +996,110 @@ namespace dxvk {
         rec.w().str(key);
         rec.w().str(value);
       }
+    }
+    return result;
+  }
+
+  // The rows are recorded with the host's pitch, up to the end of the last row.
+  remixapi_ErrorCode ApiRecorder::UpdateTexture(PFN_remixapi_UpdateTexture fn, const remixapi_TextureUpdateInfo* infos, uint32_t count, TextureElementSize elementSize) {
+    const auto result = REC_CALL(infos, count);
+    if (result == REMIXAPI_ERROR_CODE_SUCCESS && (count == 0 || infos)) {
+      if (Rec rec { Op::UpdateTexture, result }) {
+        rec.w().pod(count);
+        for (uint32_t i = 0; i < count; ++i) {
+          rec.w().handle(HandleKind::Texture, infos[i].texture);
+          rec.w().pod(infos[i].rects_count);
+          for (uint32_t r = 0; r < infos[i].rects_count; ++r) {
+            const remixapi_TextureUpdateRect& rect = infos[i].rects_values[r];
+            rec.w().pod(rect.x);
+            rec.w().pod(rect.y);
+            rec.w().pod(rect.width);
+            rec.w().pod(rect.height);
+            rec.w().pod(rect.rowPitch);
+            const uint64_t rowBytes = uint64_t(rect.width) * elementSize(infos[i].texture);
+            const uint64_t pitch = rect.rowPitch != 0 ? rect.rowPitch : rowBytes;
+            uint64_t size = pitch * (rect.height - 1) + rowBytes;
+            const void* pixels = rect.pixels;
+            rec.w().blobBytes(pixels, size);
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  remixapi_ErrorCode ApiRecorder::UpdateMaterial(PFN_remixapi_UpdateMaterial fn, remixapi_MaterialHandle handle, const remixapi_MaterialInfo* info) {
+    const auto result = REC_CALL(handle, info);
+    if (result == REMIXAPI_ERROR_CODE_SUCCESS) {
+      if (Rec rec { Op::UpdateMaterial, result }) {
+        rec.w().handle(HandleKind::Material, handle);
+        ioMaterialInfo(rec.w(), const_cast<remixapi_MaterialInfo&>(*info));
+      }
+    }
+    return result;
+  }
+
+  // The layer's text is recorded, so a replay on another machine loads the same options, always as a file layer.
+  // The layer's key name is recorded too, as remixapi_CreateConfigLayer forms it, so handles share a layer on replay
+  // exactly when they shared one here.
+  remixapi_ErrorCode ApiRecorder::CreateConfigLayer(PFN_remixapi_CreateConfigLayer fn, const remixapi_ConfigLayerInfoEXT* info, uint64_t* out) {
+    const auto result = REC_CALL(info, out);
+    if (result == REMIXAPI_ERROR_CODE_SUCCESS) {
+      std::string text;
+      std::string key;
+      if (info->confPath != nullptr && info->confPath[0] != L'\0') {
+        std::ifstream file(info->confPath, std::ios::binary);
+        text.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+        std::error_code pathError;
+        const std::filesystem::path absolute = std::filesystem::absolute(info->confPath, pathError);
+        key = str::fromws(pathError ? info->confPath : absolute.c_str());
+      } else {
+        key = info->layerName != nullptr ? info->layerName : "";
+        for (uint32_t i = 0; i < info->values_count; ++i) {
+          text += std::string { info->values_values[i].key } + " = " + info->values_values[i].value + "\n";
+        }
+      }
+      if (Rec rec { Op::CreateConfigLayer, result }) {
+        rec.w().str(text.c_str());
+        rec.w().pod(info->priority);
+        rec.w().pod(info->initialStrength);
+        rec.w().pod(info->initialThreshold);
+        rec.w().pod(*out);
+        rec.w().str(key.c_str());
+      }
+    }
+    return result;
+  }
+
+  remixapi_ErrorCode ApiRecorder::SetConfigLayerBlends(PFN_remixapi_SetConfigLayerBlends fn, const remixapi_ConfigLayerBlend* blends, uint32_t count) {
+    const auto result = REC_CALL(blends, count);
+    if (result == REMIXAPI_ERROR_CODE_SUCCESS && (count == 0 || blends)) {
+      if (Rec rec { Op::SetConfigLayerBlends, result }) {
+        rec.w().pod(count);
+        for (uint32_t i = 0; i < count; ++i) {
+          rec.w().handle(HandleKind::ConfigLayer, blends[i].handle);
+          rec.w().pod(blends[i].strength);
+          rec.w().pod(blends[i].threshold);
+        }
+      }
+    }
+    return result;
+  }
+
+  remixapi_ErrorCode ApiRecorder::DestroyConfigLayer(PFN_remixapi_DestroyConfigLayer fn, uint64_t handle) {
+    const auto result = REC_CALL(handle);
+    if (result == REMIXAPI_ERROR_CODE_SUCCESS) {
+      if (Rec rec { Op::DestroyConfigLayer, result }) {
+        rec.w().handle(HandleKind::ConfigLayer, handle);
+      }
+    }
+    return result;
+  }
+
+  remixapi_ErrorCode ApiRecorder::GetConfigValue(PFN_remixapi_GetConfigValue fn, const char* key, char* value, uint32_t* inoutSize) {
+    const auto result = REC_CALL(key, value, inoutSize);
+    if (Rec rec { Op::GetConfigValue, result, kFlagMarker }) {
+      rec.w().str(key);
     }
     return result;
   }

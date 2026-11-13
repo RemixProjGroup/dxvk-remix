@@ -30,6 +30,7 @@
 
 #include "../util/config/config.h"
 #include "rtx_option_constants.h"
+#include "rtx_option_layer_blend.h"
 
 namespace dxvk {
 
@@ -114,6 +115,15 @@ namespace dxvk {
         m_pendingMinBlendThreshold = threshold;
       }
     }
+
+    // Sets the blend a host holds on this layer, which applies every frame until it is set again or cleared.
+    // Call on the CS thread, like the requests.
+    void setHostBlend(const RtxOptionLayerHostBlend& blend) {
+      m_hostBlend = blend;
+      m_hasHostBlend = true;
+    }
+    void clearHostBlend() { m_hasHostBlend = false; }
+    bool hasHostBlend() const { return m_hasHostBlend; }
 
     // Resolve all pending requests accumulated during the frame.
     // Should be called once per frame before option resolution.
@@ -380,6 +390,9 @@ namespace dxvk {
     float m_pendingMaxBlendStrength;
     // Tracks the minimum requested blend threshold for this frame.
     float m_pendingMinBlendThreshold;
+    // Valid while m_hasHostBlend is set. See setHostBlend.
+    RtxOptionLayerHostBlend m_hostBlend;
+    bool m_hasHostBlend = false;
   };
 
   // RAII helper to temporarily set the target layer for RtxOption edits.

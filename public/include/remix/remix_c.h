@@ -152,6 +152,7 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_ASSET_KEY_EXT                        = 0x4E560002,
     REMIXAPI_STRUCT_TYPE_EXTERNAL_FRAME_EXT                   = 0x4E560003,
     REMIXAPI_STRUCT_TYPE_COLOR_GRADE_EXT                      = 0x4E560004,
+    REMIXAPI_STRUCT_TYPE_CONFIG_LAYER_INFO_EXT                = 0x4E560005,
     REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TEXTURE_TRANSFORM_EXT  = 0x4E560006,
     REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT        = 0x4E560007,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
@@ -190,6 +191,8 @@ extern "C" {
     // Remix Plus error codes live from 0x4E560000 on, like the Remix Plus struct types.
     // The device or the current output does not support the requested feature.
     REMIXAPI_ERROR_CODE_FEATURE_UNAVAILABLE                   = 0x4E560001,
+    // The output buffer is too small. The call reports the size it needs.
+    REMIXAPI_ERROR_CODE_BUFFER_TOO_SMALL                      = 0x4E560002,
   } remixapi_ErrorCode;
 
   typedef uint32_t remixapi_Bool;
@@ -1269,6 +1272,127 @@ extern "C" {
     const char* name, const remixapi_ColorGradeEXT* grade);
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SaveColorGradePreset(
     const char* name, const remixapi_ColorGradeEXT* grade);
+
+  // Changes a live material's parameters and textures and keeps its handle. An optional named export; the versioned
+  // Interface table is unchanged. See docs/RemixApi.md, "UpdateMaterial".
+  // info->hash is 0 or the handle. Applied in command-stream order, so it takes effect in the frame it is issued in.
+  // Any thread.
+  // A change of plain parameters or of textures other than the albedo rebuilds nothing.
+  // A change of the alpha test, blend state, opacity, albedo texture, sampler, sprite sheet, displacement, subsurface
+  // profile or asset key rebuilds the material's users, and still returns REMIXAPI_ERROR_CODE_SUCCESS.
+  // Returns REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS for a bad struct, a handle that is not live, or a change of material
+  // type (opaque, translucent, portal), and leaves the material as it was.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_UpdateMaterial)(
+    remixapi_MaterialHandle handle, const remixapi_MaterialInfo* info);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_UpdateMaterial(
+    remixapi_MaterialHandle handle, const remixapi_MaterialInfo* info);
+
+  // Partial texture updates. An optional named export; the versioned Interface table is unchanged.
+  // See docs/RemixApi.md, "UpdateTexture".
+  typedef struct remixapi_TextureUpdateRect {
+    // Position and size at mip 0.
+    uint32_t    x;
+    uint32_t    y;
+    uint32_t    width;
+    uint32_t    height;
+    // Bytes between the starts of rows. 0 means tightly packed.
+    uint32_t    rowPitch;
+    // In the texture's own format.
+    const void* pixels;
+  } remixapi_TextureUpdateRect;
+
+  typedef struct remixapi_TextureUpdateInfo {
+    remixapi_TextureHandle            texture;
+    const remixapi_TextureUpdateRect* rects_values;
+    uint32_t                          rects_count;
+  } remixapi_TextureUpdateInfo;
+
+  // Writes rectangles of texture mip 0 and regenerates the lower mips of the changed area. The pixels are copied before
+  // the call returns, and the writes apply in command-stream order. Materials, meshes and BLASes are untouched. Any thread.
+  // Returns REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS for a null array with a count, a null pixel pointer, a rectangle
+  // outside the texture, a row pitch shorter than a row, or a handle CreateTexture did not make or that is not live.
+  // Returns REMIXAPI_ERROR_CODE_FEATURE_UNAVAILABLE for a compressed format, an imported D3D11 texture, or mips in a
+  // format the device cannot filter.
+  // Any error applies nothing from the batch.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_UpdateTexture)(
+    const remixapi_TextureUpdateInfo* infos, uint32_t count);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_UpdateTexture(
+    const remixapi_TextureUpdateInfo* infos, uint32_t count);
+
+  // Config layers: a sparse .conf loaded as an option layer that the host fades. Optional named exports; the versioned
+  // Interface table is unchanged. See docs/RemixApi.md, "Config layers (named exports)".
+  // These are for authored looks such as weather or interiors, not for values computed per frame.
+  // One option of an in-memory layer, written as in a .conf file.
+  typedef struct remixapi_ConfigLayerValue {
+    const char* key;
+    const char* value;
+  } remixapi_ConfigLayerValue;
+
+  // A layer comes from either confPath, or values with layerName. Set the other source to null and 0.
+  typedef struct remixapi_ConfigLayerInfoEXT {
+    remixapi_StructType sType;
+    void*               pNext;
+    remixapi_Path       confPath;
+    // Copied during the call. Such a layer is never written to a file.
+    const remixapi_ConfigLayerValue* values_values;
+    uint32_t            values_count;
+    // Shown in the developer menu's Option Layers view. Not empty, at most 128 characters, and without a path separator
+    // or a .conf ending.
+    const char*         layerName;
+    // Higher values are blended over lower ones. Clamped to 100..10000000, which ranks the layer above
+    // rtx.conf and below user settings and quality presets.
+    uint32_t            priority;
+    // Clamped to 0..1. Floats blend by strength, and other types apply once strength reaches threshold.
+    float               initialStrength;
+    float               initialThreshold;
+  } remixapi_ConfigLayerInfoEXT;
+
+  // One handle's blend. Strength and threshold are clamped to 0..1.
+  typedef struct remixapi_ConfigLayerBlend {
+    uint64_t handle;
+    float    strength;
+    float    threshold;
+  } remixapi_ConfigLayerBlend;
+
+  // Loads the file on the calling thread and adds the layer in command-stream order. It takes effect at the end of the
+  // current frame. Any thread.
+  // The same path and priority, or the same name, priority and values, share one layer with its reference count, and
+  // the layer blends with the highest strength and lowest threshold among its handles.
+  // Returns REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS for a bad struct, a non-finite value, both sources or neither, a bad
+  // name, an empty value list, or an unknown key or invalid value in the list. Nothing changes then.
+  // Returns REMIXAPI_ERROR_CODE_ALREADY_EXISTS for a name in use with another priority or other values.
+  // Returns REMIXAPI_ERROR_CODE_GENERAL_FAILURE for a missing or unreadable file.
+  // A file may name options this runtime does not have, which are ignored. A value a known option cannot parse is
+  // dropped with a warning in the log.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_CreateConfigLayer)(
+    const remixapi_ConfigLayerInfoEXT* info, uint64_t* out_handle);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_CreateConfigLayer(
+    const remixapi_ConfigLayerInfoEXT* info, uint64_t* out_handle);
+
+  // Sets each handle's blend, which persists until the next call for that handle. Later entries for one handle win.
+  // It takes effect at the end of the current frame. Any thread.
+  // Returns REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS for a null array with a count, a non-finite value or a handle that
+  // is not live, and then applies nothing.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_SetConfigLayerBlends)(
+    const remixapi_ConfigLayerBlend* blends, uint32_t count);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetConfigLayerBlends(
+    const remixapi_ConfigLayerBlend* blends, uint32_t count);
+
+  // Releases the handle's reference. The layer leaves at the end of the current frame when no reference is left.
+  // Any thread.
+  // Returns REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS for a handle that is not live.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_DestroyConfigLayer)(uint64_t handle);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_DestroyConfigLayer(uint64_t handle);
+
+  // Writes the option's resolved value as .conf text, with its terminator. It sees changes from the last completed frame
+  // on. Any thread.
+  // A null value only reports the size, including the terminator, in *inout_size.
+  // Returns REMIXAPI_ERROR_CODE_BUFFER_TOO_SMALL when the value does not fit, and reports the size it needs.
+  // Returns REMIXAPI_ERROR_CODE_GENERAL_FAILURE for an unknown key.
+  typedef remixapi_ErrorCode(REMIXAPI_PTR* PFN_remixapi_GetConfigValue)(
+    const char* key, char* value, uint32_t* inout_size);
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_GetConfigValue(
+    const char* key, char* value, uint32_t* inout_size);
 
   // External frame: the presented image, shared with another Vulkan device or process without a CPU readback.
   // An optional named export; the versioned Interface table is unchanged. Probe with

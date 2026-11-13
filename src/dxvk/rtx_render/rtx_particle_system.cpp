@@ -481,6 +481,8 @@ namespace dxvk {
       // Strip out any custom particle defined in the target material to avoid creating duplicated, nested systems.
       MaterialData particleRenderMaterial(renderMaterialData);
       particleRenderMaterial.m_particleSystem = std::nullopt;
+      // The system keeps this copy, which an in-place update of an API material cannot reach. That material's updates rebuild.
+      particleRenderMaterial.markInstancePatched();
 
       if(disableMaterialSpriteSheet) {
         // Disable the material spritesheet

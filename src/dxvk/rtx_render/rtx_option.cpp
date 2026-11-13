@@ -290,6 +290,54 @@ namespace dxvk {
     return genericValueToString(m_resolvedValue);
   }
 
+  bool RtxOptionImpl::isValidConfigValue(const std::string& value) const {
+    // The parsers accept a number followed by anything, and the hash readers throw on a bad hash.
+    const auto wholeNumber = [&value]() {
+      const char* begin = value.c_str();
+      char* end = nullptr;
+      std::strtod(begin, &end);
+      return end != begin && value.find_first_not_of(" \t", size_t(end - begin)) == std::string::npos;
+    };
+    const auto hashList = [&value](bool allowRemoval) {
+      std::vector<std::string> hashes;
+      Config::parseOptionValue(value, hashes);
+      for (const std::string& raw : hashes) {
+        const size_t first = raw.find_first_not_of(" \t");
+        if (first == std::string::npos) {
+          continue;
+        }
+        const size_t last = raw.find_last_not_of(" \t");
+        std::string hash = raw.substr(first, last - first + 1);
+        if (allowRemoval && hash[0] == '-') {
+          hash.erase(0, 1);
+        }
+        if (hash.rfind("0x", 0) == 0 || hash.rfind("0X", 0) == 0) {
+          hash.erase(0, 2);
+        }
+        if (hash.empty() || hash.size() > 16 || hash.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    GenericValueWrapper parsed(m_type);
+    switch (m_type) {
+    case OptionType::Bool: return Config::parseOptionValue(value, parsed.data.b);
+    case OptionType::Int: return wholeNumber() && Config::parseOptionValue(value, parsed.data.i);
+    case OptionType::Float: return wholeNumber() && Config::parseOptionValue(value, parsed.data.f) && std::isfinite(parsed.data.f);
+    case OptionType::Vector2: return Config::parseOptionValue(value, *parsed.data.v2);
+    case OptionType::Vector3: return Config::parseOptionValue(value, *parsed.data.v3);
+    case OptionType::Vector2i: return Config::parseOptionValue(value, *parsed.data.v2i);
+    case OptionType::Vector4: return Config::parseOptionValue(value, *parsed.data.v4);
+    case OptionType::String: return Config::parseOptionValue(value, *parsed.data.string);
+    case OptionType::VirtualKeys: return Config::parseOptionValue(value, *parsed.data.virtualKeys);
+    case OptionType::HashSet: return hashList(true);
+    case OptionType::HashVector: return hashList(false);
+    default: return false;
+    }
+  }
+
   void RtxOptionImpl::invokeOnChangeCallback(DxvkDevice* device) const {
     if (m_onChangeCallback) {
       m_onChangeCallback(device);

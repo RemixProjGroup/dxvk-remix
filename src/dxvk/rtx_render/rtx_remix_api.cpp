@@ -64,6 +64,7 @@
 #include "rtx_frontend_interface.h"
 #include "rtx_fork_api_recorder.h"
 #include "rtx_retained_scene.h"
+#include "rtx_material_update.h"
 #include "rtx_option_manager.h"
 #include "rtx/pass/screen_overlay/screen_overlay.h"  // SCREEN_OVERLAY_FLAG_*
 
@@ -76,6 +77,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
+#include <filesystem>
+#include <fstream>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -205,8 +208,8 @@ namespace {
   // The bones the vertices of each live skinned mesh name (its highest blend index plus one), guarded by s_mutex.
   // An instance of the mesh that sends fewer bones gets the rest as identity (SkinningDesc::usedBones).
   std::unordered_map<remixapi_MeshHandle, uint32_t> s_meshBones;
-  // The description digest of each material created through the API and not destroyed yet, guarded by s_mutex.
-  std::unordered_map<remixapi_MaterialHandle, uint64_t> s_liveMaterials;
+  // The description summary of each material created through the API and not destroyed yet, guarded by s_mutex.
+  std::unordered_map<remixapi_MaterialHandle, dxvk::ApiMaterialSummary> s_liveMaterials;
   // Track handles that were updated or created this frame to prevent re-adding after deletion in the same frame
   std::unordered_set<remixapi_LightHandle> s_handlesDeletedThisFrame;
   // Sticky: set once any external (C-API) light is registered. Used to gate the
@@ -1345,12 +1348,12 @@ namespace {
     std::lock_guard lock { s_mutex };
 
     // A repeat of the live description returns here, so the material's users do not rebuild.
-    auto [live, isNew] = s_liveMaterials.try_emplace(handle, digest);
-    if (!isNew && live->second == digest) {
+    auto [live, isNew] = s_liveMaterials.try_emplace(handle);
+    if (!isNew && live->second.description == digest) {
       *out_handle = handle;
       return REMIXAPI_ERROR_CODE_SUCCESS;
     }
-    live->second = digest;
+    live->second = { digest, dxvk::apiMaterialRebuildState(*info, s_apiVersion), dxvk::apiMaterialKind(*info) };
 
     remixDevice->EmitCs([cHandle = handle,
                          cMaterialData = convert::toRtMaterialWithoutTexturePreload(*info),
@@ -1384,6 +1387,7 @@ namespace {
         static_cast<dxvk::RtxContext*>(ctx)->drainSceneCommands(cBound);
         auto& assets = ctx->getCommonObjects()->getSceneManager().getAssetReplacer();
         assets->destroyExternalMaterial(cHandle);
+        ctx->getCommonObjects()->getSceneManager().forgetLiveMaterial(cHandle);
       });
       return REMIXAPI_ERROR_CODE_SUCCESS;
     }
@@ -2245,10 +2249,78 @@ namespace {
       // readOption() writes the option's layer values and the global dirty-option map, which the CS thread
       // reads and clears under this mutex in RtxOptionManager::applyPendingValues(). Lock order: s_mutex first.
       std::lock_guard<std::mutex> optionLock(dxvk::RtxOptionImpl::getUpdateMutex());
-      option->readOption(newSetting, dxvk::RtxOptionLayer::getUserLayer());
+      // A NoSave option goes to the Derived layer, so the runtime's own menus, which write there too, can still change it.
+      option->readOption(newSetting, option->getTargetLayer(dxvk::RtxOptionLayer::getUserLayer()));
     }
 
     return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  // ---- Config layers ------------------------------------------------------------------------------------------
+
+  // Layers a host holds, guarded by s_mutex. The layer registry itself only changes on the CS thread.
+  struct HostConfigLayer {
+    std::string path;  // The layer key's name: a file's absolute path, or the name of an in-memory layer.
+    uint32_t priority = 0;
+    dxvk::RtxOptionLayerHostBlend blend;
+    bool inMemory = false;
+    std::string values;  // An in-memory layer's values, which decide whether a second create can share it.
+  };
+  std::unordered_map<uint64_t, HostConfigLayer> s_hostConfigLayers;
+  uint64_t s_lastHostConfigLayer = 0;
+
+  // Returns the blend that the live handles of a layer combine to.
+  // Returns nullopt when no handle is left on the layer.
+  std::optional<dxvk::RtxOptionLayerHostBlend> combinedHostBlend(const std::string& path, uint32_t priority) {
+    std::optional<dxvk::RtxOptionLayerHostBlend> combined;
+    for (const auto& [handle, layer] : s_hostConfigLayers) {
+      if (layer.priority == priority && layer.path == path) {
+        combined = combined ? dxvk::combineLayerHostBlends(*combined, layer.blend) : layer.blend;
+      }
+    }
+    return combined;
+  }
+
+  // CS thread. Takes the option update mutex, because adding or removing a layer writes the options' layer queues and
+  // the dirty-option map that remixapi_SetConfigVariable writes from other threads.
+  void applyHostConfigBlend(const std::string& path, uint32_t priority, const dxvk::RtxOptionLayerHostBlend& blend) {
+    std::lock_guard<std::mutex> optionLock(dxvk::RtxOptionImpl::getUpdateMutex());
+    if (dxvk::RtxOptionLayer* layer = dxvk::RtxOptionManager::getLayer({ priority, path })) {
+      layer->setHostBlend(blend);
+    }
+  }
+
+  void releaseHostConfigLayer(const std::string& path, uint32_t priority, const std::optional<dxvk::RtxOptionLayerHostBlend>& remaining) {
+    std::lock_guard<std::mutex> optionLock(dxvk::RtxOptionImpl::getUpdateMutex());
+    dxvk::RtxOptionLayer* layer = dxvk::RtxOptionManager::getLayer({ priority, path });
+    if (layer == nullptr) {
+      return;
+    }
+    if (remaining) {
+      layer->setHostBlend(*remaining);
+    } else {
+      layer->clearHostBlend();
+    }
+    dxvk::RtxOptionManager::releaseLayer(layer);
+  }
+
+  // Shutdown releases the host's layers, or the option values they hold would outlast the host.
+  // A device registered over another keeps them, because options are process-wide and the host's handles stay valid.
+  void releaseAllHostConfigLayers(dxvk::RemixApiDevice* remixDevice) {
+    std::lock_guard lock { s_mutex };
+    std::vector<HostConfigLayer> layers;
+    layers.reserve(s_hostConfigLayers.size());
+    for (auto& [handle, layer] : s_hostConfigLayers) {
+      layers.push_back(std::move(layer));
+    }
+    s_hostConfigLayers.clear();
+    if (!layers.empty()) {
+      remixDevice->EmitCs([cLayers = std::move(layers)](dxvk::DxvkContext*) {
+        for (const HostConfigLayer& layer : cLayers) {
+          releaseHostConfigLayer(layer.path, layer.priority, std::nullopt);
+        }
+      });
+    }
   }
 
   remixapi_ErrorCode REMIXAPI_CALL remixapi_RequestVramCompaction() {
@@ -2411,6 +2483,7 @@ namespace {
     // Clears the frame-boundary callback state.
     dxvk::fork_hooks::shutdownCallbacks();
     if (s_dxvkDevice) {
+      releaseAllHostConfigLayers(s_dxvkDevice.get());
       dxvk::g_dxvkDeviceNative = nullptr;
       auto host = std::move(s_dxvkDevice);
       host->shutdown();
@@ -3182,6 +3255,243 @@ extern "C"
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_UpdateTexture(
+      const remixapi_TextureUpdateInfo* infos, uint32_t count) {
+    REMIX_FORK_RECORD(UpdateTexture, infos, count, &dxvk::fork_hooks::updatableTextureElementSize);
+    const dxvk::perf::ApiScope perfApiScope { dxvk::perf::Api::UpdateTexture, count }; // rtx.profile.detailedLogging
+    return dxvk::fork_hooks::updateTexture(tryAsDxvk(), s_mutex, infos, count);
+  }
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_UpdateMaterial(
+      remixapi_MaterialHandle handle, const remixapi_MaterialInfo* info) {
+    REMIX_FORK_RECORD(UpdateMaterial, handle, info);
+    const dxvk::perf::ApiScope perfApiScope { dxvk::perf::Api::UpdateMaterial, 1 }; // rtx.profile.detailedLogging
+    dxvk::RemixApiDevice* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (!handle || !info || info->sType != REMIXAPI_STRUCT_TYPE_MATERIAL_INFO ||
+        (info->hash != 0 && info->hash != reinterpret_cast<uint64_t>(handle))) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    const dxvk::ApiMaterialSummary next { materialDigest(*info), dxvk::apiMaterialRebuildState(*info, s_apiVersion), dxvk::apiMaterialKind(*info) };
+
+    {
+      std::lock_guard lock { s_mutex };
+      auto live = s_liveMaterials.find(handle);
+      if (live == s_liveMaterials.end()) {
+        return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+      }
+      const dxvk::ApiMaterialChange change = dxvk::classifyApiMaterialChange(live->second, next);
+      if (change == dxvk::ApiMaterialChange::KindChange) {
+        return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+      }
+      if (change == dxvk::ApiMaterialChange::None) {
+        return REMIXAPI_ERROR_CODE_SUCCESS;
+      }
+      live->second = next;
+      remixDevice->EmitCs([cHandle = handle,
+                           cMaterialData = convert::toRtMaterialWithoutTexturePreload(*info),
+                           cPreloadSrc = convert::makePreloadSource(*info),
+                           cRebuild = change == dxvk::ApiMaterialChange::RebuildUsers](dxvk::DxvkContext* ctx) {
+        ctx->getCommonObjects()->getSceneManager().updateExternalMaterial(
+          *ctx, cHandle, convert::toRtMaterialFinalized(*ctx, cMaterialData, cPreloadSrc), cRebuild);
+      });
+    }
+    emitAssetKey(remixDevice, info->pNext, reinterpret_cast<uint64_t>(handle), false);
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_CreateConfigLayer(
+      const remixapi_ConfigLayerInfoEXT* info, uint64_t* out_handle) {
+    REMIX_FORK_RECORD(CreateConfigLayer, info, out_handle);
+    const dxvk::perf::ApiScope perfApiScope { dxvk::perf::Api::ConfigLayer, 1 }; // rtx.profile.detailedLogging
+    dxvk::RemixApiDevice* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (!out_handle || !info || info->sType != REMIXAPI_STRUCT_TYPE_CONFIG_LAYER_INFO_EXT) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    const bool hasFile = info->confPath != nullptr && info->confPath[0] != L'\0';
+    const bool inMemory = info->values_values != nullptr || info->values_count != 0 || info->layerName != nullptr;
+    if (hasFile == inMemory) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    float strength = info->initialStrength;
+    float threshold = info->initialThreshold;
+    if (!dxvk::sanitizeLayerBlendValue(strength) || !dxvk::sanitizeLayerBlendValue(threshold)) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    std::string path;
+    std::string values;
+    dxvk::Config config;
+    if (inMemory) {
+      if (!info->layerName || !dxvk::isValidHostLayerName(info->layerName) || !info->values_values || info->values_count == 0) {
+        return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+      }
+      path = info->layerName;
+      for (uint32_t i = 0; i < info->values_count; ++i) {
+        const remixapi_ConfigLayerValue& entry = info->values_values[i];
+        if (!entry.key || !entry.value || std::strpbrk(entry.value, "\r\n") != nullptr) {
+          return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+        }
+        const dxvk::RtxOptionImpl* option = dxvk::RtxOptionImpl::getOptionByFullName(std::string { entry.key });
+        if (!option || !option->isValidConfigValue(entry.value)) {
+          return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+        }
+        config.setOption(entry.key, std::string { entry.value });
+        values += std::string { entry.key } + " = " + entry.value + "\n";
+      }
+    } else {
+      // The parser takes a missing file for an empty one, so the file is opened here first.
+      if (!std::ifstream(info->confPath).is_open()) {
+        return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+      }
+      // An absolute path keeps one file on one key, whichever way the host spells it.
+      std::error_code pathError;
+      const std::filesystem::path absolute = std::filesystem::absolute(info->confPath, pathError);
+      path = dxvk::str::fromws(pathError ? info->confPath : absolute.c_str());
+
+      // A hash option's reader throws on a bad value, so a value no known option can read does not reach the render thread.
+      const dxvk::Config parsed = dxvk::Config::getOptionLayerConfig(path);
+      for (const auto& [key, value] : parsed.getOptions()) {
+        const dxvk::RtxOptionImpl* option = dxvk::RtxOptionImpl::getOptionByFullName(key);
+        if (option != nullptr && !option->isValidConfigValue(value)) {
+          dxvk::Logger::warn(dxvk::str::format("[RTX Option]: Config layer ", path, ": dropped ", key, " = ", value));
+          continue;
+        }
+        config.setOption(key, std::string { value });
+      }
+    }
+    const uint32_t priority = dxvk::clampHostLayerPriority(info->priority);
+
+    std::lock_guard lock { s_mutex };
+    if (inMemory) {
+      for (const auto& [liveHandle, live] : s_hostConfigLayers) {
+        if (live.inMemory && live.path == path && (live.priority != priority || live.values != values)) {
+          return REMIXAPI_ERROR_CODE_ALREADY_EXISTS;
+        }
+      }
+    }
+    const uint64_t handle = ++s_lastHostConfigLayer;
+    s_hostConfigLayers.emplace(handle, HostConfigLayer { path, priority, { strength, threshold }, inMemory, std::move(values) });
+    remixDevice->EmitCs([cPath = path, cPriority = priority, cConfig = std::move(config), cInMemory = inMemory,
+                         cBlend = *combinedHostBlend(path, priority), cStrength = strength, cThreshold = threshold](dxvk::DxvkContext*) {
+      std::lock_guard<std::mutex> optionLock(dxvk::RtxOptionImpl::getUpdateMutex());
+      // An empty file path makes the layer one that no save reaches.
+      const std::string filePath = cInMemory ? std::string() : cPath;
+      if (dxvk::RtxOptionLayer* layer = dxvk::RtxOptionManager::acquireLayer(filePath, { cPriority, cPath }, cStrength, cThreshold, false, &cConfig)) {
+        layer->setHostBlend(cBlend);
+      }
+    });
+    *out_handle = handle;
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_SetConfigLayerBlends(
+      const remixapi_ConfigLayerBlend* blends, uint32_t count) {
+    REMIX_FORK_RECORD(SetConfigLayerBlends, blends, count);
+    const dxvk::perf::ApiScope perfApiScope { dxvk::perf::Api::ConfigLayer, count }; // rtx.profile.detailedLogging
+    dxvk::RemixApiDevice* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    if (count == 0) {
+      return REMIXAPI_ERROR_CODE_SUCCESS;
+    }
+    if (!blends) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+
+    std::vector<dxvk::RtxOptionLayerHostBlend> sanitized(count);
+    for (uint32_t i = 0; i < count; ++i) {
+      sanitized[i] = { blends[i].strength, blends[i].threshold };
+      if (!dxvk::sanitizeLayerBlendValue(sanitized[i].strength) || !dxvk::sanitizeLayerBlendValue(sanitized[i].threshold)) {
+        return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+      }
+    }
+
+    std::lock_guard lock { s_mutex };
+    for (uint32_t i = 0; i < count; ++i) {
+      if (s_hostConfigLayers.find(blends[i].handle) == s_hostConfigLayers.end()) {
+        return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+      }
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+      s_hostConfigLayers[blends[i].handle].blend = sanitized[i];
+    }
+
+    struct LayerBlend {
+      std::string path;
+      uint32_t priority;
+      dxvk::RtxOptionLayerHostBlend blend;
+    };
+    std::vector<LayerBlend> layerBlends;
+    layerBlends.reserve(count);
+    for (uint32_t i = 0; i < count; ++i) {
+      const HostConfigLayer& layer = s_hostConfigLayers[blends[i].handle];
+      layerBlends.push_back({ layer.path, layer.priority, *combinedHostBlend(layer.path, layer.priority) });
+    }
+    remixDevice->EmitCs([cBlends = std::move(layerBlends)](dxvk::DxvkContext*) {
+      for (const LayerBlend& blend : cBlends) {
+        applyHostConfigBlend(blend.path, blend.priority, blend.blend);
+      }
+    });
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_DestroyConfigLayer(uint64_t handle) {
+    REMIX_FORK_RECORD(DestroyConfigLayer, handle);
+    const dxvk::perf::ApiScope perfApiScope { dxvk::perf::Api::ConfigLayer, 1 }; // rtx.profile.detailedLogging
+    dxvk::RemixApiDevice* remixDevice = tryAsDxvk();
+    if (!remixDevice) {
+      return REMIXAPI_ERROR_CODE_REMIX_DEVICE_WAS_NOT_REGISTERED;
+    }
+    std::lock_guard lock { s_mutex };
+    auto found = s_hostConfigLayers.find(handle);
+    if (found == s_hostConfigLayers.end()) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    HostConfigLayer layer = std::move(found->second);
+    s_hostConfigLayers.erase(found);
+    remixDevice->EmitCs([cPath = layer.path, cPriority = layer.priority,
+                         cRemaining = combinedHostBlend(layer.path, layer.priority)](dxvk::DxvkContext*) {
+      releaseHostConfigLayer(cPath, cPriority, cRemaining);
+    });
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
+  REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_GetConfigValue(
+      const char* key, char* value, uint32_t* inout_size) {
+    REMIX_FORK_RECORD(GetConfigValue, key, value, inout_size);
+    if (!key || key[0] == '\0' || !inout_size) {
+      return REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS;
+    }
+    dxvk::RtxOptionImpl* option = dxvk::RtxOptionImpl::getOptionByFullName(std::string { key });
+    if (!option) {
+      return REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    }
+    std::string text;
+    {
+      std::lock_guard<std::mutex> optionLock(dxvk::RtxOptionImpl::getUpdateMutex());
+      text = option->getResolvedValueAsString();
+    }
+    const uint32_t needed = uint32_t(text.size()) + 1;
+    if (!value) {
+      *inout_size = needed;
+      return REMIXAPI_ERROR_CODE_SUCCESS;
+    }
+    if (*inout_size < needed) {
+      *inout_size = needed;
+      return REMIXAPI_ERROR_CODE_BUFFER_TOO_SMALL;
+    }
+    std::memcpy(value, text.c_str(), needed);
+    *inout_size = needed;
+    return REMIXAPI_ERROR_CODE_SUCCESS;
+  }
+
   REMIXAPI remixapi_ErrorCode REMIXAPI_CALL remixapi_CreateRetainedInstance(
       const remixapi_InstanceInfo* info, uint64_t* out_handle) {
     REMIX_FORK_RECORD(CreateRetainedInstance, info, out_handle);
@@ -3459,6 +3769,7 @@ namespace dxvk {
         s_liveMeshHandles.clear();
         s_meshBones.clear();
         s_liveMaterials.clear();
+        fork_hooks::forgetApiTextures();
       }
       s_dxvkDevice = std::move(device);
       g_dxvkDeviceNative = s_dxvkDevice->GetDXVKDevice().ptr();
@@ -3567,6 +3878,7 @@ namespace dxvk {
       s_liveMeshHandles.clear();
       s_meshBones.clear();
       s_liveMaterials.clear();
+      dxvk::fork_hooks::forgetApiTextures();
       s_dxvkDevice = create();
       g_dxvkDeviceNative = s_dxvkDevice->GetDXVKDevice().ptr();
       ApiRecorder::onDeviceRegistered(true, 0, 0);
@@ -3741,6 +4053,7 @@ namespace dxvk {
             prepared->markImported();
           }
           *out_handle = reinterpret_cast<remixapi_TextureHandle>(hash);
+          fork_hooks::noteImportedTexture(*out_handle);
           return REMIXAPI_ERROR_CODE_SUCCESS;
         }
 
@@ -3821,6 +4134,7 @@ namespace dxvk {
           dxvk::ApiRecorder::readbackTexture(ctx, dst, readback);
         });
         *out_handle = reinterpret_cast<remixapi_TextureHandle>(hash);
+        fork_hooks::noteImportedTexture(*out_handle);
         return REMIXAPI_ERROR_CODE_SUCCESS;
       } catch (const std::exception& e) {
         dxvk::Logger::err(dxvk::str::format("ImportD3D11Texture: ", e.what()));

@@ -45,7 +45,7 @@ STRESS_SLOTS=${STRESS_SLOTS:-True}
 STRESS_CONF=()
 ALL_D3D9="repeat twice twice-overlay twice-overlay-first worldspace skinned skinned-view-root skinned-passenger ring-reorder ring-static ring-static-precombined topology-churn-omm texcoord-index identity-view fused-world fused-view reset no-present sky sky-numos skybox3d terrain terrain-pbr emitter portals rendertarget vtf instancer fog lights replacement-reject per-draw per-draw-declined per-draw-sentinel bad-values bad-values-clean lifecycle multi-output multi-output-single multi-output-extra gbuffer-nrc gbuffer-pom-sss gbuffer-pom-sss-nrc skinned-view-walk skinned-root-motion skinned-parked skinned-uninit skinned-swap skinned-shared-palette skinned-view-model-effect ring-props sky-fog sky-fog-numos sky-fog-switch"
 # The Remix API frontend's runs of the conformance cases.
-ALL_API="api-bad-values api-bad-values-clean api-lifecycle api-caller-threads api-caller-threads-single"
+ALL_API="api-bad-values api-bad-values-clean api-lifecycle api-caller-threads api-caller-threads-single api-config-layers api-material-update api-texture-update"
 ALL="$ALL_D3D9 $ALL_API"
 case "$*" in
   d3d9) SCENARIOS=$ALL_D3D9 ;;
@@ -243,6 +243,11 @@ scenario() {
     api-bad-values) ARGS=(--bad-values --event-frame 400) ;;
     api-bad-values-clean) ARGS=(--bad-values --clean --event-frame 400) ;;
     api-lifecycle) ARGS=(--lifecycle --event-frame 400) ;;
+    api-config-layers) ARGS=(--config-layers --event-frame 400) ;;
+    # Nothing moves but the updated materials, with the material self-checks on. The extra frames hold the rebuild and
+    # the updates of a material without users, after the window of frames 300-599.
+    api-material-update) ARGS=(--material-update --event-frame 400); EXTRA_FRAMES=300; CONF=("rtx.coreMaterial.gpuCheck=True") ;;
+    api-texture-update) ARGS=(--texture-update --event-frame 400) ;;
     # The same calls from four threads, and from one for the reference.
     api-caller-threads) ARGS=(--caller-threads 4 --event-frame 400) ;;
     api-caller-threads-single) ARGS=(--caller-threads 1 --event-frame 400) ;;
@@ -289,7 +294,7 @@ for sc in $SCENARIOS; do
   unset DXVK_DUMP_SCREENSHOT_FRAME DXVK_SCREENSHOT_PATH
   if [ -f "$LOG" ]; then cp "$LOG" "$OUT/log-$name.txt"; else : > "$OUT/log-$name.txt"; fi
   echo "=== $name exit $rc"
-  grep -E '^(event|no-present|SKIP|FAILED|bad-values|lifecycle)' "$OUT/out-$name.txt" | head -4
+  grep -E '^(event|no-present|SKIP|FAILED|bad-values|lifecycle|config-layers|material-update|texture-update)' "$OUT/out-$name.txt" | head -4
 done
 
 # The checks. Each line: PASS / FAIL / INFO / SKIP, the scenario, the checklist ID, what is expected and the values.
@@ -351,7 +356,7 @@ class Log:
         # "<case>: N calls, M unexpected results" from the testhost.
         self.unexpected = None
         for l in self.out:
-            m = re.match(r"(bad-values|lifecycle): (\d+) calls, (\d+) unexpected results", l)
+            m = re.match(r"(bad-values|lifecycle|config-layers|material-update|texture-update): (\d+) calls, (\d+) unexpected results", l)
             if m:
                 self.unexpected = int(m.group(3))
         # "ring-reorder: N quads, max move M per frame" from the testhost.
@@ -559,7 +564,8 @@ for sc in sys.argv[3:]:
     injected = {k: v for k, v in SCENE_INPUT.get(sc, {}).items()}
     expect(on.sceneInput == injected, sc, "SI", "[SceneInput] counts equal the injected counts",
            f"expected {fmt(injected)}, got {fmt(on.sceneInput)}")
-    if sc in ("bad-values", "lifecycle", "api-bad-values", "api-bad-values-clean", "api-lifecycle", "bad-values-clean"):
+    if sc in ("bad-values", "lifecycle", "api-bad-values", "api-bad-values-clean", "api-lifecycle", "bad-values-clean",
+              "api-config-layers", "api-material-update", "api-texture-update"):
         if on.unexpected is not None or sc.startswith("api-"):
             expect(None if on.unexpected is None else on.unexpected == 0, sc, "ret",
                    "the testhost saw the return codes of the case's table", f"unexpected={on.unexpected}")
@@ -577,8 +583,6 @@ for sc in sys.argv[3:]:
                        f"clean {s_clean}/{h_clean}, now {s_bad}/{h_bad}")
             else:
                 report("INFO", sc, "good", "run the -clean scenario too to compare the good objects", f"{s_bad}/{h_bad}")
-        if sc.startswith("api-"):
-            continue
     if sc in ("multi-output", "multi-output-extra"):
         single = Log("multi-output-single", "on")
         if single.stats:
@@ -590,6 +594,51 @@ for sc in sys.argv[3:]:
                    f"now {len(on.stats)} lines {frames(on)} {num(on.stat('surfaces'))}")
         else:
             report("INFO", sc, "one", "run multi-output-single too to compare")
+    if sc == "api-texture-update":
+        totals = [l for l in on.lines if "[TextureUpdate] totals:" in l]
+        last = totals[-1] if totals else ""
+        expect(bool(totals) and val(last, "dropped") == 0 and val(last, "rects") > 0 and val(last, "mipTexels") <= 150 * val(last, "rects"),
+               sc, "TU", "no dropped batch, and mip work that follows the changed rectangles", last.split("[TextureUpdate] ", 1)[-1])
+        held = on.perfCpu[1:2]  # The logs come per 300 frames, so the second line is frames 300-599.
+        expect(bool(held) and all(",created:0.00" in l for l in held), sc, "TU0",
+               "no retained entry built in the patches' window (frames 300-599)", (held[0][:200] if held else "no window"))
+    if sc == "api-material-update":
+        # The testhost's timeline is in remix_testhost.cpp (--material-update). The runtime logs the totals every 300
+        # frames while something changed, so the first line is frame 600 and the last frame 900.
+        totals = [l for l in on.lines if "[MaterialUpdate] totals:" in l]
+        first = totals[0] if totals else ""
+        last = totals[-1] if totals else ""
+        # 261 + 120 parameter updates and the two of the material without users, and the alpha change. The update of
+        # frame 760 repeats the values the alpha change sent, so it is no change and not counted. A slot left unwritten
+        # while it had no user makes the update back to the first value a rebuild.
+        expect(len(totals) >= 2 and val(last, "rebuilt") == 1 and val(last, "inPlace") == 383, sc, "MU",
+               "one rebuild for the alpha change, every other update in place, also with no user", last.split("[MaterialUpdate] ", 1)[-1])
+        # Uploads that only the updates caused, in frames whose scene was unchanged. None means the scene was not still,
+        # and the case does not test what it should.
+        expect(bool(first) and val(first, "staticUploads") is not None and val(first, "staticUploads") >= 200, sc, "MUS",
+               "the parameter updates were uploaded while the scene stood still (frames 320-580)", first.split("[MaterialUpdate] ", 1)[-1])
+        # rtx.coreMaterial.selfCheck compares the records last uploaded with the materials. A record that missed an
+        # update differs. gpuCheck compares the uploaded tables on the GPU with each other.
+        def checks(kind):
+            out = []
+            for l in on.lines:
+                if f"[CoreMaterial] {kind} surfaces=" in l:
+                    m = re.search(r"\(frame (\d+)\)", l)
+                    out.append((int(m.group(1)) if m else -1, val(l, "mismatches")))
+            return out
+        host = checks("check")
+        gpu = checks("gpuCheck")
+        after = lambda rows, lo, hi: any(lo <= f <= hi for f, _ in rows)
+        expect(after(host, 590, 620) and after(host, 890, 920) and all(m == 0 for _, m in host), sc, "MUC",
+               "the uploaded material records match the materials after each update window (frames 600 and 900)", str(host))
+        expect(bool(gpu) and all(m == 0 for _, m in gpu), sc, "MUG",
+               "the material tables on the GPU agree with each other", str(gpu))
+        held = on.perfCpu[1:2]  # The logs come per 300 frames, so the second line is frames 300-599.
+        transientBuilt = [re.search(r"transientPerFrame=\S*?\bbuilt:([\d.]+)", l) for l in held]
+        expect(bool(held) and all(",created:0.00" in l for l in held) and all(m and float(m.group(1)) == 0 for m in transientBuilt),
+               sc, "MU0", "no retained entry or transient instance built per frame in the updates' window (frames 300-599)",
+               (held[0][:200] if held else "no window"))
+        report("INFO", sc, "slots", "surface material slots the live materials hold", f"liveSlots={val(last, 'liveSlots')}")
     if sc == "api-caller-threads":
         single = Log("api-caller-threads-single", "on")
         s_mt, h_mt = num(on.stat("surfaces")), num(on.stat("hidden"))

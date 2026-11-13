@@ -113,6 +113,8 @@ An unchanged instance costs almost nothing, so the guide to retained performance
 | `UpdateRetainedInstances` with a visibility change | Sets the TLAS state, under the hidden policy (below) | The first toggle rebuilds a merged bucket |
 | `UpdateRetainedInstance` (whole description) | Queues a rebuild, reusing its instances where it can | One full entry rebuild |
 | A mesh refresh, `DestroyMaterial`, or `CreateMaterial` with changed data for a material it uses | Rebuilds every entry that uses the asset | One rebuild per user |
+| `remixapi_UpdateMaterial` with parameters or textures other than the albedo | Writes the material's GPU data | One write per material variant, none per user |
+| `remixapi_UpdateMaterial` with alpha, blend, opacity, the albedo texture or the sampler | Rebuilds every entry that uses the material | One rebuild per user |
 | `DrawRetainedInstances` with another origin | Moves every instance | Scene-wide (see [Origin shifts](#origin-shifts)) |
 | A cleared texture cache, including `RequestTextureVramFree` | Every retained entry takes its full path | Scene-wide, for one frame |
 | `SetConfigVariable` changing an option that invalidates draw translation, such as `rtx.enableAlphaTest` | Every retained entry takes its full path | Scene-wide, for one frame |
@@ -267,7 +269,13 @@ never waits for the GPU: the runtime keeps a resource until no frame in flight u
 **Create each material once.** Keep your own table from material hash to handle, and check it first. A repeated
 `CreateMaterial` with a live hash and an identical description hashes the description and returns, with no other work,
 so it is safe but not free. With different data, including a different asset key, it replaces the material, and
-**every retained entry that uses the material rebuilds**. Do not change a material per frame or per draw.
+**every retained entry that uses the material rebuilds**. Do not change a material per frame or per draw that way.
+
+**Change live materials with `remixapi_UpdateMaterial`.** Parameters and textures other than the albedo are written in
+place and rebuild nothing, so wetness, emissive changes and tints can run per frame. The cost is one small write per
+variant of the material, whatever the number of instances. Alpha, blend, opacity, the albedo texture and the sampler still
+rebuild the users, because BLAS flags and opacity micromaps depend on them. `[MaterialUpdate]` counts `inPlace` and
+`rebuilt`, so check that a per-frame update does not sit in `rebuilt`.
 
 **Use stable hashes.** The handle is your `info->hash`. An unstable hash means new assets every session, and mods stop
 matching. Add `remixapi_AssetKeyEXT` for a key that survives content changes.
@@ -297,6 +305,12 @@ place when they can. The old path's texture copies cost 2.0-2.6 GB in an open-wo
 **`CreateTexture` runs on your thread.** It creates the image and staging buffer and copies your data on the calling
 thread, and takes the API mutex only to queue the upload, so other threads' API calls do not wait for that work. Do bulk
 texture creation at load time, or spread it out. Prefer a D3D11 import where you can.
+
+**Patch instead of recreating.** `remixapi_UpdateTexture` keeps the handle and slot, so a dynamic surface costs what its
+changed pixels cost: one staging copy on your thread, one GPU copy per rectangle and one blit per rectangle per mip. A
+16x16 patch in a 1024 texture with a full mip chain writes about 150 mip texels, against about 350,000 for the whole
+chain. Send one batch per frame, because each call allocates a staging buffer. A patch of an alpha-tested texture rebakes
+its opacity micromaps, so keep frequently patched textures off alpha-tested materials.
 
 **Texture file paths resolve on the render thread.** A material's file path textures are found and queued on the
 render thread when the material is created. Many new file-based materials in one frame land there together.
@@ -376,6 +390,10 @@ Keep the expensive part of your scene work off the render thread and off your ho
 | `CreateLightBatched`, `UpdateLightDefinition`, `DestroyLight` | Any | API mutex to queue |
 | `CreateTexture` | Any | Image setup without locks, then the API mutex and device lock to queue the upload |
 | `SetConfigVariable` | Any | API mutex and option lock |
+| `remixapi_UpdateTexture` | Any | Copies your pixels without locks, with the API mutex to validate and to queue |
+| `remixapi_CreateConfigLayer` | Any | Reads and parses the file without locks, then the API mutex to queue |
+| `remixapi_SetConfigLayerBlends`, `remixapi_DestroyConfigLayer` | Any | API mutex to queue |
+| `remixapi_GetConfigValue` | Any | Option lock |
 | `GetMemoryPressure`, `RequestVramCompaction`, `RequestTextureVramFree`, host settings | Any | Atomic or no lock |
 | `PrepareD3D11TextureEx` | The immediate-context thread, outside deferred recording | |
 | `RegisterD3D11Device`, `RenderD3D11`, `DrawScreenOverlayD3D11` | The game's render thread | |
@@ -435,6 +453,20 @@ work of p50 5.2 / p95 6.3 ms fit fully inside a 6-8 ms present wait and added no
   about 3 fps. Adding `rtx.present.presentWaitPreGateFlush` then took that frame from 21.4 ms to 20.6 ms with no judder.
 
 Use these only if you see uneven frame delivery. The `[Perf]` line prints present intervals, which is where it shows.
+
+### Looks and config layers
+
+**Fade a look with a config layer.** Authored looks such as weather and interiors belong in a `.conf` that you load once
+with `remixapi_CreateConfigLayer` and fade with `remixapi_SetConfigLayerBlends`. A loop that writes interpolated values
+through `SetConfigVariable` takes the API mutex per key, writes to the player's layer and overrides their menu.
+
+**Fade, do not animate.** A blend change walks the option table when it is applied, then resolves each option the layer
+holds. That is fine during a fade. A layer whose strength changes every frame for the whole session pays it every frame,
+and a value you compute per frame does not belong in a layer at all. Stop sending a blend when it stops changing.
+
+**Options that invalidate draw translation still do.** A layer holding `rtx.enableAlphaTest` or similar sends every
+retained entry down its full path each frame that option's value changes. Keep those out of faded layers, or use the
+threshold so they switch once.
 
 ## 9. VRAM
 
@@ -577,7 +609,7 @@ Most of these came from real integrations. The rest follow from the code.
 | Two moves per instance per frame | The instance rebuilds | Send the final transform once |
 | Destroy and create when objects return to view | Stutter, micromap re-bakes, memory churn | One handle for the object's life |
 | One mesh handle per placement | VRAM and build time scale with placements | One mesh per unique geometry and material |
-| Calling `CreateMaterial` with changing data for a live hash | Retained users rebuild | Change a material only when its data really changes |
+| Calling `CreateMaterial` with changing data for a live hash | Retained users rebuild | `remixapi_UpdateMaterial` |
 | Re-creating a mesh hash to change it | The update never appears | `remixapi_MeshInfoRefreshGeometryEXT` |
 | A host check that compares only textures before re-sending | Rebuilt geometry is dropped, and stale level-of-detail blocks show through full-detail walls | Treat changed geometry as a change |
 | Creating thousands of meshes in one frame | One long render-thread frame | A per-frame budget |

@@ -78,6 +78,18 @@ exe = executable('test_color_grade',  files('test_color_grade.cpp'), win_subsyst
 test('test_color_grade', exe, env: test_env)
 tests += exe
 
+exe = executable('test_config_layer_blend',  files('test_config_layer_blend.cpp'), win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_config_layer_blend', exe, env: test_env)
+tests += exe
+
+exe = executable('test_material_update',  files('test_material_update.cpp'), include_directories : remix_api_include_path, win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_material_update', exe, env: test_env)
+tests += exe
+
+exe = executable('test_texture_update',  files('test_texture_update.cpp'), win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_texture_update', exe, env: test_env)
+tests += exe
+
 exe = executable('test_pnext',  files('test_pnext.cpp'), include_directories : remix_api_include_path,  dependencies : test_unit_deps, win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
 test('test_pnext', exe, env: test_env)
 tests += exe

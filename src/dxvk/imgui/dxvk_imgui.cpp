@@ -2299,7 +2299,8 @@ namespace dxvk {
         bool pendingEnabled = optionLayer.getPendingEnabled();
         float pendingStrength = optionLayer.getPendingBlendStrength();
         float pendingThreshold = optionLayer.getPendingBlendThreshold();
-        const bool isLayerActive = !hasSaveableConfig || (pendingEnabled && pendingStrength > pendingThreshold);
+        const bool hasBlendControls = (hasSaveableConfig && !isUserLayer) || optionLayer.hasHostBlend();
+        const bool isLayerActive = (!hasSaveableConfig && !optionLayer.hasHostBlend()) || (pendingEnabled && pendingStrength > pendingThreshold);
         
         // Apply header styling
         bool pushedStyle = false;
@@ -2365,8 +2366,8 @@ namespace dxvk {
             }
           }
           
-          // Enable/blend controls only for saveable config layers (Remix Config, User, dynamically loaded mods)
-          if (hasSaveableConfig && !isUserLayer) {
+          // Enable/blend controls only for saveable config layers (Remix Config, dynamically loaded mods) and host layers.
+          if (hasBlendControls) {
             const std::string optionLayerEnabledText = "Enabled###Enabled_" + displayName;
             const std::string optionLayerStrengthText = " Strength###Strength_" + displayName;
             const std::string optionLayerThresholdText = " Threshold###Threshold_" + displayName;
@@ -2377,12 +2378,20 @@ namespace dxvk {
 
             if (IMGUI_ADD_TOOLTIP(ImGui::SliderFloat(optionLayerStrengthText.c_str(), &pendingStrength, 0.0f, 1.0f),
                                   "Adjusts the blending strength of this option layer (0 = off, 1 = full effect).")) {
-              optionLayer.requestBlendStrength(pendingStrength);
+              if (optionLayer.hasHostBlend()) {
+                optionLayer.setHostBlend({ pendingStrength, pendingThreshold });
+              } else {
+                optionLayer.requestBlendStrength(pendingStrength);
+              }
             }
 
             if (IMGUI_ADD_TOOLTIP(ImGui::SliderFloat(optionLayerThresholdText.c_str(), &pendingThreshold, 0.0f, 1.0f),
                                   "Sets the blending strength threshold for this option layer.")) {
-              optionLayer.requestBlendThreshold(pendingThreshold);
+              if (optionLayer.hasHostBlend()) {
+                optionLayer.setHostBlend({ pendingStrength, pendingThreshold });
+              } else {
+                optionLayer.requestBlendThreshold(pendingThreshold);
+              }
             }
           }
           

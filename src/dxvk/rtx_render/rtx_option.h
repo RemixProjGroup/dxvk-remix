@@ -224,6 +224,9 @@ namespace dxvk {
     const GenericValue* getGenericValue(const RtxOptionLayer* layer) const;
     std::string genericValueToString(const GenericValue& value) const;
     std::string getResolvedValueAsString() const;
+
+    // Returns true when this option can read value, as text in .conf form.
+    bool isValidConfigValue(const std::string& value) const;
     const GenericValue& getResolvedValue() const { tagInvalidationScope(); return m_resolvedValue; }
     
     // Min/max values - public for documentation generation

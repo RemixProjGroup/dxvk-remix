@@ -1943,7 +1943,8 @@ struct RtSurfaceMaterial {
     m_subsurfaceMaterial { subsurfaceMaterial } {}
 
   RtSurfaceMaterial(const RtSurfaceMaterial& surfaceMaterial) :
-    m_type{ surfaceMaterial.m_type } {
+    m_type{ surfaceMaterial.m_type },
+    m_liveKey{ surfaceMaterial.m_liveKey } {
     switch (m_type) {
     default:
       assert(false);
@@ -2149,6 +2150,7 @@ struct RtSurfaceMaterial {
   RtSurfaceMaterial& operator=(const RtSurfaceMaterial& rtSurfaceMaterial) {
     if (this != &rtSurfaceMaterial) {
       m_type = rtSurfaceMaterial.m_type;
+      m_liveKey = rtSurfaceMaterial.m_liveKey;
 
       switch (rtSurfaceMaterial.m_type) {
       default:
@@ -2175,7 +2177,7 @@ struct RtSurfaceMaterial {
 
   bool operator==(const RtSurfaceMaterial& rhs) const {
     // Note: Different Surface Material types are not the same Surface Material so comparison can return false
-    if (m_type != rhs.m_type) {
+    if (m_type != rhs.m_type || m_liveKey != rhs.m_liveKey) {
       return false;
     }
 
@@ -2196,20 +2198,12 @@ struct RtSurfaceMaterial {
   }
 
   XXH64_hash_t getHash() const {
-    switch (m_type) {
-    default:
-      assert(false);
+    return getContentHash() ^ m_liveKey;
+  }
 
-      [[fallthrough]];
-    case RtSurfaceMaterialType::Opaque:
-      return m_opaqueSurfaceMaterial.getHash();
-    case RtSurfaceMaterialType::Translucent:
-      return m_translucentSurfaceMaterial.getHash();
-    case RtSurfaceMaterialType::RayPortal:
-      return m_rayPortalSurfaceMaterial.getHash();
-    case RtSurfaceMaterialType::Subsurface:
-      return m_subsurfaceMaterial.getHash();
-    }
+  // A nonzero key gives the material a cache slot of its own, which no other material with the same content shares.
+  void setLiveKey(uint64_t liveKey) {
+    m_liveKey = liveKey;
   }
 
   RtSurfaceMaterialType getType() const {
@@ -2265,7 +2259,25 @@ struct RtSurfaceMaterial {
 private:
   // Type-specific Surface Material Information
 
+  XXH64_hash_t getContentHash() const {
+    switch (m_type) {
+    default:
+      assert(false);
+
+      [[fallthrough]];
+    case RtSurfaceMaterialType::Opaque:
+      return m_opaqueSurfaceMaterial.getHash();
+    case RtSurfaceMaterialType::Translucent:
+      return m_translucentSurfaceMaterial.getHash();
+    case RtSurfaceMaterialType::RayPortal:
+      return m_rayPortalSurfaceMaterial.getHash();
+    case RtSurfaceMaterialType::Subsurface:
+      return m_subsurfaceMaterial.getHash();
+    }
+  }
+
   RtSurfaceMaterialType m_type;
+  uint64_t m_liveKey = 0;
   union {
     RtOpaqueSurfaceMaterial m_opaqueSurfaceMaterial;
     RtTranslucentSurfaceMaterial m_translucentSurfaceMaterial;
@@ -2484,6 +2496,9 @@ struct MaterialData {
 
 private:
   bool m_usesLegacyDefaults = false;
+  bool m_instancePatched = false;
+  XXH64_hash_t m_stableHash = kEmptyHash;
+  uint64_t m_liveHandle = 0;
 
 public:
 
@@ -2523,10 +2538,42 @@ public:
     return static_cast<MaterialDataType>(m_data.index());
   }
 
+  // Returns the identity of the material in draws, geometry keys, asset keys and replacement lookups.
+  // A material updated in place keeps the hash it had, so nothing keyed by it rebuilds.
   XXH64_hash_t getHash() const {
+    if (m_stableHash != kEmptyHash) {
+      return m_stableHash;
+    }
     const XXH64_hash_t hash = std::visit([](auto const& mat) { return mat.getHash(); }, m_data);
     // Identical authored parameters must not merge legacy and replacement materials in the cache.
     return m_usesLegacyDefaults ? XXH64(&m_usesLegacyDefaults, sizeof(m_usesLegacyDefaults), hash) : hash;
+  }
+
+  void setStableHash(XXH64_hash_t hash) {
+    m_stableHash = hash;
+  }
+
+  bool hasStableHash() const {
+    return m_stableHash != kEmptyHash;
+  }
+
+  // The handle of an API material, 0 otherwise. See SceneManager::updateExternalMaterial.
+  uint64_t getLiveHandle() const {
+    return m_liveHandle;
+  }
+
+  void setLiveHandle(uint64_t handle) {
+    m_liveHandle = handle;
+  }
+
+  // Marks a copy that was changed for one instance. Its surface material cannot be written from the API material.
+  void markInstancePatched() {
+    m_instancePatched = true;
+    m_stableHash = kEmptyHash;
+  }
+
+  bool isInstancePatched() const {
+    return m_instancePatched;
   }
 
   const Rc<DxvkSampler>& getSamplerOverride() const {

@@ -85,6 +85,11 @@ namespace remix_record {
     ReplaceD3D11Texture       = 39,  // u64 token, h:Texture, u32 encoding, u32 readbackId
     RequestVramCompaction     = 40,
     RequestTextureVramFree    = 41,
+    CreateConfigLayer         = 42,  // str conf text, u32 priority, f32 strength, f32 threshold, u64 outHandle [, str layer key]
+    SetConfigLayerBlends      = 43,  // u32 count, count x (h:ConfigLayer, f32 strength, f32 threshold)
+    DestroyConfigLayer        = 44,  // h:ConfigLayer
+    UpdateMaterial            = 45,  // h:Material, MaterialInfo
+    UpdateTexture             = 46,  // u32 count, count x (h:Texture, u32 rects, rects x (u32 x, y, width, height, rowPitch, blob pixels))
 
     // Markers (kFlagMarker): recorded for context, never replayed.
     PrepareD3D11Texture       = 100, // u64 texture, u32 dxgiFormat, u32 maxDimension, u64 outToken
@@ -105,6 +110,7 @@ namespace remix_record {
     SetUIState                = 115, // u32 state
     DxvkInterop               = 116, // u32 which (DxvkCall)
     SceneMarker               = 117, // u32 index (1, 2, ...), u64 frame (frames completed when it was added)
+    GetConfigValue            = 118, // str key
 
     FrameIndex                = 0xFFFF0001, // u64 frameCount, frameCount x u64 frame start offset
   };
@@ -114,7 +120,7 @@ namespace remix_record {
     GetTextureHash, GetSharedD3D11TextureHandle,
   };
 
-  enum class HandleKind : uint32_t { Material, Mesh, Light, Texture, Retained, Count };
+  enum class HandleKind : uint32_t { Material, Mesh, Light, Texture, Retained, ConfigLayer, Count };
 
   enum class BlobMode : uint8_t { Null = 0, Inline = 1, File = 2 };
 

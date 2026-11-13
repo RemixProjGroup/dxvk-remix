@@ -5,6 +5,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- 2026-11-02: `remixapi_UpdateTexture`, a named export that writes rectangles of a
+  `CreateTexture` texture in place and regenerates the lower mips of the changed area.
+  Adds `remixapi_TextureUpdateInfo` and `remixapi_TextureUpdateRect`.
+- 2026-11-02: `remixapi_UpdateMaterial`, a named export that changes a live
+  material and keeps its handle. Parameters and textures other than the albedo
+  rebuild nothing. Alpha, blend, opacity, the albedo texture and the sampler rebuild
+  the users. A change of material type returns `INVALID_ARGUMENTS`.
+- 2026-11-02: config layers. The named exports `remixapi_CreateConfigLayer`,
+  `remixapi_SetConfigLayerBlends` and `remixapi_DestroyConfigLayer` load a sparse
+  `.conf` or in-memory key and value pairs (`remixapi_ConfigLayerValue`) as an option
+  layer that the host fades, ranked above `rtx.conf` and below
+  user settings and quality presets. `remixapi_GetConfigValue` reads an option's
+  resolved value as `.conf` text. Adds `remixapi_ConfigLayerInfoEXT`
+  (`REMIXAPI_STRUCT_TYPE_CONFIG_LAYER_INFO_EXT`, `0x4E560005`),
+  `remixapi_ConfigLayerBlend` and `REMIXAPI_ERROR_CODE_BUFFER_TOO_SMALL` (`0x4E560002`).
+
+### Changed
+- 2026-11-02: `SetConfigVariable` writes an option flagged `NoSave` to the Derived
+  layer instead of the User layer, so the runtime's menus can change it afterwards.
+
 ### Removed
 - 2026-10-21: the named export `remixapi_fork_ReplayIdentityTrace` and its
   result struct `remixapi_fork_IdentityReplayResult`, with the D3D9 identity

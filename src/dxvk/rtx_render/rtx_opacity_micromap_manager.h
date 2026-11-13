@@ -328,6 +328,8 @@ namespace dxvk {
     // another texture was reused, which says nothing about the texture this array was baked from.
     XXH64_hash_t bakedOpacityImageHash = 0;
     XXH64_hash_t bakedSecondaryOpacityImageHash = 0;
+    // RtxTextureManager::lastTexturePatch when the bake started. A later patch of a texture it reads drops the array.
+    uint64_t bakeTexturePatch = 0;
     // Set when a BLAS first binds this micromap ([D3d9Alpha] builtNeverBound).
     bool everBound = false;
 

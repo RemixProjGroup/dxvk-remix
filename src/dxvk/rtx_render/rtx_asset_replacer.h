@@ -608,6 +608,9 @@ namespace dxvk {
     }
 
     void makeMaterialWithTexturePreload(DxvkContext& ctx, remixapi_MaterialHandle handle, MaterialData&& data);
+    // Stores a new description of a live material without telling its users, for a change they do not depend on
+    // (SceneManager::updateExternalMaterial).
+    void replaceExternalMaterialInPlace(remixapi_MaterialHandle handle, MaterialData&& data);
     [[nodiscard]] const MaterialData* accessExternalMaterial(remixapi_MaterialHandle handle) const;
     void destroyExternalMaterial(remixapi_MaterialHandle handle);
 

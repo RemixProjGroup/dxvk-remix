@@ -81,6 +81,7 @@ namespace dxvk {
     // ---- wrappers, one per entry point; fn is the real implementation ----
     static remixapi_ErrorCode CreateMaterial(PFN_remixapi_CreateMaterial fn, const remixapi_MaterialInfo* info, remixapi_MaterialHandle* out);
     static remixapi_ErrorCode DestroyMaterial(PFN_remixapi_DestroyMaterial fn, remixapi_MaterialHandle handle);
+    static remixapi_ErrorCode UpdateMaterial(PFN_remixapi_UpdateMaterial fn, remixapi_MaterialHandle handle, const remixapi_MaterialInfo* info);
     static remixapi_ErrorCode CreateMesh(PFN_remixapi_CreateMesh fn, const remixapi_MeshInfo* info, remixapi_MeshHandle* out);
     static remixapi_ErrorCode CreateMeshBatched(PFN_remixapi_CreateMeshBatched fn, const remixapi_MeshInfo* info, remixapi_MeshHandle* out);
     static remixapi_ErrorCode DestroyMesh(PFN_remixapi_DestroyMesh fn, remixapi_MeshHandle handle);
@@ -94,12 +95,19 @@ namespace dxvk {
     static remixapi_ErrorCode UpdateLightDefinition(PFN_remixapi_UpdateLightDefinition fn, remixapi_LightHandle handle, const remixapi_LightInfo* info);
     static remixapi_ErrorCode AutoInstancePersistentLights(PFN_remixapi_AutoInstancePersistentLights fn);
     static remixapi_ErrorCode SetConfigVariable(PFN_remixapi_SetConfigVariable fn, const char* key, const char* value);
+    static remixapi_ErrorCode CreateConfigLayer(PFN_remixapi_CreateConfigLayer fn, const remixapi_ConfigLayerInfoEXT* info, uint64_t* out);
+    static remixapi_ErrorCode SetConfigLayerBlends(PFN_remixapi_SetConfigLayerBlends fn, const remixapi_ConfigLayerBlend* blends, uint32_t count);
+    static remixapi_ErrorCode DestroyConfigLayer(PFN_remixapi_DestroyConfigLayer fn, uint64_t handle);
+    static remixapi_ErrorCode GetConfigValue(PFN_remixapi_GetConfigValue fn, const char* key, char* value, uint32_t* inoutSize);
     static remixapi_ErrorCode SetGameValue(PFN_remixapi_SetGameValue fn, const char* key, const char* value);
     static remixapi_ErrorCode GetGameValue(PFN_remixapi_GetGameValue fn, const char* key, char* outBuffer, uint32_t bufferSize, uint32_t* outSize);
     static remixapi_ErrorCode AddTextureHash(PFN_remixapi_AddTextureHash fn, const char* category, const char* hash);
     static remixapi_ErrorCode RemoveTextureHash(PFN_remixapi_RemoveTextureHash fn, const char* category, const char* hash);
     static remixapi_ErrorCode CreateTexture(PFN_remixapi_CreateTexture fn, const remixapi_TextureInfo* info, remixapi_TextureHandle* out);
     static remixapi_ErrorCode DestroyTexture(PFN_remixapi_DestroyTexture fn, remixapi_TextureHandle handle);
+    // Returns the size of one texel of a texture the call accepted.
+    using TextureElementSize = uint32_t (*)(remixapi_TextureHandle);
+    static remixapi_ErrorCode UpdateTexture(PFN_remixapi_UpdateTexture fn, const remixapi_TextureUpdateInfo* infos, uint32_t count, TextureElementSize elementSize);
     static remixapi_ErrorCode Present(PFN_remixapi_Present fn, const remixapi_PresentInfo* info);
     // The size and DXGI format of a RenderD3D11 destination, which the D3D11 host measures.
     struct TargetDesc {

@@ -253,7 +253,20 @@ namespace {
   }
 }
 
+void AssetReplacer::replaceExternalMaterialInPlace(remixapi_MaterialHandle handle, MaterialData&& data) {
+  data.setLiveHandle(reinterpret_cast<uint64_t>(handle));
+  m_extMaterials[handle].emplace(std::move(data));
+}
+
 void AssetReplacer::makeMaterialWithTexturePreload(DxvkContext& ctx, remixapi_MaterialHandle handle, MaterialData&& data) {
+  data.setLiveHandle(reinterpret_cast<uint64_t>(handle));
+
+  // A description can return to the hash an in-place update kept, which its users would not see as a change.
+  const MaterialData* live = accessExternalMaterial(handle);
+  if (live != nullptr && live->hasStableHash() && live->getHash() == data.getHash()) {
+    data.setStableHash(data.getHash() ^ 0x9E3779B97F4A7C15ull);
+  }
+
   // A create for a live handle replaces its material. try_emplace leaves data intact when the handle exists.
   auto [iter, isNew] = m_extMaterials.try_emplace(handle, std::move(data));
   if (!isNew) {

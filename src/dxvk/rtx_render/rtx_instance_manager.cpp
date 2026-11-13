@@ -1051,6 +1051,7 @@ namespace dxvk {
           if (currentInstance.m_isWorldSpaceUI) {
             // Here we need to do deep copy and patch the material
             tmpMaterialData = *materialData;
+            tmpMaterialData.markInstancePatched();
             materialData = &tmpMaterialData;
             // For worldspace UI, we want to show the UI (unlit) in the world.  So configure the blend mode if blending is used accordingly.
             tmpMaterialData.getOpaqueMaterialData().setEnableEmission(true);
@@ -1059,6 +1060,7 @@ namespace dxvk {
           } else if (currentInstance.surface.alphaState.emissiveBlend && RtxOptions::enableEmissiveBlendEmissiveOverride() && useLegacyAlphaState) {
             // Here we need to do deep copy and patch the material
             tmpMaterialData = *materialData;
+            tmpMaterialData.markInstancePatched();
             materialData = &tmpMaterialData;
             // If the user has decided to override the legacy alpha state, assume they know what they are doing and allow for explicit emission controls.
             // With rtx.emissiveBlendOverrideScaleByMaterial, a material that enables emission scales the override by its own intensity.

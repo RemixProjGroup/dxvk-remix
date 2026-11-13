@@ -126,6 +126,7 @@ the API, see [`docs/RemixApi.md`](docs/RemixApi.md).
 | `REMIXAPI_STRUCT_TYPE_ASSET_KEY_EXT` | `0x4E560002` |  |
 | `REMIXAPI_STRUCT_TYPE_EXTERNAL_FRAME_EXT` | `0x4E560003` |  |
 | `REMIXAPI_STRUCT_TYPE_COLOR_GRADE_EXT` | `0x4E560004` |  |
+| `REMIXAPI_STRUCT_TYPE_CONFIG_LAYER_INFO_EXT` | `0x4E560005` |  |
 | `REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TEXTURE_TRANSFORM_EXT` | `0x4E560006` |  |
 | `REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT` | `0x4E560007` |  |
 
@@ -152,6 +153,7 @@ the API, see [`docs/RemixApi.md`](docs/RemixApi.md).
 | `REMIXAPI_ERROR_CODE_HRESULT_VK_CREATE_DEVICE_FAIL` | `0x88960005` |  |
 | `REMIXAPI_ERROR_CODE_HRESULT_GRAPHICS_QUEUE_FAMILY_MISSING` | `0x88960006` |  |
 | `REMIXAPI_ERROR_CODE_FEATURE_UNAVAILABLE` | `0x4E560001` | Remix Plus error codes live from 0x4E560000 on, like the Remix Plus struct types. The device or the current output does not support the requested feature. |
+| `REMIXAPI_ERROR_CODE_BUFFER_TOO_SMALL` | `0x4E560002` | The output buffer is too small. The call reports the size it needs. |
 
 ### `remixapi_CameraType`
 
@@ -956,6 +958,66 @@ picks another preset (rtx.tonemap.gradePreset). Any thread may call these; they 
 | `float` | `anchor` | where the tone curve's shoulder starts |
 | `float` | `shoulder` | how late and hard the shoulder bends |
 
+### `remixapi_TextureUpdateRect`
+
+Partial texture updates. An optional named export; the versioned Interface table is unchanged.
+See docs/RemixApi.md, "UpdateTexture".
+
+| Type | Field | Notes |
+| :-- | :-- | :-- |
+| `uint32_t` | `x` | Position and size at mip 0. |
+| `uint32_t` | `y` |  |
+| `uint32_t` | `width` |  |
+| `uint32_t` | `height` |  |
+| `uint32_t` | `rowPitch` | Bytes between the starts of rows. 0 means tightly packed. |
+| `const void*` | `pixels` | In the texture's own format. |
+
+### `remixapi_TextureUpdateInfo`
+
+| Type | Field | Notes |
+| :-- | :-- | :-- |
+| `remixapi_TextureHandle` | `texture` |  |
+| `const remixapi_TextureUpdateRect*` | `rects_values` |  |
+| `uint32_t` | `rects_count` |  |
+
+### `remixapi_ConfigLayerValue`
+
+Config layers: a sparse .conf loaded as an option layer that the host fades. Optional named exports; the versioned
+Interface table is unchanged. See docs/RemixApi.md, "Config layers (named exports)".
+These are for authored looks such as weather or interiors, not for values computed per frame.
+One option of an in-memory layer, written as in a .conf file.
+
+| Type | Field | Notes |
+| :-- | :-- | :-- |
+| `const char*` | `key` |  |
+| `const char*` | `value` |  |
+
+### `remixapi_ConfigLayerInfoEXT`
+
+A layer comes from either confPath, or values with layerName. Set the other source to null and 0.
+
+| Type | Field | Notes |
+| :-- | :-- | :-- |
+| `remixapi_StructType` | `sType` |  |
+| `void*` | `pNext` |  |
+| `remixapi_Path` | `confPath` |  |
+| `const remixapi_ConfigLayerValue*` | `values_values` | Copied during the call. Such a layer is never written to a file. |
+| `uint32_t` | `values_count` |  |
+| `const char*` | `layerName` | Shown in the developer menu's Option Layers view. Not empty, at most 128 characters, and without a path separator or a .conf ending. |
+| `uint32_t` | `priority` | Higher values are blended over lower ones. Clamped to 100..10000000, which ranks the layer above rtx.conf and below user settings and quality presets. |
+| `float` | `initialStrength` | Clamped to 0..1. Floats blend by strength, and other types apply once strength reaches threshold. |
+| `float` | `initialThreshold` |  |
+
+### `remixapi_ConfigLayerBlend`
+
+One handle's blend. Strength and threshold are clamped to 0..1.
+
+| Type | Field | Notes |
+| :-- | :-- | :-- |
+| `uint64_t` | `handle` |  |
+| `float` | `strength` |  |
+| `float` | `threshold` |  |
+
 ### `remixapi_ExternalFrameEXT`
 
 External frame: the presented image, shared with another Vulkan device or process without a CPU readback.
@@ -1585,6 +1647,60 @@ Parameters:
 
 - `const char* name`
 - `const remixapi_ColorGradeEXT* grade`
+
+### `PFN_remixapi_UpdateMaterial`
+
+Returns: `remixapi_ErrorCode`
+
+Parameters:
+
+- `remixapi_MaterialHandle handle`
+- `const remixapi_MaterialInfo* info`
+
+### `PFN_remixapi_UpdateTexture`
+
+Returns: `remixapi_ErrorCode`
+
+Parameters:
+
+- `const remixapi_TextureUpdateInfo* infos`
+- `uint32_t count`
+
+### `PFN_remixapi_CreateConfigLayer`
+
+Returns: `remixapi_ErrorCode`
+
+Parameters:
+
+- `const remixapi_ConfigLayerInfoEXT* info`
+- `uint64_t* out_handle`
+
+### `PFN_remixapi_SetConfigLayerBlends`
+
+Returns: `remixapi_ErrorCode`
+
+Parameters:
+
+- `const remixapi_ConfigLayerBlend* blends`
+- `uint32_t count`
+
+### `PFN_remixapi_DestroyConfigLayer`
+
+Returns: `remixapi_ErrorCode`
+
+Parameters:
+
+- `uint64_t handle`
+
+### `PFN_remixapi_GetConfigValue`
+
+Returns: `remixapi_ErrorCode`
+
+Parameters:
+
+- `const char* key`
+- `char* value`
+- `uint32_t* inout_size`
 
 ### `PFN_remixapi_ConfigureExternalFrame`
 

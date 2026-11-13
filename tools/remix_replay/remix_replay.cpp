@@ -811,6 +811,11 @@ namespace {
     PFN_remixapi_UpdateRetainedInstances  updateRetainedMany = nullptr;
     PFN_remixapi_DestroyRetainedInstances destroyRetained = nullptr;
     PFN_remixapi_DrawRetainedInstances    drawRetained = nullptr;
+    PFN_remixapi_UpdateMaterial           updateMaterial = nullptr;
+    PFN_remixapi_UpdateTexture            updateTexture = nullptr;
+    PFN_remixapi_CreateConfigLayer        createConfigLayer = nullptr;
+    PFN_remixapi_SetConfigLayerBlends     setConfigLayerBlends = nullptr;
+    PFN_remixapi_DestroyConfigLayer       destroyConfigLayer = nullptr;
   };
 
   struct TextureEntry {
@@ -1103,6 +1108,91 @@ namespace {
         remixapi_TextureHandle replaced = nullptr;
         result = createImportedTexture(handleBits(h), encoding, readbackId, &replaced, REMIXAPI_TEXTURE_HOST_IMPORT_FLAG_REPLACE);
         m_replaces += 1;
+        break;
+      }
+      case Op::UpdateTexture: {
+        const uint32_t count = r.get<uint32_t>();
+        std::vector<remixapi_TextureUpdateInfo> infos(count);
+        std::vector<std::vector<remixapi_TextureUpdateRect>> rects(count);
+        for (uint32_t i = 0; i < count; ++i) {
+          r.handle(HandleKind::Texture, infos[i].texture);
+          rects[i].resize(r.get<uint32_t>());
+          for (remixapi_TextureUpdateRect& rect : rects[i]) {
+            rect.x = r.get<uint32_t>();
+            rect.y = r.get<uint32_t>();
+            rect.width = r.get<uint32_t>();
+            rect.height = r.get<uint32_t>();
+            rect.rowPitch = r.get<uint32_t>();
+            uint64_t size = 0;
+            r.blobBytes(rect.pixels, size);
+          }
+          infos[i].rects_values = rects[i].data();
+          infos[i].rects_count = uint32_t(rects[i].size());
+        }
+        result = m_ex.updateTexture ? m_ex.updateTexture(infos.data(), count) : REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+        break;
+      }
+      case Op::UpdateMaterial: {
+        remixapi_MaterialHandle h;
+        r.handle(HandleKind::Material, h);
+        remixapi_MaterialInfo info {};
+        info.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
+        ioMaterialInfo(r, info);
+        result = m_ex.updateMaterial ? m_ex.updateMaterial(h, &info) : REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+        break;
+      }
+      case Op::CreateConfigLayer: {
+        const char* text = nullptr;
+        r.str(text);
+        remixapi_ConfigLayerInfoEXT info {};
+        info.sType = REMIXAPI_STRUCT_TYPE_CONFIG_LAYER_INFO_EXT;
+        info.priority = r.get<uint32_t>();
+        info.initialStrength = r.get<float>();
+        info.initialThreshold = r.get<float>();
+        const uint64_t recorded = r.get<uint64_t>();
+        // The layer's key name, which a recording made before it was added lacks.
+        const char* key = nullptr;
+        if (!r.atEnd()) {
+          r.str(key);
+        }
+        // The recorded text goes to a file of its own, since the host's path may not exist here.
+        const fs::path dir = m_o.recording / "config-layers";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        // One file per layer key, so handles that shared a layer in the recording share one here, and distinct layers
+        // with the same text and priority stay distinct. Without a key, equal text shares a file.
+        const std::string identity = key != nullptr ? std::string("key:") + key : std::string("text:") + (text != nullptr ? text : "");
+        const fs::path file = dir / (std::to_string(std::hash<std::string> {}(identity)) + ".conf");
+        if (FILE* out = _wfopen(file.c_str(), L"wb")) {
+          if (text != nullptr) {
+            std::fwrite(text, 1, std::strlen(text), out);
+          }
+          std::fclose(out);
+        }
+        const std::wstring path = file.wstring();
+        info.confPath = path.c_str();
+        uint64_t h = 0;
+        result = m_ex.createConfigLayer ? m_ex.createConfigLayer(&info, &h) : REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+        if (result == REMIXAPI_ERROR_CODE_SUCCESS) {
+          m_remap.set(HandleKind::ConfigLayer, recorded, h);
+        }
+        break;
+      }
+      case Op::SetConfigLayerBlends: {
+        const uint32_t count = r.get<uint32_t>();
+        std::vector<remixapi_ConfigLayerBlend> blends(count);
+        for (remixapi_ConfigLayerBlend& blend : blends) {
+          r.handle(HandleKind::ConfigLayer, blend.handle);
+          blend.strength = r.get<float>();
+          blend.threshold = r.get<float>();
+        }
+        result = m_ex.setConfigLayerBlends ? m_ex.setConfigLayerBlends(blends.data(), count) : REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+        break;
+      }
+      case Op::DestroyConfigLayer: {
+        uint64_t h = 0;
+        r.handle(HandleKind::ConfigLayer, h);
+        result = m_ex.destroyConfigLayer ? m_ex.destroyConfigLayer(h) : REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
         break;
       }
       case Op::RequestVramCompaction:
@@ -1489,6 +1579,11 @@ int wmain(int argc, wchar_t** argv) {
   ex.updateRetainedMany = reinterpret_cast<PFN_remixapi_UpdateRetainedInstances>(GetProcAddress(dll, "remixapi_UpdateRetainedInstances"));
   ex.destroyRetained = reinterpret_cast<PFN_remixapi_DestroyRetainedInstances>(GetProcAddress(dll, "remixapi_DestroyRetainedInstances"));
   ex.drawRetained = reinterpret_cast<PFN_remixapi_DrawRetainedInstances>(GetProcAddress(dll, "remixapi_DrawRetainedInstances"));
+  ex.updateTexture = reinterpret_cast<PFN_remixapi_UpdateTexture>(GetProcAddress(dll, "remixapi_UpdateTexture"));
+  ex.updateMaterial = reinterpret_cast<PFN_remixapi_UpdateMaterial>(GetProcAddress(dll, "remixapi_UpdateMaterial"));
+  ex.createConfigLayer = reinterpret_cast<PFN_remixapi_CreateConfigLayer>(GetProcAddress(dll, "remixapi_CreateConfigLayer"));
+  ex.setConfigLayerBlends = reinterpret_cast<PFN_remixapi_SetConfigLayerBlends>(GetProcAddress(dll, "remixapi_SetConfigLayerBlends"));
+  ex.destroyConfigLayer = reinterpret_cast<PFN_remixapi_DestroyConfigLayer>(GetProcAddress(dll, "remixapi_DestroyConfigLayer"));
 
   const uint32_t width = o.width ? o.width : (recordedWidth ? recordedWidth : 1920);
   const uint32_t height = o.height ? o.height : (recordedHeight ? recordedHeight : 1080);

@@ -73,6 +73,39 @@ against its buffer before it copies (`D3D9Rtx::verticesInRange`), rasterizes a d
 | topology-churn-omm | A retained alpha-tested object whose triangles change every frame | `--d3d9 topology-churn-omm`: a fence of 10 cutout quads in one dynamic buffer, rewritten every frame and drawn alpha tested with 14 triangles on even frames and 20 on odd ones, `rtx.opacityMicromap.enable` on | test pending (a mesh refresh with another triangle count) | | No `[OmmBake] rejected` line; `staleTexelTables=0` and `topologyResets` > 0 in the `[OmmTopology]` lines (the micromap data follows the in-place rebuilds; the second needs micromap support) |
 | soak | Long sessions | test pending | test pending | | `[SceneSoak]` memory and table sizes flat after warm-up; no counter wraps |
 
+### texture-update
+
+`--texture-update` (`api-texture-update`). The default scene plus a 256 texel RGBA8 sRGB texture with mips on a retained
+cube, with a 16x16 rectangle written every frame from `--event-frame` for 100 frames. Expectation:
+`texture-update: N calls, 0 unexpected results`, which includes a compressed texture, a stale handle, a rectangle outside
+the texture and a short pitch. The last `[TextureUpdate]` line shows `dropped=0` and at most 150 mip texels per rectangle,
+and the `[PerfCpu]` window of frames 300-599 shows `created:0.00`.
+
+### material-update
+
+`--material-update` (`api-material-update`, 1020 frames). The default scene held still, so the runtime sees an
+unchanged scene unless the case changes it, plus retained, per-frame and material-override cubes of one material and a
+retained cube of a second one, with `rtx.coreMaterial.gpuCheck` on. From frame 320 to 580 the emissive and roughness of
+the first material change every frame and nothing else does. At frame 620 the second material's cube is destroyed, at
+650 the material is updated with no user, at 680 the cube is created again, and at 710 the material is updated back to
+its first value. At 740 an alpha test change of the first material falls back to a rebuild, and from 760 to 880 its
+parameters change every frame again. Expectation: `material-update: N calls, 0 unexpected results`, which includes a
+type change, a stale handle and a bad struct. The last `[MaterialUpdate]` totals show `rebuilt=1` and `inPlace=383`,
+and the first shows `staticUploads` of at least 200, which are uploads only the updates caused while the scene stood
+still. The `[CoreMaterial] check` lines of frames 600 and 900 show `mismatches=0`, so the uploaded records hold the
+updated values, and the `gpuCheck` lines show `mismatches=0`. The `[PerfCpu]` window of frames 300-599 shows
+`created:0.00` and a transient `built:0.00`.
+
+### config-layers
+
+`--config-layers` (`api-config-layers`). The default scene plus a `.conf` written beside the testhost that sets
+`rtx.emissiveIntensity`. From `--event-frame` on, the testhost reads the option back after each step. It checks strength
+1, a fade to 0.5, a lower 0.25 that must hold for 20 frames without another call, the option's own value after the
+destroy, and the return codes for a missing file, a bad struct, a non-finite blend, a stale handle and a small buffer.
+Then an in-memory layer sets the same option, and the option follows it until its destroy. Its return codes cover both
+sources, neither, an unknown key, an invalid value, a bad name, and a name in use with other values.
+Expectation: `config-layers: N calls, 0 unexpected results`.
+
 ### bad-values
 
 From frame 400 on (`--event-frame`). Each D3D9 draw has buffers of its own, so the frontend cannot take it for another

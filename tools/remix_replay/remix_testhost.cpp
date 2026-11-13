@@ -4,7 +4,7 @@
 //
 //   remix_testhost --runtime <dir> [--frames N] [--d3d11] [--show] [--origin-shift [--camera-events] [--instanced]]
 //                  [--skinned N [--reorder] [--skinned-dense]] [--particles] [--usd-mod [--mod-edit-frame F]] [--light-updates N]
-//                  [--asset-key] [--clusters N [--stream K [--create-first]]] [--bad-values [--clean]] [--lifecycle] [--event-frame F]
+//                  [--asset-key] [--clusters N [--stream K [--create-first]]] [--bad-values [--clean]] [--lifecycle] [--config-layers] [--material-update] [--texture-update] [--event-frame F]
 //                  [--caller-threads T] [--light-resend] [--light-recreate K] [--vram-budget M]
 //   remix_testhost --runtime <dir> --d3d9 <scenario> [--frames N] [--event-frame F] [--hidden-frames N] [--overlay] [--overlay-first] [--precombined]
 //   remix_testhost --d3d9-hashes
@@ -72,6 +72,15 @@
 // valid values, so the two runs' good objects can be compared. --lifecycle: the default scene, plus the lifecycle case's
 // calls in unexpected orders (destroy unknown, destroy twice, update after destroy, a mesh hash reused). Both print
 // "<case>: N calls, M unexpected results" with the return codes that differed from the case's table.
+//
+// --config-layers: the default scene, plus a .conf loaded as a host config layer and faded from --event-frame on, with
+// each step read back through remixapi_GetConfigValue (the config-layers case of docs/frontend-conformance.md).
+//
+// --material-update: the default scene held still, plus cubes whose materials change through remixapi_UpdateMaterial,
+// one of them while it has no user (the material-update case of docs/frontend-conformance.md). Needs at least 900 frames.
+//
+// --texture-update: the default scene, plus a cube whose texture gets a rectangle written every frame through
+// remixapi_UpdateTexture (the texture-update case of docs/frontend-conformance.md).
 //
 // --caller-threads T: the default scene, plus 32 small cubes drawn with DrawInstance every frame and two meshes made
 // at --event-frame (one with CreateMeshBatched, one with CreateMesh) and drawn from then on, the calls split over T
@@ -308,6 +317,9 @@ int wmain(int argc, wchar_t** argv) {
   bool badValues = false;
   bool clean = false;
   bool lifecycle = false;
+  bool configLayers = false;
+  bool materialUpdate = false;
+  bool textureUpdate = false;
   int caseFrame = 400;
   int callerThreads = 0;
   std::wstring d3d9Scenario;
@@ -378,6 +390,12 @@ int wmain(int argc, wchar_t** argv) {
       d3d9Args.clean = true;
     } else if (a == L"--lifecycle") {
       lifecycle = true;
+    } else if (a == L"--config-layers") {
+      configLayers = true;
+    } else if (a == L"--material-update") {
+      materialUpdate = true;
+    } else if (a == L"--texture-update") {
+      textureUpdate = true;
     } else if (a == L"--caller-threads" && i + 1 < argc) {
       callerThreads = std::max(_wtoi(argv[++i]), 1);
     } else if (a == L"--event-frame" && i + 1 < argc) {
@@ -502,6 +520,12 @@ int wmain(int argc, wchar_t** argv) {
   auto updateRetainedMany = reinterpret_cast<PFN_remixapi_UpdateRetainedInstances>(proc("remixapi_UpdateRetainedInstances"));
   auto destroyRetained = reinterpret_cast<PFN_remixapi_DestroyRetainedInstances>(proc("remixapi_DestroyRetainedInstances"));
   auto drawRetained = reinterpret_cast<PFN_remixapi_DrawRetainedInstances>(proc("remixapi_DrawRetainedInstances"));
+  auto updateTexture = reinterpret_cast<PFN_remixapi_UpdateTexture>(GetProcAddress(dll, "remixapi_UpdateTexture"));
+  auto updateMaterial = reinterpret_cast<PFN_remixapi_UpdateMaterial>(GetProcAddress(dll, "remixapi_UpdateMaterial"));
+  auto createConfigLayer = reinterpret_cast<PFN_remixapi_CreateConfigLayer>(GetProcAddress(dll, "remixapi_CreateConfigLayer"));
+  auto setConfigLayerBlends = reinterpret_cast<PFN_remixapi_SetConfigLayerBlends>(GetProcAddress(dll, "remixapi_SetConfigLayerBlends"));
+  auto destroyConfigLayer = reinterpret_cast<PFN_remixapi_DestroyConfigLayer>(GetProcAddress(dll, "remixapi_DestroyConfigLayer"));
+  auto getConfigValue = reinterpret_cast<PFN_remixapi_GetConfigValue>(GetProcAddress(dll, "remixapi_GetConfigValue"));
   auto registerD3D11 = reinterpret_cast<PFN_remixapi_RegisterD3D11Device>(proc("remixapi_RegisterD3D11Device"));
   auto renderD3D11 = reinterpret_cast<PFN_remixapi_RenderD3D11>(proc("remixapi_RenderD3D11"));
   auto prepareEx = reinterpret_cast<PFN_remixapi_PrepareD3D11TextureEx>(proc("remixapi_PrepareD3D11TextureEx"));
@@ -1587,6 +1611,355 @@ int wmain(int argc, wchar_t** argv) {
     }
   };
 
+  // --texture-update. The texture is made before frame 300, and the patches run inside the log window of frames 300-599.
+  CaseCalls textures { "texture-update" };
+  constexpr uint64_t kPatchedTextureHash = 0x80000000000000B0ull;
+  constexpr uint64_t kCompressedTextureHash = 0x80000000000000B1ull;
+  constexpr uint32_t kPatchedSize = 256;
+  std::vector<uint32_t> patchedChain;
+  std::vector<uint32_t> patchPixels(16 * 16, 0xFF2040E0u);
+  remixapi_TextureHandle patchedTexture = nullptr, compressedTexture = nullptr;
+  remixapi_MaterialHandle patchedMaterial = nullptr;
+  remixapi_MeshHandle patchedMesh = nullptr;
+  uint64_t patchedRetained = 0;
+  std::wstring patchedPath;
+  const auto textureUpdateFrame = [&](int frame) {
+    if (frame == 10) {
+      uint32_t mips = 0;
+      for (uint32_t size = kPatchedSize; size > 0; size >>= 1) {
+        patchedChain.insert(patchedChain.end(), size_t(size) * size, 0xFF808080u);
+        ++mips;
+      }
+      remixapi_TextureInfo ti {};
+      ti.sType = REMIXAPI_STRUCT_TYPE_TEXTURE_INFO;
+      ti.hash = kPatchedTextureHash;
+      ti.width = kPatchedSize;
+      ti.height = kPatchedSize;
+      ti.depth = 1;
+      ti.mipLevels = mips;
+      ti.format = REMIXAPI_FORMAT_R8G8B8A8_SRGB;
+      ti.data = patchedChain.data();
+      ti.dataSize = patchedChain.size() * sizeof(uint32_t);
+      check(g_remix.CreateTexture(&ti, &patchedTexture), "CreateTexture patched");
+      static const uint8_t kBlock[8] = {};
+      ti.hash = kCompressedTextureHash;
+      ti.width = 4;
+      ti.height = 4;
+      ti.mipLevels = 1;
+      ti.format = REMIXAPI_FORMAT_BC1_RGB_UNORM;
+      ti.data = kBlock;
+      ti.dataSize = sizeof(kBlock);
+      check(g_remix.CreateTexture(&ti, &compressedTexture), "CreateTexture compressed");
+
+      wchar_t buffer[32];
+      swprintf(buffer, 32, L"0x%llX", static_cast<unsigned long long>(kPatchedTextureHash));
+      patchedPath = buffer;
+      remixapi_MaterialInfoOpaqueEXT opaque {};
+      opaque.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT;
+      opaque.albedoConstant = { 1.f, 1.f, 1.f };
+      opaque.opacityConstant = 1.f;
+      opaque.roughnessConstant = 0.5f;
+      opaque.alphaTestType = 7;
+      remixapi_MaterialInfo mi {};
+      mi.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
+      mi.pNext = &opaque;
+      mi.hash = 0x80000000000000B2ull;
+      mi.albedoTexture = patchedPath.c_str();
+      check(g_remix.CreateMaterial(&mi, &patchedMaterial), "CreateMaterial patched");
+      remixapi_MeshInfoSurfaceTriangles s {};
+      s.vertices_values = caseCube.data(); s.vertices_count = caseCube.size();
+      s.indices_values = caseCubeIdx.data(); s.indices_count = caseCubeIdx.size();
+      s.material = patchedMaterial;
+      remixapi_MeshInfo mesh {};
+      mesh.sType = REMIXAPI_STRUCT_TYPE_MESH_INFO;
+      mesh.hash = 0x80000000000000B3ull;
+      mesh.surfaces_values = &s;
+      mesh.surfaces_count = 1;
+      check(g_remix.CreateMesh(&mesh, &patchedMesh), "CreateMesh patched");
+      remixapi_InstanceInfo ri {};
+      ri.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
+      ri.mesh = patchedMesh;
+      ri.transform = translate(3.f, 0.5f, -4.f, 0.5f);
+      check(createRetained(&ri, &patchedRetained), "CreateRetainedInstance patched");
+    }
+    if (frame >= caseFrame && frame < caseFrame + 100) {
+      remixapi_TextureUpdateRect rect {};
+      rect.x = 8 + uint32_t(frame - caseFrame) * 2;
+      rect.y = 8;
+      rect.width = 16;
+      rect.height = 16;
+      rect.rowPitch = 16 * 4;
+      rect.pixels = patchPixels.data();
+      const remixapi_TextureUpdateInfo info { patchedTexture, &rect, 1 };
+      textures.expect(updateTexture(&info, 1), kOk, "UpdateTexture");
+    } else if (frame == caseFrame + 110) {
+      remixapi_TextureUpdateRect rect {};
+      rect.width = 4;
+      rect.height = 4;
+      rect.pixels = patchPixels.data();
+      remixapi_TextureUpdateInfo info { compressedTexture, &rect, 1 };
+      textures.expect(updateTexture(&info, 1), REMIXAPI_ERROR_CODE_FEATURE_UNAVAILABLE, "UpdateTexture compressed");
+      info.texture = reinterpret_cast<remixapi_TextureHandle>(0x80000000DEAD00B0ull);
+      textures.expect(updateTexture(&info, 1), kInvalid, "UpdateTexture stale handle");
+      info.texture = patchedTexture;
+      rect.x = kPatchedSize - 2;
+      textures.expect(updateTexture(&info, 1), kInvalid, "UpdateTexture outside the texture");
+      rect.x = 0;
+      rect.rowPitch = 4;
+      textures.expect(updateTexture(&info, 1), kInvalid, "UpdateTexture short pitch");
+      rect.rowPitch = 0;
+      rect.pixels = nullptr;
+      textures.expect(updateTexture(&info, 1), kInvalid, "UpdateTexture null pixels");
+      textures.expect(updateTexture(nullptr, 1), kInvalid, "UpdateTexture null array");
+      textures.expect(updateTexture(nullptr, 0), kOk, "UpdateTexture empty");
+    }
+  };
+
+  // --material-update. The rest of the scene holds still (staticScene below), so an update is the only change and the
+  // runtime may skip its scene uploads. The runtime logs [MaterialUpdate] and its material self-checks every 300 frames:
+  //   10       the cubes are made.
+  //   320-580  per-frame parameter updates, with nothing else changing.
+  //   400      calls that must fail or change nothing.
+  //   620-710  a second material loses its only user, is updated, gets the user back, and is updated back to its
+  //            first value, all in place.
+  //   740      an alpha test change, which rebuilds the users.
+  //   760-880  per-frame parameter updates after the rebuild.
+  // The case needs at least 900 frames.
+  CaseCalls materials { "material-update" };
+  constexpr uint64_t kUpdatedMaterialHash = 0x80000000000000A0ull;
+  constexpr uint64_t kCycledMaterialHash = 0x80000000000000A3ull;
+  remixapi_MaterialInfoOpaqueEXT updatedOpaque {};
+  updatedOpaque.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT;
+  updatedOpaque.albedoConstant = { 0.6f, 0.6f, 0.6f };
+  updatedOpaque.opacityConstant = 1.f;
+  updatedOpaque.roughnessConstant = 0.5f;
+  updatedOpaque.alphaTestType = 7;
+  updatedOpaque.alphaReferenceValue = 0;
+  remixapi_MaterialInfo updatedInfo {};
+  updatedInfo.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
+  updatedInfo.pNext = &updatedOpaque;
+  updatedInfo.hash = kUpdatedMaterialHash;
+  remixapi_MaterialInfoOpaqueEXT cycledOpaque = updatedOpaque;
+  cycledOpaque.albedoConstant = { 0.2f, 0.8f, 0.2f };
+  remixapi_MaterialInfo cycledInfo = updatedInfo;
+  cycledInfo.pNext = &cycledOpaque;
+  cycledInfo.hash = kCycledMaterialHash;
+  remixapi_MaterialHandle updatedMaterial = nullptr, overrideBase = nullptr, cycledMaterial = nullptr;
+  remixapi_MeshHandle updatedMesh = nullptr, overrideMesh = nullptr, cycledMesh = nullptr;
+  uint64_t updatedRetained[2] = {};
+  uint64_t cycledRetained = 0;
+  const auto createCycledInstance = [&]() {
+    remixapi_InstanceInfo ri {};
+    ri.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
+    ri.mesh = cycledMesh;
+    ri.transform = translate(-2.5f, 0.5f, -5.f, 0.5f);
+    materials.expect(createRetained(&ri, &cycledRetained), kOk, "CreateRetainedInstance cycled");
+  };
+  const auto updateParameters = [&](float t) {
+    updatedOpaque.roughnessConstant = 0.1f + 0.8f * t;
+    updatedInfo.emissiveIntensity = 1.f + 3.f * t;
+    updatedInfo.emissiveColorConstant = { 1.f, 0.5f, 0.2f };
+    materials.expect(updateMaterial(updatedMaterial, &updatedInfo), kOk, "UpdateMaterial parameters");
+  };
+  const auto materialUpdateFrame = [&](int frame) {
+    if (frame == 10) {
+      check(g_remix.CreateMaterial(&updatedInfo, &updatedMaterial), "CreateMaterial updated");
+      remixapi_MaterialInfo baseInfo = updatedInfo;
+      baseInfo.hash = kUpdatedMaterialHash + 1;
+      check(g_remix.CreateMaterial(&baseInfo, &overrideBase), "CreateMaterial override base");
+      check(g_remix.CreateMaterial(&cycledInfo, &cycledMaterial), "CreateMaterial cycled");
+      const auto meshOf = [&](uint64_t hash, remixapi_MaterialHandle material, remixapi_MeshHandle* out) {
+        remixapi_MeshInfoSurfaceTriangles s {};
+        s.vertices_values = caseCube.data(); s.vertices_count = caseCube.size();
+        s.indices_values = caseCubeIdx.data(); s.indices_count = caseCubeIdx.size();
+        s.material = material;
+        remixapi_MeshInfo mi {};
+        mi.sType = REMIXAPI_STRUCT_TYPE_MESH_INFO;
+        mi.hash = hash;
+        mi.surfaces_values = &s;
+        mi.surfaces_count = 1;
+        check(g_remix.CreateMesh(&mi, out), "CreateMesh material-update");
+      };
+      meshOf(0x80000000000000A1ull, updatedMaterial, &updatedMesh);
+      meshOf(0x80000000000000A2ull, overrideBase, &overrideMesh);
+      meshOf(0x80000000000000A4ull, cycledMaterial, &cycledMesh);
+      remixapi_InstanceInfo ri {};
+      ri.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
+      ri.mesh = updatedMesh;
+      ri.transform = translate(-3.f, 0.5f, -4.f, 0.5f);
+      check(createRetained(&ri, &updatedRetained[0]), "CreateRetainedInstance material-update");
+      remixapi_InstanceInfoMaterialOverrideEXT over {};
+      over.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_MATERIAL_OVERRIDE_EXT;
+      over.material = updatedMaterial;
+      ri.pNext = &over;
+      ri.mesh = overrideMesh;
+      ri.transform = translate(-2.f, 0.5f, -4.f, 0.5f);
+      check(createRetained(&ri, &updatedRetained[1]), "CreateRetainedInstance material-update override");
+      createCycledInstance();
+    }
+    if (frame >= 320 && frame <= 580) {
+      updateParameters(float(frame - 320) / 260.f);
+    } else if (frame >= 760 && frame <= 880) {
+      updateParameters(1.f - float(frame - 760) / 120.f);
+    }
+    if (frame == caseFrame) {
+      // The description of the update made earlier in this frame is no change.
+      materials.expect(updateMaterial(updatedMaterial, &updatedInfo), kOk, "UpdateMaterial repeat");
+      remixapi_MaterialInfoTranslucentEXT translucent {};
+      translucent.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TRANSLUCENT_EXT;
+      remixapi_MaterialInfo other = updatedInfo;
+      other.pNext = &translucent;
+      materials.expect(updateMaterial(updatedMaterial, &other), kInvalid, "UpdateMaterial type change");
+      materials.expect(updateMaterial(reinterpret_cast<remixapi_MaterialHandle>(0x80000000DEAD00A0ull), &updatedInfo), kInvalid, "UpdateMaterial stale handle");
+      other = updatedInfo;
+      other.sType = REMIXAPI_STRUCT_TYPE_NONE;
+      materials.expect(updateMaterial(updatedMaterial, &other), kInvalid, "UpdateMaterial wrong sType");
+      other = updatedInfo;
+      other.hash = kUpdatedMaterialHash + 7;
+      materials.expect(updateMaterial(updatedMaterial, &other), kInvalid, "UpdateMaterial other hash");
+    }
+    if (frame == 620) {
+      materials.expect(destroyRetained(&cycledRetained, 1), kOk, "DestroyRetainedInstances cycled");
+    } else if (frame == 650) {
+      // The material has no user now. Its surface material must take the new value all the same.
+      cycledOpaque.albedoConstant = { 0.8f, 0.2f, 0.2f };
+      materials.expect(updateMaterial(cycledMaterial, &cycledInfo), kOk, "UpdateMaterial without users");
+    } else if (frame == 680) {
+      createCycledInstance();
+    } else if (frame == 710) {
+      // Back to the first value, which a surface material left unwritten would still hold.
+      cycledOpaque.albedoConstant = { 0.2f, 0.8f, 0.2f };
+      materials.expect(updateMaterial(cycledMaterial, &cycledInfo), kOk, "UpdateMaterial back to the first value");
+    } else if (frame == 740) {
+      updatedOpaque.alphaTestType = 4;
+      updatedOpaque.alphaReferenceValue = 16;
+      materials.expect(updateMaterial(updatedMaterial, &updatedInfo), kOk, "UpdateMaterial alpha test");
+    }
+    if (updatedMesh != nullptr) {
+      remixapi_InstanceInfo di {};
+      di.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
+      di.mesh = updatedMesh;
+      di.transform = translate(-1.f, 0.5f, -4.f, 0.5f);
+      check(g_remix.DrawInstance(&di), "DrawInstance material-update");
+    }
+  };
+
+  // --config-layers. A step's result is read 10 frames later, since the render thread may run a few frames behind.
+  CaseCalls layers { "config-layers" };
+  constexpr float kLayerValue = 3.f;
+  float layerBase = 0.f;
+  uint64_t layerHandle = 0;
+  const auto readLayerOption = [&]() {
+    char text[64] = {};
+    uint32_t size = sizeof(text);
+    layers.expect(getConfigValue("rtx.emissiveIntensity", text, &size), kOk, "GetConfigValue");
+    return float(std::atof(text));
+  };
+  const auto expectLayerOption = [&](float want, const char* what) {
+    const float got = readLayerOption();
+    layers.expect(std::fabs(got - want) < 0.01f ? kOk : REMIXAPI_ERROR_CODE_GENERAL_FAILURE, kOk, what);
+  };
+  const auto setLayerBlend = [&](float strength, float threshold, const char* what) {
+    const remixapi_ConfigLayerBlend blend { layerHandle, strength, threshold };
+    layers.expect(setConfigLayerBlends(&blend, 1), kOk, what);
+  };
+  const auto configLayersFrame = [&](int frame) {
+    if (frame == caseFrame) {
+      layerBase = readLayerOption();
+      const fs::path conf = fs::temp_directory_path() / "remix_testhost_config_layer.conf";
+      if (FILE* out = _wfopen(conf.c_str(), L"wb")) {
+        std::fprintf(out, "rtx.emissiveIntensity = %f\n", kLayerValue);
+        std::fclose(out);
+      }
+      const std::wstring path = conf.wstring();
+      remixapi_ConfigLayerInfoEXT info {};
+      info.sType = REMIXAPI_STRUCT_TYPE_CONFIG_LAYER_INFO_EXT;
+      info.confPath = L"remix_testhost_no_such_file.conf";
+      info.priority = 10000;
+      info.initialStrength = 1.f;
+      info.initialThreshold = 0.1f;
+      layers.expect(createConfigLayer(&info, &layerHandle), REMIXAPI_ERROR_CODE_GENERAL_FAILURE, "CreateConfigLayer missing file");
+      info.confPath = path.c_str();
+      info.initialStrength = kNaN;
+      layers.expect(createConfigLayer(&info, &layerHandle), kInvalid, "CreateConfigLayer NaN strength");
+      info.initialStrength = 1.f;
+      info.sType = REMIXAPI_STRUCT_TYPE_NONE;
+      layers.expect(createConfigLayer(&info, &layerHandle), kInvalid, "CreateConfigLayer wrong sType");
+      info.sType = REMIXAPI_STRUCT_TYPE_CONFIG_LAYER_INFO_EXT;
+      layers.expect(createConfigLayer(&info, &layerHandle), kOk, "CreateConfigLayer");
+
+      char tiny[1] = {};
+      uint32_t size = 0;
+      layers.expect(getConfigValue("rtx.emissiveIntensity", nullptr, &size), kOk, "GetConfigValue size query");
+      layers.expect(size > 1 ? kOk : REMIXAPI_ERROR_CODE_GENERAL_FAILURE, kOk, "GetConfigValue reports a size");
+      const uint32_t needed = size;
+      size = sizeof(tiny);
+      layers.expect(getConfigValue("rtx.emissiveIntensity", tiny, &size), REMIXAPI_ERROR_CODE_BUFFER_TOO_SMALL, "GetConfigValue small buffer");
+      layers.expect(size == needed ? kOk : REMIXAPI_ERROR_CODE_GENERAL_FAILURE, kOk, "GetConfigValue reports the needed size");
+      layers.expect(getConfigValue("rtx.no.such.option", nullptr, &size), REMIXAPI_ERROR_CODE_GENERAL_FAILURE, "GetConfigValue unknown key");
+    } else if (frame == caseFrame + 10) {
+      expectLayerOption(kLayerValue, "strength 1 applies");
+      setLayerBlend(0.5f, 0.1f, "SetConfigLayerBlends 0.5");
+    } else if (frame == caseFrame + 20) {
+      expectLayerOption(layerBase + (kLayerValue - layerBase) * 0.5f, "strength 0.5 blends");
+      setLayerBlend(0.25f, 0.1f, "SetConfigLayerBlends lower");
+    } else if (frame == caseFrame + 30) {
+      expectLayerOption(layerBase + (kLayerValue - layerBase) * 0.25f, "a lower strength applies");
+    } else if (frame == caseFrame + 50) {
+      expectLayerOption(layerBase + (kLayerValue - layerBase) * 0.25f, "the strength holds without calls");
+      const remixapi_ConfigLayerBlend nan { layerHandle, kInf, 0.1f };
+      layers.expect(setConfigLayerBlends(&nan, 1), kInvalid, "SetConfigLayerBlends infinity");
+      const remixapi_ConfigLayerBlend stale { 0xDEAD0001ull, 0.5f, 0.1f };
+      layers.expect(setConfigLayerBlends(&stale, 1), kInvalid, "SetConfigLayerBlends stale handle");
+      layers.expect(destroyConfigLayer(layerHandle), kOk, "DestroyConfigLayer");
+      layers.expect(destroyConfigLayer(layerHandle), kInvalid, "DestroyConfigLayer twice");
+    } else if (frame == caseFrame + 60) {
+      expectLayerOption(layerBase, "the option's value returns after the destroy");
+
+      const remixapi_ConfigLayerValue good[] = { { "rtx.emissiveIntensity", "2.0" } };
+      const remixapi_ConfigLayerValue other[] = { { "rtx.emissiveIntensity", "2.5" } };
+      const remixapi_ConfigLayerValue unknown[] = { { "rtx.no.such.option", "1" } };
+      const remixapi_ConfigLayerValue invalid[] = { { "rtx.emissiveIntensity", "banana" } };
+      remixapi_ConfigLayerInfoEXT info {};
+      info.sType = REMIXAPI_STRUCT_TYPE_CONFIG_LAYER_INFO_EXT;
+      info.priority = 10000;
+      info.initialStrength = 1.f;
+      info.initialThreshold = 0.1f;
+      layers.expect(createConfigLayer(&info, &layerHandle), kInvalid, "CreateConfigLayer no source");
+      info.values_values = good;
+      info.values_count = 1;
+      info.layerName = "Testhost look";
+      info.confPath = L"remix_testhost_config_layer.conf";
+      layers.expect(createConfigLayer(&info, &layerHandle), kInvalid, "CreateConfigLayer both sources");
+      info.confPath = nullptr;
+      info.values_values = unknown;
+      layers.expect(createConfigLayer(&info, &layerHandle), kInvalid, "CreateConfigLayer unknown key");
+      info.values_values = invalid;
+      layers.expect(createConfigLayer(&info, &layerHandle), kInvalid, "CreateConfigLayer invalid value");
+      info.values_values = good;
+      info.layerName = "looks/testhost";
+      layers.expect(createConfigLayer(&info, &layerHandle), kInvalid, "CreateConfigLayer path in name");
+      info.layerName = "Testhost look";
+      layers.expect(createConfigLayer(&info, &layerHandle), kOk, "CreateConfigLayer in memory");
+      uint64_t second = 0;
+      info.values_values = other;
+      layers.expect(createConfigLayer(&info, &second), REMIXAPI_ERROR_CODE_ALREADY_EXISTS, "CreateConfigLayer name with other values");
+      info.values_values = good;
+      info.priority = 20000;
+      layers.expect(createConfigLayer(&info, &second), REMIXAPI_ERROR_CODE_ALREADY_EXISTS, "CreateConfigLayer name at another priority");
+      info.priority = 10000;
+      layers.expect(createConfigLayer(&info, &second), kOk, "CreateConfigLayer shares the layer");
+      layers.expect(destroyConfigLayer(second), kOk, "DestroyConfigLayer shared handle");
+    } else if (frame == caseFrame + 70) {
+      expectLayerOption(2.f, "the in-memory layer applies");
+      layers.expect(destroyConfigLayer(layerHandle), kOk, "DestroyConfigLayer in memory");
+    } else if (frame == caseFrame + 80) {
+      expectLayerOption(layerBase, "the option's value returns after the in-memory layer");
+    }
+  };
+
+  // --material-update proves that an update reaches the GPU while nothing else changes.
+  const bool staticScene = materialUpdate;
   for (int frame = 0; frame < frames; ++frame) {
     MSG msg;
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -1594,7 +1967,8 @@ int wmain(int argc, wchar_t** argv) {
       DispatchMessageW(&msg);
     }
     // The last 30 frames are static, so a screenshot taken on any of them shows the same scene.
-    const int t = std::min(frame, std::max(0, frames - 30));
+    // With staticScene nothing moves at all, so the runtime sees an unchanged scene unless a case changes it.
+    const int t = staticScene ? 0 : std::min(frame, std::max(0, frames - 30));
     const float angle = 0.6f + 0.01f * float(t);
     remixapi_CameraInfoParameterizedEXT cam {};
     cam.sType = REMIXAPI_STRUCT_TYPE_CAMERA_INFO_PARAMETERIZED_EXT;
@@ -1623,6 +1997,15 @@ int wmain(int argc, wchar_t** argv) {
     if (lifecycle) {
       lifecycleFrame(frame);
     }
+    if (configLayers && createConfigLayer != nullptr) {
+      configLayersFrame(frame);
+    }
+    if (materialUpdate && updateMaterial != nullptr) {
+      materialUpdateFrame(frame);
+    }
+    if (textureUpdate && updateTexture != nullptr) {
+      textureUpdateFrame(frame);
+    }
     if (callerThreads > 0) {
       callerThreadsFrame(frame);
     }
@@ -1648,11 +2031,13 @@ int wmain(int argc, wchar_t** argv) {
     ii.doubleSided = 0;
     check(g_remix.DrawInstance(&ii), "DrawInstance cubes");
 
-    remixapi_RetainedInstanceUpdate up {};
-    up.handle = retained[0];
-    up.flags = REMIXAPI_RETAINED_UPDATE_TRANSFORM;
-    up.transform = translate(-2.5f, 0.5f, 1.5f + 0.02f * float(t));
-    check(updateRetainedMany(&up, 1), "UpdateRetainedInstances");
+    if (!staticScene) {
+      remixapi_RetainedInstanceUpdate up {};
+      up.handle = retained[0];
+      up.flags = REMIXAPI_RETAINED_UPDATE_TRANSFORM;
+      up.transform = translate(-2.5f, 0.5f, 1.5f + 0.02f * float(t));
+      check(updateRetainedMany(&up, 1), "UpdateRetainedInstances");
+    }
     check(drawRetained(nullptr), "DrawRetainedInstances");
 
     for (int k = 0; k < skinnedCount; ++k) {
@@ -1833,6 +2218,18 @@ int wmain(int argc, wchar_t** argv) {
 
   if (badValues) {
     std::printf("%s: %d calls, %d unexpected results\n", bad.name, bad.calls, bad.unexpected);
+  }
+  if (textureUpdate) {
+    std::printf("%s: %d calls, %d unexpected results\n", textures.name, textures.calls, updateTexture != nullptr ? textures.unexpected : 1);
+    destroyRetained(&patchedRetained, 1);
+  }
+  if (materialUpdate) {
+    std::printf("%s: %d calls, %d unexpected results\n", materials.name, materials.calls, updateMaterial != nullptr ? materials.unexpected : 1);
+    destroyRetained(updatedRetained, 2);
+    destroyRetained(&cycledRetained, 1);
+  }
+  if (configLayers) {
+    std::printf("%s: %d calls, %d unexpected results\n", layers.name, layers.calls, createConfigLayer != nullptr ? layers.unexpected : 1);
   }
   if (lifecycle) {
     std::printf("%s: %d calls, %d unexpected results\n", life.name, life.calls, life.unexpected);

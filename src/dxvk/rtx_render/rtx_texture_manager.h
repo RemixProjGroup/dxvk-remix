@@ -159,6 +159,17 @@ namespace dxvk {
       return showProgress();
     }
 
+    // Records that a texture's pixels changed in place, keeping its view and size. Each patch gets a sequence number,
+    // which opacity micromaps compare with the number recorded when their bake started.
+    void notePatchedTexture(XXH64_hash_t imageHash) { m_texturePatches[imageHash] = ++m_lastTexturePatch; }
+    // Returns the sequence number of the latest patch of any texture, or 0 when none was patched.
+    uint64_t lastTexturePatch() const { return m_lastTexturePatch; }
+    // Returns the sequence number of the texture's latest patch, or 0 when it was never patched.
+    uint64_t texturePatch(XXH64_hash_t imageHash) const {
+      auto found = m_texturePatches.find(imageHash);
+      return found != m_texturePatches.end() ? found->second : 0;
+    }
+
     // Ref counting for texture lifetime: increment when a surface material is bound to an instance,
     // decrement when the instance is destroyed or its material changes. GC evicts textures at zero.
     void retainTexture(uint32_t textureIndex);
@@ -200,6 +211,8 @@ namespace dxvk {
       }
     };
     SparseUniqueCache<TextureRef, TextureHashFn, TextureEquality> m_textureCache;
+    fast_unordered_cache<uint64_t> m_texturePatches;
+    uint64_t m_lastTexturePatch = 0;
     uint32_t m_textureCacheGeneration = 0;
     std::atomic<uint32_t> m_retainedCount { 0 }; // replacement textures (ManagedTexture) with m_refCount > 0
 
