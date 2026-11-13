@@ -507,8 +507,10 @@ namespace dxvk {
     struct PoolUsage {
       uint32_t     chunkCount = 0;
       uint32_t     drainingCount = 0;
+      uint32_t     emptyChunkCount = 0;
       VkDeviceSize chunkBytes = 0;
       VkDeviceSize freeBytes = 0;
+      VkDeviceSize largestFreeSlice = 0;
     };
 
     struct ChunkUsage {
@@ -520,6 +522,7 @@ namespace dxvk {
       PoolUsage    pools[uint32_t(ChunkPool::Count)];
     };
     ChunkUsage getChunkUsage(uint32_t heapId);
+    ChunkUsage getChunkUsageOfType(uint32_t memTypeId);
 
     // Marks, per chunk class whose free space is at least minSlack of its chunk bytes, the
     // chunks used below maxOccupancy as draining, sparsest first, while the free space of
@@ -544,6 +547,16 @@ namespace dxvk {
     void setDrainingBeforeNewChunk(bool enable) { m_drainingBeforeNewChunk.store(enable, std::memory_order_relaxed); }
     AllocTiming takeAllocTiming();
 
+    // vkAllocateMemory calls and chunk counts since the device was created. takeAllocTiming does not reset them.
+    struct AllocTotals {
+      uint64_t calls = 0;
+      double   totalMs = 0.0;
+      double   maxMs = 0.0;
+      uint64_t chunksMade = 0;
+      uint64_t chunksFreed = 0;
+    };
+    AllocTotals getAllocTotals() const;
+
   private:
 
     const Rc<vk::DeviceFn>                 m_vkd;
@@ -563,6 +576,14 @@ namespace dxvk {
     std::atomic<bool>     m_drainingBeforeNewChunk = { true };
     std::atomic<uint64_t> m_allocNsTotal = { 0u };
     std::atomic<uint64_t> m_allocNsMax = { 0u };
+
+    std::atomic<uint64_t> m_allocCallsTotal = { 0u };
+    std::atomic<uint64_t> m_chunksMadeTotal = { 0u };
+    std::atomic<uint64_t> m_chunksFreedTotal = { 0u };
+    std::atomic<uint64_t> m_allocNsTotalAll = { 0u };
+    std::atomic<uint64_t> m_allocNsMaxAll = { 0u };
+
+    void accumulateChunkUsage(DxvkMemoryType* type, ChunkUsage& usage);
 
     DxvkMemory tryAlloc(
       const VkMemoryRequirements*             req,

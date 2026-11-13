@@ -263,6 +263,7 @@ DxvkMemory::DxvkMemory() { }
     // doesn't need to be since we don't free chunks
     m_alloc->freeDeviceMemory(m_type, m_memory);
     m_alloc->m_chunksFreed.fetch_add(1, std::memory_order_relaxed);
+    m_alloc->m_chunksFreedTotal.fetch_add(1, std::memory_order_relaxed);
   }
   
   
@@ -623,30 +624,53 @@ DxvkMemory::DxvkMemory() { }
     }
   }
 
+  DxvkMemoryAllocator::AllocTotals DxvkMemoryAllocator::getAllocTotals() const {
+    AllocTotals totals;
+    totals.calls = m_allocCallsTotal.load(std::memory_order_relaxed);
+    totals.totalMs = double(m_allocNsTotalAll.load(std::memory_order_relaxed)) / 1.0e6;
+    totals.maxMs = double(m_allocNsMaxAll.load(std::memory_order_relaxed)) / 1.0e6;
+    totals.chunksMade = m_chunksMadeTotal.load(std::memory_order_relaxed);
+    totals.chunksFreed = m_chunksFreedTotal.load(std::memory_order_relaxed);
+    return totals;
+  }
+
+  void DxvkMemoryAllocator::accumulateChunkUsage(DxvkMemoryType* type, ChunkUsage& usage) {
+    std::lock_guard<dxvk::mutex> lock(type->mutex);
+    for (const auto& chunk : type->chunks) {
+      VkDeviceSize freeBytes = 0;
+      VkDeviceSize largestFree = 0;
+      chunk->getFreeSpace(freeBytes, largestFree);
+      const bool empty = chunk->isEmpty();
+      usage.chunkCount++;
+      usage.emptyChunkCount += empty ? 1 : 0;
+      usage.chunkBytes += chunk->getSize();
+      usage.freeBytes += freeBytes;
+      usage.largestFreeSlice = std::max(usage.largestFreeSlice, largestFree);
+
+      PoolUsage& pool = usage.pools[uint32_t(chunkPoolOf(chunk->getHints()))];
+      pool.chunkCount++;
+      pool.drainingCount += chunk->isDraining() ? 1 : 0;
+      pool.emptyChunkCount += empty ? 1 : 0;
+      pool.chunkBytes += chunk->getSize();
+      pool.freeBytes += freeBytes;
+      pool.largestFreeSlice = std::max(pool.largestFreeSlice, largestFree);
+    }
+  }
+
   DxvkMemoryAllocator::ChunkUsage DxvkMemoryAllocator::getChunkUsage(uint32_t heapId) {
     ChunkUsage usage;
     for (uint32_t i = 0; i < m_memProps.memoryTypeCount; i++) {
-      DxvkMemoryType* type = &m_memTypes[i];
-      if (type->heapId != heapId) {
-        continue;
+      if (m_memTypes[i].heapId == heapId) {
+        accumulateChunkUsage(&m_memTypes[i], usage);
       }
-      std::lock_guard<dxvk::mutex> lock(type->mutex);
-      for (const auto& chunk : type->chunks) {
-        VkDeviceSize freeBytes = 0;
-        VkDeviceSize largestFree = 0;
-        chunk->getFreeSpace(freeBytes, largestFree);
-        usage.chunkCount++;
-        usage.emptyChunkCount += chunk->isEmpty() ? 1 : 0;
-        usage.chunkBytes += chunk->getSize();
-        usage.freeBytes += freeBytes;
-        usage.largestFreeSlice = std::max(usage.largestFreeSlice, largestFree);
+    }
+    return usage;
+  }
 
-        PoolUsage& pool = usage.pools[uint32_t(chunkPoolOf(chunk->getHints()))];
-        pool.chunkCount++;
-        pool.drainingCount += chunk->isDraining() ? 1 : 0;
-        pool.chunkBytes += chunk->getSize();
-        pool.freeBytes += freeBytes;
-      }
+  DxvkMemoryAllocator::ChunkUsage DxvkMemoryAllocator::getChunkUsageOfType(uint32_t memTypeId) {
+    ChunkUsage usage;
+    if (memTypeId < m_memProps.memoryTypeCount) {
+      accumulateChunkUsage(&m_memTypes[memTypeId], usage);
     }
     return usage;
   }
@@ -831,6 +855,7 @@ DxvkMemory::DxvkMemory() { }
 
         if (devMem.memHandle) {
           m_chunksMade.fetch_add(1, std::memory_order_relaxed);
+          m_chunksMadeTotal.fetch_add(1, std::memory_order_relaxed);
           Rc<DxvkMemoryChunk> chunk = new DxvkMemoryChunk(this, type, devMem, hints);
           memory = chunk->alloc(flags, size, align, hints, category);
 
@@ -941,6 +966,10 @@ DxvkMemory::DxvkMemory() { }
     m_allocNsTotal.fetch_add(allocNs, std::memory_order_relaxed);
     uint64_t prevMax = m_allocNsMax.load(std::memory_order_relaxed);
     while (allocNs > prevMax && !m_allocNsMax.compare_exchange_weak(prevMax, allocNs, std::memory_order_relaxed)) { }
+    m_allocCallsTotal.fetch_add(1, std::memory_order_relaxed);
+    m_allocNsTotalAll.fetch_add(allocNs, std::memory_order_relaxed);
+    uint64_t prevMaxAll = m_allocNsMaxAll.load(std::memory_order_relaxed);
+    while (allocNs > prevMaxAll && !m_allocNsMaxAll.compare_exchange_weak(prevMaxAll, allocNs, std::memory_order_relaxed)) { }
 
     if (allocResult != VK_SUCCESS)
       return DxvkDeviceMemory();

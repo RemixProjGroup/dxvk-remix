@@ -207,6 +207,29 @@ namespace dxvk {
       std::string mib(uint64_t bytes) {
         return str::format(bytes >> 20, " MiB");
       }
+
+      void addPoolUsage(DxvkMemoryAllocator::PoolUsage& sum, const DxvkMemoryAllocator::PoolUsage& pool) {
+        sum.chunkCount += pool.chunkCount;
+        sum.drainingCount += pool.drainingCount;
+        sum.emptyChunkCount += pool.emptyChunkCount;
+        sum.chunkBytes += pool.chunkBytes;
+        sum.freeBytes += pool.freeBytes;
+        sum.largestFreeSlice = std::max(sum.largestFreeSlice, pool.largestFreeSlice);
+      }
+
+      // Writes "<class>.<field>=<value>" pairs for every chunk class, with sizes in MiB.
+      std::string chunkClassFields(const DxvkMemoryAllocator::PoolUsage* pools) {
+        std::string fields;
+        for (uint32_t p = 0; p < uint32_t(DxvkMemoryAllocator::ChunkPool::Count); p++) {
+          const DxvkMemoryAllocator::PoolUsage& pool = pools[p];
+          const std::string name = DxvkMemoryAllocator::chunkPoolName(DxvkMemoryAllocator::ChunkPool(p));
+          fields += str::format(p ? " " : "",
+            name, ".chunks=", pool.chunkCount, " ", name, ".empty=", pool.emptyChunkCount, " ", name, ".draining=", pool.drainingCount,
+            " ", name, ".chunkMiB=", pool.chunkBytes >> 20, " ", name, ".usedMiB=", (pool.chunkBytes - pool.freeBytes) >> 20,
+            " ", name, ".freeMiB=", pool.freeBytes >> 20, " ", name, ".largestFreeMiB=", pool.largestFreeSlice >> 20);
+        }
+        return fields;
+      }
     }
 
     uint32_t level() { return s_level.load(std::memory_order_relaxed); }
@@ -564,6 +587,7 @@ namespace dxvk {
       const VkPhysicalDeviceMemoryProperties& props = allocator.getMemoryProperties();
       uint64_t allocated = 0, used = 0, chunkFree = 0, emptyChunks = 0, chunkBytes = 0;
       uint64_t accelUsed = 0, texUsed = 0, appBuffers = 0, appTextures = 0;
+      DxvkMemoryAllocator::PoolUsage pools[uint32_t(DxvkMemoryAllocator::ChunkPool::Count)];
       for (uint32_t heapId = 0; heapId < props.memoryHeapCount; heapId++) {
         if (!(props.memoryHeaps[heapId].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) {
           continue;
@@ -575,6 +599,9 @@ namespace dxvk {
         chunkFree += cu.freeBytes;
         emptyChunks += cu.emptyChunkCount;
         chunkBytes += cu.chunkBytes;
+        for (uint32_t p = 0; p < uint32_t(DxvkMemoryAllocator::ChunkPool::Count); p++) {
+          addPoolUsage(pools[p], cu.pools[p]);
+        }
         accelUsed += stats.usedByCategory(DxvkMemoryStats::Category::RTXAccelerationStructure);
         texUsed += stats.usedByCategory(DxvkMemoryStats::Category::RTXMaterialTexture);
         appBuffers += stats.usedByCategory(DxvkMemoryStats::Category::AppBuffer);
@@ -582,6 +609,8 @@ namespace dxvk {
       }
       const uint64_t importSkipped = s_importCapSkipped.load(std::memory_order_relaxed);
       const DxvkMemoryAllocator::AllocTiming allocTiming = allocator.takeAllocTiming();
+      const DxvkMemoryAllocator::AllocTotals allocTotals = allocator.getAllocTotals();
+      const uint64_t chunkUsed = chunkBytes - chunkFree;
       const ImportTokenStats tokenStats = importTokenStats();
       const DxvkAppImageStats& appImages = DxvkAppImageStats::get();
 
@@ -612,6 +641,12 @@ namespace dxvk {
         s.texturesRelocated - s.texturesRelocatedAtLog, ", textures that dropped idle mips ", s.idleMipDrops - s.idleMipDropsAtLog,
         " | vkAllocateMemory ", allocTiming.calls, " calls, ", uint32_t(allocTiming.totalMs * 10.0) / 10.0, " ms, longest ",
         uint32_t(allocTiming.maxMs * 100.0) / 100.0, " ms; chunks made ", allocTiming.chunksMade, ", freed ", allocTiming.chunksFreed,
+        " | alloc totals: calls=", allocTotals.calls, " totalMs=", uint64_t(allocTotals.totalMs),
+        " longestMs=", uint32_t(allocTotals.maxMs * 100.0) / 100.0,
+        " chunksMade=", allocTotals.chunksMade, " chunksFreed=", allocTotals.chunksFreed,
+        " | chunks: chunkMiB=", chunkBytes >> 20, " usedMiB=", chunkUsed >> 20, " freeMiB=", chunkFree >> 20,
+        " freePctOfUsed=", chunkUsed ? uint32_t(1000.0 * double(chunkFree) / double(chunkUsed)) / 10.0 : 0.0,
+        " ", chunkClassFields(pools),
         s_baseline.count > 0
           ? str::format(" | vs post-load #", s_baseline.count, ": ", compare(takeSnapshot(allocator, usage, frame, instanceCount), s_baseline.last))
           : std::string(),

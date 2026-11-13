@@ -822,8 +822,60 @@ namespace dxvk {
     ImGui::PopStyleColor();
 
     ImGui::TextWrapped("%s dynamically uses available VRAM to maximize texture quality.", productName().c_str());
-    
+
     ImGui::Dummy(ImVec2 { 4, 0 });
+  }
+
+  void ImGUI::showAllocatorChunks() const {
+    DxvkMemoryAllocator& allocator = m_device->getCommon()->memoryManager();
+    const VkPhysicalDeviceMemoryProperties& props = allocator.getMemoryProperties();
+    const DxvkMemoryAllocator::AllocTotals totals = allocator.getAllocTotals();
+    const auto mib = [] (VkDeviceSize bytes) { return (unsigned long long) (bytes >> 20); };
+
+    ImGui::Text("vkAllocateMemory: %llu calls, %.1f ms in total, longest %.2f ms",
+                (unsigned long long) totals.calls, totals.totalMs, totals.maxMs);
+    ImGui::Text("Chunks made %llu, freed %llu", (unsigned long long) totals.chunksMade, (unsigned long long) totals.chunksFreed);
+
+    // Each row is one chunk class of one memory type. Memory outside chunks is dedicated allocations.
+    const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit;
+    if (!ImGui::BeginTable("##allocatorChunks", 10, flags)) {
+      return;
+    }
+    const char* kHeaders[] = { "Type", "Class", "Chunks", "Empty", "Draining", "Chunk MiB", "Used MiB", "Free MiB", "Free % of Used", "Largest Free MiB" };
+    for (const char* header : kHeaders) {
+      ImGui::TableSetupColumn(header);
+    }
+    ImGui::TableHeadersRow();
+
+    for (uint32_t typeId = 0; typeId < props.memoryTypeCount; typeId++) {
+      const DxvkMemoryAllocator::ChunkUsage usage = allocator.getChunkUsageOfType(typeId);
+      if (usage.chunkCount == 0) {
+        continue;
+      }
+      const VkMemoryPropertyFlags typeFlags = props.memoryTypes[typeId].propertyFlags;
+      const char* kind = (typeFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+        ? ((typeFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? "device, mapped" : "device")
+        : "system";
+      for (uint32_t p = 0; p < uint32_t(DxvkMemoryAllocator::ChunkPool::Count); p++) {
+        const DxvkMemoryAllocator::PoolUsage& pool = usage.pools[p];
+        if (pool.chunkCount == 0) {
+          continue;
+        }
+        const VkDeviceSize used = pool.chunkBytes - pool.freeBytes;
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn(); ImGui::Text("%u (%s)", typeId, kind);
+        ImGui::TableNextColumn(); ImGui::TextUnformatted(DxvkMemoryAllocator::chunkPoolName(DxvkMemoryAllocator::ChunkPool(p)));
+        ImGui::TableNextColumn(); ImGui::Text("%u", pool.chunkCount);
+        ImGui::TableNextColumn(); ImGui::Text("%u", pool.emptyChunkCount);
+        ImGui::TableNextColumn(); ImGui::Text("%u", pool.drainingCount);
+        ImGui::TableNextColumn(); ImGui::Text("%llu", mib(pool.chunkBytes));
+        ImGui::TableNextColumn(); ImGui::Text("%llu", mib(used));
+        ImGui::TableNextColumn(); ImGui::Text("%llu", mib(pool.freeBytes));
+        ImGui::TableNextColumn(); ImGui::Text("%.1f", used ? 100.0 * double(pool.freeBytes) / double(used) : 0.0);
+        ImGui::TableNextColumn(); ImGui::Text("%llu", mib(pool.largestFreeSlice));
+      }
+    }
+    ImGui::EndTable();
   }
 
   void ImGUI::switchMenu(UIType type, bool force) {
@@ -5026,6 +5078,10 @@ namespace dxvk {
         ImGui::Text("Freed so far: pooled BLAS %llu MiB, scratch %llu MiB, empty chunks %llu MiB, import mips ~%llu MiB (%u level changes)",
                     (unsigned long long) (freed.pooledBlas >> 20), (unsigned long long) (freed.scratch >> 20),
                     (unsigned long long) (freed.emptyChunks >> 20), (unsigned long long) (freed.importCapSkipped >> 20), freed.levelChanges);
+      }
+      if (ImGui::TreeNode("Allocator Chunks##vrambudget")) {
+        showAllocatorChunks();
+        ImGui::TreePop();
       }
       RemixGui::Checkbox("Enable VRAM Budget", &VramBudget::enableObject());
       if (ImGui::TreeNode("Advanced##vrambudget")) {

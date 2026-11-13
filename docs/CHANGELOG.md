@@ -111,6 +111,15 @@ With sparse rendering on and `rtx.sparseRendering.enableRtxdiReuseForInactivePix
 - Options: none. Frames without sparse rendering, or with RTXDI reuse for inactive pixels on, are unchanged.
 - Commits: the commit that adds this entry.
 
+## 2026-11-03
+
+### VRAM: allocator chunk figures per chunk class in the log and the dev menu
+The `[VramBudget]` log line and a new "Allocator Chunks" view under VRAM Budget show how much of the allocator's chunk memory each chunk class (other, accel, OMM, app, geometry) uses and leaves free, so a long session shows where free space inside chunks builds up. This change only adds diagnostics. Allocation behavior is unchanged.
+- Log: new `key=value` fields after the vkAllocateMemory figures. `alloc totals:` has `calls`, `totalMs`, `longestMs`, `chunksMade` and `chunksFreed` since start. `chunks:` has `chunkMiB`, `usedMiB`, `freeMiB` and `freePctOfUsed` over device-local heaps, then `<class>.chunks`, `.empty`, `.draining`, `.chunkMiB`, `.usedMiB`, `.freeMiB` and `.largestFreeMiB` for each class.
+- Dev menu: Rendering, VRAM Budget, Allocator Chunks shows one table row per memory type and chunk class, with the same counters.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-01
 
 ### GPU device loss when a BLAS drops an opacity micromap in flight

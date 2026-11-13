@@ -287,6 +287,8 @@ namespace dxvk {
     };
     VideoMemoryUsage getVideoMemoryUsage() const;
     void showMemoryStats() const;
+    // Draws the allocator's chunk use per memory type and chunk class, and its allocation counters.
+    void showAllocatorChunks() const;
     // Draws the video memory use as one labeled bar that starts controlOffsetX from the start of the line.
     void showCompactMemoryStats(float controlOffsetX) const;
     bool showRayReconstructionEnable(bool supportsRR);
