@@ -27,6 +27,7 @@
 #include "rtx/utility/math.slangh"
 #include "rtx/utility/packing.slangh"
 #include "rtx/utility/froxel.slangh"
+#include "rtx/concept/billboard.slangh"
 #include "rtx/concept/ray/ray.slangh"
 #include "rtx/concept/surface/surface.slangh"
 #include "rtx/concept/surface_material/surface_material.slangh"
@@ -999,8 +1000,12 @@ void resolveVertexUnorderedParticles<
       surfaceInteraction.position = p;
       surfaceInteraction.positionError = 0;
       surfaceInteraction.geometryNormal = normal;
-      surfaceInteraction.geometryTangent = billboard.xAxis;
-      surfaceInteraction.geometryBitangent = billboard.yAxis;
+      if (packedFlagGet(billboard.flags, billboardFlagHasMaterialTextureAxes)) {
+        calcBillboardTangents(billboard, normal, surfaceInteraction.geometryTangent, surfaceInteraction.geometryBitangent);
+      } else {
+        surfaceInteraction.geometryTangent = billboard.xAxis;
+        surfaceInteraction.geometryBitangent = billboard.yAxis;
+      }
       surfaceInteraction.motion = 0;
       surfaceInteraction.textureCoordinates = uv;
       surfaceInteraction.textureGradientX = dUVRatio.x * billboard.xAxisUV;
@@ -1373,8 +1378,12 @@ void resolveVertexUnordered<
       surfaceInteraction.position = p;
       surfaceInteraction.positionError = 0;
       surfaceInteraction.geometryNormal = normal;
-      surfaceInteraction.geometryTangent = billboard.xAxis;
-      surfaceInteraction.geometryBitangent = billboard.yAxis;
+      if (packedFlagGet(billboard.flags, billboardFlagHasMaterialTextureAxes)) {
+        calcBillboardTangents(billboard, normal, surfaceInteraction.geometryTangent, surfaceInteraction.geometryBitangent);
+      } else {
+        surfaceInteraction.geometryTangent = billboard.xAxis;
+        surfaceInteraction.geometryBitangent = billboard.yAxis;
+      }
       surfaceInteraction.motion = 0;
       surfaceInteraction.textureCoordinates = uv;
       surfaceInteraction.textureGradientX = dUVRatio.x * billboard.xAxisUV;

@@ -93,6 +93,7 @@ namespace dxvk {
     bool m_anyLegacy = false;
     bool m_anyTextureOps = false;
     bool m_anyEye = false;
+    bool m_anyTextureScroll = false; // A scrolling surface's legacy record changes every frame.
     bool m_legacyRecordsValid = false; // m_legacyUploaded / the buffer hold this table's records
 
     // GPU check: one host-visible counter buffer, dispatched only while no earlier dispatch awaits read-back.

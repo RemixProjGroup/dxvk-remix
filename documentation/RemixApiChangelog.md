@@ -68,6 +68,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS`. Instances without a `DECAL_*` category ignore it,
   and without the struct decals keep the runtime's order. The bridge does not forward it.
   `remixapi_Interface` and `REMIXAPI_VERSION` are unchanged. docs/RemixApi.md, "Decal order".
+- 2026-11-02: `remixapi_MaterialInfoTextureTransformEXT`
+  (`REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TEXTURE_TRANSFORM_EXT` = 0x4E560006), chained onto
+  `remixapi_MaterialInfo` to scale, rotate, offset and scroll an opaque or translucent material's
+  textures. Existing structs are unchanged, a material without it has identity controls, and a
+  runtime that predates it ignores it. The 32-bit bridge does not forward it. See
+  `documentation/TextureTransforms.md`.
 - 2026-10-27: color grading, as named exports: `remixapi_SetColorGradePreset`,
   `remixapi_SetColorGrade`, `remixapi_MixColorGradePresets`, `remixapi_GetColorGrade` and
   `remixapi_SaveColorGradePreset`, with `remixapi_ColorGradeEXT`

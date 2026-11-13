@@ -24,6 +24,7 @@
 
 static const uint billboardFlagIsBeam         = 0x01;
 static const uint billboardFlagIsCameraFacing = 0x02;
+static const uint billboardFlagHasMaterialTextureAxes = 0x04;
 
 struct MemoryBillboard
 {

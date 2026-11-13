@@ -38,6 +38,7 @@
 #include "rtx_point_instancer_system.h"
 #include "rtx_scene_interface.h"
 
+#include "../../util/util_global_time.h"
 #include "rtx_matrix_helpers.h"
 
 #include "dxvk_scoped_annotation.h"
@@ -3286,6 +3287,9 @@ namespace dxvk {
         if (billboard.isCameraFacing) {
           memory.flags |= billboardFlagIsCameraFacing;
         }
+        if (billboard.hasMaterialTextureAxes) {
+          memory.flags |= billboardFlagHasMaterialTextureAxes;
+        }
 
         // TLAS instance
         VkAccelerationStructureInstanceKHR instance {};
@@ -3682,6 +3686,7 @@ namespace dxvk {
     const SccrShellManager& sccrShell = m_device->getCommon()->metaSccrShell();
     unsigned char* gpuData = surfacesGPUData.data();
     const unsigned char* uploadedData = m_uploadedSurfaceData.data();
+    const uint64_t textureScrollTimeUs = GlobalTime::get().absoluteTimeUs();
 
     constexpr uint32_t kChunk = 512;
     const uint32_t chunkCount = (surfaceCount + kChunk - 1) / kChunk;
@@ -3715,7 +3720,7 @@ namespace dxvk {
           flags |= kSlotGpuOwned;
         } else {
           size_t offset = size_t(i) * kSurfaceGPUSize;
-          surface.writeGPUData(gpuData, offset, i, firstIndexOffsets[i]);
+          surface.writeGPUData(gpuData, offset, i, firstIndexOffsets[i], textureScrollTimeUs);
           // data15.w. The lookup is read-only, so it is safe on the workers.
           sccrShell.patchSurfaceRecord(gpuData + size_t(i) * kSurfaceGPUSize, instance);
           const bool dirty = !canDiff || i >= comparable ||
@@ -3817,7 +3822,7 @@ namespace dxvk {
         RtSurface& surface = surfaces[i]->surface;
         size_t offset = 0;
         surface.firstIndex += firstIndexOffsets[i];
-        surface.writeGPUData(record.data(), offset, i);
+        surface.writeGPUData(record.data(), offset, i, 0, textureScrollTimeUs);
         surface.firstIndex -= firstIndexOffsets[i];
         sccrShell.patchSurfaceRecord(record.data(), *surfaces[i]);
         if (std::memcmp(record.data(), gpuData + size_t(i) * kSurfaceGPUSize, kSurfaceGPUSize) != 0) {
@@ -3984,6 +3989,7 @@ namespace dxvk {
     // Writes each record's SCCR shell slot. SceneManager::prepareSceneData already ran the shell manager's frame.
     const SccrShellManager& sccrShell = m_device->getCommon()->metaSccrShell();
 
+    const uint64_t textureScrollTimeUs = GlobalTime::get().absoluteTimeUs();
     for (uint32_t i = 0; i < m_reorderedSurfaces.size(); ++i) {
       const auto& currentInstance = *m_reorderedSurfaces[i];
       RtSurface& currentSurface = m_reorderedSurfaces[i]->surface;
@@ -3995,7 +4001,7 @@ namespace dxvk {
       } else {
         // Split instance geometry need to have their first index offset set in their corresponding surface instances
         currentSurface.firstIndex += m_reorderedSurfacesFirstIndexOffset[i];
-        currentSurface.writeGPUData(surfacesGPUData.data(), dataOffset, i);
+        currentSurface.writeGPUData(surfacesGPUData.data(), dataOffset, i, 0, textureScrollTimeUs);
         currentSurface.firstIndex -= m_reorderedSurfacesFirstIndexOffset[i];
         sccrShell.patchSurfaceRecord(surfacesGPUData.data() + dataOffset - kSurfaceGPUSize, currentInstance);
       }

@@ -571,7 +571,12 @@ namespace {
           src.getSpecularMetalStrength(),
           src.getSpecularMetalParams(),
           src.getSpecularMetalTint(),
-          src.getAlbedoTint()
+          src.getAlbedoTint(),
+          src.getTextureScrollRate(),
+          src.getTextureScrollAngle(),
+          src.getTextureScale(),
+          src.getTextureOffset(),
+          src.getTextureRotation()
         } };
       }
       case MaterialDataType::Translucent: 
@@ -595,7 +600,12 @@ namespace {
           src.getEnableDiffuseLayer(),
           src.getFilterMode(),
           src.getWrapModeU(),
-          src.getWrapModeV()
+          src.getWrapModeV(),
+          src.getTextureScrollRate(),
+          src.getTextureScrollAngle(),
+          src.getTextureScale(),
+          src.getTextureOffset(),
+          src.getTextureRotation()
         } };
       }
       case MaterialDataType::RayPortal:
@@ -621,6 +631,17 @@ namespace {
     }
 
     MaterialData toRtMaterialWithoutTexturePreload(const remixapi_MaterialInfo& info) {
+      auto extTextureTransform = pnext::find<remixapi_MaterialInfoTextureTransformEXT>(&info);
+      const float textureScrollRate = extTextureTransform ? extTextureTransform->textureScrollRate : 0.f;
+      const float textureScrollAngle = extTextureTransform ? extTextureTransform->textureScrollAngle : 0.f;
+      const Vector2 textureScale = extTextureTransform && extTextureTransform->textureScale_hasvalue
+        ? Vector2(extTextureTransform->textureScale_value.x, extTextureTransform->textureScale_value.y)
+        : Vector2(1.f);
+      const Vector2 textureOffset = extTextureTransform
+        ? Vector2(extTextureTransform->textureOffset.x, extTextureTransform->textureOffset.y)
+        : Vector2(0.f);
+      const float textureRotation = extTextureTransform ? extTextureTransform->textureRotation : 0.f;
+
       if (auto extOpaque = pnext::find<remixapi_MaterialInfoOpaqueEXT>(&info)) {
         auto extSubsurface = pnext::find<remixapi_MaterialInfoOpaqueSubsurfaceEXT>(&info);
         auto extSpecGloss = pnext::find<remixapi_MaterialInfoOpaqueSpecGlossEXT>(&info);
@@ -691,6 +712,11 @@ namespace {
           extSpecGloss ? tovec3(extSpecGloss->specularTint) : Vector3{ 0.f, 0.f, 0.f },
           // Per-material albedo texture tint (1,1,1 = none).
           extAlbedoTint ? tovec3(extAlbedoTint->albedoTint) : Vector3{ 1.f, 1.f, 1.f },
+          textureScrollRate,
+          textureScrollAngle,
+          textureScale,
+          textureOffset,
+          textureRotation,
         } };
       }
       if (auto extTranslucent = pnext::find<remixapi_MaterialInfoTranslucentEXT>(&info)) {
@@ -713,6 +739,11 @@ namespace {
           info.filterMode,
           info.wrapModeU,
           info.wrapModeV,
+          textureScrollRate,
+          textureScrollAngle,
+          textureScale,
+          textureOffset,
+          textureRotation,
         } };
       }
       if (auto extPortal = pnext::find<remixapi_MaterialInfoPortalEXT>(&info)) {
@@ -1193,6 +1224,15 @@ namespace {
 
     // The sType of each extension keeps a missing extension apart from one that holds the same bytes.
     // The version checks match the conversion, because older hosts pass shorter structs.
+    if (auto textureTransform = pnext::find<remixapi_MaterialInfoTextureTransformEXT>(&info)) {
+      pod(textureTransform->sType);
+      pod(textureTransform->textureScrollRate);
+      pod(textureTransform->textureScrollAngle);
+      pod(textureTransform->textureScale_hasvalue);
+      pod(textureTransform->textureScale_value);
+      pod(textureTransform->textureOffset);
+      pod(textureTransform->textureRotation);
+    }
     if (auto opaque = pnext::find<remixapi_MaterialInfoOpaqueEXT>(&info)) {
       pod(opaque->sType);
       path(opaque->roughnessTexture);

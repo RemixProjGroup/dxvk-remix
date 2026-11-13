@@ -69,6 +69,11 @@ exe = executable('test_bindless_buffer_mirror',  files('test_bindless_buffer_mir
 test('test_bindless_buffer_mirror', exe, env: test_env)
 tests += exe
 
+exe = executable('test_texture_transform', files('test_texture_transform.cpp'),
+  include_directories : test_include_path, dependencies : [ d3d9_dep, test_unit_deps ], link_with: [ dxvk_lib ], win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_texture_transform', exe, env: test_env)
+tests += exe
+
 exe = executable('test_color_grade',  files('test_color_grade.cpp'), win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
 test('test_color_grade', exe, env: test_env)
 tests += exe

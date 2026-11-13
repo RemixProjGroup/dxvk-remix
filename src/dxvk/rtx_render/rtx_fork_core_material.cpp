@@ -11,6 +11,7 @@
 #include "rtx_scene_manager.h"
 #include "rtx_instance_manager.h"
 #include "rtx_materials.h"
+#include "../../util/util_global_time.h"
 #include "rtx_constants.h"
 #include "rtx_shader_manager.h"
 #include "dxvk_device.h"
@@ -235,10 +236,10 @@ namespace dxvk {
 
     // The legacy record of one surface, copied word for word from the Surface record writeGPUData produces (so the
     // two decode alike), plus the material's secondary texture.
-    void writeLegacyRecord(unsigned char* out, const RtSurface& surface, uint32_t surfaceIndex, const RtSurfaceMaterial* material) {
+    void writeLegacyRecord(unsigned char* out, const RtSurface& surface, uint32_t surfaceIndex, const RtSurfaceMaterial* material, uint64_t textureScrollTimeUs) {
       unsigned char surfaceRecord[kSurfaceGPUSize];
       size_t surfaceOffset = 0;
-      surface.writeGPUData(surfaceRecord, surfaceOffset, surfaceIndex);
+      surface.writeGPUData(surfaceRecord, surfaceOffset, surfaceIndex, 0, textureScrollTimeUs);
       std::memset(out, 0, LEGACY_SURFACE_SIZE);
       std::memcpy(out + LEGACY_SURFACE_OFFSET_TRANSFORM, surfaceRecord + kSurfaceData11, 32);
       std::memcpy(out + LEGACY_SURFACE_OFFSET_CLIP_PLANE, surfaceRecord + kSurfaceData14, 16);
@@ -259,7 +260,7 @@ namespace dxvk {
     }
 
     // Host self-check: the legacy record decoded field by field against the RtSurface itself.
-    const char* compareLegacyRecord(const unsigned char* legacy, const RtSurface& surface, const RtSurfaceMaterial* material) {
+    const char* compareLegacyRecord(const unsigned char* legacy, const RtSurface& surface, const RtSurfaceMaterial* material, uint64_t textureScrollTimeUs) {
       auto floatBits = [](float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; };
       const auto& eye = surface.eyeParams;
       // Transform rows as RtSurface::writeGPUData lays them out (eye basis U / V aliased).
@@ -270,7 +271,7 @@ namespace dxvk {
         transform[4] = floatBits(eye->eyeUpV[0]); transform[5] = floatBits(eye->eyeUpV[1]);
         transform[6] = floatBits(eye->eyeUpV[2]); transform[7] = 0;
       } else {
-        const Matrix4& t = surface.textureTransform;
+        const Matrix4 t = surface.getTextureTransform(textureScrollTimeUs);
         transform[0] = floatBits(t.data[0].x); transform[1] = floatBits(t.data[1].x);
         transform[2] = floatBits(t.data[2].x); transform[3] = floatBits(t.data[3].x);
         transform[4] = floatBits(t.data[0].y); transform[5] = floatBits(t.data[1].y);
@@ -522,13 +523,15 @@ namespace dxvk {
     const unsigned char* records = m_uploaded.data();
 
     // hasLegacy and hasTextureOps are already in every core record's tail. The eye comes from the surface.
-    bool anyLegacy = false, anyTextureOps = false, anyEye = false;
+    bool anyLegacy = false, anyTextureOps = false, anyEye = false, anyTextureScroll = false;
     for (uint32_t i = 0; i < surfaceCount; ++i) {
       const uint32_t tail = readU32(records + size_t(i) * kRecordSize, CORE_MATERIAL_OFFSET_TAIL);
       anyLegacy = anyLegacy || (tail & CORE_MATERIAL_TAIL_HAS_LEGACY) != 0;
       anyTextureOps = anyTextureOps || (tail & CORE_MATERIAL_TAIL_HAS_TEXTURE_OPS) != 0;
       anyEye = anyEye || surfaces[i]->surface.eyeParams.has_value();
+      anyTextureScroll = anyTextureScroll || surfaces[i]->surface.isTextureScrolling();
     }
+    m_anyTextureScroll = anyTextureScroll;
     m_anyLegacy = anyLegacy;
     m_anyTextureOps = anyTextureOps;
     m_anyEye = anyEye;
@@ -549,6 +552,7 @@ namespace dxvk {
 
     m_legacyData.resize(size_t(surfaceCount) * LEGACY_SURFACE_SIZE);
     unsigned char* out = m_legacyData.data();
+    const uint64_t textureScrollTimeUs = GlobalTime::get().absoluteTimeUs();
     constexpr uint32_t kChunk = 1024;
     const uint32_t chunkCount = (surfaceCount + kChunk - 1) / kChunk;
     const auto processChunk = [&](uint32_t chunk) {
@@ -560,7 +564,7 @@ namespace dxvk {
           continue;
         }
         const RtSurfaceMaterial* material = surface.surfaceMaterialIndex < materials.size() ? &materials[surface.surfaceMaterialIndex] : nullptr;
-        writeLegacyRecord(out + size_t(i) * LEGACY_SURFACE_SIZE, surface, i, material);
+        writeLegacyRecord(out + size_t(i) * LEGACY_SURFACE_SIZE, surface, i, material, textureScrollTimeUs);
       }
     };
     if (chunkCount <= 2) {
@@ -692,9 +696,10 @@ namespace dxvk {
     const uint32_t frame = m_device->getCurrentFrameId();
     m_finishedFrame = frame;
     const uint32_t surfaceCount = uint32_t(scene.m_accelManager.getOrderedInstances().size());
-    const bool legacyStale = !m_legacyStateValid;
+    const bool legacyStale = !m_legacyStateValid || m_anyTextureScroll;
     if (m_writtenFrame != frame && (!tableCurrent(surfaceCount) || legacyStale)) {
-      // The old upload was skipped (scene unchanged) but the table does not describe these surfaces yet.
+      // The old upload was skipped (scene unchanged) but the table does not describe these surfaces yet,
+      // or a scrolling surface's legacy record has to follow the time.
       beginMaterialGpuWriteBatch();
       writeAndUpload(ctx, scene);
       endMaterialGpuWriteBatch();
@@ -750,7 +755,8 @@ namespace dxvk {
           }
         } else {
           field = compareLegacyRecord(legacy, surface,
-                                      surface.surfaceMaterialIndex < materials.size() ? &materials[surface.surfaceMaterialIndex] : nullptr);
+                                      surface.surfaceMaterialIndex < materials.size() ? &materials[surface.surfaceMaterialIndex] : nullptr,
+                                      GlobalTime::get().absoluteTimeUs());
         }
       }
       if (field != nullptr) {

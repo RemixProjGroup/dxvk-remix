@@ -449,6 +449,23 @@ namespace remix {
   };
 
   // Can be linked to MaterialInfoOpaqueEXT
+  struct MaterialInfoTextureTransformEXT : remixapi_MaterialInfoTextureTransformEXT {
+    MaterialInfoTextureTransformEXT() {
+      sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TEXTURE_TRANSFORM_EXT;
+      pNext = nullptr;
+      textureScrollRate = 0.f;
+      textureScrollAngle = 0.f;
+      textureScale_hasvalue = false;
+      textureScale_value = { 1.f, 1.f };
+      textureOffset = { 0.f, 0.f };
+      textureRotation = 0.f;
+    }
+
+    void set_textureScale(const std::optional<remixapi_Float2D>& v) {
+      detail::assign_if(textureScale_hasvalue, textureScale_value, v);
+    }
+  };
+
   struct MaterialInfoOpaqueSubsurfaceEXT : remixapi_MaterialInfoOpaqueSubsurfaceEXT {
     MaterialInfoOpaqueSubsurfaceEXT() {
       sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SUBSURFACE_EXT;

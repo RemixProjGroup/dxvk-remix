@@ -353,6 +353,7 @@ struct IntersectionBillboard {
   bool allowAsIntersectionPrimitive;
   bool isBeam; // if true, the billboard's Y axis is fixed and the billboard is free to rotate around it
   bool isCameraFacing; // if true, the billboard should always orient the normal toward the camera, don't use the transform matrix
+  bool hasMaterialTextureAxes = false; // if true, the shading frame comes from the UV axes, which a material control has scaled, rotated or mirrored
 };
 
 // InstanceManager is responsible for maintaining the active set of scene instances

@@ -152,6 +152,7 @@ extern "C" {
     REMIXAPI_STRUCT_TYPE_ASSET_KEY_EXT                        = 0x4E560002,
     REMIXAPI_STRUCT_TYPE_EXTERNAL_FRAME_EXT                   = 0x4E560003,
     REMIXAPI_STRUCT_TYPE_COLOR_GRADE_EXT                      = 0x4E560004,
+    REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TEXTURE_TRANSFORM_EXT  = 0x4E560006,
     REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT        = 0x4E560007,
     // NOTE: if adding a new struct, register it in 'rtx_remix_specialization.inl'
     //       and only extend this enum by appending, never adjust the order of these 
@@ -355,6 +356,21 @@ extern "C" {
   // (currently 1). Optional named export; absent on older runtimes.
   typedef uint32_t(REMIXAPI_PTR* PFN_remixapi_GetMaterialAlbedoTintVersion)(void);
   REMIXAPI uint32_t REMIXAPI_CALL remixapi_GetMaterialAlbedoTintVersion(void);
+
+  // Chained onto remixapi_MaterialInfo, next to remixapi_MaterialInfoOpaqueEXT or
+  // remixapi_MaterialInfoTranslucentEXT, to scale, rotate, offset and scroll all of the material's textures.
+  // A zero-initialized struct with textureScale_hasvalue false is the identity. A runtime that predates
+  // the struct ignores it and renders the textures untransformed. See documentation/TextureTransforms.md.
+  typedef struct remixapi_MaterialInfoTextureTransformEXT {
+    remixapi_StructType sType;              // REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TEXTURE_TRANSFORM_EXT
+    void*               pNext;
+    float               textureScrollRate;  // UV units per second. 0 disables scrolling.
+    float               textureScrollAngle; // Degrees: 0 is positive U, 90 is positive V.
+    remixapi_Bool       textureScale_hasvalue;
+    remixapi_Float2D    textureScale_value; // Per-axis scale applied before rotation. Default: (1, 1).
+    remixapi_Float2D    textureOffset;      // UV units, added after scale and rotation.
+    float               textureRotation;    // Degrees around the UV origin, after scale and before offset.
+  } remixapi_MaterialInfoTextureTransformEXT;
 
   typedef struct remixapi_MaterialInfoTranslucentEXT {
     remixapi_StructType sType;

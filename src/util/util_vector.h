@@ -677,6 +677,14 @@ namespace dxvk {
   }
 
   template <typename T>
+  Vector2Base<T> clamp(const Vector2Base<T>& a, const Vector2Base<T>& lo, const Vector2Base<T>& hi) {
+    return Vector2Base<T>(
+      std::clamp(a.x, lo.x, hi.x),
+      std::clamp(a.y, lo.y, hi.y)
+    );
+  }
+
+  template <typename T>
   Vector2Base<T> doFloor(const Vector2Base<T>& a) {
     return Vector2Base<T>(
       floor(a.x),

@@ -21,6 +21,8 @@
 */
 #pragma once
 
+#include <string_view>
+
 #include "../../lssusd/mdl_helpers.h"
 
 #include "../../lssusd/usd_include_begin.h"
@@ -32,6 +34,13 @@
 // Note: These material ranges and defaults should be kept in sync with the MDL ranges to prevent mismatching between how data is clamped.
 
 // clang-format off
+#define LIST_TEXTURE_TRANSFORM_CONSTANTS(X) \
+  X(TextureScrollRate,  texture_scroll_rate,  float,   -65504.f,         65504.f,         0.f) \
+  X(TextureScrollAngle, texture_scroll_angle, float,   -65504.f,         65504.f,         0.f) \
+  X(TextureScale,       texture_scale,        Vector2, Vector2(-65504.f), Vector2(65504.f), Vector2(1.f)) \
+  X(TextureOffset,      texture_offset,       Vector2, Vector2(-65504.f), Vector2(65504.f), Vector2(0.f)) \
+  X(TextureRotation,    texture_rotation,     float,   -65504.f,         65504.f,         0.f)
+
 #define LIST_OPAQUE_MATERIAL_TEXTURES(X) \
   /*Parameter Name,                          USD Token String,                     Type,       UNUSED...   Default Value */ \
   X(AlbedoOpacityTexture,                    diffuse_texture,                      TextureRef, void, void, {}) \
@@ -101,7 +110,8 @@
   X(SpecularMetalParams,              specular_metal_params,                  Vector3,        Vector3(0.f),               Vector3(1.f),               Vector3(0.35f, 0.65f, 1.f)) \
   X(SpecularMetalTint,                specular_metal_tint,                    Vector3,        Vector3(0.f),               Vector3(1.f),               Vector3(0.f)) \
   /* Gamma-space RGB multiplier on the sampled albedo texture (remixapi_MaterialInfoOpaqueAlbedoTintEXT). */ \
-  X(AlbedoTint,                       albedo_tint,                            Vector3,        Vector3(0.f),               Vector3(16.f),              Vector3(1.f))
+  X(AlbedoTint,                       albedo_tint,                            Vector3,        Vector3(0.f),               Vector3(16.f),              Vector3(1.f)) \
+  LIST_TEXTURE_TRANSFORM_CONSTANTS(X)
 
 #define LIST_OPAQUE_MATERIAL_PARAMS(X)\
   LIST_OPAQUE_MATERIAL_TEXTURES(X) \
@@ -138,7 +148,8 @@
   /* Sampler State */ \
   X(FilterMode,                       filter_mode,                        uint8_t,  lss::Mdl::Filter::Nearest,  lss::Mdl::Filter::Linear,  lss::Mdl::Filter::Linear)  \
   X(WrapModeU,                        wrap_mode_u,                        uint8_t,  lss::Mdl::WrapMode::Clamp,  lss::Mdl::WrapMode::Clip,  lss::Mdl::WrapMode::Repeat) \
-  X(WrapModeV,                        wrap_mode_v,                        uint8_t,  lss::Mdl::WrapMode::Clamp,  lss::Mdl::WrapMode::Clip,  lss::Mdl::WrapMode::Repeat)
+  X(WrapModeV,                        wrap_mode_v,                        uint8_t,  lss::Mdl::WrapMode::Clamp,  lss::Mdl::WrapMode::Clip,  lss::Mdl::WrapMode::Repeat) \
+  LIST_TEXTURE_TRANSFORM_CONSTANTS(X)
 
 #define LIST_TRANSLUCENT_MATERIAL_PARAMS(X)\
   LIST_TRANSLUCENT_MATERIAL_TEXTURES(X) \
@@ -169,6 +180,13 @@
   LIST_PORTAL_MATERIAL_TEXTURES(X) \
   LIST_PORTAL_MATERIAL_CONSTANTS(X)
 // clang-format on
+
+// Texture transform constants enter a material's hash only with a non-default value.
+// The hash is the default API material key, so materials without a transform keep their keys.
+constexpr bool isHashedOnlyWhenSet(std::string_view name) {
+  return name == "TextureScrollRate" || name == "TextureScrollAngle" || name == "TextureScale" ||
+         name == "TextureOffset" || name == "TextureRotation";
+}
 
 #define WRITE_CTOR_ARGS(name, usd_attr, type, minVal, maxVal, defaultVal) \
       const type& name,
@@ -221,7 +239,9 @@
       h += m_##name.getImageHash();
 
 #define WRITE_CONSTANT_HASH(name, usd_attr, type, minVal, maxVal, defaultVal) \
-      h = XXH64(&m_##name, sizeof(m_##name), h);
+      if (!isHashedOnlyWhenSet(#name) || m_##name != defaultVal) { \
+        h = XXH64(&m_##name, sizeof(m_##name), h); \
+      }
 
 #define WRITE_PARAMETER_MEMBERS(name, usd_attr, type, minVal, maxVal, defaultVal) \
       type m_##name = defaultVal;
@@ -328,6 +348,7 @@ namespace dxvk {
   REMIX_MATERIAL(RayPortalMaterial, LIST_PORTAL_MATERIAL_CONSTANTS, LIST_PORTAL_MATERIAL_TEXTURES, LIST_PORTAL_MATERIAL_PARAMS)
 }
 
+#undef LIST_TEXTURE_TRANSFORM_CONSTANTS
 #undef LIST_OPAQUE_MATERIAL_TEXTURES
 #undef LIST_OPAQUE_MATERIAL_CONSTANTS
 #undef LIST_OPAQUE_MATERIAL_PARAMS

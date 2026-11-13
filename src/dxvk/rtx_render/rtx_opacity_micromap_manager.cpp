@@ -1261,6 +1261,8 @@ namespace dxvk {
 
     // Filter by OMM settings
     {
+      // A micromap bakes one texture position, so a scrolling alpha cannot use one, whatever the option says.
+      useOpacityMicromap &= !instance.surface.isTextureScrolling();
       useOpacityMicromap &= !instance.isAnimated() || OpacityMicromapOptions::BuildRequests::enableAnimatedInstances();
       useOpacityMicromap &= !alphaState.isParticle || OpacityMicromapOptions::BuildRequests::enableParticles();
     }

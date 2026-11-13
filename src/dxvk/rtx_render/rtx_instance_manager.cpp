@@ -37,6 +37,7 @@
 #include "rtx_ray_portal_manager.h"
 #include "rtx_terrain_baker.h"
 
+#include "../../util/util_global_time.h"
 #include "rtx_matrix_helpers.h"
 #include "dxvk_scoped_annotation.h"
 
@@ -158,7 +159,7 @@ namespace dxvk {
   namespace {
     template<int RtInstanceSize> struct CheckRtInstanceSize {
       // The second line of the build error should contain the new size of RtInstance in the template argument, i.e. `dxvk::CheckRtInstanceSize<newSize>`
-      static_assert(RtInstanceSize == 824,"RtInstance size has changed.  Fix the copy constructor above this message, then update the expected size.");
+      static_assert(RtInstanceSize == 856,"RtInstance size has changed.  Fix the copy constructor above this message, then update the expected size.");
     };
     CheckRtInstanceSize<sizeof(RtInstance)> _rtInstanceSizeTest;
   }
@@ -984,6 +985,21 @@ namespace dxvk {
 
     // Updates done only once a frame unless overriden due to an explicit state
     if (isFirstUpdateThisFrame || overridePreviousCameraUpdate) {
+      Vector2 textureScrollSpeed(0.f);
+      Vector2 textureScale(1.f);
+      Vector2 textureOffset(0.f);
+      float textureRotation = 0.f;
+
+      // Eyes, animated water and camera-space-normal texgen use only the captured mapping.
+      if (!drawCall.isEye() && legacySurface.texgenMode != TexGenMode::ViewNormals &&
+          !currentInstance.testCategoryFlags(InstanceCategories::AnimatedWater)) {
+        materialData->getTextureTransformData(textureScrollSpeed, textureScale, textureOffset, textureRotation);
+      }
+
+      currentInstance.surface.textureScrollSpeed = textureScrollSpeed;
+      currentInstance.surface.textureScale = textureScale;
+      currentInstance.surface.textureOffset = textureOffset;
+      currentInstance.surface.textureRotation = textureRotation;
 
       if (isFirstUpdateThisFrame) {
         currentInstance.m_materialType = materialData->getType();
@@ -1025,7 +1041,7 @@ namespace dxvk {
         currentInstance.surface.blendModeState = drawCall.getMaterialData().blendMode;
 
         materialData->getSpriteSheetData(currentInstance.surface.spriteSheetRows, currentInstance.surface.spriteSheetCols, currentInstance.surface.spriteSheetFPS);
-        currentInstance.m_isAnimated = currentInstance.surface.spriteSheetFPS != 0;
+        currentInstance.m_isAnimated = currentInstance.surface.spriteSheetFPS != 0 || currentInstance.surface.isTextureScrolling();
         currentInstance.surface.objectPickingValue = drawCall.drawCallID;
 
         if (materialData->getType() == MaterialDataType::Opaque)
@@ -1153,7 +1169,7 @@ namespace dxvk {
           }
         }
 
-        currentInstance.surface.textureTransform = legacySurface.textureTransform;
+        currentInstance.surface.setCapturedTextureTransform(legacySurface.textureTransform);
 
         currentInstance.surface.isStatic = !(hasTransformChanged || hasPreviousPositions) || currentInstance.m_materialType == MaterialDataType::RayPortal;
 
@@ -2146,6 +2162,8 @@ namespace dxvk {
       return;
 
     const bool hasNonIdentityTextureTransform = instance.surface.textureTransform != Matrix4();
+    const Vector2 textureScrollOffset = instance.surface.getTextureScrollOffset(GlobalTime::get().absoluteTimeUs());
+    const bool hasMaterialTextureAxes = instance.surface.hasMaterialTextureAxes();
     bool bSuccess = true;
     bool areAllBillboardsValidIntersectionCandidates = true;
     uint32_t billboardCount = 0;
@@ -2249,7 +2267,7 @@ namespace dxvk {
       billboard.height = yLength;
       billboard.xAxisUV = xVectorUV * 0.5f;
       billboard.yAxisUV = yVectorUV * 0.5f;
-      billboard.centerUV = centerUV;
+      billboard.centerUV = instance.surface.isTextureScrolling() ? centerUV + textureScrollOffset : centerUV;
       billboard.instance = &instance;
       billboard.vertexColor = vertexColor;
       billboard.instanceMask = computeBillboardIntersectionPrimitiveMask(instance);
@@ -2258,6 +2276,7 @@ namespace dxvk {
       billboard.allowAsIntersectionPrimitive = true;
       billboard.isBeam = false;
       billboard.isCameraFacing = isCameraFacing;
+      billboard.hasMaterialTextureAxes = hasMaterialTextureAxes;
       m_billboards.push_back(billboard);
       ++billboardCount;
     }
@@ -2303,6 +2322,9 @@ namespace dxvk {
     if (!bufferData.indexData || !bufferData.positionData || !bufferData.texcoordData)
       return;
 
+    const bool hasMaterialTextureTransform = instance.surface.hasMaterialTextureTransform();
+    const Matrix4 textureTransform = instance.surface.getTextureTransform(GlobalTime::get().absoluteTimeUs());
+
     // Extract the beams from the triangle strip.
     // Start by loading the first 2 indices.
     uint16_t indices[4];
@@ -2331,6 +2353,9 @@ namespace dxvk {
       for (int i = 0; i < 4; ++i) {
         positions[i] = bufferData.getPosition(indices[i]);
         texcoords[i] = bufferData.getTexCoord(indices[i]);
+        if (hasMaterialTextureTransform) {
+          texcoords[i] = transformTexcoord(textureTransform, texcoords[i]);
+        }
       }
 
       // Load one vertex color - assuming that the entire beam uses the same color
@@ -2368,6 +2393,7 @@ namespace dxvk {
       billboard.allowAsIntersectionPrimitive = true;
       billboard.isBeam = true;
       billboard.isCameraFacing = false;
+      billboard.hasMaterialTextureAxes = instance.surface.hasMaterialTextureAxes();
       m_billboards.push_back(billboard);
 
       // If there are enough vertices left in the strip to fit one more beam, after the separator pair,

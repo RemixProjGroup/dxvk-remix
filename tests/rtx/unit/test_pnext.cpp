@@ -294,6 +294,24 @@ namespace pnext_test_app {
     }
   }
 
+  void test_materialTextureTransform() {
+    remix::MaterialInfoTextureTransformEXT transform {};
+    if (transform.sType != REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TEXTURE_TRANSFORM_EXT ||
+        transform.textureScrollRate != 0.f || transform.textureScrollAngle != 0.f || transform.textureScale_hasvalue ||
+        transform.textureScale_value.x != 1.f || transform.textureScale_value.y != 1.f ||
+        transform.textureOffset.x != 0.f || transform.textureOffset.y != 0.f ||
+        transform.textureRotation != 0.f) {
+      throw dxvk::DxvkError { ERROR_INTRO "Texture transform wrapper must default to the identity" };
+    }
+
+    remixapi_MaterialInfo material {};
+    material.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
+    material.pNext = &transform;
+    if (pnext::find<remixapi_MaterialInfoTextureTransformEXT>(&material) != &transform) {
+      throw dxvk::DxvkError { ERROR_INTRO "Texture transform struct must be found on a material chain" };
+    }
+  }
+
   namespace test_apiVersionOrdering {
     static_assert(REMIXAPI_VERSION_MAKE(0, 0, 0) < REMIXAPI_VERSION_MAKE(1, 0, 0));
     static_assert(REMIXAPI_VERSION_MAKE(0, 0, 0) < REMIXAPI_VERSION_MAKE(0, 1, 0));
@@ -315,6 +333,7 @@ int main() {
     pnext_test_app::test_decalOrder();
     pnext_test_app::test_decalOrderRecord();
     pnext_test_app::test_wrapper();
+    pnext_test_app::test_materialTextureTransform();
   }
   catch (const dxvk::DxvkError& error) {
     std::cerr << error.message() << std::endl;

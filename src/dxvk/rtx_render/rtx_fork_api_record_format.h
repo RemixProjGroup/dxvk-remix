@@ -214,6 +214,15 @@ namespace remix_record {
     }
   }
 
+  template<class IO> void ioExt(IO& io, remixapi_MaterialInfoTextureTransformEXT& s) {
+    io.pod(s.textureScrollRate);
+    io.pod(s.textureScrollAngle);
+    io.pod(s.textureScale_hasvalue);
+    io.pod(s.textureScale_value);
+    io.pod(s.textureOffset);
+    io.pod(s.textureRotation);
+  }
+
   template<class IO> void ioExt(IO& io, remixapi_MaterialInfoOpaqueSubsurfaceEXT& s) {
     io.wstr(s.subsurfaceTransmittanceTexture);
     io.wstr(s.subsurfaceThicknessTexture);
@@ -533,6 +542,7 @@ namespace remix_record {
   X(REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SUBSURFACE_EXT,  remixapi_MaterialInfoOpaqueSubsurfaceEXT)\
   X(REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SPEC_GLOSS_EXT,  remixapi_MaterialInfoOpaqueSpecGlossEXT) \
   X(REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_ALBEDO_TINT_EXT, remixapi_MaterialInfoOpaqueAlbedoTintEXT)\
+  X(REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TEXTURE_TRANSFORM_EXT,  remixapi_MaterialInfoTextureTransformEXT)\
   X(REMIXAPI_STRUCT_TYPE_LIGHT_INFO_DISTANT_EXT,               remixapi_LightInfoDistantEXT)            \
   X(REMIXAPI_STRUCT_TYPE_LIGHT_INFO_CYLINDER_EXT,              remixapi_LightInfoCylinderEXT)           \
   X(REMIXAPI_STRUCT_TYPE_LIGHT_INFO_DISK_EXT,                  remixapi_LightInfoDiskEXT)               \

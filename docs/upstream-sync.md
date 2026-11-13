@@ -46,6 +46,10 @@ Ported by hand: `3f75d648b` (bridge query completion, shared heap upload snapsho
 
 Take: `89257d282` (merge `9dd9b9398`, REMIX-6230), ported by hand in "Bindless buffer table: updates follow the changed slots". Kept from upstream: the slot list in `RetainedBufferTable`, `PendingSlotQueues`, `BindlessBufferMirror` and the unit tests. Different from upstream: registered buffers pin their backing, because a full-buffer write would otherwise rename a table buffer behind the mirror. `rtx.trackBindlessResourcesOnChange` stays, the failed-allocation recovery stays instead of a throw, and retired buffers need no snapshot resource. Measured gain: pending. The rest of the range was not reviewed.
 
+## Between passes: material texture transforms, 2026-11-02
+
+Ported by hand: `c5f0f8e7d` (merge `cf83c0514`), in "Material texture scale, offset, rotation and scroll". USD and MDL attribute names match upstream. Different from upstream: the API gets a new chained struct, `remixapi_MaterialInfoTextureTransformEXT`, because existing structs keep their layout, and the bridge does not forward it. The new constants enter the material hash only with a non-default value, because that hash is the default API material key. The controls stay on `RtSurface`, so retained scene transform updates keep them. The legacy surface record follows the scroll. A scrolling surface never gets a micromap, even with `rtx.opacityMicromap.buildRequests.enableAnimatedInstances`. Billboards use the new tangents only when a material control changes their UV axes, and beams apply the transform only when a material control is set, so other draws stay bit-identical. Not taken: the `(u, v, 1, 1)` padding in billboard and micromap footprint texcoords, which changes draws with a non-zero third matrix column, and the `animationTimeSeconds` helper, which is a refactor.
+
 ## Starting point, 2026-10-15
 
 - `upstream/main` is at `029602f83` (2026-10-15).
@@ -92,7 +96,7 @@ Ports land on four branches: fix/20261029-upstream-small-fixes, fix/20261029-ups
 | `9344b88d0` | 10-21 | Surface material index refactor | skip | Refactor only. |
 | `97355c1a1` | 10-21 | DLSS NR / FG preset labels | taken earlier | Frame generation labels only (10-26). |
 | `c8a654180` | 10-21 | Secret replacements after merges | take | fix/20261029-upstream-small-fixes. |
-| `c5f0f8e7d` | 10-21 | Texture transform attributes in the material API | maybe | Remix API feature; port with an API request. |
+| `c5f0f8e7d` | 10-21 | Texture transform attributes in the material API | taken 11-02 | feat/20261102-upstream-texture-scroll. See the section below. |
 | `ff38fdb93` | 10-22 | SHaRC firefly clamp 100 | skip | Our SHaRC clamps with `rtx.sharc.maxDepositRatio` (20); try 100 in a game config before changing the default. |
 | `8bbf141e6` | 10-19 | Bridge per-frame IPC cost | have equivalent | Our own bridge rework (A3a sent-state cache, A4 non-blocking queries, the transport changes) covers it; the options and `d3d9_sent_state.h` are already in the trunk. |
 | `da9aeaa35` | 10-20 | SetConfigVariable option mutex | take | fix/20261029-upstream-small-fixes, with its credits line. |

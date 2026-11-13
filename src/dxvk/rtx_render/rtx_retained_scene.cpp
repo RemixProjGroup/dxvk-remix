@@ -319,7 +319,7 @@ namespace dxvk {
     }
     for (Submesh& sub : entry.subs) {
       if (sub.instance != nullptr) {
-        sub.instance->surface.textureTransform = textureTransform;
+        sub.instance->surface.setCapturedTextureTransform(textureTransform);
         sub.instance->surface.texgenMode = texgenMode;
       }
     }

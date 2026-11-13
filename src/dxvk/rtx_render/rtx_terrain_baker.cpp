@@ -559,7 +559,12 @@ namespace dxvk {
       0.f, // SpecularMetalStrength - off
       Vector3(0.35f, 0.65f, 1.f), // SpecularMetalParams (unused while off)
       Vector3(0.f), // SpecularMetalTint
-      Vector3(1.f) // AlbedoTint - none
+      Vector3(1.f), // AlbedoTint - none
+      0.f, // TextureScrollRate
+      0.f, // TextureScrollAngle
+      Vector2(1.f), // TextureScale
+      Vector2(0.f), // TextureOffset
+      0.f // TextureRotation
     ));
 
     m_hasInitializedMaterialDataThisFrame = true;

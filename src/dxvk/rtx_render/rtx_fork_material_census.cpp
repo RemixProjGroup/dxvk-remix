@@ -251,7 +251,7 @@ namespace dxvk {
         isFactorOrColor(surf.textureAlphaArg1Source) || isFactorOrColor(surf.textureAlphaArg2Source);
       const bool eye = surf.eyeParams.has_value();
       // The eye basis aliases the texture transform words, so the transform only counts without the eye.
-      const bool textureTransform = !eye && !(surf.textureTransform == Matrix4());
+      const bool textureTransform = !eye && (!(surf.textureTransform == Matrix4()) || surf.isTextureScrolling());
       const bool spritesheet = surf.spriteSheetFPS != 0 ||
         std::max<uint8_t>(1, surf.spriteSheetRows) != 1 || std::max<uint8_t>(1, surf.spriteSheetCols) != 1;
       const bool texgen = surf.texgenMode != TexGenMode::None;

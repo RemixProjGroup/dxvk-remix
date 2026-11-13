@@ -324,6 +324,12 @@ hash, not by `info->hash`, unless the material carries an
 `remixapi_MaterialInfoOpaqueEXT` has `alphaTestType` 0 (never passes), which hides
 the surface; use 7 (always) for opaque surfaces.
 
+Optional extensions chain next to the type-specific one:
+
+| Extension | When to use |
+| :-- | :-- |
+| `remixapi_MaterialInfoTextureTransformEXT` | Scale, rotate, offset or scroll all of an opaque or translucent material's textures. Not forwarded by the 32-bit bridge. See [`TextureTransforms.md`](../documentation/TextureTransforms.md). |
+
 ---
 
 ## Meshes

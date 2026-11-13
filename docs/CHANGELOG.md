@@ -185,6 +185,13 @@ The bindless buffer table no longer compares every slot with the descriptor sets
 - Measured: pending.
 - Commits: the commit that adds this entry.
 
+### Material texture scale, offset, rotation and scroll
+Opaque and translucent materials can scale, mirror, rotate, offset and scroll all of their textures through the MDL parameters `texture_scale`, `texture_offset`, `texture_rotation`, `texture_scroll_rate` and `texture_scroll_angle`, with upstream's names, so mods authored for upstream work. The math runs on the CPU and ends up in the existing per-surface texture matrix, so no GPU struct changes, and a material without these parameters writes the same records and keeps its material key. A scrolling surface never gets an opacity micromap, because a micromap holds one texture position. Baked terrain, eyes, sky, animated water, ray portals and view-normal texgen ignore the parameters.
+- Options: none. The parameters are authored on materials, and their defaults change nothing.
+- API: new chained `remixapi_MaterialInfoTextureTransformEXT` (0x4E560006). Existing structs are unchanged. The 32-bit bridge does not forward it.
+- Commits: the commit that adds this entry.
+- Docs: [TextureTransforms.md](../documentation/TextureTransforms.md)
+
 ## 2026-11-01
 
 ### GPU device loss when a BLAS drops an opacity micromap in flight
