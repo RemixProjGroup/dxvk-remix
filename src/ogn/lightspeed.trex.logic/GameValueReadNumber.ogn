@@ -1,0 +1,35 @@
+{
+  "lightspeed.trex.logic.GameValueReadNumber": {
+    "description": ["Reads a plugin-injected game-state value as a float.\n\nPlugins write values via remixapi_SetGameValue(key, value) in remix_c.h. This component reads the value under the given key and parses it as a float. Accepts any string parseable as a C floating-point literal; otherwise the default is emitted."],
+    "version": 1,
+    "uiName": "Game Value Read Number",
+    "language": "python",
+    "categoryDefinitions": "config/CategoryDefinition.json",
+    "categories": "Sense",
+    "inputs": {
+      "key": {
+        "description": ["The game-state key to read (e.g. 'windSpeed'). Plugins publish values under this key via remixapi_SetGameValue in remix_c.h."],
+        "type": "token",
+        "default": "",
+        "metadata": {
+          "tokenCategory": "String"
+        },
+        "uiName": "Key"
+      },
+      "defaultValue": {
+        "description": ["Value emitted when the key has not been set by any plugin, or when the stored value does not parse as a number."],
+        "type": "float",
+        "default": 0.000000,
+        "uiName": "Default"
+      }
+    },
+    "outputs": {
+      "value": {
+        "description": ["The current value of the game-state key as a float. Accepts any string parseable as a C floating-point literal (trailing whitespace permitted); otherwise the default is emitted."],
+        "type": "float",
+        "default": 0.000000,
+        "uiName": "Value"
+      }
+    }
+  }
+}

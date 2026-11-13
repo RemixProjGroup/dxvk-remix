@@ -58,6 +58,8 @@ This documentation provides detailed information about all available components 
 | [Angle to Mesh](AngleToMesh.md) | Measures the angle between a ray and a mesh's center point\.  This can be used to determine if the ca\.\.\. | 1 |
 | [Camera](Camera.md) | Provides information about the camera's position, direction, and field of view\.<br/><br/>Outputs current cam\.\.\. | 1 |
 | [Fog Hash Checker](FogHashChecker.md) | Detects if a specific fog state is currently active in the scene\.<br/><br/>Checks if a given fog hash matche\.\.\. | 1 |
+| [Game Value Read Bool](GameValueReadBool.md) | Reads a plugin\-injected game\-state value as a bool\.<br/><br/>Plugins write values via remixapi\_SetGameValue\(\.\.\. | 1 |
+| [Game Value Read Number](GameValueReadNumber.md) | Reads a plugin\-injected game\-state value as a float\.<br/><br/>Plugins write values via remixapi\_SetGameValue\.\.\. | 1 |
 | [Keyboard Input](KeyboardInput.md) | Detects when keyboard keys are pressed, held, or released\.<br/><br/>Checks the state of a keyboard key or ke\.\.\. | 1 |
 | [Light Hash Checker](LightHashChecker.md) | Detects if a specific light is currently active in the scene\.<br/><br/>Checks if a specific light hash is pr\.\.\. | 1 |
 | [Mesh Hash Checker](MeshHashChecker.md) | Detects if a specific mesh is currently being drawn in the scene\.<br/><br/>This checks all meshes that the g\.\.\. | 1 |
@@ -99,8 +101,8 @@ This documentation provides detailed information about all available components 
 
 ## Statistics
 
-- **Total Components:** 68
-- **Categorized Components:** 68
+- **Total Components:** 70
+- **Categorized Components:** 70
 - **Categories:** 5
 
 ---

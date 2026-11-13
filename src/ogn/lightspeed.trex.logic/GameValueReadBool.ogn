@@ -1,0 +1,35 @@
+{
+  "lightspeed.trex.logic.GameValueReadBool": {
+    "description": ["Reads a plugin-injected game-state value as a bool.\n\nPlugins write values via remixapi_SetGameValue(key, value) in remix_c.h. This component reads the value under the given key and interprets it as a bool. Accepts '1'/'0'/'true'/'false' (case-insensitive); any other content emits the default."],
+    "version": 1,
+    "uiName": "Game Value Read Bool",
+    "language": "python",
+    "categoryDefinitions": "config/CategoryDefinition.json",
+    "categories": "Sense",
+    "inputs": {
+      "key": {
+        "description": ["The game-state key to read (e.g. 'isRaining'). Plugins publish values under this key via remixapi_SetGameValue in remix_c.h."],
+        "type": "token",
+        "default": "",
+        "metadata": {
+          "tokenCategory": "String"
+        },
+        "uiName": "Key"
+      },
+      "defaultValue": {
+        "description": ["Value emitted when the key has not been set by any plugin, or when the stored value does not parse as a bool."],
+        "type": "bool",
+        "default": false,
+        "uiName": "Default"
+      }
+    },
+    "outputs": {
+      "value": {
+        "description": ["The current value of the game-state key as a bool. Accepts '1'/'0'/'true'/'false' (case-insensitive); any other content yields the default."],
+        "type": "bool",
+        "default": false,
+        "uiName": "Value"
+      }
+    }
+  }
+}
