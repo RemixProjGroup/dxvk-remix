@@ -89,10 +89,17 @@ namespace dxvk {
     /**
     * \brief Determine the mapping mode of the buffer, (ie. direct mapping or backed)
     */
-    inline D3D9_COMMON_BUFFER_MAP_MODE GetMapMode() const {
-      return (m_desc.Pool == D3DPOOL_DEFAULT && (m_desc.Usage & (D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY)))
+    inline D3D9_COMMON_BUFFER_MAP_MODE DetermineMapMode(const D3D9Options* options) const {
+      return (m_desc.Pool == D3DPOOL_DEFAULT && (m_desc.Usage & (D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY)) && options->allowDirectBufferMapping)
         ? D3D9_COMMON_BUFFER_MAP_MODE_DIRECT
         : D3D9_COMMON_BUFFER_MAP_MODE_BUFFER;
+    }
+
+    /**
+    * \brief Get the mapping mode of the buffer, (ie. direct mapping or backed)
+    */
+    inline D3D9_COMMON_BUFFER_MAP_MODE GetMapMode() const {
+      return m_mapMode;
     }
 
     /**
@@ -120,7 +127,12 @@ namespace dxvk {
 
     template <D3D9_COMMON_BUFFER_TYPE Type>
     inline DxvkBufferSlice GetBufferSlice(VkDeviceSize offset, VkDeviceSize length) const {
-      return DxvkBufferSlice(GetBuffer<Type>(), offset, length);
+      if (likely(length && offset < m_desc.Size)) {
+        return DxvkBufferSlice(GetBuffer<Type>(), offset,
+          std::min<VkDeviceSize>(m_desc.Size - offset, length));
+      }
+
+      return DxvkBufferSlice();
     }
 
     inline DxvkBufferSliceHandle AllocMapSlice() {
@@ -257,7 +269,8 @@ namespace dxvk {
 
     D3D9DeviceEx*               m_parent;
     const D3D9_BUFFER_DESC      m_desc;
-    DWORD                       m_mapFlags;
+    D3D9_COMMON_BUFFER_MAP_MODE m_mapMode;
+    DWORD                       m_mapFlags = 0;
     bool                        m_wasWrittenByGPU = false;
     bool                        m_uploadUsingStaging = false;
 

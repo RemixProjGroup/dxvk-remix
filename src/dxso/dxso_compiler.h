@@ -300,7 +300,7 @@ namespace dxvk {
 
     DxsoShaderMetaInfo         m_meta;
     DxsoDefinedConstants       m_constants;
-    uint32_t                   m_maxDefinedConstant;
+    uint32_t                   m_maxDefinedConstant = 0u;
 
     SpirvModule                m_module;
 
@@ -315,9 +315,7 @@ namespace dxvk {
     ////////////////////////////////////////////////
     // Temporary r# vector registers with immediate
     // indexing, and x# vector array registers.
-    std::array<
-      DxsoRegisterPointer,
-      DxsoMaxTempRegs> m_rRegs;
+    std::vector<DxsoRegisterPointer> m_rRegs;
 
     ////////////////////////////////////////////////
     // Predicate registers
@@ -598,6 +596,11 @@ namespace dxvk {
     DxsoRegisterValue emitDot(
             DxsoRegisterValue       a,
             DxsoRegisterValue       b);
+
+    DxsoRegisterValue emitMix(
+            DxsoRegisterValue       x,
+            DxsoRegisterValue       y,
+            DxsoRegisterValue       a);
 
     DxsoRegisterValue emitCross(
             DxsoRegisterValue       a,

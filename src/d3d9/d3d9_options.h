@@ -187,11 +187,14 @@ namespace dxvk {
     /// misc. imprecision on some vendors
     bool alphaTestWiggleRoom;
 
-    /// Apitrace mode: Maps all buffers in cached memory.
-    bool apitraceMode;
+    /// Puts all host-visible buffers in cached system memory.
+    bool cachedDynamicBuffers;
 
     /// Use device local memory for constant buffers.
     bool deviceLocalConstantBuffers;
+
+    /// Maps DEFAULT-pool dynamic and write-only buffers directly instead of through a staging buffer.
+    bool allowDirectBufferMapping;
 
     // NV-DXVK start: adapter override conf
     /// Override the adapter/GPU used for D3D9 (-1 = use application defined)

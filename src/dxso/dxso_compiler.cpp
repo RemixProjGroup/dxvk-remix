@@ -44,6 +44,7 @@ namespace dxvk {
 
     m_usedSamplers = 0;
     m_usedRTs      = 0;
+    m_rRegs.reserve(DxsoMaxTempRegs);
 
     for (uint32_t i = 0; i < m_rRegs.size(); i++)
       m_rRegs.at(i)  = DxsoRegisterPointer{ };
@@ -131,6 +132,7 @@ namespace dxvk {
     case DxsoOpcode::Lrp:
     case DxsoOpcode::Frc:
     case DxsoOpcode::Cmp:
+    case DxsoOpcode::Bem:
     case DxsoOpcode::Cnd:
     case DxsoOpcode::Dp2Add:
     case DxsoOpcode::DsX:
@@ -849,7 +851,7 @@ namespace dxvk {
     const bool pixel  = m_programInfo.type() == DxsoProgramTypes::PixelShader;
     const bool vertex = !pixel;
 
-    if (pixel && input && semantic.usage == DxsoUsage::Color && m_programInfo.majorVersion() < 3)
+    if (pixel && input && semantic.usage == DxsoUsage::Color)
       centroid = true;
 
     uint32_t slot = 0;
@@ -1262,6 +1264,8 @@ namespace dxvk {
       const DxsoBaseRegister* relative) {
     switch (reg.id.type) {
       case DxsoRegisterType::Temp: {
+        if (reg.id.num >= m_rRegs.size())
+          m_rRegs.resize( reg.id.num + 1, DxsoRegisterPointer { } );
         DxsoRegisterPointer& ptr = m_rRegs.at(reg.id.num);
         if (ptr.id == 0) {
           std::string name = str::format("r", reg.id.num);
@@ -1638,6 +1642,22 @@ namespace dxvk {
 
     dot.id = m_module.opDot(getVectorTypeId(dot.type), az.id, bz.id);
     return dot;
+  }
+
+  DxsoRegisterValue DxsoCompiler::emitMix(
+            DxsoRegisterValue       x,
+            DxsoRegisterValue       y,
+            DxsoRegisterValue       a) {
+    uint32_t typeId = getVectorTypeId(x.type);
+
+    if (m_moduleInfo.options.d3d9FloatEmulation != D3D9FloatEmulation::Strict)
+      return {x.type, m_module.opFMix(typeId, x.id, y.id, a.id)};
+
+    DxsoRegisterValue ySubx;
+    ySubx.type = x.type;
+    ySubx.id   = m_module.opFSub(typeId, y.id, x.id);
+
+    return emitFma(a, ySubx, x);
   }
 
 
@@ -2184,11 +2204,21 @@ namespace dxvk {
           else
             result.id = m_module.opCompositeConstruct(typeId, result.type.ccount, resultIndices.data());
 
+          if (m_moduleInfo.options.d3d9FloatEmulation == D3D9FloatEmulation::Enabled) {
+            result.id = m_module.opNMin(typeId, result.id,
+              m_module.constfReplicant(FLT_MAX, result.type.ccount));
+          }
           break;
         }
+        [[fallthrough]];
       case DxsoOpcode::Exp:
         result.id = m_module.opExp2(typeId,
           emitRegisterLoad(src[0], mask).id);
+
+        if (m_moduleInfo.options.d3d9FloatEmulation == D3D9FloatEmulation::Enabled) {
+          result.id = m_module.opNMin(typeId, result.id,
+            m_module.constfReplicant(FLT_MAX, result.type.ccount));
+        }
         break;
       case DxsoOpcode::Pow: {
         uint32_t base = emitRegisterLoad(src[0], mask).id;
@@ -2224,7 +2254,10 @@ namespace dxvk {
             indices[index++] = m_module.opCompositeExtract(m_module.defFloatType(32), crossValue.id, 1, &i);
         }
 
-        result.id = m_module.opCompositeConstruct(getVectorTypeId(result.type), result.type.ccount, indices.data());
+        if (result.type.ccount == 1)
+          result.id = indices[0];
+        else
+          result.id = m_module.opCompositeConstruct(typeId, result.type.ccount, indices.data());
 
         break;
       }
@@ -2366,10 +2399,10 @@ namespace dxvk {
         }
         break;
       case DxsoOpcode::Lrp:
-        result.id = m_module.opFMix(typeId,
-          emitRegisterLoad(src[2], mask).id,
-          emitRegisterLoad(src[1], mask).id,
-          emitRegisterLoad(src[0], mask).id);
+        result.id = emitMix(
+          emitRegisterLoad(src[2], mask),
+          emitRegisterLoad(src[1], mask),
+          emitRegisterLoad(src[0], mask)).id;
         break;
       case DxsoOpcode::Frc:
         result.id = m_module.opFract(typeId,
@@ -2388,6 +2421,41 @@ namespace dxvk {
           typeId, cmp,
           emitRegisterLoad(src[1], mask).id,
           emitRegisterLoad(src[2], mask).id);
+        break;
+      }
+      case DxsoOpcode::Bem: {
+        DxsoRegisterValue src0 = emitRegisterLoad(src[0], mask);
+        DxsoRegisterValue src1 = emitRegisterLoad(src[1], mask);
+
+        // dst.x = src0.x + [bm00(m) * src1.x + bm10(m) * src1.y]
+        // dst.y = src0.y + [bm01(m) * src1.x + bm11(m) * src1.y]
+
+        // The bm indices are stored transposed, so each row is a dot product.
+
+        // dst.x = src0.x + dot(bm0, src1)
+        // dst.y = src0.y + dot(bm1, src1)
+
+        std::array<uint32_t, 2> values = { m_module.constf32(0.0f), m_module.constf32(0.0f) };
+
+        for (uint32_t i = 0; i < 2; i++) {
+          uint32_t fl_t   = getScalarTypeId(DxsoScalarType::Float32);
+          uint32_t vec2_t = getVectorTypeId({ DxsoScalarType::Float32, 2 });
+          std::array<uint32_t, 4> indices = { 0, 1, 2, 3 };
+
+          uint32_t tc_m_n = m_module.opCompositeExtract(fl_t, src0.id, 1, &i);
+
+          uint32_t offset = m_module.constu32(D3D9SharedPSStages_Count * ctx.dst.id.num + D3D9SharedPSStages_BumpEnvMat0 + i);
+          uint32_t bm     = m_module.opAccessChain(m_module.defPointerType(vec2_t, spv::StorageClassUniform),
+                                                  m_ps.sharedState, 1, &offset);
+                   bm     = m_module.opLoad(vec2_t, bm);
+
+          uint32_t t      = m_module.opVectorShuffle(vec2_t, src1.id, src1.id, 2, indices.data());
+
+          uint32_t dot    = m_module.opDot(fl_t, bm, t);
+
+          values[i]       = m_module.opFAdd(fl_t, tc_m_n, dot);
+        }
+        result.id = m_module.opCompositeConstruct(typeId, values.size(), values.data());
         break;
       }
       case DxsoOpcode::Cnd: {
@@ -3677,6 +3745,10 @@ void DxsoCompiler::emitControlFlowGenericLoop(
 
       DxsoRegMask mask = elem.mask;
       if (mask.popCount() == 0)
+        mask = DxsoRegMask(true, true, true, true);
+
+      // Pixel shaders read every component that the vertex shader wrote, whatever the dcl mask.
+      if (m_programInfo.type() == DxsoProgramType::PixelShader)
         mask = DxsoRegMask(true, true, true, true);
 
       std::array<uint32_t, 4> indices = { 0, 1, 2, 3 };

@@ -892,16 +892,35 @@ namespace dxvk {
     if (unlikely(srcTexInfo->Desc()->Pool != D3DPOOL_SYSTEMMEM || dstTexInfo->Desc()->Pool != D3DPOOL_DEFAULT))
       return D3DERR_INVALIDCALL;
 
-    const Rc<DxvkImage> dstImage  = dstTexInfo->GetImage();
-    const DxvkFormatInfo* formatInfo = imageFormatInfo(dstTexInfo->GetFormatMapping().FormatColor);
-    uint32_t mipLevels   = std::min(srcTexInfo->Desc()->MipLevels, dstTexInfo->Desc()->MipLevels);
-    uint32_t arraySlices = std::min(srcTexInfo->Desc()->ArraySize, dstTexInfo->Desc()->ArraySize);
+    if (unlikely(srcTexInfo->Desc()->MipLevels < dstTexInfo->Desc()->MipLevels && !dstTexInfo->IsAutomaticMip()))
+      return D3DERR_INVALIDCALL;
+
+    if (unlikely(dstTexInfo->Desc()->Format != srcTexInfo->Desc()->Format))
+      return D3DERR_INVALIDCALL;
 
     if (unlikely(srcTexInfo->IsAutomaticMip() && !dstTexInfo->IsAutomaticMip()))
       return D3DERR_INVALIDCALL;
 
-    if (dstTexInfo->IsAutomaticMip())
-      mipLevels = 1;
+    const Rc<DxvkImage> dstImage  = dstTexInfo->GetImage();
+    const DxvkFormatInfo* formatInfo = imageFormatInfo(dstTexInfo->GetFormatMapping().FormatColor);
+    uint32_t mipLevels = dstTexInfo->IsAutomaticMip() ? 1 : dstTexInfo->Desc()->MipLevels;
+    uint32_t arraySlices = std::min(srcTexInfo->Desc()->ArraySize, dstTexInfo->Desc()->ArraySize);
+
+    uint32_t srcMipOffset = 0;
+    VkExtent3D srcFirstMipExtent = srcTexInfo->GetExtent();
+    VkExtent3D dstFirstMipExtent = dstTexInfo->GetExtent();
+
+    if (srcFirstMipExtent != dstFirstMipExtent) {
+      // UpdateTexture can be used with textures that have different mip lengths.
+      // It will either match the top mips or the bottom ones.
+
+      srcMipOffset = srcTexInfo->Desc()->MipLevels - mipLevels;
+      srcFirstMipExtent = util::computeMipLevelExtent(srcTexInfo->GetExtent(), srcMipOffset);
+      dstFirstMipExtent = dstTexInfo->GetExtent();
+    }
+
+    if (srcFirstMipExtent != dstFirstMipExtent)
+      return D3DERR_INVALIDCALL;
 
     // Set up the destination texture from the source texture for RTX use
     dstTexInfo->SetupForRtxFrom(srcTexInfo);
@@ -911,23 +930,24 @@ namespace dxvk {
       if (box.Left >= box.Right || box.Top >= box.Bottom || box.Front >= box.Back)
         continue;
 
-      for (uint32_t m = 0; m < mipLevels; m++) {
-        VkImageSubresourceLayers dstLayers = { VK_IMAGE_ASPECT_COLOR_BIT, m, a, 1 };
+      for (uint32_t dstMip = 0; dstMip < mipLevels; dstMip++) {
+        uint32_t srcMip = dstMip + srcMipOffset;
+        VkImageSubresourceLayers dstLayers = { VK_IMAGE_ASPECT_COLOR_BIT, dstMip, a, 1 };
 
         VkOffset3D scaledBoxOffset = {
-          int32_t(alignDown(box.Left  >> m, formatInfo->blockSize.width)),
-          int32_t(alignDown(box.Top   >> m, formatInfo->blockSize.height)),
-          int32_t(alignDown(box.Front >> m, formatInfo->blockSize.depth))
+          int32_t(alignDown(box.Left  >> srcMip, formatInfo->blockSize.width)),
+          int32_t(alignDown(box.Top   >> srcMip, formatInfo->blockSize.height)),
+          int32_t(alignDown(box.Front >> srcMip, formatInfo->blockSize.depth))
         };
         VkExtent3D scaledBoxExtent = util::computeMipLevelExtent({
           uint32_t(box.Right  - int32_t(alignDown(box.Left, formatInfo->blockSize.width))),
           uint32_t(box.Bottom - int32_t(alignDown(box.Top, formatInfo->blockSize.height))),
           uint32_t(box.Back   - int32_t(alignDown(box.Front, formatInfo->blockSize.depth)))
-        }, m);
+        }, srcMip);
         VkExtent3D scaledBoxExtentBlockCount = util::computeBlockCount(scaledBoxExtent, formatInfo->blockSize);
         VkExtent3D scaledAlignedBoxExtent = util::computeBlockExtent(scaledBoxExtentBlockCount, formatInfo->blockSize);
 
-        VkExtent3D texLevelExtent = dstImage->mipLevelExtent(m);
+        VkExtent3D texLevelExtent = dstImage->mipLevelExtent(dstMip);
         VkExtent3D texLevelExtentBlockCount = util::computeBlockCount(texLevelExtent, formatInfo->blockSize);
 
         scaledAlignedBoxExtent.width = std::min<uint32_t>(texLevelExtent.width - scaledBoxOffset.x, scaledAlignedBoxExtent.width);
@@ -942,7 +962,7 @@ namespace dxvk {
             + boxOffsetBlockCount.y * pitch
             + boxOffsetBlockCount.x * formatInfo->elementSize;
 
-        void* srcData = reinterpret_cast<uint8_t*>(srcTexInfo->GetMappedSlice(srcTexInfo->CalcSubresource(a, m)).mapPtr) + copySrcOffset;
+        void* srcData = reinterpret_cast<uint8_t*>(srcTexInfo->GetMappedSlice(srcTexInfo->CalcSubresource(a, srcMip)).mapPtr) + copySrcOffset;
         util::packImageData(
           slice.mapPtr, srcData, scaledBoxExtentBlockCount, formatInfo->elementSize,
           pitch, pitch * texLevelExtentBlockCount.height);
@@ -964,7 +984,7 @@ namespace dxvk {
             cSrcSlice.buffer(), cSrcSlice.offset(), 0, 0);
         });
 
-        dstTexInfo->SetWrittenByGPU(dstTexInfo->CalcSubresource(a, m), true);
+        dstTexInfo->SetWrittenByGPU(dstTexInfo->CalcSubresource(a, dstMip), true);
       }
     }
 
@@ -997,6 +1017,9 @@ namespace dxvk {
     D3D9CommonTexture* srcTexInfo = GetCommonTexture(src);
 
     if (srcTexInfo->Desc()->Format != dstTexInfo->Desc()->Format)
+      return D3DERR_INVALIDCALL;
+
+    if (src->GetSurfaceExtent() != dst->GetSurfaceExtent())
       return D3DERR_INVALIDCALL;
 
     if (dstTexInfo->Desc()->Pool == D3DPOOL_DEFAULT)
@@ -1078,6 +1101,9 @@ namespace dxvk {
 
     Rc<DxvkImage> dstImage = dstTextureInfo->GetImage();
     Rc<DxvkImage> srcImage = srcTextureInfo->GetImage();
+
+    if (dstImage == nullptr || srcImage == nullptr)
+        return D3DERR_INVALIDCALL;
 
     const DxvkFormatInfo* dstFormatInfo = imageFormatInfo(dstImage->info().format);
     const DxvkFormatInfo* srcFormatInfo = imageFormatInfo(srcImage->info().format);
@@ -1198,7 +1224,7 @@ namespace dxvk {
           ctx->resolveDepthStencilImage(
             cDstImage, cSrcImage, cRegion,
             VK_RESOLVE_MODE_AVERAGE_BIT_KHR,
-            VK_RESOLVE_MODE_AVERAGE_BIT_KHR);
+            VK_RESOLVE_MODE_SAMPLE_ZERO_BIT_KHR);
         }
       });
     };
@@ -1715,6 +1741,10 @@ namespace dxvk {
     // This works around that.
     uint32_t alignment = m_d3d9Options.lenientClear ? 8 : 1;
 
+    if (extent.width == 0 || extent.height == 0) {
+      return D3D_OK;
+    }
+
     if (!Count) {
       // Clear our viewport & scissor minified region in this rendertarget.
       ClearViewRect(alignment, offset, extent);
@@ -1727,6 +1757,11 @@ namespace dxvk {
           std::max<int32_t>(pRects[i].y1, offset.y),
           0
         };
+
+        if (std::min<uint32_t>(pRects[i].x2, offset.x + extent.width) <= rectOffset.x
+          || std::min<uint32_t>(pRects[i].y2, offset.y + extent.height) <= rectOffset.y) {
+          continue;
+        }
 
         VkExtent3D rectExtent = {
           std::min<uint32_t>(pRects[i].x2, offset.x + extent.width)  - rectOffset.x,
@@ -1769,10 +1804,7 @@ namespace dxvk {
     ScopedCpuProfileZone();
     D3D9DeviceLock lock = LockDevice();
 
-    if (unlikely(ShouldRecord()))
-      return m_recorder->MultiplyStateTransform(TransformState, pMatrix);
-
-    uint32_t idx = GetTransformIndex(TransformState);
+    const uint32_t idx = GetTransformIndex(TransformState);
 
     m_state.transforms[idx] = m_state.transforms[idx] * ConvertMatrix(pMatrix);
 
@@ -1862,7 +1894,7 @@ namespace dxvk {
       return D3DERR_INVALIDCALL;
 
     if (unlikely(ShouldRecord())) {
-      Logger::warn("D3D9DeviceEx::SetLight: State block not implemented.");
+      m_recorder->SetLight(Index, pLight);
       return D3D_OK;
     }
 
@@ -1902,6 +1934,11 @@ namespace dxvk {
   HRESULT STDMETHODCALLTYPE D3D9DeviceEx::LightEnable(DWORD Index, BOOL Enable) {
     ScopedCpuProfileZone();
     D3D9DeviceLock lock = LockDevice();
+
+    if (unlikely(ShouldRecord())) {
+      m_recorder->LightEnable(Index, Enable);
+      return D3D_OK;
+    }
 
     if (unlikely(Index >= m_state.lights.size()))
       m_state.lights.resize(Index + 1);
@@ -2450,13 +2487,8 @@ namespace dxvk {
     if (unlikely(pValue == nullptr))
       return D3DERR_INVALIDCALL;
 
-    *pValue = 0;
-
-    if (unlikely(Stage >= caps::TextureStageCount))
-      return D3DERR_INVALIDCALL;
-
-    if (unlikely(dxvkType >= TextureStageStateCount))
-      return D3DERR_INVALIDCALL;
+    Stage = std::min(Stage, DWORD(caps::TextureStageCount - 1));
+    dxvkType = std::min(dxvkType, D3D9TextureStageStateTypes(DXVK_TSS_COUNT - 1));
 
     *pValue = m_state.textureStages[Stage][dxvkType];
 
@@ -4118,12 +4150,19 @@ namespace dxvk {
         m_dirtySamplerStates |= 1u << StateSampler;
       }
 
-      if (unlikely(m_fetch4Enabled & (1u << StateSampler) && !(m_fetch4 & (1u << StateSampler)))) {
-        bool textureSupportsFetch4 = newTexture->SupportsFetch4();
-        if (textureSupportsFetch4
-          && m_state.samplerStates[StateSampler][D3DSAMP_MAGFILTER] == D3DTEXF_POINT
-          && m_state.samplerStates[StateSampler][D3DSAMP_MINFILTER] == D3DTEXF_POINT) {
+      if (unlikely(m_fetch4Enabled & (1u << StateSampler))) {
+        const bool samplerFetch4 = (m_fetch4 & (1u << StateSampler)) != 0;
+        const bool pointFilter = m_state.samplerStates[StateSampler][D3DSAMP_MAGFILTER] == D3DTEXF_POINT
+                                  && m_state.samplerStates[StateSampler][D3DSAMP_MINFILTER] == D3DTEXF_POINT;
+        const bool textureSupportsFetch4 = newTexture->SupportsFetch4();
+
+        if (unlikely(textureSupportsFetch4 && pointFilter && !samplerFetch4)) {
+          // The new texture supports fetch4, so the sampler turns it on.
           m_fetch4 |= 1u << StateSampler;
+          m_dirtySamplerStates |= 1u << StateSampler;
+        } else if (unlikely(!textureSupportsFetch4 && samplerFetch4)) {
+          // The new texture does not support fetch4, so the sampler turns it off.
+          m_fetch4 &= ~(1u << StateSampler);
           m_dirtySamplerStates |= 1u << StateSampler;
         }
       }
@@ -4175,13 +4214,12 @@ namespace dxvk {
           D3D9TextureStageStateTypes Type,
           DWORD                      Value) {
     ScopedCpuProfileZone();
+
+    // Out-of-range stages and types are clamped instead of rejected, as on the NVIDIA driver.
+    Stage = std::min(Stage, DWORD(caps::TextureStageCount - 1));
+    Type = std::min(Type, D3D9TextureStageStateTypes(DXVK_TSS_COUNT - 1));
+
     D3D9DeviceLock lock = LockDevice();
-
-    if (unlikely(Stage >= caps::TextureStageCount))
-      return D3DERR_INVALIDCALL;
-
-    if (unlikely(Type >= TextureStageStateCount))
-      return D3DERR_INVALIDCALL;
 
     if (unlikely(ShouldRecord()))
       return m_recorder->SetStateTextureStageState(Stage, Type, Value);
@@ -5484,7 +5522,7 @@ namespace dxvk {
     uint32_t floatCount = m_vsFloatConstsCount;
     if (constSet.meta.needsConstantCopies) {
       auto shader = GetCommonShader(m_state.vertexShader);
-      floatCount = std::max(floatCount, shader->GetMaxDefinedConstant());
+      floatCount = std::max(floatCount, shader->GetMaxDefinedConstant() + 1);
     }
     floatCount = std::min(floatCount, constSet.meta.maxConstIndexF);
 
@@ -5567,7 +5605,7 @@ namespace dxvk {
     uint32_t floatCount = ShaderStage == DxsoProgramType::VertexShader ? m_vsFloatConstsCount : m_psFloatConstsCount;
     if (constSet.meta.needsConstantCopies) {
       auto shader = GetCommonShader(Shader);
-      floatCount = std::max(floatCount, shader->GetMaxDefinedConstant());
+      floatCount = std::max(floatCount, shader->GetMaxDefinedConstant() + 1);
     }
     floatCount = std::min(constSet.meta.maxConstIndexF, floatCount);
 
@@ -7016,6 +7054,9 @@ namespace dxvk {
     const     uint32_t regCountHardware = DetermineHardwareRegCount<ProgramType, ConstantType>();
     constexpr uint32_t regCountSoftware = DetermineSoftwareRegCount<ProgramType, ConstantType>();
 
+    if (unlikely(StartRegister > std::numeric_limits<uint32_t>::max() - Count))
+      return D3DERR_INVALIDCALL;
+
     if (unlikely(StartRegister + Count > regCountSoftware))
       return D3DERR_INVALIDCALL;
 
@@ -7591,7 +7632,7 @@ namespace dxvk {
     const D3D9_COMMON_TEXTURE_DESC* dstDesc = dstTextureInfo->Desc();
 
     VkSampleCountFlagBits dstSampleCount;
-    DecodeMultiSampleType(dstDesc->MultiSample, dstDesc->MultisampleQuality, &dstSampleCount);
+    DecodeMultiSampleType(m_dxvkDevice, dstDesc->MultiSample, dstDesc->MultisampleQuality, &dstSampleCount);
 
     if (unlikely(dstSampleCount != VK_SAMPLE_COUNT_1_BIT)) {
       Logger::warn("D3D9DeviceEx::ResolveZ: dstSampleCount != 1. Discarding.");
@@ -7623,7 +7664,7 @@ namespace dxvk {
       srcSubresource.arrayLayer, 1 };
 
     VkSampleCountFlagBits srcSampleCount;
-    DecodeMultiSampleType(srcDesc->MultiSample, srcDesc->MultisampleQuality, &srcSampleCount);
+    DecodeMultiSampleType(m_dxvkDevice, srcDesc->MultiSample, srcDesc->MultisampleQuality, &srcSampleCount);
 
     if (srcSampleCount == VK_SAMPLE_COUNT_1_BIT) {
       EmitCs([

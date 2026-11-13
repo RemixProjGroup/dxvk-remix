@@ -30,9 +30,10 @@ namespace dxvk {
   D3D9CommonBuffer::D3D9CommonBuffer(
           D3D9DeviceEx*      pDevice,
     const D3D9_BUFFER_DESC*  pDesc) 
-    : m_parent ( pDevice ), m_desc ( *pDesc ) {
+    : m_parent ( pDevice ), m_desc ( *pDesc ),
+      m_mapMode(DetermineMapMode(pDevice->GetOptions())) {
     m_buffer = CreateBuffer();
-    if (GetMapMode() == D3D9_COMMON_BUFFER_MAP_MODE_BUFFER)
+    if (m_mapMode == D3D9_COMMON_BUFFER_MAP_MODE_BUFFER)
       m_stagingBuffer = CreateStagingBuffer();
 
     m_sliceHandle = GetMapBuffer()->getSliceHandle();
@@ -121,7 +122,8 @@ namespace dxvk {
       memoryFlags |= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     }
 
-    if (memoryFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT && m_parent->GetOptions()->apitraceMode) {
+    if ((memoryFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && m_parent->GetOptions()->cachedDynamicBuffers) {
+      memoryFlags &= ~VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
       memoryFlags |= VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
     }
 
@@ -145,7 +147,7 @@ namespace dxvk {
 
     VkMemoryPropertyFlags memoryFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
 
-    if (m_parent->GetOptions()->apitraceMode)
+    if (m_parent->GetOptions()->cachedDynamicBuffers)
       memoryFlags |= VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 
     return m_parent->GetDXVKDevice()->createBuffer(info, memoryFlags, DxvkMemoryStats::Category::AppBuffer, "D3D9 staging buffer");

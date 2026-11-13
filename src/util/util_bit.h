@@ -16,9 +16,12 @@
 #include "util_likely.h"
 #include "util_math.h"
 
+#include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <type_traits>
+#include <vector>
 
 namespace dxvk::bit {
 
@@ -292,9 +295,86 @@ namespace dxvk::bit {
       return get(idx);
     }
 
+    constexpr void setN(uint32_t bits) {
+      uint32_t fullDwords = bits / 32;
+      uint32_t offset = bits % 32;
+
+      for (size_t i = 0; i < fullDwords; i++)
+        m_dwords[i] = std::numeric_limits<uint32_t>::max();
+
+      if (offset > 0)
+        m_dwords[fullDwords] = (1u << offset) - 1;
+    }
+
   private:
 
     uint32_t m_dwords[Dwords];
+
+  };
+
+  class bitvector {
+  public:
+
+    bool get(uint32_t idx) const {
+      uint32_t dword = idx / 32;
+      uint32_t bit   = idx % 32;
+
+      return m_dwords[dword] & (1u << bit);
+    }
+
+    void ensureSize(uint32_t bitCount) {
+      uint32_t dword = bitCount / 32;
+      if (unlikely(dword >= m_dwords.size())) {
+        m_dwords.resize(dword + 1);
+      }
+      m_bitCount = std::max(m_bitCount, bitCount);
+    }
+
+    void set(uint32_t idx, bool value) {
+      ensureSize(idx + 1);
+
+      uint32_t dword = idx / 32;
+      uint32_t bit   = idx % 32;
+
+      if (value)
+        m_dwords[dword] |= 1u << bit;
+      else
+        m_dwords[dword] &= ~(1u << bit);
+    }
+
+    uint32_t& dword(uint32_t idx) {
+      return m_dwords[idx];
+    }
+
+    size_t bitCount() const {
+      return m_bitCount;
+    }
+
+    size_t dwordCount() const {
+      return m_dwords.size();
+    }
+
+    bool operator [] (uint32_t idx) const {
+      return get(idx);
+    }
+
+    void setN(uint32_t bits) {
+      ensureSize(bits);
+
+      uint32_t fullDwords = bits / 32;
+      uint32_t offset = bits % 32;
+
+      for (size_t i = 0; i < fullDwords; i++)
+        m_dwords[i] = std::numeric_limits<uint32_t>::max();
+
+      if (offset > 0)
+        m_dwords[fullDwords] = (1u << offset) - 1;
+    }
+
+  private:
+
+    std::vector<uint32_t> m_dwords;
+    uint32_t              m_bitCount = 0;
 
   };
 

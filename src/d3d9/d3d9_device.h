@@ -1132,6 +1132,9 @@ namespace dxvk {
         const     uint32_t regCountHardware = DetermineHardwareRegCount<ProgramType, ConstantType>();
         constexpr uint32_t regCountSoftware = DetermineSoftwareRegCount<ProgramType, ConstantType>();
 
+        if (StartRegister > std::numeric_limits<uint32_t>::max() - Count)
+          return D3DERR_INVALIDCALL;
+
         if (StartRegister + Count > regCountSoftware)
           return D3DERR_INVALIDCALL;
 

@@ -120,6 +120,57 @@ The `[VramBudget]` log line and a new "Allocator Chunks" view under VRAM Budget 
 - Options: none.
 - Commits: the commit that adds this entry.
 
+### D3D9: fixes ported from upstream DXVK
+Self-contained D3D9 correctness and compatibility fixes and game config entries from upstream DXVK, which this tree forked at upstream 6a3de28f (v1.9.4, 76 commits before v1.10). The triage of all upstream D3D9 commits since then is in [dxvk-upstream-d3d9-triage.md](dxvk-upstream-d3d9-triage.md).
+- Options (dxvk.conf): renamed `d3d9.apitraceMode` to `d3d9.cachedDynamicBuffers`; added `d3d9.allowDirectBufferMapping` (default on).
+- Fixes, one line per Remix Plus commit, each naming its upstream commit:
+  - `UpdateTexture` copies between textures with different mip counts, matching the top or the bottom mips, and handles automatic mip generation (c12cd195, b2f22d57, bfd47ec8).
+  - A 5551 back buffer no longer also offers 565 swap chain formats (b2d96ee0).
+  - D3DFMT_D32 is reported as unsupported, as on Windows drivers, so games pick a format they also use on real hardware (1f88ee59).
+  - An invalid D3DRS_CULLMODE value disables culling instead of culling back faces (4e34c29c).
+  - StretchRect returns D3DERR_INVALIDCALL instead of crashing when a surface has no image (5b7406fe).
+  - Multisampled depth-stencil resolves write sample zero for stencil, since averaging stencil is invalid (e406484b).
+  - CheckDeviceType accepts D3DFMT_UNKNOWN as a windowed back buffer format, and CheckDeviceFormatConversion still rejects it as a source (95995041, 64d22606).
+  - GetFrontBufferData accepts a D3DPOOL_SCRATCH destination (ce48b57f).
+  - Multisample counts the GPU does not support are lowered to a supported one, and CheckDeviceMultiSampleType reports the same set (9e110cd3, 5ae5476d).
+  - Vertex state blocks capture the integer and bool vertex shader constants too (0462454d).
+  - Restarting an occlusion query that is still running no longer underflows its reset counter, which could make GetData wait forever (ecc23023).
+  - The highest constant a shader defines with def is copied to the constant buffer too, instead of being dropped by an off-by-one (9cde0b57).
+  - A vertex or index buffer bound at an offset past its end binds an empty slice instead of an out-of-range one, which could fault the GPU (ea314980).
+  - A light enabled without SetLight gets the D3D9 default: white diffuse with zero alpha, pointing down +Z (9e422a2b).
+  - Fixed-function specular highlights no longer appear on surfaces facing away from the light (da814668).
+  - IDirect3DStateBlock9::Capture leaves a captured stream's offset as recorded, as Windows does (dc3dd0f8).
+  - With strict float emulation, the lrp shader instruction follows D3D9's zero-wins multiply rule (630fee59, 18a801de).
+  - Pixel shader inputs load all four components regardless of the dcl mask, which upstream reports fixes shadows in Test Drive Unlimited 2 (c585ea25).
+  - Shader Model 1 pixel shaders report render target 0 as written, so it is not unbound as unused (4b108460).
+  - The crs instruction with a single-component destination no longer emits invalid SPIR-V (82ebc29e).
+  - Color inputs of Shader Model 3 pixel shaders are interpolated at the centroid, as for earlier models (5962be44).
+  - Shaders that use more than 32 temporary registers no longer throw out of range during translation (037669f7).
+  - A shader without def constants reports zero defined constants instead of an uninitialized value (fed51e6c).
+  - The ps_1_4 bem instruction is translated instead of being dropped (404c984f).
+  - Clears with an empty viewport, scissor or rectangle are skipped instead of issuing zero-sized Vulkan clears (860237e7).
+  - GetRenderTargetData fails when the source and destination sizes differ, which upstream reports fixes mouse picking in MySims (ab359318).
+  - Fetch4 is turned off again when a sampler that used it gets a texture that does not support it, which upstream reports fixes lighting in Spider-Man: Shattered Dimensions (9e1ecec7).
+  - INTZ is reported as unsupported for multisampled surfaces, as on Windows drivers (0fc5c84e).
+  - YUV video texture conversion uses float coefficients instead of integer divisions that rounded them to 0 or 1 (9c5551cb).
+  - SetLOD only affects D3DPOOL_MANAGED textures, as on Windows (098e41a3).
+  - `d3d9.cachedDynamicBuffers` (formerly `d3d9.apitraceMode`) puts host-visible buffers in cached system memory, where it could fall back to uncached memory before (5fd025c5, d2759c20).
+  - The Sims 2 profile enables `d3d9.cachedDynamicBuffers` and also matches The Sims 2 Content Manager and HomeCrafter Plus (fe9c875f, fb8f79e4).
+  - `d3d9.allowDirectBufferMapping` off routes DEFAULT-pool dynamic buffers through a staging buffer, for game profiles that need it (6d71eea5, cf4c5c34).
+  - Profiles with strict float emulation: Borderlands 2 (split from The Pre-Sequel), Sonic Adventure 2, Supreme Commander, UK Truck Simulator 1, Operation Flashpoint: Red River, Max Payne 3, Thumper, Halo Online (4f56e72d, 43b79bcb, a78c1bd6 and others in the commit message).
+  - Profiles with memory tracking: The Ship, SiN Episodes: Emergence, Secret World Legends, Star Wars: Empire at War, Pirate Hunter, Alone in the Dark (2008), Blitzkrieg 2, and the Dragon Nest profile, whose key had a trailing space and never applied (fe9a24d1, 2b16134b and others in the commit message).
+  - Profiles that report a specific GPU: Alien Rage, CivCity: Rome, Battle Engine Aquila, The Sims 3 (cc9266ed, d8eb4d0d, f27e3c9f, c27ef1c4).
+  - Profiles with cached dynamic buffers: Tomb Raider: Anniversary and Underworld (with Legend, plus longMad), Battlestations: Midway, Codename: Panzers, Delta Force: Xtreme 1 and 2, Dragonshard, The Battle for Middle-earth II, APB: Reloaded, Battle Mages, Far Cry 2, LEGO Indiana Jones, LEGO Batman, Hammer World Editor, Sonic & All-Stars Racing Transformed (1a2e724c, a63a5753 and others in the commit message).
+  - Profiles for Injustice, Drakensang, 9th Dawn II, Time Leap Paradise SUPER LIVE, Star Wars: The Force Unleashed II, Scarface, Ys Origin, Age of Empires II HD, Prince of Persia (2008), The Incredibles (9d6804e4, 5c56fa0d and others in the commit message).
+  - Fixed-function draws treat a texture on the eighth stage as used (395ac388).
+  - With fast float emulation, exp and expp clamp to FLT_MAX so a later multiply by zero gives zero instead of NaN (e9a0fec5).
+  - SetTextureStageState and GetTextureStageState clamp an out-of-range stage or type instead of failing, as the NVIDIA driver does (1c6fc7b5).
+  - Shader constant Set and Get calls whose start register plus count overflows fail instead of writing out of bounds (92523fc0).
+  - MultiplyTransform during state block recording no longer writes past the state block's transform array, and applies to the device as on Windows (4f0c2176, 9c012c8e).
+  - State blocks record SetLight and LightEnable and capture lights, so lights set through a state block reach both fixed function and Remix's light conversion (1a3b576d, 4796eb0b, 0d28be4a).
+  - A buffer's last lock flags start at zero instead of uninitialized memory (a7977232).
+- Commits: the commit that adds each fix line.
+
 ## 2026-11-01
 
 ### GPU device loss when a BLAS drops an opacity micromap in flight

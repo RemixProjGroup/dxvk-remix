@@ -3,7 +3,7 @@
 This runtime is a fork of NVIDIA RTX Remix (`dxvk-remix`), which is built on DXVK. The
 code is under two licenses, and each file's header says which applies:
 
-- **zlib/libpng** (`LICENSE`, Philip Rebohle and Joshua Ashton): DXVK's own code, such as
+- **zlib/libpng** (`LICENSE`, Philip Rebohle, Joshua Ashton and Robin Kertels): DXVK's own code, such as
   the D3D11/DXGI frontends (no file in `src/d3d11` carries an NVIDIA header), most of
   `src/d3d9` and most of `src/dxvk` outside `rtx_render`.
 - **MIT** (`LICENSE-MIT`, NVIDIA): RTX Remix's code, in files with NVIDIA's MIT header (most

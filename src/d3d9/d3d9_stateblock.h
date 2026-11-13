@@ -25,7 +25,8 @@ namespace dxvk {
     StreamFreq,
     Transforms,
     TextureStages,
-    Material
+    Material,
+    Lights
   };
 
   using D3D9CapturedStateFlags = Flags<D3D9CapturedStateFlag>;
@@ -61,6 +62,8 @@ namespace dxvk {
       bit::bitset<caps::MaxOtherConstants>              iConsts;
       bit::bitset<caps::MaxOtherConstants>              bConsts;
     } psConsts;
+
+    bit::bitvector                                      lightEnabledChanges;
   };
 
   enum class D3D9StateBlockType :uint32_t {
@@ -110,6 +113,11 @@ namespace dxvk {
             UINT               OffsetInBytes,
             UINT               Stride);
 
+    HRESULT SetStreamSourceWithoutOffset(
+            UINT               StreamNumber,
+            D3D9VertexBuffer*  pStreamData,
+            UINT               Stride);
+
     HRESULT SetStreamSourceFreq(UINT StreamNumber, UINT Setting);
 
     HRESULT SetStateTexture(DWORD StateSampler, IDirect3DBaseTexture9* pTexture);
@@ -120,14 +128,16 @@ namespace dxvk {
 
     HRESULT SetMaterial(const D3DMATERIAL9* pMaterial);
 
+    HRESULT SetLight(DWORD Index, const D3DLIGHT9* pLight);
+
+    HRESULT LightEnable(DWORD Index, BOOL Enable);
+
     HRESULT SetStateTransform(uint32_t idx, const D3DMATRIX* pMatrix);
 
     HRESULT SetStateTextureStageState(
             DWORD                      Stage,
             D3D9TextureStageStateTypes Type,
             DWORD                      Value);
-
-    HRESULT MultiplyStateTransform(uint32_t idx, const D3DMATRIX* pMatrix);
 
     HRESULT SetViewport(const D3DVIEWPORT9* pViewport);
 
@@ -172,7 +182,7 @@ namespace dxvk {
       Capture
     };
 
-    template <typename Dst, typename Src>
+    template <typename Dst, typename Src, bool IgnoreStreamOffset>
     void ApplyOrCapture(Dst* dst, const Src* src) {
       if (m_captures.flags.test(D3D9CapturedStateFlag::StreamFreq)) {
         for (uint32_t idx : bit::BitMask(m_captures.streamFreq.dword(0)))
@@ -202,11 +212,19 @@ namespace dxvk {
       if (m_captures.flags.test(D3D9CapturedStateFlag::VertexBuffers)) {
         for (uint32_t idx : bit::BitMask(m_captures.vertexBuffers.dword(0))) {
           const auto& vbo = src->vertexBuffers[idx];
-          dst->SetStreamSource(
-            idx,
-            vbo.vertexBuffer.ptr(),
-            vbo.offset,
-            vbo.stride);
+          if constexpr (!IgnoreStreamOffset) {
+            dst->SetStreamSource(
+              idx,
+              vbo.vertexBuffer.ptr(),
+              vbo.offset,
+              vbo.stride);
+          } else {
+            // D3D9 does not capture the stream offset.
+            dst->SetStreamSourceWithoutOffset(
+              idx,
+              vbo.vertexBuffer.ptr(),
+              vbo.stride);
+          }
         }
       }
 
@@ -297,14 +315,30 @@ namespace dxvk {
             dst->SetPixelBoolBitfield(i, m_captures.psConsts.bConsts.dword(i), src->psConsts.bConsts[i]);
         }
       }
+
+      if (m_captures.flags.test(D3D9CapturedStateFlag::Lights)) {
+        for (uint32_t i = 0; i < src->lights.size(); i++) {
+          if (!src->lights[i].has_value())
+            continue;
+
+          dst->SetLight(i, &src->lights[i].value());
+        }
+        for (uint32_t i = 0; i < m_captures.lightEnabledChanges.dwordCount(); i++) {
+          for (uint32_t consts : bit::BitMask(m_captures.lightEnabledChanges.dword(i))) {
+            uint32_t idx = i * 32 + consts;
+
+            dst->LightEnable(idx, src->IsLightEnabled(idx));
+          }
+        }
+      }
     }
 
-    template <D3D9StateFunction Func>
+    template <D3D9StateFunction Func, bool IgnoreStreamOffset>
     void ApplyOrCapture() {
       if      constexpr (Func == D3D9StateFunction::Apply)
-        ApplyOrCapture(m_parent, &m_state);
+        ApplyOrCapture<D3D9DeviceEx, D3D9CapturableState, IgnoreStreamOffset>(m_parent, &m_state);
       else if constexpr (Func == D3D9StateFunction::Capture)
-        ApplyOrCapture(this, m_deviceState);
+        ApplyOrCapture<D3D9StateBlock, D3D9CapturableState, IgnoreStreamOffset>(this, m_deviceState);
     }
 
     template <

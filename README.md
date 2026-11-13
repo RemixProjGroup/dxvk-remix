@@ -279,7 +279,7 @@ Open an issue in this repository. The **Open Log Folder** button in the Alt+X me
 
 Remix Plus is built on:
 
-- [DXVK](https://github.com/doitsujin/dxvk) by Philip Rebohle and Joshua Ashton (zlib, [`LICENSE`](LICENSE)).
+- [DXVK](https://github.com/doitsujin/dxvk) by Philip Rebohle, Joshua Ashton and Robin Kertels (zlib, [`LICENSE`](LICENSE)).
 - [NVIDIA RTX Remix `dxvk-remix`](https://github.com/NVIDIAGameWorks/dxvk-remix) (MIT,
   [`LICENSE-MIT`](LICENSE-MIT)).
 - [NUMOS (numos-sky)](https://github.com/Kim2091/numos-sky), the sky, atmosphere, cloud and weather renderer, a

@@ -20,7 +20,7 @@ namespace dxvk {
   };
 
   static constexpr D3D9ShaderMasks FixedFunctionMask =
-    { 0b1111111, 0b1 };
+    { 0b11111111, 0b1 };
 
   struct D3D9MipFilter {
     bool                MipsEnabled;
@@ -92,9 +92,10 @@ namespace dxvk {
           ID3DBlob** ppDisassembly);
 
   HRESULT DecodeMultiSampleType(
-        D3DMULTISAMPLE_TYPE       MultiSample,
-        DWORD                     MultisampleQuality,
-        VkSampleCountFlagBits*    pCount);
+    const Rc<DxvkDevice>&           pDevice,
+          D3DMULTISAMPLE_TYPE       MultiSample,
+          DWORD                     MultisampleQuality,
+          VkSampleCountFlagBits*    pSampleCount);
 
   VkFormat GetPackedDepthStencilFormat(D3D9Format Format);
 

@@ -297,8 +297,16 @@ namespace dxvk {
     { R"(\\anarchyonline\.exe$)", {{
       { "d3d9.memoryTrackTest",             "True" },
     }} },
-    /* Borderlands 2 and The Pre Sequel!           */
-    { R"(\\Borderlands(2|PreSequel)\.exe$)", {{
+    /* Borderlands 2                              *
+     * Missing lava in Vault of the Warrior       *
+     * without Strict floats                      */
+    { R"(\\Borderlands2\.exe$)", {{
+      { "d3d9.lenientClear",                "True" },
+      { "d3d9.supportDFFormats",            "False" },
+      { "d3d9.floatEmulation",              "Strict" },
+    }} },
+    /* Borderlands: The Pre-Sequel                */
+    { R"(\\BorderlandsPreSequel\.exe$)", {{
       { "d3d9.lenientClear",                "True" },
       { "d3d9.supportDFFormats",            "False" },
     }} },
@@ -316,14 +324,17 @@ namespace dxvk {
     }} },
     /* Sonic Adventure 2                          */
     { R"(\\Sonic Adventure 2\\(launcher|sonic2app)\.exe$)", {{
-      { "d3d9.floatEmulation",              "False" },
+      { "d3d9.floatEmulation",              "Strict" },
     }} },
     /* The Sims 2,
        Body Shop,
        The Sims Life Stories,
        The Sims Pet Stories,
-       and The Sims Castaway Stories             */
-    { R"(\\(Sims2.*|TS2BodyShop|SimsLS|SimsPS|SimsCS)\.exe$)", {{
+       The Sims Castaway Stories,
+       The Sims 2 Content Manager
+       and HomeCrafter Plus                      */
+    { R"(\\(Sims2.*|TS2BodyShop|SimsLS|SimsPS|SimsCS)"
+      R"(|The Sims 2 Content Manager|TS2HomeCrafterPlus)\.exe$)", {{
       { "d3d9.customVendorId",              "10de" },
       { "d3d9.customDeviceId",              "0091" },
       { "d3d9.customDeviceDesc",            "GeForce 7800 GTX" },
@@ -331,6 +342,7 @@ namespace dxvk {
       { "d3d9.supportX4R4G4B4",             "False" },
       { "d3d9.maxAvailableMemory",          "2048" },
       { "d3d9.memoryTrackTest",             "True" },
+      { "d3d9.cachedDynamicBuffers",        "True" },
     }} },
     /* Dead Space uses the a NULL render target instead
        of a 1x1 one if DF24 is NOT supported      */
@@ -431,13 +443,18 @@ namespace dxvk {
     { R"(\\EverQuest2.*\.exe$)", {{
       { "d3d9.alphaTestWiggleRoom", "True" },
     }} },
-    /* Tomb Raider: Legend                       */
-    { R"(\\trl\.exe$)", {{
-      { "d3d9.apitraceMode",                "True" },
+    /* Tomb Raider: Legend, Anniversary, Underworld  *
+     * Read from a buffer created with:              *
+     * D3DPOOL_DEFAULT,                              *
+     * D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY buffer. *
+     * Legend flickers with next gen content option. */
+    { R"(\\(trl|tra|tru)\.exe$)", {{
+      { "d3d9.cachedDynamicBuffers",        "True" },
+      { "d3d9.longMad",                     "True" },
     }} },
     /* Everquest                                 */
     { R"(\\eqgame\.exe$)", {{
-      { "d3d9.apitraceMode",                "True" },
+      { "d3d9.cachedDynamicBuffers",        "True" },
     }} },
     /* Dark Messiah of Might & Magic             */
     { R"(\\mm\.exe$)", {{
@@ -455,7 +472,7 @@ namespace dxvk {
     }} },
     /* Dragon Nest                               */
     { R"(\\DragonNest_x64\.exe$)", {{
-      { "d3d9.memoryTrackTest ",            "True" },
+      { "d3d9.memoryTrackTest",             "True" },
     }} },
     /* Dal Segno                                 */
     { R"(\\DST\.exe$)", {{
@@ -954,6 +971,204 @@ namespace dxvk {
     /* James Cameron's Avatar needs invariantPosition to fix black flickering vegetation */
     { R"(\\Avatar\.exe$)", {{
       { "d3d9.invariantPosition",              "True" },
+    }} },
+    /* Injustice: Gods Among Us                   *
+     * Locks a buffer that's still in use         */
+    { R"(\\injustice\.exe$)", {{
+      { "d3d9.allowDirectBufferMapping",   "False" },
+    }} },
+    /* Drakensang: The Dark Eye                   */
+    { R"(\\drakensang\.exe$)", {{
+      { "d3d9.deferSurfaceCreation",        "True" },
+    }} },
+    /* 9th Dawn II                                *
+     * OpenGL game that also spins up d3d9        *
+     * Black screens without config               */
+    { R"(\\ninthdawnii\.exe$)", {{
+      { "d3d9.deferSurfaceCreation",        "True" },
+    }} },
+    /* Time Leap Paradise SUPER LIVE              */
+    { R"(\\tlpsl\.exe$)", {{
+      { "d3d9.deferSurfaceCreation",        "True" },
+    }} },
+    /* Star Wars The Force Unleashed 2            *
+     * Black particles because it tries to bind   *
+     * a 2D texture for a shader that             *
+     * declares a 3d texture.                     */
+    { R"(\\SWTFU2\.exe$)", {{
+      { "d3d9.forceSamplerTypeSpecConstants", "True" },
+    }} },
+    /* Scarface - Rendering issues when the       *
+     * D3DLOCK_DISCARD flag is respected          */
+    { R"(\\Scarface\.exe$)", {{
+      { "d3d9.allowDiscard",               "False" },
+    }} },
+    /* YS Origin                                  *
+     * Helps very bad frametimes in some areas    */
+    { R"(\\yso_win\.exe$)", {{
+      { "d3d9.maxFrameLatency",                "1" },
+    }} },
+    /* Age of Empires 2 - janky frame timing      */
+    { R"(\\AoK HD\.exe$)", {{
+      { "d3d9.maxFrameLatency",                "1" },
+    }} },
+    /* Prince of Persia (2008) - Can get stuck    *
+     * during loading at very high fps            */
+    { R"(\\Prince( of Persia|OfPersia_Launcher)\.exe$)", {{
+      { "d3d9.maxFrameRate",                 "240" },
+    }} },
+    /* The Incredibles                            */
+    { R"(\\IncPC\.exe$)", {{
+      { "d3d9.maxFrameRate",                  "59" },
+    }} },
+    /* Battlestations Midway                      */
+    { R"(\\Battlestationsmidway\.exe$)", {{
+      { "d3d9.cachedDynamicBuffers",        "True" },
+    }} },
+    /* Codename Panzers Phase One/Two             *
+     * Main menu won't render after intros        *
+     * and CPU bound performance                  */
+    { R"(\\(PANZERS|PANZERS_Phase_2)\.exe$)", {{
+      { "d3d9.deferSurfaceCreation",        "True" },
+      { "d3d9.cachedDynamicBuffers",        "True" },
+    }} },
+    /* Delta Force: Xtreme 1 & 2 - Performance    */
+    { R"(\\(DFX|dfx2)\.exe$)", {{
+      { "d3d9.cachedDynamicBuffers",        "True" },
+    }} },
+    /* Dungeons and Dragons: Dragonshard          *
+     * Massive FPS decreases in some scenes       */
+    { R"(\\Dragonshard\.exe$)", {{
+      { "d3d9.cachedDynamicBuffers",        "True" },
+    }} },
+    /* Battle for Middle-earth 2 and expansion    *
+     * Slowdowns in certain scenarios             */
+    { R"(\\(The Battle for Middle-earth( \(tm\))? II( Demo)?)"
+      R"(|The Lord of the Rings, The Rise of the Witch-king)\\game\.dat$)", {{
+      { "d3d9.cachedDynamicBuffers",        "True" },
+    }} },
+    /* APB: Reloaded                              *
+     * Fixes frametime jumps when shooting        */
+    { R"(\\APB\.exe$)", {{
+      { "d3d9.cachedDynamicBuffers",        "True" },
+    }} },
+    /* Battle Mages - helps CPU bound perf        */
+    { R"(\\Battle Mages\\mages\.exe$)", {{
+      { "d3d9.cachedDynamicBuffers",        "True" },
+    }} },
+    /* Far Cry 2:                                 *
+     * Set cached dynamic buffers to True to      *
+     * improve perf on all hardware.              */
+    { R"(\\(FarCry2|farcry2game)\.exe$)", {{
+      { "d3d9.cachedDynamicBuffers",        "True" },
+    }} },
+    /* Lego Indiana Jones: The Original Adventures *
+     * Fix UI performance                          */
+    { R"(\\LEGOIndy\.exe$)", {{
+      { "d3d9.cachedDynamicBuffers",        "True" },
+    }} },
+    /* Lego Batman: The Videogame                 *
+     * Fix UI performance                         */
+    { R"((\\LEGOBatman|LegoBatman\\Game)\.exe$)", {{
+      { "d3d9.cachedDynamicBuffers",        "True" },
+    }} },
+    /* Hammer World Editor                        */
+    { R"(\\(hammer(plusplus)?|mallet|wc)\.exe$)", {{
+      { "d3d9.cachedDynamicBuffers",        "True" },
+    }} },
+    /* Sonic & All-Stars Racing Transformed       *
+     * Helps performance when Resizable BAR       *
+     * is enabled                                 */
+    { R"(\\ASN_App_PcDx9_Final\.exe$)", {{
+      { "d3d9.cachedDynamicBuffers",        "True" },
+    }} },
+    /* Alien Rage                                 *
+     * Reports a GTX 295 to fix shadows           */
+    { R"(\\(ShippingPC-AFEARGame|ARageMP)\.exe$)", {{
+      { "d3d9.customVendorId",              "10de" },
+      { "d3d9.customDeviceId",              "05E0" },
+    }} },
+    /* CivCity: Rome                              *
+     * Enables soft real-time shadows             */
+    { R"(\\CivCity Rome\.exe$)", {{
+      { "d3d9.customVendorId",              "10de" },
+    }} },
+    /* Battle Engine Aquila - Enables additional  *
+     * graphical features and Nvidia particle fog */
+    { R"(\\BEA\.exe$)", {{
+      { "d3d9.customVendorId",              "10de" },
+      { "d3d9.customDeviceId",              "0330" },
+      { "d3d9.customDeviceDesc", "NVIDIA GeForce FX 5900 Ultra" },
+    }} },
+    /* Sims 3                                     *
+     * Worse shadow quality on unknown AMD cards  */
+    { R"(\\TS3(W)?\.exe$)", {{
+      { "d3d9.customVendorId",              "10de" },
+      { "d3d9.customDeviceId",              "1080" },
+      { "d3d9.customDeviceDesc", "Geforce GTX 580" },
+    }} },
+    /* The Ship (2004)                            */
+    { R"(\\ship\.exe$)", {{
+      { "d3d9.memoryTrackTest",             "True" },
+    }} },
+    /* SiN Episodes Emergence                     */
+    { R"(\\SinEpisodes\.exe$)", {{
+      { "d3d9.memoryTrackTest",             "True" },
+    }} },
+    /* Secret World Legends - d3d9 mode only sees *
+     * 512MB vram locking higher graphics presets */
+    { R"(\\SecretWorldLegends\.exe$)", {{
+      { "d3d9.memoryTrackTest",             "True" },
+    }} },
+    /* Star Wars Empire at War & expansion        *
+     * In base game the AA option disappears at   *
+     * 2075MB vram and above                      */
+    { R"(\\(StarWarsG|sweaw|swfoc)\.exe$)", {{
+      { "d3d9.maxAvailableMemory",          "2048" },
+      { "d3d9.memoryTrackTest",             "True" },
+    }} },
+    /* Pirate Hunter - Prevents crash             */
+    { R"(\\PH\.exe$)", {{
+      { "d3d9.memoryTrackTest",             "True" },
+      { "d3d9.maxAvailableMemory",          "2048" },
+    }} },
+    /* Alone in the Dark (2008)                   *
+     * Crashes when selecting the graphics menu   *
+     * option without memory tracking in place    */
+    { R"(\\Alone\.exe$)", {{
+      { "d3d9.memoryTrackTest",             "True" },
+    }} },
+    /* Blitzkrieg 2 - Startup crash               */
+    { R"(\\Blitzkrieg 2( - Fall of the Reich| - Liberation)?\\bin\\game\.exe$)", {{
+      { "d3d9.memoryTrackTest",             "True" },
+    }} },
+    /* Supreme Commander & Forged Alliance Forever */
+    { R"(\\(SupremeCommander|ForgedAlliance)\.exe$)", {{
+      { "d3d9.floatEmulation",            "Strict" },
+    }} },
+    /* UK Truck Simulator 1                       */
+    { R"(\\UK Truck Simulator\\bin\\win_x86\\game\.exe$)", {{
+      { "d3d9.floatEmulation",            "Strict" },
+    }} },
+    /* Operation Flashpoint: Red River            *
+     * Flickering issues                          */
+    { R"(\\RedRiver\.exe$)", {{
+      { "d3d9.floatEmulation",            "Strict" },
+    }} },
+    /* Max Payne 3 - Visual issues on drivers     *
+     * such as ANV (and amdvlk when set to True)  */
+    { R"(\\MaxPayne3\.exe$)", {{
+      { "d3d9.floatEmulation",            "Strict" },
+    }} },
+    /* Thumper - Fixes missing track              */
+    { R"(\\THUMPER_dx9\.exe$)", {{
+      { "d3d9.floatEmulation",            "Strict" },
+    }} },
+    /* Halo Online                                *
+     * Black textures                             */
+    { R"(\\eldorado\.exe$)", {{
+      { "d3d9.floatEmulation",            "Strict" },
+      { "d3d9.allowDirectBufferMapping",   "False" },
     }} },
   }};
 

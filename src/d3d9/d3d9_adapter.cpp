@@ -184,7 +184,8 @@ namespace dxvk {
     if (MultiSampleType != D3DMULTISAMPLE_NONE
      && (SurfaceFormat == D3D9Format::D32_LOCKABLE
       || SurfaceFormat == D3D9Format::D32F_LOCKABLE
-      || SurfaceFormat == D3D9Format::D16_LOCKABLE))
+      || SurfaceFormat == D3D9Format::D16_LOCKABLE
+      || SurfaceFormat == D3D9Format::INTZ))
       return D3DERR_NOTAVAILABLE;
 
     uint32_t sampleCount = std::max<uint32_t>(MultiSampleType, 1u);
@@ -196,9 +197,8 @@ namespace dxvk {
     // Therefore...
     VkSampleCountFlags sampleFlags = VkSampleCountFlags(sampleCount);
 
-    auto availableFlags = !IsDepthFormat(SurfaceFormat)
-      ? m_adapter->deviceProperties().limits.framebufferColorSampleCounts
-      : m_adapter->deviceProperties().limits.framebufferDepthSampleCounts;
+    auto availableFlags = m_adapter->deviceProperties().limits.framebufferColorSampleCounts
+                        & m_adapter->deviceProperties().limits.framebufferDepthSampleCounts;
 
     if (!(availableFlags & sampleFlags))
       return D3DERR_NOTAVAILABLE;
@@ -237,7 +237,8 @@ namespace dxvk {
           D3DDEVTYPE DeviceType,
           D3D9Format SourceFormat,
           D3D9Format TargetFormat) {
-    bool sourceSupported = IsSupportedBackBufferFormat(D3D9Format::Unknown, SourceFormat, TRUE);
+    bool sourceSupported = SourceFormat != D3D9Format::Unknown
+                        && IsSupportedBackBufferFormat(SourceFormat);
     bool targetSupported = TargetFormat == D3D9Format::X1R5G5B5
                         || TargetFormat == D3D9Format::A1R5G5B5
                         || TargetFormat == D3D9Format::R5G6B5

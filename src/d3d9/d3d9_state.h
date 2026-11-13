@@ -237,11 +237,11 @@ namespace dxvk {
 
   constexpr D3DLIGHT9 DefaultLight = {
     D3DLIGHT_DIRECTIONAL,     // Type
-    {1.0f, 1.0f, 1.0f, 1.0f}, // Diffuse
+    {1.0f, 1.0f, 1.0f, 0.0f}, // Diffuse
     {0.0f, 0.0f, 0.0f, 0.0f}, // Specular
     {0.0f, 0.0f, 0.0f, 0.0f}, // Ambient
     {0.0f, 0.0f, 0.0f},       // Position
-    {0.0f, 0.0f, 0.0f},       // Direction
+    {0.0f, 0.0f, 1.0f},       // Direction
     0.0f,                     // Range
     0.0f,                     // Falloff
     0.0f, 0.0f, 0.0f,         // Attenuations [constant, linear, quadratic]
@@ -299,7 +299,7 @@ namespace dxvk {
     std::vector<DWORD>                               enabledLightIndices;
     // NV-DXVK end
 
-    bool IsLightEnabled(DWORD Index) {
+    bool IsLightEnabled(DWORD Index) const {
       const auto& indices = enabledLightIndices;
       return std::find(indices.begin(), indices.end(), Index) != indices.end();
     }

@@ -100,8 +100,9 @@ namespace dxvk {
     this->longMad                       = config.getOption<bool>        ("d3d9.longMad",                       false);
     this->tearFree                      = config.getOption<Tristate>    ("d3d9.tearFree",                      Tristate::Auto);
     this->alphaTestWiggleRoom           = config.getOption<bool>        ("d3d9.alphaTestWiggleRoom",           false);
-    this->apitraceMode                  = config.getOption<bool>        ("d3d9.apitraceMode",                  false);
+    this->cachedDynamicBuffers          = config.getOption<bool>        ("d3d9.cachedDynamicBuffers",          false);
     this->deviceLocalConstantBuffers    = config.getOption<bool>        ("d3d9.deviceLocalConstantBuffers",    false);
+    this->allowDirectBufferMapping      = config.getOption<bool>        ("d3d9.allowDirectBufferMapping",      true);
     this->maxEnabledLights              = config.getOption<int32_t>     ("d3d9.maxEnabledLights",              caps::MaxEnabledLights);
     // NV-DXVK start: adapter override conf
     this->adapterOverride = config.getOption<int32_t>("d3d9.adapterOverride", -1);
