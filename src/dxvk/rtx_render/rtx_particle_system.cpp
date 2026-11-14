@@ -203,6 +203,7 @@ namespace dxvk {
       ImGui::BeginDisabled(!enable());
       RemixGui::Checkbox("Enable Spawning", &enableSpawningObject());
       RemixGui::DragFloat("Time Scale", &timeScaleObject(), 0.01f, 0.f, 1.f, "%.2f");
+      RemixGui::DragFloat("Min Screen Size", &minScreenSizeObject(), 0.05f, 0.f, 16.f, "%.2f px");
 
       if (RemixGui::CollapsingHeader("Emitter Discontinuity Lerp Guard", ImGuiTreeNodeFlags_CollapsingHeader)) {
         ImGui::Indent();
@@ -382,7 +383,7 @@ namespace dxvk {
     constants.absoluteTimeSecs = GlobalTime::get().absoluteTimeMs() * 0.001f * timeScale();
 
     constants.resolveTransparencyThreshold = RtxOptions::resolveTransparencyThreshold();
-    constants.minParticleSize = 2.f; // NOTE: In pixels
+    constants.minParticleSize = minScreenSize(); // In pixels of the render resolution
     constants.sceneScale = RtxOptions::sceneScale();
 
     // Whether the spawn kernel has a TLAS to trace. Simulation runs before AccelManager::prepareSceneData builds
