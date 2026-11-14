@@ -36,6 +36,13 @@ The cloud screen pass splits the quarter march into a march-only pass, a rebuild
 - Measured: NUMOS viewer at 2560x1600, cloud pass 12-30% cheaper across clear, storm, overcast, layer 2, under-deck, in-deck, lens and flying views; confirmed in New Vegas.
 - Commits: the commit that adds this entry.
 
+## 2026-11-14
+
+### Fix: texture grid thumbnails that open no menu
+A texture thumbnail's button took its ImGui ID from the texture's image view alone, so thumbnails that share an image view were one widget, and clicking one of them could open no texture menu. Each button is now scoped by its texture hash.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-11
 
 ### Weather Presets window easier to read

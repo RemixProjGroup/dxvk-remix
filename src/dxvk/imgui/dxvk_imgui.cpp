@@ -2939,10 +2939,13 @@ namespace dxvk {
       ImGui::SetCursorPosX(x + startX + (thumbnailSize - extent.x) / 2.f);
       ImGui::SetCursorPosY(y + (thumbnailSize - extent.y) / 2.f);
 
+      // An ImageButton's ID is its texID alone, so thumbnails that share an image view would share one widget.
+      ImGui::PushID(reinterpret_cast<const void*>(static_cast<uintptr_t>(texHash)));
       if (ImGui::ImageButton(texImgui.texID, extent)) {
         clickedOnTextureButton = true;
         texture_popup::g_wasLeftClick = true;
       }
+      ImGui::PopID();
 
       if (!showLegacyTextureGui() || uniqueId == texture_popup::lastOpenCategoryId) {
         if (g_jumpto.load() == texHash) {
