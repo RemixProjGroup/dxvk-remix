@@ -28,6 +28,13 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-14
+
+### Fix: sky light on particles
+`resolve.slangh` adds the sky provider's light to sky-lit particle materials only under `RESOLVE_SKY_LIT_PARTICLES`, and nothing defined it, so such particles took only the froxel radiance cache and rendered dark against a bright sky. The geometry resolver defines it again. Remix API materials now carry the sky-lit particle flag (it acts only when a material is drawn as a particle), so API particles take sky light too.
+- Options: added `rtx.particles.skyAmbientScale` (default 1, the sky's own light; 0 turns it off), in place of a fixed 1.0. Preset-independent: it scales an existing term and costs nothing.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-11
 
 ### Weather Presets window easier to read

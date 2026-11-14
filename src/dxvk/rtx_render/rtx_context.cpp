@@ -2021,9 +2021,8 @@ namespace dxvk {
     constants.preExposureHistoryRatio = PreExposure::historyRatio();
 
     constants.skyMode = static_cast<uint32_t>(RtxOptions::skyMode());
-    // Sky light on particle materials flagged OPAQUE_SURFACE_MATERIAL_FLAG_SKY_LIT_PARTICLE, at full
-    // strength. Nothing creates such materials at present.
-    constants.particleSkyAmbientScale = 1.0f;
+    // Sky light on particle materials flagged OPAQUE_SURFACE_MATERIAL_FLAG_SKY_LIT_PARTICLE.
+    constants.particleSkyAmbientScale = RtxParticleSystemManager::skyAmbientScale();
 
     const SkyMode currentSkyMode = RtxOptions::skyMode();
     if (currentSkyMode != m_lastSkyMode) {

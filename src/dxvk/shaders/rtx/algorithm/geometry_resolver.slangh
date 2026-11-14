@@ -37,6 +37,9 @@
 #include "rtx/concept/surface_material/opaque_surface_material_interaction.slangh"
 #include "rtx/concept/surface/alpha_blend_surface.slangh"
 #include "rtx/concept/light/light.slangh"
+// The geometry resolver owns the sky provider resources, so it alone compiles in the sky term for sky-lit particle materials.
+// Passes that include resolve.slangh through other chains leave this undefined.
+#define RESOLVE_SKY_LIT_PARTICLES 1
 #include "rtx/algorithm/resolve.slangh"
 #include "rtx/algorithm/volume_lighting_consumer.slangh"
 #include "rtx/pass/post_fx/post_fx_motion_blur_geometry_flags.slangh"

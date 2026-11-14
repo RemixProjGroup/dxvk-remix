@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `remixapi_ConfigLayerBlend` and `REMIXAPI_ERROR_CODE_BUFFER_TOO_SMALL` (`0x4E560002`).
 
 ### Changed
+- 2026-11-14: materials made with `CreateMaterial` carry the sky-lit particle flag. It acts only
+  when the material is drawn as a particle, which then takes the sky provider's light, scaled by
+  `rtx.particles.skyAmbientScale`.
 - 2026-11-02: `SetConfigVariable` writes an option flagged `NoSave` to the Derived
   layer instead of the User layer, so the runtime's menus can change it afterwards.
 

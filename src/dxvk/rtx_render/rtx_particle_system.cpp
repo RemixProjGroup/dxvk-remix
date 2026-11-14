@@ -203,6 +203,7 @@ namespace dxvk {
       ImGui::BeginDisabled(!enable());
       RemixGui::Checkbox("Enable Spawning", &enableSpawningObject());
       RemixGui::DragFloat("Time Scale", &timeScaleObject(), 0.01f, 0.f, 1.f, "%.2f");
+      RemixGui::DragFloat("Sky Light Scale", &skyAmbientScaleObject(), 0.01f, 0.f, 4.f, "%.2f");
 
       if (RemixGui::CollapsingHeader("Emitter Discontinuity Lerp Guard", ImGuiTreeNodeFlags_CollapsingHeader)) {
         ImGui::Indent();
