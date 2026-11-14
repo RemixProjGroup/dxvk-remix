@@ -2227,9 +2227,8 @@ namespace dxvk {
     // Only a presented frame injects, so it sets the scene count that onBeginScene uses as the frame length.
     if (callInjectRtx) {
       m_scenesLastPresentedFrame = m_scenesThisFrame;
-      if (!m_windowInactive.load(std::memory_order_acquire)) {
-        m_endingFramesWithoutPresent = false;
-      }
+      // A present shows that the game still presents, also while its window is inactive (windowed and borderless games do).
+      m_endingFramesWithoutPresent = false;
     }
     m_scenesThisFrame = 0;
 
@@ -2267,8 +2266,14 @@ namespace dxvk {
 
   void D3D9Rtx::onBeginScene() {
     ++m_scenesThisFrame;
-    if (m_windowInactive.load(std::memory_order_acquire)) {
-      m_endingFramesWithoutPresent = true;
+    // An inactive window counts as drawing without presenting only once far more scenes passed than a presented frame had.
+    // A game that keeps presenting with a varying scene count per frame (cube map faces, for example) would otherwise
+    // have each longer frame split, with its world part ended without injection.
+    if (!m_endingFramesWithoutPresent && m_windowInactive.load(std::memory_order_acquire)) {
+      const uint32_t presented = m_scenesLastPresentedFrame > 0 ? m_scenesLastPresentedFrame : 1;
+      if (m_scenesThisFrame > presented * 4 + 8) {
+        m_endingFramesWithoutPresent = true;
+      }
     }
     if (!m_endingFramesWithoutPresent || m_drawCallID == 0) {
       return;

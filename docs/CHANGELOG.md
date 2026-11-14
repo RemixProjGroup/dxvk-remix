@@ -28,6 +28,13 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-14
+
+### Fix: the ray traced world no longer vanishes while the game window is inactive
+With the window inactive, every scene past the last presented frame's scene count ended the frame without injection. A game that keeps presenting with a varying scene count per frame lost its ray traced world in each longer frame and showed only what came after the split. A present now always clears the state, and an inactive window ends frames without a present only once far more scenes than a presented frame's have passed.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-11
 
 ### Weather Presets window easier to read
