@@ -28,6 +28,13 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-11
+
+### Weather Presets window easier to read
+The preset settings are laid out as a table of override tick, label and control, with the label column as wide as the longest label, so no label is cut off. Settings a preset does not override show their value at full opacity in a secondary text color on a faint field instead of at half opacity, hints and status lines use that secondary color instead of the disabled one, the preset list sizes to its names with the share percentage in its own right-aligned column, and the color rows are spelled "color". Presentation only: the same controls, behavior and preset file format.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-10
 
 ### Performance log: the present-wait gap is idle time, pauses close the window, present options apply from the first present

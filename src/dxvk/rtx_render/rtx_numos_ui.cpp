@@ -991,6 +991,22 @@ namespace dxvk {
     // Weather Presets window
     // ------------------------------------------------------------------------------------------
 
+    // The theme's text color moved part way to its disabled text color.
+    // Hints and read-only values use it, so they read as secondary and stay legible in every theme.
+    ImVec4 hintTextColor() {
+      const ImVec4 text = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+      const ImVec4 dim = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+      constexpr float t = 0.4f;
+      return ImVec4(text.x + (dim.x - text.x) * t, text.y + (dim.y - text.y) * t, text.z + (dim.z - text.z) * t, text.w);
+    }
+
+    // Draws wrapped text in the hint color.
+    void hintText(const std::string& text) {
+      ImGui::PushStyleColor(ImGuiCol_Text, hintTextColor());
+      ImGui::TextWrapped("%s", text.c_str());
+      ImGui::PopStyleColor();
+    }
+
     struct PresetWindow {
       bool open = false;
       std::string selected;
@@ -1089,7 +1105,7 @@ namespace dxvk {
           { "cloudBodyBillowGain", "Billow gain", RowKind::Number, 0.01f, 0.0f, 1.0f, "%.2f", 0, 0 },
           { "cloudCurlStrengthKm", "Detail curl", RowKind::Number, 0.005f, 0.0f, 1.0f, "%.3f km", 0, 0 },
           { "cloudDiffuseSunStrength", "Diffuse sunlight", RowKind::Number, 0.01f, 0.0f, 1.0f, "%.2f", 0, 0 },
-          { "cloudColor", "Cloud colour", RowKind::Colour, 0, 0, 0, nullptr, 0, 0 },
+          { "cloudColor", "Cloud color", RowKind::Colour, 0, 0, 0, nullptr, 0, 0 },
         } },
         { "Second layer (ground fog / dust)", true, {
           { "cloudLayer2Enable", "Enabled", RowKind::Switch, 0, 0, 0, nullptr, 0, 0 },
@@ -1107,9 +1123,9 @@ namespace dxvk {
           { "cloudWindDirection", "Wind direction", RowKind::Number, 1.0f, 0.0f, 360.0f, "%.1f deg", 0, 0 },
         } },
         { "Atmosphere", true, {
-          { "airTint", "Air colour", RowKind::Colour, 0, 0, 0, nullptr, 0, 0 },
+          { "airTint", "Air color", RowKind::Colour, 0, 0, 0, nullptr, 0, 0 },
           { "airDensity", "Air density", RowKind::Number, 0.01f, 0.0f, 100.0f, "%.2f", 0, 0 },
-          { "aerosolTint", "Haze colour", RowKind::Colour, 0, 0, 0, nullptr, 0, 0 },
+          { "aerosolTint", "Haze color", RowKind::Colour, 0, 0, 0, nullptr, 0, 0 },
           { "aerosolDensity", "Haze density", RowKind::Number, 0.05f, 0.0f, 100.0f, "%.2f", 0, 0 },
           { "hazeWorldScale", "Haze world scale", RowKind::Number, 0.005f, 0.01f, 10.0f, "%.3f", 0, 0, true },
         } },
@@ -1118,7 +1134,7 @@ namespace dxvk {
         } },
         { "Lightning", false, {
           { "lightningStrikesPerMinute", "Strikes per minute", RowKind::Number, 0.1f, 0.0f, 60.0f, "%.1f", 0, 0 },
-          { "lightningColor", "Flash colour", RowKind::Colour, 0, 0, 0, nullptr, 0, 0 },
+          { "lightningColor", "Flash color", RowKind::Colour, 0, 0, 0, nullptr, 0, 0 },
         } },
         { "Fog (height fog)", false, {
           { "fogVisibilityMeters", "Visibility", RowKind::Number, 10.0f, 0.0f, 100000.0f, "%.0f m", ImGuiSliderFlags_Logarithmic, 0 },
@@ -1164,18 +1180,40 @@ namespace dxvk {
       return *reinterpret_cast<const T*>(reinterpret_cast<const char*>(&s) + info.offset);
     }
 
-    // The override tick and the control of one setting. Unticked, the control shows the sky's value
-    // read-only. A multiplier shows the value it gives over the user's setting, and an edit stores the
+    // The width of the longest curated row label, so every label shows in full.
+    float presetLabelWidth() {
+      float width = 0.0f;
+      for (const PresetSection& section : presetSections()) {
+        for (const PresetRow& row : section.rows) {
+          width = std::max(width, ImGui::CalcTextSize(row.label).x);
+        }
+      }
+      return width + ImGui::GetStyle().ItemSpacing.x;
+    }
+
+    // One table row of a setting: the override tick, the label and the control.
+    // Unticked, the control shows the sky's value read-only, in the hint color on a faint field.
+    // A multiplier shows the value it gives over the user's setting, and an edit stores the
     // shown value as an absolute one.
     void presetRow(NumosWeather& weather, NumosWeather::Preset& p, const PresetRow& row) {
       const std::string key = std::string(kKeyPrefix) + row.name;
       const numos::SettingInfo* info = numos::findSetting(key);
+      const ImVec4 hint = hintTextColor();
+      ImGui::TableNextRow();
       if (info == nullptr) {
-        ImGui::TextDisabled("%s: not in this NUMOS version", key.c_str());
+        ImGui::TableSetColumnIndex(1);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(hint, "%s", row.label);
+        ImGui::TableSetColumnIndex(2);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(hint, "%s: not in this NUMOS version", key.c_str());
         return;
       }
       const size_t i = size_t(info - numos::settingInfos().data());
+      const char* description = info->description ? info->description : "";
       ImGui::PushID(key.c_str());
+
+      ImGui::TableSetColumnIndex(0);
       bool set = p.set[i];
       if (ImGui::Checkbox("##set", &set)) {
         if (set) {
@@ -1185,10 +1223,27 @@ namespace dxvk {
         }
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Override this setting in this preset. Off: the user's own value shows.");
-      ImGui::SameLine();
 
       const bool own = p.set[i];
       const bool multiplier = own && p.relative[i];
+      ImGui::TableSetColumnIndex(1);
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextColored(own ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : hint, "%s", row.label);
+      RemixGui::SetTooltipToLastWidgetOnHover(description);
+
+      // The control fills the value column, less the room for the multiplier note.
+      ImGui::TableSetColumnIndex(2);
+      const char* multiplierNote = "(x your setting)";
+      const float controlWidth = multiplier ? -(ImGui::CalcTextSize(multiplierNote).x + ImGui::GetStyle().ItemSpacing.x) : -FLT_MIN;
+
+      // An unticked control keeps full opacity and reads as read-only by its hint-colored text and faint field.
+      if (!own) {
+        ImVec4 field = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+        field.w *= 0.4f;
+        ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, hint);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, field);
+      }
       const numos::Settings& base = weather.lastBase();
       const numos::Settings& sky = weather.current();
       bool edited = false;
@@ -1196,7 +1251,7 @@ namespace dxvk {
       switch (row.kind) {
       case RowKind::Switch: {
         bool v = own ? presetField<bool>(*p.values, *info) : presetField<bool>(sky, *info);
-        edited = ImGui::Checkbox(row.label, &v);
+        edited = ImGui::Checkbox("##value", &v);
         if (edited && own) {
           presetField<bool>(*p.values, *info) = v;
         }
@@ -1210,7 +1265,8 @@ namespace dxvk {
                 : multiplier ? presetField<float>(*p.values, *info) * presetField<float>(base, *info)
                 : presetField<float>(*p.values, *info);
         v *= scale;
-        edited = ImGui::DragFloat(row.label, &v, row.speed, row.mn, row.mx, row.format, row.flags | kClamp);
+        ImGui::SetNextItemWidth(controlWidth);
+        edited = ImGui::DragFloat("##value", &v, row.speed, row.mn, row.mx, row.format, row.flags | kClamp);
         if (edited && own) {
           presetField<float>(*p.values, *info) = v / scale;
         }
@@ -1228,17 +1284,19 @@ namespace dxvk {
         }
         if (row.kind == RowKind::Colour) {
           float c[3] = { v.x, v.y, v.z };
-          edited = ImGui::ColorEdit3(row.label, c, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+          ImGui::SetNextItemWidth(controlWidth);
+          edited = ImGui::ColorEdit3("##value", c, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
           v = numos::Vector3(c[0], c[1], c[2]);
         } else {
-          // An HDR value split into a colour and a strength (its largest channel).
+          // An HDR value split into a color and a strength (its largest channel).
           const float strength = std::max(std::max(v.x, v.y), std::max(v.z, 1e-4f));
           float c[3] = { v.x / strength, v.y / strength, v.z / strength };
           float s = strength;
-          edited = ImGui::ColorEdit3(row.label, c, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs);
+          edited = ImGui::ColorEdit3("##value", c, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs);
           ImGui::SameLine();
-          ImGui::SetNextItemWidth(120.0f);
-          edited |= ImGui::DragFloat("strength", &s, row.speed, row.mn, row.mx, row.format, kClamp);
+          ImGui::SetNextItemWidth(controlWidth);
+          const std::string format = std::string("strength ") + row.format;
+          edited |= ImGui::DragFloat("##strength", &s, row.speed, row.mn, row.mx, format.c_str(), kClamp);
           const float cmax = std::max(std::max(c[0], c[1]), std::max(c[2], 1e-4f));
           v = numos::Vector3(c[0] * s / cmax, c[1] * s / cmax, c[2] * s / cmax);
         }
@@ -1249,16 +1307,18 @@ namespace dxvk {
       }
       }
       ImGui::EndDisabled();
-      if (info->description && info->description[0]) {
-        RemixGui::SetTooltipToLastWidgetOnHover(info->description);
+      if (!own) {
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar();
       }
+      RemixGui::SetTooltipToLastWidgetOnHover(description);
       if (edited && own) {
         p.relative[i] = false;
         p.dirty = true;
       }
       if (multiplier && !edited) {
         ImGui::SameLine();
-        ImGui::TextDisabled("(x your setting)");
+        ImGui::TextColored(hint, "%s", multiplierNote);
         RemixGui::SetTooltipToLastWidgetOnHover("Stored as a multiplier on your own value, so it follows your tuning. Editing it "
                                                 "here stores the shown value as an absolute one (Revert undoes that).");
       }
@@ -1321,7 +1381,7 @@ namespace dxvk {
         ImGui::PopID();
       }
       if (p.bindings.empty()) {
-        ImGui::TextDisabled("No weathers: this preset shows only when chosen or previewed.");
+        hintText("No weathers: this preset shows only when chosen or previewed.");
       }
 
       const std::string current = firstId(NumosWeather::gameWeather());
@@ -1474,11 +1534,14 @@ namespace dxvk {
         }
       }
 
+      ImGui::Spacing();
       if (ImGui::CollapsingHeader("Weathers", ImGuiTreeNodeFlags_DefaultOpen)) {
         presetWeathers(weather, p, window);
       }
 
-      ImGui::TextDisabled("Tick a setting to override it in this preset. Edits apply live; Save writes the file.");
+      ImGui::Spacing();
+      hintText("Tick a setting to override it in this preset. Edits apply live; Save writes the file.");
+      const float labelWidth = presetLabelWidth();
       for (const PresetSection& section : presetSections()) {
         if (!ImGui::CollapsingHeader(section.title, section.open ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
           continue;
@@ -1490,12 +1553,19 @@ namespace dxvk {
           const size_t fi = size_t(follow - numos::settingInfos().data());
           follows = p.set[fi] ? presetField<bool>(*p.values, *follow) : presetField<bool>(weather.current(), *follow);
         }
-        for (const PresetRow& row : section.rows) {
-          if ((row.follow > 0 && !follows) || (row.follow < 0 && follows)) {
-            continue;
+        if (ImGui::BeginTable(section.title, 3, ImGuiTableFlags_SizingFixedFit)) {
+          ImGui::TableSetupColumn("##set", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
+          ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+          ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+          for (const PresetRow& row : section.rows) {
+            if ((row.follow > 0 && !follows) || (row.follow < 0 && follows)) {
+              continue;
+            }
+            presetRow(weather, p, row);
           }
-          presetRow(weather, p, row);
+          ImGui::EndTable();
         }
+        ImGui::Spacing();
       }
       if (ImGui::CollapsingHeader("Other settings")) {
         otherSettings(weather, p, window);
@@ -1503,26 +1573,61 @@ namespace dxvk {
       return true;
     }
 
+    // The name a preset has in the list, with its off and unsaved marks.
+    std::string presetListName(const NumosWeather::Preset& p) {
+      return std::string(p.enabled ? "" : "(off) ") + p.name + (p.dirty ? " *" : "");
+    }
+
+    // Each row draws the name on the left, clipped before a right-aligned column with the share of the
+    // sky the preset makes up. A share of 0% is drawn in the hint color.
     void presetListEntries(NumosWeather& weather, PresetWindow& window, bool builtIn) {
+      const float percentColumn = ImGui::CalcTextSize("100%").x;
       for (const NumosWeather::Preset& p : weather.presets()) {
         if (p.numosBuiltIn != builtIn) {
           continue;
         }
-        char label[256];
-        std::snprintf(label, sizeof(label), "%s%s%s  %.0f%%###preset_%s", p.enabled ? "" : "(off) ", p.name.c_str(),
-                      p.dirty ? " *" : "", showingWeight(weather, p) * 100.0f, p.name.c_str());
-        if (ImGui::Selectable(label, window.selected == p.name)) {
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        const float right = pos.x + ImGui::GetContentRegionAvail().x;
+        const std::string id = "###preset_" + p.name;
+        if (ImGui::Selectable(id.c_str(), window.selected == p.name)) {
           window.selected = p.name;
         }
+        const std::string name = presetListName(p);
+        const float nameRight = right - percentColumn - ImGui::GetStyle().ItemSpacing.x;
+        if (pos.x + ImGui::CalcTextSize(name.c_str()).x > nameRight) {
+          RemixGui::SetTooltipToLastWidgetOnHover(name.c_str());
+        }
+        const float weight = showingWeight(weather, p) * 100.0f;
+        char percent[16];
+        std::snprintf(percent, sizeof(percent), "%.0f%%", weight);
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        draw->PushClipRect(pos, ImVec2(nameRight, pos.y + ImGui::GetTextLineHeight()), true);
+        draw->AddText(pos, ImGui::GetColorU32(ImGuiCol_Text), name.c_str());
+        draw->PopClipRect();
+        const ImU32 percentColor = weight >= 0.5f ? ImGui::GetColorU32(ImGuiCol_Text) : ImGui::GetColorU32(hintTextColor());
+        draw->AddText(ImVec2(right - ImGui::CalcTextSize(percent).x, pos.y), percentColor, percent);
       }
+    }
+
+    // Wide enough for the longest name, its share and the list's buttons, up to 40% of the window.
+    float presetListWidth(NumosWeather& weather) {
+      const ImGuiStyle& style = ImGui::GetStyle();
+      float names = 0.0f;
+      for (const NumosWeather::Preset& p : weather.presets()) {
+        names = std::max(names, ImGui::CalcTextSize(presetListName(p).c_str()).x);
+      }
+      const float rows = names + style.ItemSpacing.x + ImGui::CalcTextSize("100%").x;
+      const float buttons = ImGui::CalcTextSize("AddDuplicateDelete").x + style.FramePadding.x * 6.0f + style.ItemSpacing.x * 2.0f;
+      const float content = std::max(rows, buttons) + style.WindowPadding.x * 2.0f + style.ScrollbarSize;
+      return std::min(content, ImGui::GetContentRegionAvail().x * 0.4f);
     }
 
     // The preset list: the game's presets, then the built-in ones, and Add / Duplicate / Delete.
     void presetList(NumosWeather& weather, PresetWindow& window) {
-      ImGui::BeginChild("presetList", ImVec2(230.0f, 0.0f), true);
+      ImGui::BeginChild("presetList", ImVec2(presetListWidth(weather), 0.0f), true);
       presetListEntries(weather, window, false);
       ImGui::Spacing();
-      ImGui::TextDisabled("Built-in");
+      hintText("Built-in");
       RemixGui::SetTooltipToLastWidgetOnHover("The sky library's own presets (Clear ... Altostratus), as files that can be edited and "
                                               "bound like any other.");
       ImGui::Separator();
@@ -1791,8 +1896,9 @@ namespace dxvk {
       ImGui::SameLine();
       RemixGui::Checkbox("Follow game weather", &NumosWeather::followGameObject());
       ImGui::SameLine();
-      ImGui::SetNextItemWidth(120.0f);
+      RemixGui::PushLabelColumnFixedWidth(ImGui::CalcTextSize("Ease (s)").x + ImGui::GetStyle().FramePadding.x * 2.0f);
       RemixGui::DragFloat("Ease (s)", &NumosWeather::transitionSecondsObject(), 0.1f, 0.0f, 600.0f, "%.1f", kClamp);
+      RemixGui::PopLabelColumnFixedWidth();
       const std::string chosen = NumosWeather::preset();
       ImGui::SetNextItemWidth(220.0f);
       if (ImGui::BeginCombo("Without a game weather", chosen.empty() ? "(settings only)" : chosen.c_str())) {
@@ -1810,7 +1916,7 @@ namespace dxvk {
                                               "weather is off).");
       presetFiles(weather, window);
       if (!window.status.empty()) {
-        ImGui::TextDisabled("%s", window.status.c_str());
+        hintText(window.status);
       }
 
       // The current weather.
@@ -1826,7 +1932,7 @@ namespace dxvk {
                       NumosWeather::gameWeatherBlend() * 100.0f);
         }
       } else {
-        ImGui::TextDisabled("The game reports no weather (interior, menu, or no game integration).");
+        hintText("The game reports no weather (interior, menu, or no game integration).");
       }
       const std::string& active = weather.activePreset();
       ImGui::Text("Showing: %s%s", active.empty() ? "the settings alone" : active.c_str(),
@@ -1904,7 +2010,7 @@ namespace dxvk {
       if (NumosWeather::Preset* p = weather.find(window.selected)) {
         presetEditor(weather, *p, window);
       } else {
-        ImGui::TextDisabled("Select or add a preset.");
+        hintText("Select or add a preset.");
       }
       ImGui::EndChild();
     }
