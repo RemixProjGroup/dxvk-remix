@@ -30,6 +30,13 @@ Entry format:
 
 ## 2026-11-10
 
+### Performance log: the present-wait gap is idle time, pauses close the window, present options apply from the first present
+- `PresentGateGap`, the GPU idle time between the early pre-gate submit and the rest of the frame while `rtx.present.presentWaitPacing` waits for the previous present, was sorted in among the GPU stages of the `[PerfGpu]` line, so it read as Remix GPU work. It now follows the stage list as `| GPU idle, not in gpuRemixMs (p50/p95/max/avg ms): PresentGateGap=...`.
+- With `rtx.profile.detailedLogging`, a gap of more than 5 s between two ray traced frames (an unfocused window, a dialog, a debugger) was booked as one frame, which turned a window's average into a few fps. Such a gap now logs `[PerfFrame] no frame for N s before frame F ...`, logs the frames before it as a short window, and starts a new window without the pause.
+- The `rtx.present.*` values (pacing, queue limit, gate wait, trace CSV) and the option-read globals were copied to the present path and the submission thread only inside a ray traced frame, so menus and loading screens ran without them. The copy now runs on every Remix present.
+- Options: none. The `rtx.present.presentWaitPreGateFlush` description says where the gap is reported.
+- Commits: the commit that adds this entry.
+
 ### Fix: the startup prewarm compiles the SHARC pipelines the frames use
 The prewarm ran before the opacity micromap support was recorded, so it registered every SHARC update and query pipeline without the micromap flag while the frames bind them with it. On a cold pipeline cache the first 3D frames then waited for some of them and compiled the rest in the background. Micromap support is now recorded before the prewarm, and the integrate indirect prewarm reads the micromap state through the same getter as the frame. A thread that loses the race to create a shader now returns the winner's object, so pipelines registered for it still match. Ray tracing pipeline creation lines name every distinct shader of the pipeline and mark micromap pipelines, and the first-frames report adds `[ShaderPrewarm] missed by the prewarm:` with the first 64 late compiles and whether the frame waited for each.
 - Options: none.

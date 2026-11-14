@@ -622,8 +622,6 @@ namespace dxvk {
 
     common->getTextureManager().processAllHotReloadRequests();
 
-    RtxPerfLog::syncGlobals();
-
     const float gpuIdleTimeMilliseconds = getGpuIdleTimeSinceLastCall();
     Metrics::TestTraceSample testTraceSample;
     testTraceSample.frameId = m_device->getCurrentFrameId();
@@ -989,6 +987,10 @@ namespace dxvk {
   }
 
   void RtxContext::endFrame(std::uint64_t cachedReflexFrameId, Rc<DxvkImage> targetImage, bool callInjectRtx) {
+
+    // Runs on every Remix present, including frames that skip ray tracing (menus, loading screens), so the present
+    // path and the submission thread see the configured values from the first present on.
+    RtxPerfLog::syncGlobals();
 
     if (callInjectRtx) {
       // Fallback inject (is a no-op if already injected this frame, or no valid RT scene)

@@ -230,6 +230,22 @@ namespace dxvk {
     }
     m_lastFrameId = frameId;
 
+    // A frame this long is the game not presenting at all (an unfocused window, a modal dialog, a debugger):
+    // the window so far is logged and a new one starts, so the pause does not stand for the play around it.
+    const double gapMs = double(nowNs - m_lastFrameNs) / 1e6;
+    if (m_started && gapMs > kPauseMs) {
+      Logger::info(str::format("[PerfFrame] no frame for ", uint32_t(gapMs / 1000.0), " s before frame ", frameId,
+        ": the pause is left out, and the ", m_w.frames, " frames before it are logged as a short window"));
+      if (m_w.frames > 0) {
+        logInterval(ctx);
+      }
+      Changes discard;
+      readChanges(ctx, discard);
+      snapshot();
+      startWindow();
+      return;
+    }
+
     if (!m_started) {
       m_started = true;
       Changes discard;
@@ -428,15 +444,22 @@ namespace dxvk {
       " | spikes=", w.spikes, " logged=", w.spikesLogged,
       " | gpuStalls=", stalls, " longestFenceWaitMs=", perf::g_gpuStallMaxWaitMs.load(std::memory_order_relaxed)));
 
-    // GPU stages sorted by p50, all stages with p95 >= 0.05 ms.
+    // GPU stages sorted by avg, all stages with p95 >= 0.05 ms.
+    // PresentGateGap is GPU idle time behind the present wait, not GPU work, so it follows the stages on its own.
     if (w.gpuSamples > 0) {
       struct Row { size_t idx; Pct p; };
       std::vector<Row> rows;
+      std::string idle;
       for (size_t i = 0; i < w.gpuStageMs.size() && i < m_labels.size(); ++i) {
         if (w.gpuStageMs[i].empty()) {
           continue;
         }
         Row row { i, percentiles(w.gpuStageMs[i]) };
+        if (std::strcmp(m_labels[i], "PresentGateGap") == 0) {
+          idle = str::format(" | GPU idle, not in gpuRemixMs (p50/p95/max/avg ms): PresentGateGap=", f2(row.p.p50), "/",
+                             f2(row.p.p95), "/", f2(row.p.max), "/", f2(row.p.avg));
+          continue;
+        }
         if (row.p.p95 >= 0.05f) {
           rows.push_back(row);
         }
@@ -446,7 +469,7 @@ namespace dxvk {
       for (const Row& row : rows) {
         s += str::format(" ", m_labels[row.idx], "=", f2(row.p.p50), "/", f2(row.p.p95), "/", f2(row.p.max));
       }
-      Logger::info(s);
+      Logger::info(s + idle);
     }
 
     // CPU (Remix CS thread; injectRTX runs there together with the game's D3D11 command stream).

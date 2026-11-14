@@ -124,7 +124,8 @@ namespace dxvk {
                "With rtx.present.presentWaitPacing: submits the start of the frame separately, ahead of the present "
                "wait, so it runs while the GPU would otherwise idle. The rest of the frame still waits. 0 = off, 1 = "
                "scene preparation (BLAS and TLAS builds), 2 = also the atmosphere bake, 3 = also volumetrics, 4 = also "
-               "the G-buffer. Ignored in Tracy builds. The time shows as the PresentGateGap GPU stage.");
+               "the G-buffer. Ignored in Tracy builds. The GPU idle time left between the early submit and the rest of the "
+               "frame shows as PresentGateGap at the end of the [PerfGpu] line.");
     RTX_OPTION("rtx.present", uint32_t, presentWaitPreGateMaxBlasBuilds, 16,
                "With rtx.present.presentWaitPreGateFlush: skips the early submit on frames that fully build more than "
                "this many BLASes (refits do not count), so a burst of builds stays behind the present wait instead of "
@@ -167,6 +168,8 @@ namespace dxvk {
 
     static constexpr uint32_t kMaxPrepPhases = 28;
     static constexpr uint32_t kRing = 64;
+    // A gap between two ray traced frames longer than this, in ms, closes the window instead of counting as a frame.
+    static constexpr double kPauseMs = 5000.0;
 
     // CPU-side values of one ray traced frame, filled by RtxContext::injectRTX.
     struct CpuFrame {
@@ -203,7 +206,7 @@ namespace dxvk {
       bool dlssNr = false;
     };
 
-    // Mirrors the options into the process globals the dxvk/d3d layers read. Every injectRTX.
+    // Mirrors the options into the process globals the dxvk/d3d layers read. Called by RtxContext::endFrame.
     static void syncGlobals();
 
     bool active() const { return detailedLogging(); }
