@@ -143,10 +143,10 @@ void main(uint2 threadIdx : SV_DispatchThreadID)
   const float2 size = authoredSize * particleCb.sceneScale;
   const float4 color = particle.color(particleSystem, animationDataTex);
   
-  // Particle sizes are authored in centimetres, so testing the authored size keeps this guard
-  // independent of rtx.sceneScale. It is only a cheap pre-cull. The screen-space test below
-  // (particleCb.minParticleSize, in pixels) is the real visibility cull.
-  const float kMinimumAuthoredSize = 0.1f;  // centimetres == 1 mm
+  // This guard only drops degenerate particles. A game's world unit can be far larger than a centimetre,
+  // so a small authored size can still be a visible particle.
+  // The screen-space test below (particleCb.minParticleSize, in pixels) is the real visibility cull.
+  const float kMinimumAuthoredSize = 0.001f;
   
   if(particle.isDead() || particle.isSleeping() || color.w < particleCb.resolveTransparencyThreshold || max(authoredSize.x, authoredSize.y) < kMinimumAuthoredSize)
   {
