@@ -21,6 +21,9 @@
 */
 #pragma once
 
+#include "rtx/pass/sharc/sharc_update_tile.slangh"
+#include "rtx/algorithm/pt_performance_counters.slangh"
+
 // SHARC's contract with the indirect integrator. The bodies live here so that
 // integrator_indirect.slangh carries call sites rather than preprocessor blocks.
 
@@ -168,6 +171,43 @@ void sharcDebugQuery(PathState pathState, bool selectedBounce, bool farEnough, b
 }
 #endif
 
+#if ENABLE_SHARC && SHARC_QUERY
+// Counts why the cache supplied no light at a first indirect hit that passed the reject test.
+// The second lookup runs only for misses that reached the lookup, and only while performance mode counts.
+void sharcCountFirstMiss(SharcParameters sharcParameters, HashGridKey key, bool firstMiss, bool farEnough, bool footprintOk)
+{
+  ptPerformanceCounterAdd(PT_PERFORMANCE_COUNTER_MISS_TOO_CLOSE, firstMiss && !farEnough);
+  ptPerformanceCounterAdd(PT_PERFORMANCE_COUNTER_MISS_FOOTPRINT, firstMiss && farEnough && !footprintOk);
+
+  bool noEntry = false;
+  bool unfilled = false;
+  if (firstMiss && farEnough && footprintOk)
+  {
+    HashGridIndex index;
+    uint bucketOffset;
+    if (HashGridFind(sharcParameters.hashGridData, key, HashGridGetBaseSlot(key, sharcParameters.hashGridData.capacity),
+                     HASH_GRID_HASH_MAP_BUCKET_SIZE, index, bucketOffset))
+    {
+      unfilled = SharcGetVoxelData(sharcParameters.resolvedBuffer, index).accumulatedSampleNum <= SHARC_SAMPLE_NUM_THRESHOLD;
+    }
+    else
+    {
+      noEntry = true;
+    }
+  }
+  ptPerformanceCounterAdd(PT_PERFORMANCE_COUNTER_MISS_NO_ENTRY, noEntry);
+  ptPerformanceCounterAdd(PT_PERFORMANCE_COUNTER_MISS_UNFILLED, unfilled);
+}
+#endif
+
+// Called when a segment leaves the scene, before the bounce count is reduced for the miss.
+void sharcOnMiss(PathState pathState)
+{
+#if ENABLE_SHARC && SHARC_QUERY
+  ptPerformanceCounterAdd(PT_PERFORMANCE_COUNTER_SKY, pathState.bounceIteration <= 1);
+#endif
+}
+
 // Called once per path, after the launch state is loaded and before the first segment is traced.
 // Seeds the path-summed roughness of the query's footprint gate with the primary's perceptual roughness,
 // or with 0 when the first lobe passed through a cutout, as upstream does.
@@ -233,49 +273,6 @@ void sharcOnContinuationSampled(inout PathState pathState, bool opaqueMaterial, 
 #if ENABLE_SHARC && SHARC_UPDATE
 // RNG stream for re-sampled first bounces. The per-bounce closest-hit offsets stop well below it.
 static const uint kSharcSkyRetryRngOffset = 240;
-
-// Kensler's cycle-walking permutation (Correlated Multi-Jittered Sampling, 2013): a bijection on
-// [0, count) for any count, seeded by seed. A power-of-two count takes one iteration, and any other
-// count takes about 1.8 on average. The guard bounds the loop.
-uint sharcPermute(uint index, uint count, uint seed)
-{
-  uint w = count - 1;
-  w |= w >> 1; w |= w >> 2; w |= w >> 4; w |= w >> 8; w |= w >> 16;
-  [loop]
-  for (uint guard = 0; guard < 16u; ++guard)
-  {
-    index ^= seed;              index *= 0xe170893du;
-    index ^= seed >> 16;
-    index ^= (index & w) >> 4;
-    index ^= seed >> 8;         index *= 0x0929eb3fu;
-    index ^= seed >> 23;
-    index ^= (index & w) >> 1;  index *= 1u | (seed >> 27);
-                                index *= 0x6935fa69u;
-    index ^= (index & w) >> 11; index *= 0x74dcb303u;
-    index ^= (index & w) >> 2;  index *= 0x9e501cc3u;
-    index ^= (index & w) >> 2;  index *= 0xc860a3dfu;
-    index &= w;
-    index ^= index >> 5;
-    if (index < count)
-    {
-      break;
-    }
-  }
-  // Still in range if the guard expires, so the worst case is one imperfect draw.
-  return (index + seed) % count;
-}
-
-// Which pixel inside its tile this update invocation samples this frame.
-// The dispatch is one thread per tile. Every tile visits all tileSize^2 positions once per tileSize^2 frames,
-// each in its own order, because a shared order would correlate neighbouring tiles.
-uvec2 sharcTileOffset(uvec2 tile, uint tileSize)
-{
-  uint seed = (tile.x * 73856093u) ^ (tile.y * 19349663u);
-  seed ^= seed >> 15; seed *= 0x2c1b3c6du; seed ^= seed >> 12;
-  const uint positions = tileSize * tileSize;
-  const uint slot = sharcPermute(cb.frameIdx % positions, positions, seed);
-  return uvec2(slot % tileSize, slot / tileSize);
-}
 
 // The primary vertex's eligibility through the predicate secondary hits use.
 // Only the emission is needed, decoded from the G-buffer words the direct pass reads.
@@ -483,6 +480,11 @@ bool sharcOnResolvedVertex(
   const bool sharcEligible = sharcReason == kSharcRejectNone;
 
 #if SHARC_QUERY
+  const bool sharcFirstHit = pathState.bounceIteration <= 1;
+  ptPerformanceCounterAdd(PT_PERFORMANCE_COUNTER_CACHE_QUERIES, sharcFirstHit);
+  ptPerformanceCounterAdd(PT_PERFORMANCE_COUNTER_EXTRA_QUERIES, !sharcFirstHit);
+  ptPerformanceCounterAdd(PT_PERFORMANCE_COUNTER_MISS_REJECTED, sharcFirstHit && !sharcEligible);
+
   const bool sharcDebugBounce = sharcDebugBounceSelected(pathState.bounceIteration);
   if (sharcDebugViewActive() && sharcDebugBounce)
   {
@@ -526,6 +528,13 @@ bool sharcOnResolvedVertex(
     if (sharcDebugViewActive())
     {
       sharcDebugQuery(pathState, sharcDebugBounce, farEnough, footprintOk, cacheHit, cachedRadiance);
+    }
+
+    ptPerformanceCounterAdd(PT_PERFORMANCE_COUNTER_CACHE_HITS, cacheHit && sharcFirstHit);
+    ptPerformanceCounterAdd(PT_PERFORMANCE_COUNTER_EXTRA_HITS, cacheHit && !sharcFirstHit);
+    if (cb.ptPerformanceCounters)
+    {
+      sharcCountFirstMiss(sharcParameters, key, sharcFirstHit && !cacheHit, farEnough, footprintOk);
     }
 
     if (cacheHit)

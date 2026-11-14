@@ -24,6 +24,7 @@
 
 #include "rtx_pre_exposure.h"
 #include "rtx_sharc.h"
+#include "rtx_pt_performance.h"
 
 #include "dxvk_device.h"
 #include "dxvk_scoped_annotation.h"
@@ -120,7 +121,8 @@ namespace dxvk {
   }
 
   void RtxSharc::fallBackFromCache() {
-    // Both options that can select the cache are cleared, or activation would be retried every frame.
+    // Everything that can select the cache is cleared, or activation would be retried every frame.
+    PtPerformance::setCacheSupported(false);
     if (indirectFromCache()) {
       indirectFromCache.setDeferred(false);
     }
@@ -314,6 +316,18 @@ namespace dxvk {
     m_args.flags = (updatePrimaryVertex() ? SHARC_FLAG_UPDATE_PRIMARY_VERTEX : 0u)
                  | (allowSpecularPaths() ? SHARC_FLAG_ALLOW_SPECULAR_PATHS : 0u)
                  | (skyRetries << SHARC_SKY_RETRY_SHIFT);
+    if (!PtPerformance::active() || !PtPerformance::cacheUpdateAdaptive()) {
+      m_adaptiveInterval = 1;
+      m_adaptiveRelaxSamples = 0;
+    }
+    if (PtPerformance::active()) {
+      m_args.updateInterval = PtPerformance::cacheUpdateAdaptive() ? m_adaptiveInterval : PtPerformance::resolvedCacheUpdateInterval();
+    } else {
+      m_args.updateInterval = 1u;
+    }
+    // A pixel sparse rendering did not shade holds an older frame's continuation,
+    // so the update tiles of performance mode pick a shaded pixel instead.
+    m_args.updatePicksActivePixel = PtPerformance::active();
 
     m_compatibilityFlags = compatibilityFlags;
     m_lastFrame = frame;
@@ -322,7 +336,81 @@ namespace dxvk {
     m_status = "Active";
   }
 
+  void RtxSharc::setAdaptiveInterval(uint32_t interval, uint32_t frame, const char* reason) {
+    if (interval == m_adaptiveInterval) {
+      return;
+    }
+    m_adaptiveInterval = interval;
+    m_adaptiveChangeFrame = frame;
+    m_adaptiveRelaxSamples = 0;
+    if (m_adaptiveLastLogFrame != ~0u && frame - m_adaptiveLastLogFrame < kAdaptiveLogFrames) {
+      m_adaptiveUnloggedChanges++;
+      return;
+    }
+    Logger::info(str::format("[PtPerformance] Cache update interval ", interval, " (", reason, ", resolvable hit ratio ",
+                             m_ptPerformanceHitRatio, ", ", m_adaptiveUnloggedChanges, " earlier changes not logged)"));
+    m_adaptiveLastLogFrame = frame;
+    m_adaptiveUnloggedChanges = 0;
+  }
+
+  void RtxSharc::onPtPerformanceCounters(uint64_t queries, uint64_t hits, uint64_t unresolvable, uint32_t sourceFrame) {
+    // Queries the cache refuses, that are too close or whose footprint is too narrow miss whatever the update does,
+    // so the ratio counts only the other queries.
+    if (queries <= unresolvable) {
+      return;
+    }
+    // A quarter weight per frame forgets a scene change within about eight readbacks.
+    const float ratio = float(double(hits) / double(queries - unresolvable));
+    m_ptPerformanceHitRatio = m_ptPerformanceHitRatio < 0.0f ? ratio : m_ptPerformanceHitRatio + 0.25f * (ratio - m_ptPerformanceHitRatio);
+
+    if (!PtPerformance::active() || !PtPerformance::cacheUpdateAdaptive()) {
+      return;
+    }
+
+    constexpr float kHysteresis = 0.02f;
+    const float relaxRatio = PtPerformance::resolvedCacheUpdateRelaxHitRatio();
+    const uint32_t frame = m_device->getCurrentFrameId();
+
+    // The unsmoothed share returns the interval to 1 on the first frame it drops.
+    if (m_adaptiveInterval > 1) {
+      if (ratio < relaxRatio - kHysteresis || m_ptPerformanceHitRatio < relaxRatio - kHysteresis) {
+        setAdaptiveInterval(1, frame, "hit ratio dropped");
+      }
+      return;
+    }
+
+    // Counts of frames before the last change or fast camera motion do not show the current state of the cache.
+    if (int32_t(sourceFrame - m_adaptiveChangeFrame) < 0) {
+      return;
+    }
+    if (m_ptPerformanceHitRatio >= relaxRatio && ratio >= relaxRatio - kHysteresis) {
+      if (++m_adaptiveRelaxSamples >= kAdaptiveRelaxSamples) {
+        setAdaptiveInterval(2, frame, "hit ratio high");
+      }
+    } else {
+      m_adaptiveRelaxSamples = 0;
+    }
+  }
+
   void RtxSharc::setRaytraceArgs(RtxContext& ctx, RaytraceArgs& args) {
+    // A camera cut or a turn of more than about 2 degrees in a frame reaches cells the cache has not filled,
+    // so the adaptive interval returns to 1 before the counters can show it.
+    if (PtPerformance::active() && PtPerformance::cacheUpdateAdaptive()) {
+      const RtCamera& camera = ctx.getSceneManager().getCamera();
+      const Vector3 forward { camera.getViewToWorld()[2].xyz() };
+      const Vector3 previousForward { camera.getPreviousViewToWorld()[2].xyz() };
+      const float lengths = std::sqrt(lengthSqr(forward) * lengthSqr(previousForward));
+      constexpr float kFastTurnCos = 0.99939f;
+      const bool fastTurn = lengths > 0.0f && dot(forward, previousForward) < kFastTurnCos * lengths;
+      if (camera.isCameraCut() || fastTurn) {
+        const uint32_t frame = m_device->getCurrentFrameId();
+        setAdaptiveInterval(1, frame, camera.isCameraCut() ? "camera cut" : "fast camera turn");
+        m_adaptiveChangeFrame = frame;
+        m_adaptiveRelaxSamples = 0;
+      }
+      m_args.updateInterval = m_adaptiveInterval;
+    }
+
     // The grid levels are measured from the camera, and the resolve pass reprojects a cell age
     // against where the camera was last frame, so both positions live with the cache rather than
     // being derived from args.

@@ -47,6 +47,14 @@ namespace dxvk {
     // Returns true if denoiser gradient calculation is enabled and actually consumed downstream
     // (NRD primary denoiser or ReSTIR GI lighting validation).
     bool getEnableDenoiserGradient(RtxContext& ctx) const;
+
+    // The sampling settings in effect. Performance mode's reduced direct light (rtx.ptPerformance.reducedDirectLight) lowers the
+    // options' values while it applies.
+    static uint32_t effectiveInitialSampleCount();
+    static bool effectiveInitialVisibility();
+    static bool effectiveRayTracedBiasCorrection();
+    static uint32_t effectiveSpatialSamples();
+    static uint32_t effectiveDisocclusionSamples();
     
     RTX_OPTION("rtx.di", bool, enableCrossPortalLight, true, "");
     RTX_OPTION("rtx.di", bool, enableInitialVisibility, true, "Whether to trace a visibility ray for the light sample selected in the initial sampling pass.");

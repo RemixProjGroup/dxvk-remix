@@ -287,6 +287,14 @@ enum class FroxelConsumerCacheQuality : int {
     // Whether the froxel radiance cache is built this frame (latched in onFrameBegin).
     bool isFroxelCacheActive() const { return m_froxelCacheActive; }
 
+    // The grid and sampling settings in effect. Performance mode's reduced volumetrics (rtx.ptPerformance.reducedVolumetrics)
+    // coarsen the options' values while the latch onFrameBegin sets is on.
+    uint32_t effectiveFroxelGridResolutionScale() const;
+    uint32_t effectiveFroxelDepthSlices() const;
+    uint32_t effectiveRestirFroxelDepthSlices() const;
+    uint32_t effectiveInitialRISSampleCount() const;
+    uint32_t effectiveSpatialReuseMaxSampleCount() const;
+
     const Resources::Resource& getCurrentVolumeReservoirs() const { return m_volumeReservoirs[0]; }
     const Resources::Resource& getPreviousVolumeReservoirs() const { return m_volumeReservoirs[1]; }
     const Resources::Resource& getCurrentVolumeAccumulatedRadianceY() const { return m_volumeAccumulatedRadianceY[m_swapTextures]; }
@@ -331,6 +339,10 @@ enum class FroxelConsumerCacheQuality : int {
     // Off means the full-size cache.
     FroxelConsumerCacheQuality m_froxelCacheReduction = FroxelConsumerCacheQuality::Off;
     FroxelConsumerCacheQuality m_froxelTexturesReduction = FroxelConsumerCacheQuality::Off;
+    // Whether performance mode's reduced volumetrics apply this frame, latched in onFrameBegin,
+    // and whether they applied when the textures were last allocated.
+    bool m_reducedVolumetrics = false;
+    bool m_froxelTexturesReducedVolumetrics = false;
 
     DxvkRaytracingPipelineShaders getPipelineShaders(bool useRayQuery) const;
 

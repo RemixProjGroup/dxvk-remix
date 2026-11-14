@@ -46,6 +46,10 @@
 // Frame feature validation for rtx.frameFeatures.validate, in the validation variants only.
 #include "rtx/algorithm/frame_features_validate.slangh"
 #endif
+#ifdef GBUFFER_VISIBILITY_INPUT
+// Performance mode's raster first hit (rtx.ptPerformance.firstHit), in the visibility input variants only.
+#include "rtx/algorithm/raster_first_hit.slangh"
+#endif
 
 // The resolve loops below count into the G-buffer slot of the software OMM resolve counters.
 #undef SOFT_OMM_RESOLVE_PASS_ID
@@ -3260,6 +3264,143 @@ void geometryPSRResolver(inout GeometryPSRResolverState psrResolverState) {
   }
 }
 
+#ifdef GBUFFER_VISIBILITY_INPUT
+// Writes the raster first hit validation view (DEBUG_VIEW_RASTER_FIRST_HIT_VALIDATION): one camera ray traced with the
+// first iteration's flags, compared with the visibility buffer's hit.
+void geometryResolverValidateRasterFirstHit(ivec2 pixelCoordinate, Ray primaryRay, uint rayFlags, uint8_t rayMask,
+                                            bool rasterHasHit, RayHitInfo rasterHit)
+{
+  RayDesc rayDesc;
+  rayDesc.Origin = primaryRay.origin;
+  rayDesc.TMin = 0.0f;
+  rayDesc.TMax = primaryRay.tMax;
+  rayDesc.Direction = primaryRay.direction;
+
+  RayQuery<0> rayQuery = RayQuery<0>();
+  rayQuery.TraceRayInline(topLevelAS, rayFlags, uint(rayMask), rayDesc);
+  while (rayQuery.Proceed())
+  {
+  }
+
+  RAY_HIT_INFO_CREATE_RAY_QUERY_COMMITTED(tracedHit, rayQuery)
+
+  vec3 color = vec3(0.0f);
+  if (tracedHit.hasHit && rasterHasHit)
+  {
+    const bool sameTriangle = calculateSurfaceIndex(tracedHit) == calculateSurfaceIndex(rasterHit) &&
+                              tracedHit.primitiveIndex == rasterHit.primitiveIndex;
+    const float shade = 0.25f + 0.75f / (1.0f + 0.01f * rasterHit.hitDistance);
+    if (sameTriangle)
+    {
+      color = vec3(shade);
+    }
+    else if (tracedHit.hitDistance < rasterHit.hitDistance * 0.999f)
+    {
+      color = vec3(1.0f, 0.0f, 0.0f);
+    }
+    else
+    {
+      color = vec3(1.0f, 1.0f, 0.0f) * shade;
+    }
+  }
+  else if (tracedHit.hasHit)
+  {
+    color = vec3(1.0f, 0.0f, 0.0f);
+  }
+  else if (rasterHasHit)
+  {
+    color = vec3(0.0f, 0.0f, 1.0f);
+  }
+
+  storeInDebugView(pixelCoordinate, color);
+}
+
+// Builds the first interaction of a camera ray from the raster first hit's visibility buffer, as the first trace of
+// the resolve loop would. The ray is intersected with the raster triangle analytically for the barycentrics, the hit
+// distance and the facing.
+// Returns false when the pixel has no raster surface, or when the ray misses that triangle or sees a back face the
+// ray would cull, and the caller traces the ray.
+bool geometryResolverRasterFirstHit(ivec2 pixelCoordinate, Ray primaryRay, bool insideMedium, out bool hadRasterSurface,
+                                    out RayHitInfo rayHitInfo)
+{
+  rayHitInfo.hitDistance = 0.0f;
+  rayHitInfo.barycentricCoordinates = 0;
+  rayHitInfo.primitiveIndex = 0;
+  rayHitInfo.customIndex = 0;
+  rayHitInfo.geometryIndex = 0;
+  rayHitInfo.hasHit = false;
+  rayHitInfo.frontHit = false;
+
+  const uint2 id = RasterFirstHitIds[pixelCoordinate];
+  hadRasterSurface = (id.x & RASTER_FIRST_HIT_ID_VALID) != 0;
+  if (!hadRasterSurface)
+  {
+    return false;
+  }
+
+  const uint customIndex = id.x & RASTER_FIRST_HIT_ID_CUSTOM_INDEX;
+  const uint primitiveIndex = id.y;
+  const Surface surface = surfaces[customIndex & CUSTOM_INDEX_SURFACE_MASK];
+
+  // Camera-relative corners keep the precision of geometry far from the origin. The ray starts at the camera.
+  vec3 corners[3];
+  for (uint corner = 0; corner < 3; corner++)
+  {
+    const uint vertexIndex = rasterFirstHitVertexIndex(surface, primitiveIndex, corner);
+    corners[corner] = rasterFirstHitCameraRelativePosition(surface, rasterFirstHitObjectPosition(surface, vertexIndex), primaryRay.origin);
+  }
+
+  // Moller-Trumbore intersection with the ray origin at 0.
+  const vec3 edge1 = corners[1] - corners[0];
+  const vec3 edge2 = corners[2] - corners[0];
+  const vec3 p = cross(primaryRay.direction, edge2);
+  const float determinant = dot(edge1, p);
+  if (abs(determinant) < 1.0e-20f)
+  {
+    return false;
+  }
+  const float inverseDeterminant = 1.0f / determinant;
+  const vec3 toOrigin = -corners[0];
+  float u = dot(toOrigin, p) * inverseDeterminant;
+  const vec3 q = cross(toOrigin, edge1);
+  float v = dot(primaryRay.direction, q) * inverseDeterminant;
+  const float t = dot(edge2, q) * inverseDeterminant;
+
+  // The rasterizer's sample and the ray agree up to rounding, so a hit just outside an edge is clamped onto it.
+  const float kEdgeTolerance = 1.0e-4f;
+  if (u < -kEdgeTolerance || v < -kEdgeTolerance || u + v > 1.0f + kEdgeTolerance || !(t > 0.0f) || t > primaryRay.tMax)
+  {
+    return false;
+  }
+  u = saturate(u);
+  v = saturate(v);
+  if (u + v > 1.0f)
+  {
+    const float sum = u + v;
+    u /= sum;
+    v /= sum;
+  }
+
+  rayHitInfo.frontHit = rasterFirstHitIsFrontFacing(corners[0], corners[1], corners[2], primaryRay.direction,
+                                                    (id.x & RASTER_FIRST_HIT_ID_FLIP_FACING) != 0);
+  // The ray culls back faces unless it starts inside a medium or the instance disables culling. A culled face here
+  // means the raster facing disagreed with the ray's, so the ray decides.
+  if (!rayHitInfo.frontHit && !insideMedium && (id.x & RASTER_FIRST_HIT_ID_CULL_DISABLE) == 0)
+  {
+    return false;
+  }
+
+  rayHitInfo.hitDistance = t;
+  rayHitInfo.barycentricCoordinates = barycentricsToUint(vec2(u, v));
+  rayHitInfo.primitiveIndex = primitiveIndex;
+  rayHitInfo.customIndex = customIndex;
+  rayHitInfo.geometryIndex = 0;
+  rayHitInfo.hasHit = true;
+
+  return true;
+}
+#endif
+
 void geometryResolver(ivec2 pixelCoordinate) {
   AtmosphereForeground[pixelCoordinate] = vec4(0.0f);
   // Initialize Geometry Resolver State
@@ -3293,12 +3434,37 @@ void geometryResolver(ivec2 pixelCoordinate) {
 
     EmptyExtraArgs extraArgs;
 
+#ifdef GBUFFER_VISIBILITY_INPUT
+    bool hadRasterSurface;
+    RayHitInfo rasterHit;
+    const bool useRasterHit = geometryResolverRasterFirstHit(
+      pixelCoordinate, primaryRay, geometryResolverState.insideMedium, hadRasterSurface, rasterHit);
+
+    if (GBUFFER_FEATURE_DEBUG_VIEW && cb.debugView == DEBUG_VIEW_RASTER_FIRST_HIT_COVERAGE)
+    {
+      storeInDebugView(pixelCoordinate, useRasterHit ? vec3(0.0f, 1.0f, 0.0f) : hadRasterSurface ? vec3(1.0f, 0.0f, 0.0f) : vec3(0.0f, 0.0f, 1.0f));
+    }
+    else if (GBUFFER_FEATURE_DEBUG_VIEW && cb.debugView == DEBUG_VIEW_RASTER_FIRST_HIT_VALIDATION)
+    {
+      geometryResolverValidateRasterFirstHit(pixelCoordinate, primaryRay, flags, geometryResolverState.rayMask, useRasterHit, rasterHit);
+    }
+
+    // The visibility buffer's hit stands in for the first trace of the resolve loop, which continues from it with rays.
+    RESOLVE_RAY_QUERY_WITH_FIRST_HIT(
+      extraArgs, primaryRay, flags,
+      geometryResolverVertex,
+      cb.primaryRayMaxInteractions, geometryResolverState,
+      geometryResolverState.segmentHitDistance,
+      DEBUG_VIEW_PRIMARY_RAY_INTERACTIONS, DEBUG_VIEW_PRIMARY_RAY_AND_UNORDERED_INTERACTIONS, GBUFFER_FEATURE_DEBUG_VIEW,
+      useRasterHit, rasterHit);
+#else
     RESOLVE_RAY_TRACE(
       extraArgs, primaryRay, flags, GBUFFER_SBT_OFFSET_STANDARD,
       geometryResolverVertex,
       cb.primaryRayMaxInteractions, geometryResolverState,
       geometryResolverState.segmentHitDistance,
       DEBUG_VIEW_PRIMARY_RAY_INTERACTIONS, DEBUG_VIEW_PRIMARY_RAY_AND_UNORDERED_INTERACTIONS, GBUFFER_FEATURE_DEBUG_VIEW);
+#endif
 
     if (GBUFFER_FEATURE_DEBUG_VIEW && cb.debugView == DEBUG_VIEW_PRIMARY_RAY_BOUNCES)
     {

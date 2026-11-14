@@ -274,3 +274,9 @@ RWStructuredBuffer<uint> CompactPsrList;
 layout(binding = GBUFFER_BINDING_COMPACT_PSR_ARGS)
 RWStructuredBuffer<uint> CompactPsrArgs;
 
+#ifdef GBUFFER_VISIBILITY_INPUT
+// rtx.ptPerformance.firstHit, see RASTER_FIRST_HIT_ID_* in raster_first_hit_binding_indices.h.
+layout(binding = GBUFFER_BINDING_RASTER_FIRST_HIT_INPUT)
+Texture2D<uint2> RasterFirstHitIds;
+#endif
+

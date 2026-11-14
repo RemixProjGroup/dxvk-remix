@@ -124,6 +124,18 @@ namespace dxvk {
                "NUMOS lights the scene, even with that option off. Its sun and moons are the scene's main lights, and "
                "inside the BVH a moon competing with lamps gets so few samples that moonlit surfaces are noisy at "
                "night.");
+    RTX_OPTION("rtx.lightSampling", float, bvhLocalShadowCullRatio, 0.0f,
+               "LightBVH mode, with the dedicated sun sample in use: where the sun is visible from a primary surface, "
+               "that pixel's local light sample skips its shadow ray and adds no light when its unshadowed "
+               "contribution is below this share of the sun's visible contribution, 0 to 1. The sun ray is traced "
+               "first, so pixels in shade keep every local light. Dropped samples make the image darker by at most "
+               "this share, never brighter. 0 traces every local shadow ray. Performance mode uses "
+               "rtx.ptPerformance.localShadowCullRatio instead.");
+
+    // The primary candidate count and the local shadow cull ratio for this frame: the performance mode values
+    // (rtx.ptPerformance.lightCandidates, rtx.ptPerformance.localShadowCullRatio) while performance mode is on, the options above otherwise.
+    static uint32_t resolvedPrimaryCandidates();
+    static float resolvedLocalShadowCullRatio();
 
     // Effective mode for this frame: mode(), with Auto resolved to RTXDI or LightBVH by the last update(). Any value that is
     // not a mode (2, or anything out of range) runs as RTXDI, the default.

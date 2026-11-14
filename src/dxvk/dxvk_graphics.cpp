@@ -26,8 +26,17 @@ namespace dxvk {
       pipeMgr->m_device->options().maxNumDynamicUniformBuffers,
       pipeMgr->m_device->options().maxNumDynamicStorageBuffers);
     
+    // A bindless shader in any stage adds the global bindless sets after the pipeline's own set.
+    std::vector<VkDescriptorSetLayout> extraLayouts;
+    for (const Rc<DxvkShader>* shader : { &m_shaders.vs, &m_shaders.tcs, &m_shaders.tes, &m_shaders.gs, &m_shaders.fs }) {
+      if (*shader != nullptr && !(*shader)->shaderOptions().extraLayouts.empty()) {
+        extraLayouts = (*shader)->shaderOptions().extraLayouts;
+        break;
+      }
+    }
+
     m_layout = new DxvkPipelineLayout(m_vkd,
-      m_slotMapping, VK_PIPELINE_BIND_POINT_GRAPHICS);
+      m_slotMapping, VK_PIPELINE_BIND_POINT_GRAPHICS, extraLayouts);
     
     m_vsIn  = m_shaders.vs != nullptr ? m_shaders.vs->interfaceSlots().inputSlots  : 0;
     m_fsOut = m_shaders.fs != nullptr ? m_shaders.fs->interfaceSlots().outputSlots : 0;

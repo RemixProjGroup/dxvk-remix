@@ -41,6 +41,7 @@
 #include "rtx_global_volumetrics.h"
 #include "rtx_scene_manager.h"
 #include "rtx_sharc.h"
+#include "rtx_pt_performance.h"
 #include "rtx_fork_sccr_shell.h"
 #include "rtx_sparse_rendering.h"
 #include "rtx_numos_settings.h"
@@ -325,7 +326,28 @@ namespace dxvk {
   }
 
   IntegrateIndirectMode RtxOptions::resolvedIntegrateIndirectMode() {
-    return RtxSharc::indirectFromCache() ? IntegrateIndirectMode::Sharc : integrateIndirectMode();
+    return (RtxSharc::indirectFromCache() || PtPerformance::indirectFromCache()) ? IntegrateIndirectMode::Sharc : integrateIndirectMode();
+  }
+
+  bool RtxOptions::resolvedDenoiseDirectAndIndirectLightingSeparately() {
+    const bool performanceCombines = PtPerformance::active() && PtPerformance::combinedDenoiser() && !isRayReconstructionEnabled();
+    return denoiseDirectAndIndirectLightingSeparately() && !performanceCombines;
+  }
+
+  uint8_t RtxOptions::resolvedPathMinBounces() {
+    // A first bounce ended by Russian roulette would leave the shaded pixel without indirect light this frame,
+    // and the SHARC update would lose the path.
+    return PtPerformance::active() ? uint8_t(1) : pathMinBounces();
+  }
+
+  uint8_t RtxOptions::resolvedPathMaxBounces() {
+    if (!PtPerformance::active()) {
+      return pathMaxBounces();
+    }
+
+    // A SHARC hit ends the path whatever the limit, so the extra bounce is only taken by rays that miss the cache.
+    const bool extraBounce = PtPerformance::cacheMissExtraBounce() && resolvedIntegrateIndirectMode() == IntegrateIndirectMode::Sharc;
+    return uint8_t(PtPerformance::resolvedIndirectBounces() + (extraBounce ? 1 : 0));
   }
 
   void RtxOptions::updatePathTracerPreset(PathTracerPreset preset) {
@@ -451,11 +473,11 @@ namespace dxvk {
           preferredDefault = GraphicsPreset::Medium;
         } else if (archId < NV_GPU_ARCHITECTURE_GB200) {
           // Ada
-          Logger::info("NVIDIA Ada architecture detected, setting default graphics settings to High");
+          Logger::info("NVIDIA Ada architecture detected, setting default graphics settings to Medium");
           preferredDefault = GraphicsPreset::High;
         } else {
           // Blackwell and beyond
-          Logger::info("NVIDIA Blackwell architecture detected, setting default graphics settings to High");
+          Logger::info("NVIDIA Blackwell architecture detected, setting default graphics settings to Medium");
           preferredDefault = GraphicsPreset::High;
         }
       } else {
@@ -491,6 +513,11 @@ namespace dxvk {
         RtxOptions::lowMemoryGpu.setDeferred(true);
       } else {
         RtxOptions::lowMemoryGpu.setDeferred(false);
+      }
+
+      // Auto selects Medium at most. The High tier above only keeps 8 GB Ada and newer GPUs on Medium.
+      if (static_cast<int>(preferredDefault) < static_cast<int>(GraphicsPreset::Medium)) {
+        preferredDefault = GraphicsPreset::Medium;
       }
 
       // graphicsPreset itself should go to User layer, not Quality layer
@@ -564,10 +591,17 @@ namespace dxvk {
 
     RtxGlobalVolumetrics& volumetrics = device->getCommon()->metaGlobalVolumetrics();
 
-    // The previous preset's frame generation preset is cleared, so only Medium and Low select the lightweight model.
+    // The previous preset's frame generation preset is cleared, so only Medium, Low and Very Low select the
+    // lightweight model.
     {
       std::lock_guard<std::mutex> lock(RtxOptionImpl::getUpdateMutex());
       DxvkDLFG::litePreset.disableLayerValue(RtxOptionLayer::getQualityLayer());
+    }
+
+    // Performance mode runs on Medium, Low and Very Low, and is off on Ultra and High. Its rtx.ptPerformance.* tuning keeps its defaults.
+    if (graphicsPreset() != GraphicsPreset::Custom) {
+      PtPerformance::enable.setDeferred(graphicsPreset() == GraphicsPreset::Medium || graphicsPreset() == GraphicsPreset::Low ||
+                                 graphicsPreset() == GraphicsPreset::VeryLow);
     }
 
     // How long idle replacement-texture mips and micromaps stay in memory. Lower presets target cards with less of it.
@@ -577,7 +611,8 @@ namespace dxvk {
     } else if (graphicsPreset() == GraphicsPreset::High) {
       VramBudget::idleMipFrames.setDeferred(3600);
       VramBudget::idleMicromapFrames.setDeferred(1800);
-    } else if (graphicsPreset() == GraphicsPreset::Medium || graphicsPreset() == GraphicsPreset::Low) {
+    } else if (graphicsPreset() == GraphicsPreset::Medium || graphicsPreset() == GraphicsPreset::Low ||
+               graphicsPreset() == GraphicsPreset::VeryLow) {
       VramBudget::idleMipFrames.setDeferred(1800);
       VramBudget::idleMicromapFrames.setDeferred(900);
     }
@@ -651,7 +686,7 @@ namespace dxvk {
       // Sparse rendering needs Ray Reconstruction to fill in the pixels it skips.
       SparseRendering::Options::enableSparseRendering.setDeferred(isRayReconstruction);
       applySparseRenderingPreset(0.228f, 0.83f, true);
-    } else if (graphicsPreset() == GraphicsPreset::Low) {
+    } else if (graphicsPreset() == GraphicsPreset::Low || graphicsPreset() == GraphicsPreset::VeryLow) {
       DxvkDLFG::litePreset.setDeferred(true);
 
       lowGraphicsPresetCommonSettings();

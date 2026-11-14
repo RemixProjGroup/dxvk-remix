@@ -37,6 +37,7 @@
 #include "dxvk_scoped_annotation.h"
 #include "rtx_context.h"
 #include "rtx_imgui.h"
+#include "rtx_pt_performance.h"
 
 namespace dxvk {
 
@@ -234,6 +235,14 @@ namespace dxvk {
       uint2(1, 1), // Full
     };
 
+    // Performance mode's reduced volumetrics. Each value bounds the option it applies to,
+    // so the reduction never costs more than the preset's settings.
+    constexpr uint32_t kReducedMinFroxelGridResolutionScale = 16;
+    constexpr uint32_t kReducedMaxFroxelDepthSlices = 32;
+    constexpr uint32_t kReducedMaxRestirFroxelDepthSlices = 64;
+    constexpr uint32_t kReducedMaxInitialRISSampleCount = 8;
+    constexpr uint32_t kReducedMaxSpatialReuseSampleCount = 4;
+
     // Reduced froxel cache quality set by each volumetrics quality level, indexed by RtxGlobalVolumetrics::QualityLevel.
     const FroxelConsumerCacheQuality kConsumerCacheQualityForLevel[] = {
       FroxelConsumerCacheQuality::Low,    // Low
@@ -253,6 +262,31 @@ namespace dxvk {
           {FroxelConsumerCacheQuality::Full, "Full (slowest, same as volumetrics on)"},
       } }
     };
+  }
+
+  uint32_t RtxGlobalVolumetrics::effectiveFroxelGridResolutionScale() const {
+    const uint32_t scale = froxelGridResolutionScale();
+    return m_reducedVolumetrics ? std::max(scale, kReducedMinFroxelGridResolutionScale) : scale;
+  }
+
+  uint32_t RtxGlobalVolumetrics::effectiveFroxelDepthSlices() const {
+    const uint32_t slices = froxelDepthSlices();
+    return m_reducedVolumetrics ? std::min(slices, kReducedMaxFroxelDepthSlices) : slices;
+  }
+
+  uint32_t RtxGlobalVolumetrics::effectiveRestirFroxelDepthSlices() const {
+    const uint32_t slices = restirFroxelDepthSlices();
+    return m_reducedVolumetrics ? std::min(slices, kReducedMaxRestirFroxelDepthSlices) : slices;
+  }
+
+  uint32_t RtxGlobalVolumetrics::effectiveInitialRISSampleCount() const {
+    const uint32_t count = initialRISSampleCount();
+    return m_reducedVolumetrics ? std::min(count, kReducedMaxInitialRISSampleCount) : count;
+  }
+
+  uint32_t RtxGlobalVolumetrics::effectiveSpatialReuseMaxSampleCount() const {
+    const uint32_t count = spatialReuseMaxSampleCount();
+    return m_reducedVolumetrics ? std::min(count, kReducedMaxSpatialReuseSampleCount) : count;
   }
 
   // Shows the quality level buttons while volumetrics are on, and the reduced cache dropdown while they are off.
@@ -643,7 +677,7 @@ namespace dxvk {
     // Note: We need to invalidate the volumetric reservoir when detecting camera cut to avoid accumulating the history from different scenes
     volumeArgs.enableVolumeTemporalResampling = enableTemporalResampling() && !isViewHistoryInvalidated;
     volumeArgs.enableVolumeSpatialResampling = enableSpatialResampling() && !isViewHistoryInvalidated;
-    volumeArgs.numSpatialSamples = spatialReuseMaxSampleCount();
+    volumeArgs.numSpatialSamples = effectiveSpatialReuseMaxSampleCount();
     volumeArgs.spatialSamplingRadius = spatialReuseSamplingRadius();
     volumeArgs.numFroxelVolumes = m_numFroxelVolumes;     
     volumeArgs.numActiveFroxelVolumes = enablePortalVolumes ? m_numFroxelVolumes : 1;
@@ -872,16 +906,20 @@ namespace dxvk {
     const bool fullCache = enable() || quality == FroxelConsumerCacheQuality::Full;
     const FroxelConsumerCacheQuality reduction = fullCache ? FroxelConsumerCacheQuality::Off : quality;
     const bool cacheActive = fullCache || reduction != FroxelConsumerCacheQuality::Off;
-    m_froxelCacheHistoryStale = cacheActive && (!m_froxelCacheActive || reduction != m_froxelCacheReduction);
+    const bool volumetricsReduced = PtPerformance::active() && PtPerformance::reducedVolumetrics();
+    m_froxelCacheHistoryStale = cacheActive &&
+      (!m_froxelCacheActive || reduction != m_froxelCacheReduction || volumetricsReduced != m_reducedVolumetrics);
     m_froxelCacheActive = cacheActive;
     m_froxelCacheReduction = reduction;
+    m_reducedVolumetrics = volumetricsReduced;
 
     RtxPass::onFrameBegin(ctx, frameBeginCtx);
 
     m_swapTextures = !m_swapTextures;
 
     // New textures start cleared, and m_froxelCacheHistoryStale resets history on the first frame at the new size.
-    if (m_rebuildFroxels || m_froxelTexturesFull != m_froxelCacheActive || m_froxelTexturesReduction != m_froxelCacheReduction) {
+    if (m_rebuildFroxels || m_froxelTexturesFull != m_froxelCacheActive || m_froxelTexturesReduction != m_froxelCacheReduction ||
+        m_froxelTexturesReducedVolumetrics != m_reducedVolumetrics) {
       createDownscaledResource(ctx, frameBeginCtx.downscaledExtent);
     }
   }
@@ -889,13 +927,15 @@ namespace dxvk {
   void RtxGlobalVolumetrics::createDownscaledResource(Rc<DxvkContext>& ctx, const VkExtent3D& downscaledExtent) {
     const uint2 divisors = kConsumerCacheDivisors[static_cast<int>(m_froxelCacheReduction)];
     m_froxelTexturesReduction = m_froxelCacheReduction;
+    m_froxelTexturesReducedVolumetrics = m_reducedVolumetrics;
 
+    const uint32_t gridResolutionScale = effectiveFroxelGridResolutionScale();
     m_froxelVolumeExtent = util::computeBlockCount(downscaledExtent, VkExtent3D {
-      froxelGridResolutionScale() * divisors.x,
-      froxelGridResolutionScale() * divisors.x,
+      gridResolutionScale * divisors.x,
+      gridResolutionScale * divisors.x,
       1
     });
-    m_froxelVolumeExtent.depth = std::max(froxelDepthSlices() / divisors.y, 1u);
+    m_froxelVolumeExtent.depth = std::max(effectiveFroxelDepthSlices() / divisors.y, 1u);
     m_numFroxelVolumes = enableInPortals() ? maxRayPortalCount + 1 : 1;
 
     VkExtent3D froxelGridFullDimensions = m_froxelVolumeExtent;
@@ -905,7 +945,7 @@ namespace dxvk {
 
     // Calculate the restir grid resolution
     m_restirFroxelVolumeExtent = util::computeBlockCount(m_froxelVolumeExtent, VkExtent3D { restirGridScale(), restirGridScale(), 1 });
-    m_restirFroxelVolumeExtent.depth = std::max(restirFroxelDepthSlices() / divisors.y, 1u);
+    m_restirFroxelVolumeExtent.depth = std::max(effectiveRestirFroxelDepthSlices() / divisors.y, 1u);
 
     VkExtent3D restirFroxelGridFullDimensions = m_restirFroxelVolumeExtent;
     restirFroxelGridFullDimensions.width *= m_numFroxelVolumes;

@@ -164,6 +164,10 @@ namespace dxvk {
 
     void bindCommonRayTracingResources(const Resources::RaytracingOutput& rtOutput);
 
+    // Marks every graphics binding dirty, so the next draw binds its own framebuffer, pipeline, descriptors and push
+    // constants again. A pass that draws with its own state and then restores the frame's state calls it.
+    void invalidateGraphicsState();
+
     void bindResourceView(const uint32_t slot, const Rc<DxvkImageView>& imageView, const Rc<DxvkBufferView>& bufferView);
 
     void getDenoiseArgs(NrdArgs& outPrimaryDirectNrdArgs, NrdArgs& outPrimaryIndirectNrdArgs, NrdArgs& outSecondaryNrdArgs);
@@ -220,6 +224,7 @@ namespace dxvk {
   protected:
     virtual void updateComputeShaderResources() override;
     virtual void updateRaytracingShaderResources() override;
+    virtual void updateGraphicsShaderResources() override;
 
   private:
     // SceneCommandQueue::issued() when the next injectRTX was emitted (setInjectionSceneCommandBound).

@@ -73,10 +73,18 @@ struct SharcArgs {
   // before the continuation is sampled and NEE is evaluated. 0 disables it. It is applied after the
   // eligibility test, so it changes what a cell stores, not which surfaces have one.
   float updateRoughnessClamp;
+
+  // The update schedule of performance mode (sharc_update_tile.slangh): one of this many blocks of update tiles
+  // updates per frame. It is 1 while the mode is off, which updates every tile every frame.
+  uint updateInterval;
+  // Nonzero when an update tile takes its source pixel among the pixels sparse rendering shaded this frame.
+  uint updatePicksActivePixel;
+  uint pad0;
+  uint pad1;
 };
 
 #ifdef __cplusplus
-static_assert(sizeof(SharcArgs) == 80);
+static_assert(sizeof(SharcArgs) == 96);
 // Every struct in the RaytraceArgs block must be a whole number of 16B rows. The shader lays the
 // block out with scalar rules (-fvk-use-scalar-layout) and pads nothing, while the C++ struct it is
 // memcpy'd from carries alignas(16) on vec4 and mat4. A struct whose size is not a multiple of 16

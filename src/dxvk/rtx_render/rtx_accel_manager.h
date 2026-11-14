@@ -227,6 +227,10 @@ public:
   static uint32_t getBlasCount();
 
   uint32_t getSurfaceCount() const { return m_reorderedSurfaces.size(); }
+  // This frame's point-instancer batches. dispatchPointInstancerCulling resolves their TLAS instance byte offsets.
+  const std::vector<PointInstancerBatch>& getPointInstancerBatches() const { return m_pointInstancerBatches; }
+  // The TLAS instance records (VkAccelerationStructureInstanceKHR) of every TLAS type.
+  const Rc<DxvkBuffer>& getInstanceBuffer() const { return m_vkInstanceBuffer; }
   const std::vector<RtInstance*>& getOrderedInstances() const { return m_reorderedSurfaces; }
   // Per surface slot, the index offset of a split (billboard) geometry, 0 otherwise.
   const std::vector<uint32_t>& getOrderedInstanceFirstIndexOffsets() const { return m_reorderedSurfacesFirstIndexOffset; }

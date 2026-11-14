@@ -449,6 +449,37 @@
 //!>       INDIRECT_SLIM_NEE_CACHE_ONLY=1
 //!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
 
+/* Lean SHARC hit shaders that keep the RIS and light BVH sampling of secondary NEE (_leanls, see
+   integrate_indirect.slang). */
+
+//!variant integrate_indirect_sharc_query_closesthit_wboit_leanls.rchit
+//!>       SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK=SURFACE_MATERIAL_RESOLVE_TYPE_OPAQUE_TRANSLUCENT
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_sharc_update4_closesthit_wboit_leanls_df.rchit
+//!>       SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK=SURFACE_MATERIAL_RESOLVE_TYPE_OPAQUE_TRANSLUCENT
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_DEFERRED_FLUSH=1
+//!>       SHARC_PROPAGATION_DEPTH=4
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_sharc_update8_closesthit_wboit_leanls_df.rchit
+//!>       SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK=SURFACE_MATERIAL_RESOLVE_TYPE_OPAQUE_TRANSLUCENT
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_DEFERRED_FLUSH=1
+//!>       SHARC_PROPAGATION_DEPTH=8
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
 //!end-variants
 #define ATMOSPHERE_AVAILABLE
 

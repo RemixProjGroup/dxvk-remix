@@ -43,6 +43,10 @@ static const uint visibilityModeAccurateHitDistanceOptional = (1 << 6);
 // The POM self-shadow of an indirect-light query (secondary NEE, the NEE cache, ReSTIR GI). In SCCR mode it is marched
 // coarsely, to rtx.displacement.indirectShadowSteps steps on the ray cone's footprint (sccrIndirectShadowFootprint).
 static const uint visibilityModePomIndirect = (1 << 7);
+// With SECONDARY_RAY_FLAG_ALPHA_AS_OPAQUE in cb.secondaryRayFlags, alpha-tested candidates at least
+// cb.secondaryAlphaOpaqueDistance along the ray occlude without an alpha test.
+// Secondary NEE sets it, and primary shadow rays never do.
+static const uint visibilityModeSimpleCutouts = (1 << 8);
 
 // Alpha-tests visibility rays at a fixed coarse footprint (rtx.shadowRays.coarseAlphaMip).
 // cb.shadowRayAlphaGradient is 1 / rtx.shadowRays.alphaMipTargetResolution. A UV-space gradient of that length makes
@@ -300,6 +304,19 @@ float getRayPortalTransparency(
   return 0.0f;
 }
 
+// Returns true for a candidate on an alpha-tested opaque surface of the current frame's TLAS.
+// Clip-planed surfaces return false, because their clipped part must not occlude.
+bool visibilityCandidateIsCutout(RayHitInfo rayHitInfo, const bool usePreviousTLAS)
+{
+  if (usePreviousTLAS || calculateMaterialType(rayHitInfo) != surfaceMaterialTypeOpaque)
+  {
+    return false;
+  }
+
+  const Surface surface = surfaces[calculateSurfaceIndex(rayHitInfo)];
+  return surface.isBlendingDisabled && !surface.isClipPlaneEnabled;
+}
+
 struct VisibilityResult {
   vec3 attenuation;
   vec3 rayDirection;
@@ -428,6 +445,17 @@ VisibilityResult traceVisibilityRay<let VisibilityMode : uint>(
           continue;
         }
         if (softOmmCandidate == SOFT_OMM_STATE_OPAQUE)
+        {
+          rayQuery.CommitNonOpaqueTriangleHit();
+          if (!closestHitSearch)
+          {
+            break;
+          }
+          continue;
+        }
+
+        if ((VisibilityMode & visibilityModeSimpleCutouts) && (cb.secondaryRayFlags & SECONDARY_RAY_FLAG_ALPHA_AS_OPAQUE) != 0 &&
+            rayHitInfo.hitDistance >= cb.secondaryAlphaOpaqueDistance && visibilityCandidateIsCutout(rayHitInfo, usePreviousTLAS))
         {
           rayQuery.CommitNonOpaqueTriangleHit();
           if (!closestHitSearch)

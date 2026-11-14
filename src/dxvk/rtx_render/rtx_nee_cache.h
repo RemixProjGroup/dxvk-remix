@@ -47,6 +47,10 @@ namespace dxvk {
 
     void setRaytraceArgs(RaytraceArgs& raytraceArgs, bool resetHistory) const;
 
+    // True while the NEE cache should run: rtx.neeCache.enable, except while performance mode is on.
+    // The pass latches it per frame, so render code tests isActive() instead.
+    static bool resolvedEnable();
+
     RTX_OPTION_ARGS("rtx.neeCache", bool, enable, true, "Enable NEE cache. The integrator will perform NEE on emissive triangles, which usually have significant light contributions, stored in the cache.",
                     args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION("rtx.neeCache", bool, enableImportanceSampling, true, "Enable importance sampling.");

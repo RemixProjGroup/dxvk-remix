@@ -393,6 +393,7 @@ namespace dxvk {
     table.push_back({ "preset", "High", { { "rtx.graphicsPreset", enumValue(GraphicsPreset::High) } }, kNeedsNothing });
     table.push_back({ "preset", "Medium", { { "rtx.graphicsPreset", enumValue(GraphicsPreset::Medium) } }, kNeedsNothing });
     table.push_back({ "preset", "Low", { { "rtx.graphicsPreset", enumValue(GraphicsPreset::Low) } }, kNeedsNothing });
+    table.push_back({ "preset", "VeryLow", { { "rtx.graphicsPreset", enumValue(GraphicsPreset::VeryLow) } }, kNeedsNothing });
 
     return table;
   }

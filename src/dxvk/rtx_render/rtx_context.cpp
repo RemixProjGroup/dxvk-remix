@@ -42,6 +42,7 @@
 #include "rtx_texture_manager.h"
 #include "rtx_neural_radiance_cache.h"
 #include "rtx_sharc.h"
+#include "rtx_pt_performance.h"
 #include "rtx_fork_hooks.h"
 #include "rtx_fork_light_bvh_pass.h"
 #include "rtx_fork_shadow_rays.h"
@@ -663,7 +664,7 @@ namespace dxvk {
 
       if (captureTestScreenshot) {
         Logger::info(str::format("RTX: Test screenshot capture triggered"));
-        Logger::info(str::format("RTX: Use separate denoiser ", RtxOptions::denoiseDirectAndIndirectLightingSeparately()));
+        Logger::info(str::format("RTX: Use separate denoiser ", RtxOptions::resolvedDenoiseDirectAndIndirectLightingSeparately()));
         Logger::info(str::format("RTX: Use rtxdi ", RtxOptions::useRTXDI()));
         Logger::info(str::format("RTX: Use dlss ", RtxOptions::isDLSSOrRayReconstructionEnabled()));
         Logger::info(str::format("RTX: Use ray reconstruction ", RtxOptions::isRayReconstructionEnabled()));
@@ -705,6 +706,8 @@ namespace dxvk {
       m_submitContainsInjectRtx = true;
       m_cachedReflexFrameId = cachedReflexFrameId;
 
+      // Performance mode's first hit Auto picks this frame's path before any pass reads it.
+      m_common->metaRasterFirstHit().onFrameBegin();
       beginGpuStageTiming();
 
       // Resolved once per frame, so a mid-frame option change cannot split twice.
@@ -1550,7 +1553,7 @@ namespace dxvk {
 
   void RtxContext::getDenoiseArgs(NrdArgs& outPrimaryDirectNrdArgs, NrdArgs& outPrimaryIndirectNrdArgs, NrdArgs& outSecondaryNrdArgs) {
     const bool realtimeDenoiserEnabled = RtxOptions::useDenoiser() && !RtxOptions::useDenoiserReferenceMode();
-    const bool separateDenoiserEnabled = RtxOptions::denoiseDirectAndIndirectLightingSeparately();
+    const bool separateDenoiserEnabled = RtxOptions::resolvedDenoiseDirectAndIndirectLightingSeparately();
 
     auto& denoiser0 = (separateDenoiserEnabled ? m_common->metaPrimaryDirectLightDenoiser() : m_common->metaPrimaryCombinedLightDenoiser());
     auto& denoiser1 = (separateDenoiserEnabled ? m_common->metaPrimaryIndirectLightDenoiser() : m_common->metaPrimaryCombinedLightDenoiser());
@@ -1627,8 +1630,8 @@ namespace dxvk {
     constants.russianRouletteMaxContinueProbability = RtxOptions::russianRouletteMaxContinueProbability();
     constants.russianRoulette1stBounceMinContinueProbability = RtxOptions::russianRoulette1stBounceMinContinueProbability();
     constants.russianRoulette1stBounceMaxContinueProbability = RtxOptions::russianRoulette1stBounceMaxContinueProbability();
-    constants.pathMinBounces = RtxOptions::pathMinBounces();
-    constants.pathMaxBounces = RtxOptions::pathMaxBounces();
+    constants.pathMinBounces = RtxOptions::resolvedPathMinBounces();
+    constants.pathMaxBounces = RtxOptions::resolvedPathMaxBounces();
     // Note: Probability adjustments always in the 0-1 range and therefore less than FLOAT16_MAX.
     constants.opaqueDiffuseLobeSamplingProbabilityZeroThreshold =
       glm::packHalf1x16(RtxOptions::opaqueDiffuseLobeSamplingProbabilityZeroThreshold());
@@ -1668,7 +1671,7 @@ namespace dxvk {
     constants.enableEmissiveBlendEmissiveOverride = RtxOptions::enableEmissiveBlendEmissiveOverride();
     constants.enableRtxdi = RtxOptions::rtxdiActive();
     constants.enableSecondaryBounces = RtxOptions::enableSecondaryBounces();
-    constants.enableSeparatedDenoisers = RtxOptions::denoiseDirectAndIndirectLightingSeparately();
+    constants.enableSeparatedDenoisers = RtxOptions::resolvedDenoiseDirectAndIndirectLightingSeparately();
     constants.enableCalculateVirtualShadingNormals = RtxOptions::useVirtualShadingNormalsForDenoising();
     constants.enableViewModelVirtualInstances = RtxOptions::ViewModel::enableVirtualInstances();
     constants.enablePSRR = RtxOptions::enablePSRR();
@@ -1703,7 +1706,9 @@ namespace dxvk {
     constants.enableIndirectAlphaBlendShadows = RtxOptions::enableIndirectAlphaBlendShadows();
     constants.enableRussianRoulette = RtxOptions::enableRussianRoulette();
     constants.enableDemodulateRoughness = m_common->metaDemodulate().demodulateRoughness();
-    constants.enableReplaceDirectSpecularHitTWithIndirectSpecularHitT = RtxOptions::replaceDirectSpecularHitTWithIndirectSpecularHitT();
+    // A combined denoiser denoises the direct specular light with its own hit distance.
+    constants.enableReplaceDirectSpecularHitTWithIndirectSpecularHitT =
+      RtxOptions::replaceDirectSpecularHitTWithIndirectSpecularHitT() && RtxOptions::resolvedDenoiseDirectAndIndirectLightingSeparately();
     constants.enablePortalFadeInEffect = RtxOptions::enablePortalFadeInEffect();
     constants.enableEnhanceBSDFDetail = (shouldUseDLSS() || useRR || shouldUseTAA()) && m_common->metaComposite().enableDLSSEnhancement();
     constants.enhanceBSDFIndirectMode = (uint32_t)m_common->metaComposite().dlssEnhancementMode();
@@ -1712,7 +1717,9 @@ namespace dxvk {
     constants.enhanceBSDFDirectLightMaxValue = m_common->metaComposite().dlssEnhancementDirectLightMaxValue();
     constants.enhanceBSDFIndirectLightMaxValue = m_common->metaComposite().dlssEnhancementIndirectLightMaxValue();
     constants.enhanceBSDFIndirectLightMinRoughness = m_common->metaComposite().dlssEnhancementIndirectLightMinRoughness();
-    constants.enableFirstBounceLobeProbabilityDithering = RtxOptions::enableFirstBounceLobeProbabilityDithering();
+    // Sparse rendering turns the dithering off, since it adds to correlation artifacts with ray reconstruction.
+    constants.enableFirstBounceLobeProbabilityDithering =
+      RtxOptions::enableFirstBounceLobeProbabilityDithering() && !m_common->metaSparseRendering().isActive();
     constants.enableUnorderedResolveInIndirectRays = RtxOptions::enableUnorderedResolveInIndirectRays();
     constants.enableProbabilisticUnorderedResolveInIndirectRays = RtxOptions::enableProbabilisticUnorderedResolveInIndirectRays();
     constants.enableTransmissionApproximationInIndirectRays = RtxOptions::enableTransmissionApproximationInIndirectRays();
@@ -1813,7 +1820,7 @@ namespace dxvk {
     // Stealing pixels requires indirect light stored in separated buffers instead of combined with direct light,
     // steal samples if separated denoiser is disabled.
     if (restirGISampleStealingMode == ReSTIRGISampleStealing::StealPixel 
-        && !RtxOptions::denoiseDirectAndIndirectLightingSeparately()) {
+        && !RtxOptions::resolvedDenoiseDirectAndIndirectLightingSeparately()) {
       restirGISampleStealingMode = ReSTIRGISampleStealing::StealSample;
     }
     constants.enableReSTIRGI = restirGI.isActive();
@@ -1870,6 +1877,28 @@ namespace dxvk {
     constants.surfaceCount = getSceneManager().getAccelManager().getSurfaceCount();
 
     m_common->metaSparseRendering().setSparseRenderingArgs(*this, constants.sparseRenderingArgs);
+    constants.ptPerformanceCounters = PtPerformance::active();
+
+    // The cheaper rays after the primary hit, set by performance mode's indirect options.
+    uint32_t secondaryRayFlags = 0;
+    float secondaryRayMaxDistance = 0.0f;
+    float secondaryAlphaOpaqueDistance = 0.0f;
+    if (PtPerformance::active()) {
+      const bool nvidiaGpu = m_device->adapter()->deviceProperties().vendorID == static_cast<uint32_t>(DxvkGpuVendor::Nvidia);
+      const float alphaOpaqueDistance = PtPerformance::resolvedIndirectAlphaOpaqueDistance(nvidiaGpu);
+      secondaryRayFlags |= alphaOpaqueDistance >= 0.0f ? SECONDARY_RAY_FLAG_ALPHA_AS_OPAQUE : 0u;
+      secondaryRayFlags |= PtPerformance::indirectSimpleShading() ? SECONDARY_RAY_FLAG_SIMPLE_SHADING : 0u;
+      secondaryRayMaxDistance = PtPerformance::indirectRayMaxDistance();
+      secondaryAlphaOpaqueDistance = std::max(alphaOpaqueDistance, 0.0f) * RtxOptions::getMeterToWorldUnitScale();
+    }
+    constants.secondaryRayFlags = secondaryRayFlags;
+    constants.secondaryAlphaOpaqueDistance = secondaryAlphaOpaqueDistance;
+    constants.secondaryRayMaxDistance = secondaryRayMaxDistance > 0.0f
+      ? secondaryRayMaxDistance * RtxOptions::getMeterToWorldUnitScale()
+      : std::numeric_limits<float>::max();
+    constants.secondaryGradientScale = (secondaryRayFlags & SECONDARY_RAY_FLAG_SIMPLE_SHADING) != 0
+      ? std::exp2(std::clamp(PtPerformance::secondaryMipBias(), 0.0f, 6.0f))
+      : 1.0f;
 
     auto* cameraTeleportDirectionInfo = getSceneManager().getRayPortalManager().getCameraTeleportationRayPortalDirectionInfo();
     constants.teleportationPortalIndex = cameraTeleportDirectionInfo ? cameraTeleportDirectionInfo->entryPortalInfo.portalIndex + 1 : 0;
@@ -1976,8 +2005,8 @@ namespace dxvk {
     m_common->metaRtxdiRayQuery().setRaytraceArgs(rtOutput);
     getSceneManager().getLightManager().setRaytraceArgs(
       constants,
-      m_common->metaRtxdiRayQuery().initialSampleCount(),
-      RtxGlobalVolumetrics::initialRISSampleCount(),
+      DxvkRtxdiRayQuery::effectiveInitialSampleCount(),
+      m_common->metaGlobalVolumetrics().effectiveInitialRISSampleCount(),
       RtxOptions::risLightSampleCount());
 
     constants.resolveTransparencyThreshold = RtxOptions::resolveTransparencyThreshold();
@@ -2222,6 +2251,22 @@ namespace dxvk {
       Logger::warn(str::format("[RTX] SHARC is not supported. Turning off rtx.sharc.indirectFromCache."));
       RtxSharc::indirectFromCache.setImmediately(false, RtxOptionLayer::getQualityLayer());
     }
+
+    // Performance mode selects SHARC through a runtime flag rather than an option, so the flag follows the device.
+    PtPerformance::setCacheSupported(sharcMissingFeature == nullptr);
+
+    // Off NVIDIA, SHARC runs as compute kernels in every indirect mode (DxvkPathtracerIntegrateIndirect::sharcUsesCompute).
+    const bool nvidiaGpu = m_device->adapter()->deviceProperties().vendorID == static_cast<uint32_t>(DxvkGpuVendor::Nvidia);
+    std::string ptPerformanceCachePath;
+    if (sharcMissingFeature != nullptr) {
+      ptPerformanceCachePath = str::format("the preset's indirect mode (the device lacks ", sharcMissingFeature, ")");
+    } else if (nvidiaGpu) {
+      ptPerformanceCachePath = "SHARC (NVIDIA GPU)";
+    } else {
+      ptPerformanceCachePath = "SHARC as compute kernels";
+    }
+    Logger::info(str::format("[PtPerformance] Indirect light in performance mode: ", ptPerformanceCachePath, ", performance mode is ",
+                             PtPerformance::active() ? "on." : "off."));
   }
 
   void RtxContext::dispatchVolumetrics(const Resources::RaytracingOutput& rtOutput) {
@@ -2241,7 +2286,9 @@ namespace dxvk {
     const bool liveTraceOn = RtxPerfLog::liveTraceReadout();
     RtxSettingsSweep& sweep = m_common->metaSettingsSweep();
     const bool sweepOn = sweep.isMeasuring();
-    if (!(gpuStages() || perfWindowOn || perfLogOn || liveTraceOn || sweepOn) || !m_device->adapter()->deviceProperties().limits.timestampComputeAndGraphics) {
+    RtxRasterFirstHit& rasterFirstHit = m_common->metaRasterFirstHit();
+    const bool firstHitAutoOn = rasterFirstHit.autoMeasuring();
+    if (!(gpuStages() || perfWindowOn || perfLogOn || liveTraceOn || sweepOn || firstHitAutoOn) || !m_device->adapter()->deviceProperties().limits.timestampComputeAndGraphics) {
       return;
     }
     for (auto& frame : m_gpuStageFrames) {
@@ -2328,6 +2375,23 @@ namespace dxvk {
             " ms=", milliseconds));
         }
       }
+      if (firstHitAutoOn) {
+        double rasterMs = 0.0;
+        double gbufferMs = -1.0;
+        bool rasterRan = false;
+        for (uint32_t i = 1; i < frame.count; ++i) {
+          const double milliseconds = double(data[i].timestamp.time - data[i - 1].timestamp.time) * scale;
+          if (std::strcmp(frame.labels[i], "RasterFirstHit") == 0) {
+            rasterRan = true;
+            rasterMs = milliseconds;
+          } else if (std::strcmp(frame.labels[i], "GBuffer") == 0) {
+            gbufferMs = milliseconds;
+          }
+        }
+        if (gbufferMs >= 0.0) {
+          rasterFirstHit.onGpuSample(frame.frameId, rasterRan, rasterMs, gbufferMs);
+        }
+      }
       if (gpuStages()) {
         Logger::info(str::format("[GPU stages] frame=", frame.frameId, " stage=MeasuredSequence ms=",
           double(data[frame.count - 1].timestamp.time - data[0].timestamp.time) * scale - presentGateGapMs));
@@ -2338,7 +2402,9 @@ namespace dxvk {
       }
       frame.pending = false;
     }
-    const uint32_t samplePeriod = gpuStages() ? 120u
+    // Performance mode's first hit Auto samples every frame while it measures.
+    const uint32_t samplePeriod = firstHitAutoOn ? 1u
+                                : gpuStages() ? 120u
                                 : (perfLogOn || liveTraceOn || sweepOn) ? std::max(1u, RtxPerfLog::detailedGpuSamplePeriod()) : 30u;
     if (m_gpuStageSampleCounter++ % samplePeriod != 0) {
       return;
@@ -2409,6 +2475,14 @@ namespace dxvk {
 
   void RtxContext::dispatchPathTracing(const Resources::RaytracingOutput& rtOutput) {
 
+    // Performance mode's raster first hit: the visibility buffer the G-buffer pass takes the camera rays' first hit from.
+    RtxRasterFirstHit& rasterFirstHit = m_common->metaRasterFirstHit();
+    rasterFirstHit.dispatch(*this, m_state, rtOutput, DxvkPathtracerGbuffer::canReadRasterFirstHit(
+      rtOutput.m_raytraceArgs, m_common->metaNeuralRadianceCache().isActive()));
+    if (rasterFirstHit.isActive()) {
+      recordGpuStageTiming("RasterFirstHit");
+    }
+
     // Gbuffer Raytracing
     m_common->metaPathtracerGbuffer().dispatch(this, rtOutput);
     recordGpuStageTiming("GBuffer");
@@ -2451,7 +2525,7 @@ namespace dxvk {
 
   void RtxContext::dispatchDenoise(const Resources::RaytracingOutput& rtOutput) {
     // Primary direct denoiser used for primary direct lighting when separated, otherwise a special combined direct+indirect denoiser is used when both direct and indirect signals are combined.
-    DxvkDenoise& denoiser0 = RtxOptions::denoiseDirectAndIndirectLightingSeparately() ? m_common->metaPrimaryDirectLightDenoiser() : m_common->metaPrimaryCombinedLightDenoiser();
+    DxvkDenoise& denoiser0 = RtxOptions::resolvedDenoiseDirectAndIndirectLightingSeparately() ? m_common->metaPrimaryDirectLightDenoiser() : m_common->metaPrimaryCombinedLightDenoiser();
     DxvkDenoise& referenceDenoiserSecondLobe0 = m_common->metaReferenceDenoiserSecondLobe0();
     // Primary Indirect denoiser used for primary indirect lighting when separated.
     DxvkDenoise& denoiser1 = m_common->metaPrimaryIndirectLightDenoiser();
@@ -2471,6 +2545,14 @@ namespace dxvk {
       referenceDenoiserSecondLobe1.releaseResources();
       referenceDenoiserSecondLobe2.releaseResources();
       return;
+    }
+
+    // The primary instances this frame does not run release their resources.
+    if (RtxOptions::resolvedDenoiseDirectAndIndirectLightingSeparately()) {
+      m_common->metaPrimaryCombinedLightDenoiser().releaseResources();
+    } else {
+      m_common->metaPrimaryDirectLightDenoiser().releaseResources();
+      denoiser1.releaseResources();
     }
 
     ScopedGpuProfileZone(this, "Denoising");
@@ -2528,7 +2610,7 @@ namespace dxvk {
     }
 
     // Primary Indirect light denoiser, if separate denoiser is used.
-    if (RtxOptions::denoiseDirectAndIndirectLightingSeparately())
+    if (RtxOptions::resolvedDenoiseDirectAndIndirectLightingSeparately())
     {
       ScopedGpuProfileZone(this, "Primary Indirect Denoising");
 
@@ -3315,6 +3397,31 @@ namespace dxvk {
                                   BINDING_SET_BINDLESS_RAW_BUFFER);
 
       m_cmd->cmdBindDescriptorSet(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, layout->pipelineLayout(), 
+                                  getSceneManager().getBindlessResourceManager().getGlobalBindlessTableSet(BindlessResourceManager::Samplers),
+                                  BINDING_SET_BINDLESS_SAMPLER);
+    }
+  }
+
+  void RtxContext::invalidateGraphicsState() {
+    unbindGraphicsPipeline();
+    m_flags.set(DxvkContextFlag::GpDirtyFramebuffer, DxvkContextFlag::DirtyPushConstants);
+  }
+
+  void RtxContext::updateGraphicsShaderResources() {
+    ScopedCpuProfileZone();
+    DxvkContext::updateGraphicsShaderResources();
+
+    auto&& layout = m_state.gp.pipeline->layout();
+    if (layout->requiresExtraDescriptorSet()) {
+      m_cmd->cmdBindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout->pipelineLayout(),
+                                  getSceneManager().getBindlessResourceManager().getGlobalBindlessTableSet(BindlessResourceManager::Textures),
+                                  BINDING_SET_BINDLESS_TEXTURE2D);
+
+      m_cmd->cmdBindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout->pipelineLayout(),
+                                  getSceneManager().getBindlessResourceManager().getGlobalBindlessTableSet(BindlessResourceManager::Buffers),
+                                  BINDING_SET_BINDLESS_RAW_BUFFER);
+
+      m_cmd->cmdBindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout->pipelineLayout(),
                                   getSceneManager().getBindlessResourceManager().getGlobalBindlessTableSet(BindlessResourceManager::Samplers),
                                   BINDING_SET_BINDLESS_SAMPLER);
     }

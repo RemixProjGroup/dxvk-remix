@@ -301,6 +301,171 @@ uint resolveIterationRayFlags(uint flags, uint8_t interactionIteration, bool las
   }                                                                                       \
 }
 
+// RESOLVE_RAY_QUERY with a first interaction that need not be traced: while useFirstHit is true, the first
+// iteration hands firstHit (a RayHitInfo) to the hit function instead of tracing the ray, and the loop traces from
+// the second iteration on. The hit function has one call site either way. The G-buffer pass uses it for the raster
+// first hit (rtx.ptPerformance.firstHit).
+#define RESOLVE_RAY_QUERY_WITH_FIRST_HIT(                                                                \
+  extraArgs, ray, flags, hitFunction, maxInteractions, payload, segmentHitDistance,       \
+  interactionsDebugView1, interactionsDebugView2, allowWriteToInteractionsDebugViews,      \
+  useFirstHit, firstHit)                                                                  \
+{                                                                                         \
+  /* Initialize the payload with the current ray's state */                               \
+                                                                                          \
+  RayDesc currentRay;                                                                     \
+  currentRay.Origin = ray.origin;                                                         \
+  currentRay.TMin = 0.f;                                                                  \
+  currentRay.TMax = ray.tMax;                                                             \
+  currentRay.Direction = ray.direction;                                                   \
+                                                                                          \
+  payload.origin = ray.origin;                                                            \
+  payload.coneRadius = ray.coneRadius;                                                    \
+  payload.direction = ray.direction;                                                      \
+                                                                                          \
+  /* Loop until a surface is resolved, or the maximum interaction count is hit */         \
+  uint8_t interactionIteration;                                                           \
+  for (interactionIteration = uint8_t(1);; ++interactionIteration)                        \
+  {                                                                                       \
+    /* Reset the hit distance used for Resolve logic for this next iteration */           \
+                                                                                          \
+    payload.continueResolving = interactionIteration < maxInteractions;                   \
+                                                                                          \
+    /* Preform the ray trace with the desired information */                              \
+                                                                                          \
+    /* Note: Live state across this call (not put into payload as it is not */            \
+    /* needed for anything on the hit function side of things):             */            \
+    /* - interactionIteration                                               */            \
+    /* - currentRay.tMax                                                    */            \
+                                                                                          \
+    {                                                                                                   \
+      /* Invoke a Ray Query */                                                                          \
+                                                                                                        \
+      /* The first interaction may come from firstHit instead of a trace. */              \
+      RayHitInfo rayHitInfo;                                                              \
+      if (interactionIteration == uint8_t(1) && (useFirstHit))                            \
+      {                                                                                   \
+        rayHitInfo = (firstHit);                                                          \
+      }                                                                                   \
+      else                                                                                \
+      {                                                                                   \
+      RayQuery<0> rayQuery = RayQuery<0>();                                                             \
+                                                                                                        \
+      /* Note: For now gl_RayFlagsOpaqueEXT is always used as this function will always return the */   \
+      /* closest geometry hit, translucent or not (as we handle things like translucency and opacity */ \
+      /* manually and re-cast the ray afterwards). */                                                   \
+      /* Note: Ray direction casted to vec3 to be consistent with how ray evaluation is done */         \
+      /* (to minimize any discrepancy). */                                                              \
+      /* rtx.alphaBake.softwareOmmResolveSkip may trace FORCE_OPAQUE in place of */       \
+      /* CULL_NON_OPAQUE (softOmmResolveFlags) and re-trace past hits that hardware */    \
+      /* micromaps would cull (software_omm.slangh). */                                   \
+      /* rtx.alphaBake.softwareOmmTraversal drops FORCE_OPAQUE / CULL_NON_OPAQUE in a */  \
+      /* pass whose bit is set and handles the non-opaque candidates below */             \
+      /* (softOmmTraversalCommit). The skip re-trace loop is then off for that */         \
+      /* iteration, because transparent hits are never committed. */                      \
+      const uint softOmmRequestedFlags =                                                  \
+        resolveIterationRayFlags(flags, interactionIteration, !payload.continueResolving);\
+      uint softOmmTraversalMode;                                                          \
+      uint softOmmSkipMode = SOFT_OMM_SKIP_NONE;                                          \
+      uint softOmmTraceFlags = softOmmTraversalFlags(SOFT_OMM_TRAVERSAL_PASS_ID, softOmmRequestedFlags, softOmmTraversalMode); \
+      if (softOmmTraversalMode == SOFT_OMM_TRAVERSAL_NONE)                                \
+      {                                                                                   \
+        softOmmTraceFlags = softOmmResolveFlags(SOFT_OMM_RESOLVE_PASS_ID, softOmmRequestedFlags, softOmmSkipMode); \
+      }                                                                                   \
+      rayQuery.TraceRayInline(                                                            \
+        topLevelAS,                                                                       \
+        softOmmTraceFlags,                                                                \
+        uint(payload.rayMask),                                                            \
+        currentRay                                                                        \
+      );                                                                                  \
+                                                                                          \
+      while (rayQuery.Proceed())                                                          \
+      {                                                                                   \
+        if (softOmmTraversalMode != SOFT_OMM_TRAVERSAL_NONE)                              \
+        {                                                                                 \
+          if (rayQuery.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE)                  \
+          {                                                                               \
+            if (softOmmTraversalCommit(SOFT_OMM_TRAVERSAL_PASS_ID, softOmmTraversalMode,  \
+                  rayQuery.CandidateInstanceID(), rayQuery.CandidateGeometryIndex(),      \
+                  rayQuery.CandidatePrimitiveIndex(), rayQuery.CandidateTriangleBarycentrics())) \
+            {                                                                             \
+              rayQuery.CommitNonOpaqueTriangleHit();                                      \
+            }                                                                             \
+          }                                                                               \
+        }                                                                                 \
+      };                                                                                  \
+                                                                                          \
+      if (softOmmSkipMode != SOFT_OMM_SKIP_NONE)                                          \
+      {                                                                                   \
+        RayDesc softOmmRay = currentRay;                                                  \
+        for (uint softOmmSkips = 0u; rayQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT; ++softOmmSkips) \
+        {                                                                                 \
+          const uint softOmmKind = softOmmResolveSkipKind(softOmmSkipMode,                \
+            rayQuery.CommittedInstanceID(), rayQuery.CommittedGeometryIndex(),            \
+            rayQuery.CommittedPrimitiveIndex(), rayQuery.CommittedTriangleBarycentrics()); \
+          if (softOmmKind == 0u ||                                                        \
+              (softOmmSkips >= SOFT_OMM_RESOLVE_MAX_SKIPS && softOmmSkipMode == SOFT_OMM_SKIP_TRANSPARENT)) \
+          {                                                                               \
+            if (softOmmKind != 0u)                                                        \
+            {                                                                             \
+              softOmmCountResolve(SOFT_OMM_RESOLVE_PASS_ID, SOFT_OMM_RESOLVE_COUNTER_CAP); \
+            }                                                                             \
+            break;                                                                        \
+          }                                                                               \
+          softOmmRay.TMin = softOmmNextRayT(rayQuery.CommittedRayT());                    \
+          const bool softOmmAtCap = softOmmSkips >= SOFT_OMM_RESOLVE_MAX_SKIPS;           \
+          softOmmCountResolve(SOFT_OMM_RESOLVE_PASS_ID, softOmmAtCap ? SOFT_OMM_RESOLVE_COUNTER_CAP : \
+            (softOmmSkipMode == SOFT_OMM_SKIP_CULL_NON_OPAQUE ? SOFT_OMM_RESOLVE_COUNTER_NON_OPAQUE : SOFT_OMM_RESOLVE_COUNTER_TRANSPARENT)); \
+          rayQuery.TraceRayInline(                                                        \
+            topLevelAS,                                                                   \
+            softOmmAtCap ? softOmmRequestedFlags : softOmmTraceFlags,                     \
+            uint(payload.rayMask),                                                        \
+            softOmmRay                                                                    \
+          );                                                                              \
+          while (rayQuery.Proceed())                                                      \
+          {                                                                               \
+          };                                                                              \
+          if (softOmmAtCap)                                                               \
+          {                                                                               \
+            break;                                                                        \
+          }                                                                               \
+        }                                                                                 \
+      }                                                                                   \
+                                                                                          \
+      /* Construct hit info from the hit */                                               \
+      rayHitInfo.hasHit = rayQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT;           \
+      rayHitInfo.hitDistance = rayQuery.CommittedRayT();                                  \
+      rayHitInfo.barycentricCoordinates = barycentricsToUint(rayQuery.CommittedTriangleBarycentrics());\
+      rayHitInfo.primitiveIndex = rayQuery.CommittedPrimitiveIndex();                     \
+      rayHitInfo.customIndex = rayQuery.CommittedInstanceID();                            \
+      rayHitInfo.geometryIndex = rayQuery.CommittedGeometryIndex();                       \
+      rayHitInfo.frontHit = rayQuery.CommittedTriangleFrontFace();                        \
+      }                                                                                   \
+                                                                                          \
+      /* Call the hit function */                                                         \
+      hitFunction(extraArgs, rayHitInfo, payload);                                        \
+    }                                                                                     \
+                                                                                          \
+    /* Check if the resolve loop should continue */                                       \
+                                                                                          \
+    if (!payload.continueResolving)                                                       \
+    {                                                                                     \
+      break;                                                                              \
+    }                                                                                     \
+                                                                                          \
+    /* Update current ray for next iteration */                                           \
+                                                                                          \
+    currentRay.Origin = payload.origin;                                                   \
+    currentRay.Direction = payload.direction;                                             \
+    currentRay.TMax = max(currentRay.TMax - segmentHitDistance, 0.0f);                    \
+  }                                                                                       \
+                                                                                          \
+  if ((cb.debugView == interactionsDebugView1 || cb.debugView == interactionsDebugView2)  \
+    && allowWriteToInteractionsDebugViews)                                                \
+  {                                                                                       \
+    accumulateInDebugViewAdd(payload.pixelCoordinate, interactionIteration);              \
+  }                                                                                       \
+}
+
 #ifdef RT_TRACE_RAY
 
 #define RESOLVE_RAY_TRACE(                                                                \

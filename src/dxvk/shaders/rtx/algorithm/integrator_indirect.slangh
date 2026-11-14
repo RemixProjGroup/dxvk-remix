@@ -357,7 +357,9 @@ void integratePathVertex(
     pathState.coneSpreadAngle,
     isStochasticAlphaBlend, firstRayPortal,
     pomOpaqueSurfaceEncountered,
-    isRaytracedRenderTarget);
+    isRaytracedRenderTarget,
+    false, false,
+    cb.secondaryRayFlags);
 
   // We can encounter a POM surface during resolving (as it's a shared function).  But if POM is disabled in indirect cases
   //  we must also handle that case and ensure nothing tries to use POM elsewhere.
@@ -579,6 +581,9 @@ void integratePathVertex(
   // Exit on a miss
   if (!rayInteractionHasHit(rayInteraction))
   {
+#if ENABLE_SHARC
+    sharcOnMiss(pathState);
+#endif
     // Reduce the bounce iteration on miss so that when integrator loop exits and increments the variable one more time,
     // the bounce iteration is + 1 since the last surface hit for both misses and hits
     --pathState.bounceIteration;
@@ -1545,7 +1550,9 @@ void integrateIndirectPath(
     secondaryRay.origin = pathState.origin;
     secondaryRay.coneRadius = pathState.coneRadius;
     secondaryRay.direction = pathState.direction;
-    secondaryRay.tMax = floatMax;
+    // The ray ends at cb.secondaryRayMaxDistance (rtx.ptPerformance.indirectRayMaxDistance),
+    // and a ray that reaches it is a sky miss.
+    secondaryRay.tMax = cb.secondaryRayMaxDistance;
 
     // Trace the secondary ray and integrate the secondary vertex
 

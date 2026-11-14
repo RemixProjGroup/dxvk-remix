@@ -81,7 +81,9 @@ namespace dxvk {
     Custom,
     // Note: Used to automatically have the graphics preset set on initialization, not used beyond this case
     // as it should be overridden by one of the other values by the time any other code uses it.
-    Auto
+    Auto,
+    // Low's values. It follows Auto, so the values the presets above store in config files stay the same.
+    VeryLow
   };
 
   enum class RaytraceModePreset {
@@ -360,7 +362,7 @@ namespace dxvk {
     RTX_OPTION_ARGS("rtx", TaauPreset, taauPreset, TaauPreset::Balanced,  "Adjusts TAA-U scaling factor, trades quality for performance.",
                     args.flags = RtxOptionFlags::UserSetting);
     static void graphicsPresetOnChange(DxvkDevice* device);
-    RTX_OPTION_ARGS("rtx", GraphicsPreset, graphicsPreset, GraphicsPreset::Auto, "Overall rendering preset, higher presets result in higher image quality, lower presets result in better performance.",
+    RTX_OPTION_ARGS("rtx", GraphicsPreset, graphicsPreset, GraphicsPreset::Auto, "Overall rendering preset, higher presets result in higher image quality, lower presets result in better performance. 0: Ultra, 1: High, 2: Medium, 3: Low, 4: Custom, 5: Auto (chosen from the GPU at startup: Low on NVIDIA GPUs older than Ampere, on other vendors' GPUs and on Ampere GPUs with 8 GB of video memory or less, Medium on the others), 6: Very Low (Low's values). Medium, Low and Very Low switch performance mode (rtx.ptPerformance.enable) on, and Ultra and High switch it off.",
                     args.environment = "DXVK_GRAPHICS_PRESET_TYPE",
                     args.onChangeCallback = &graphicsPresetOnChange,
                     args.flags = RtxOptionFlags::UserSetting);
@@ -2051,9 +2053,20 @@ namespace dxvk {
     }
 
     // The indirect integrator the runtime runs. It is rtx.integrateIndirectMode, except that rtx.sharc.indirectFromCache
-    // selects SHARC without writing that option. Code that writes presets for one mode reads the option itself instead.
-    // Defined in rtx_options.cpp.
+    // and performance mode select SHARC without writing that option. Code that writes presets for one mode reads the option
+    // itself instead. Defined in rtx_options.cpp.
     static IntegrateIndirectMode resolvedIntegrateIndirectMode();
+
+    // True when direct and indirect primary light are denoised by separate NRD instances. It is
+    // rtx.denoiseDirectAndIndirectLightingSeparately, except that rtx.ptPerformance.combinedDenoiser selects the
+    // combined instance without writing that option while NRD is the denoiser. Defined in rtx_options.cpp.
+    static bool resolvedDenoiseDirectAndIndirectLightingSeparately();
+
+    // The path bounce limits the integrators run with. They are rtx.pathMinBounces and rtx.pathMaxBounces, except that
+    // Performance mode uses 1 and rtx.ptPerformance.indirectBounces, plus one with rtx.ptPerformance.cacheMissExtraBounce, without writing
+    // those options. Defined in rtx_options.cpp.
+    static uint8_t resolvedPathMinBounces();
+    static uint8_t resolvedPathMaxBounces();
 
     static bool useReSTIRGI() {
       return resolvedIntegrateIndirectMode() == IntegrateIndirectMode::ReSTIRGI;

@@ -1,0 +1,63 @@
+/*
+* Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
+*
+* Permission is hereby granted, free of charge, to any person obtaining a
+* copy of this software and associated documentation files (the "Software"),
+* to deal in the Software without restriction, including without limitation
+* the rights to use, copy, modify, merge, publish, distribute, sublicense,
+* and/or sell copies of the Software, and to permit persons to whom the
+* Software is furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+* DEALINGS IN THE SOFTWARE.
+*/
+#pragma once
+
+#include "rtx/pass/raster_first_hit/raster_first_hit_binding_indices.h"
+
+layout(push_constant)
+ConstantBuffer<RasterFirstHitArgs> rasterArgs;
+
+layout(binding = RASTER_FIRST_HIT_BINDING_DRAW_RECORDS)
+StructuredBuffer<RasterFirstHitDrawRecord> RasterDrawRecords;
+
+#if defined(RASTER_FIRST_HIT_CULL_PASS) || defined(RASTER_FIRST_HIT_HISTORY_PASS)
+layout(binding = RASTER_FIRST_HIT_BINDING_VISIBILITY_HISTORY)
+RWStructuredBuffer<uint> RasterVisibilityHistory;
+
+layout(binding = RASTER_FIRST_HIT_BINDING_VISIBILITY_CURRENT)
+RWStructuredBuffer<uint> RasterVisibilityCurrent;
+#endif
+
+#ifdef RASTER_FIRST_HIT_CULL_PASS
+layout(binding = RASTER_FIRST_HIT_BINDING_DRAW_ARGS)
+RWStructuredBuffer<uint> RasterDrawArgs;
+
+layout(binding = RASTER_FIRST_HIT_BINDING_DRAW_COUNTS)
+RWStructuredBuffer<uint> RasterDrawCounts;
+
+layout(binding = RASTER_FIRST_HIT_BINDING_RECORD_STATE)
+RWStructuredBuffer<uint> RasterRecordState;
+
+layout(binding = RASTER_FIRST_HIT_BINDING_INSTANCE_BUFFER)
+ByteAddressBuffer RasterTlasInstances;
+
+layout(binding = RASTER_FIRST_HIT_BINDING_HIZ_INPUT)
+Texture2D<float> RasterHiz;
+#endif
+
+#ifdef RASTER_FIRST_HIT_HIZ_PASS
+layout(binding = RASTER_FIRST_HIT_BINDING_HIZ_SOURCE)
+Texture2D<float> RasterHizSource;
+
+layout(r32f, binding = RASTER_FIRST_HIT_BINDING_HIZ_OUTPUT)
+RWTexture2D<float> RasterHizOutput;
+#endif

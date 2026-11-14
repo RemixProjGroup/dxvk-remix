@@ -56,6 +56,8 @@
 #define INTEGRATE_INDIRECT_BINDING_SECONDARY_HIT_DISTANCE_INPUT             71
 #define INTEGRATE_INDIRECT_BINDING_LAST_COMPOSITE_INPUT                     72
 #define INTEGRATE_INDIRECT_BINDING_FIRST_SAMPLED_LOBE_DATA_INPUT            73
+// The SHARC update's choice of source pixel under sparse rendering.
+#define INTEGRATE_INDIRECT_BINDING_SPARSE_ACTIVE_PIXEL_MASK_INPUT           75
 
 #define INTEGRATE_INDIRECT_BINDING_NEE_CACHE                                80
 #define INTEGRATE_INDIRECT_BINDING_NEE_CACHE_SAMPLE                         81

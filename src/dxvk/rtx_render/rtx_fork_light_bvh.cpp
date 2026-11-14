@@ -28,8 +28,10 @@
 #include "rtx_fork_light_bvh_pass.h"
 #include "rtx_fork_shadow_rays.h"
 #include "rtx_sparse_rendering.h"
+#include "rtx_pt_performance.h"
 #include "rtx/pass/frame_features_validate.h"
 #include "rtx/pass/opacity_micromap/software_omm_shared.h"
+#include "rtx/pass/pt_performance_counters.h"
 
 #include <string>
 
@@ -59,6 +61,20 @@ namespace dxvk {
   bool LightBvh::dedicatedSunActive() {
     const bool wanted = bvhDedicatedSunSample() || (bvhDedicatedSunSampleWithSkyProvider() && s_skyProviderLatched);
     return wanted && active() && dedicatedSunPossible();
+  }
+
+  uint32_t LightBvh::resolvedPrimaryCandidates() {
+    if (PtPerformance::active()) {
+      return PtPerformance::resolvedLightCandidates();
+    }
+    return std::clamp(bvhPrimaryCandidates(), 1u, 32u);
+  }
+
+  float LightBvh::resolvedLocalShadowCullRatio() {
+    if (PtPerformance::active()) {
+      return PtPerformance::resolvedLocalShadowCullRatio();
+    }
+    return std::clamp(bvhLocalShadowCullRatio(), 0.0f, 1.0f);
   }
 
   // Auto counts as LightBVH here: it switches to it when the scene has enough lights.
@@ -202,9 +218,14 @@ namespace dxvk {
       // (rtx/pass/opacity_micromap/software_omm_shared.h), cleared and copied by the opacity micromap manager.
       static_assert(SOFT_OMM_COUNTER_BASE * sizeof(uint32_t) == kLightSamplingStatsBytes + FRAME_FEATURES_SEEN_SLOTS * sizeof(uint32_t),
                     "software micromap counters follow the seen bits");
+      // Then PT_PERFORMANCE_COUNTER_SLOTS words for performance mode's counters (rtx/pass/pt_performance_counters.h), cleared and copied by
+      // the indirect integrator.
+      static_assert(PT_PERFORMANCE_COUNTER_BASE == SOFT_OMM_TRAVERSAL_COUNTER_BASE + SOFT_OMM_TRAVERSAL_COUNTER_SLOTS,
+                    "performance mode counters follow the software micromap counters");
       info.size = kLightSamplingStatsBytes + FRAME_FEATURES_SEEN_SLOTS * sizeof(uint32_t) +
                   (SOFT_OMM_COUNTER_SLOTS + SOFT_OMM_RESOLVE_COUNTER_SLOTS + // + resolve counters
-                   SOFT_OMM_TRAVERSAL_COUNTER_SLOTS) * sizeof(uint32_t);     // + traversal counters
+                   SOFT_OMM_TRAVERSAL_COUNTER_SLOTS +                        // + traversal counters
+                   PT_PERFORMANCE_COUNTER_SLOTS) * sizeof(uint32_t);                // + performance mode counters
       info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
       info.stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_TRANSFER_BIT;
       info.access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -924,7 +945,7 @@ namespace dxvk {
     const bool on = active();
     args.lightSamplingMode = static_cast<uint32_t>(effectiveMode());
     args.lightBvhNodeCount = bvhNeeded() ? static_cast<uint32_t>(m_nodes.size()) : 0u;
-    args.lightBvhPrimaryCandidateCount = std::clamp(bvhPrimaryCandidates(), 1u, 32u);
+    args.lightBvhPrimaryCandidateCount = resolvedPrimaryCandidates();
     args.lightBvhIndirectCandidateCount = std::clamp(bvhIndirectCandidates(), 1u, 32u);
     args.lightBvhOverrideNeeCacheAnalytic = (on && bvhOverrideNeeCacheAnalyticLights()) ? 1u : 0u;
     args.lightSamplingStatsEnabled = logDirectStats() ? 1u : 0u;
@@ -934,6 +955,7 @@ namespace dxvk {
     args.lightBvhSunOcclusionHint = (on && bvhSeparateSelectPass() && bvhSunOcclusionHint() &&
                                      !modeSwitchedThisFrame() && !dedicatedSun) ? 1u : 0u;
     args.lightBvhDedicatedSun = dedicatedSun ? 1u : 0u;
+    args.lightBvhLocalShadowCullRatio = dedicatedSun ? resolvedLocalShadowCullRatio() : 0.0f;
     if (dedicatedSun) {
       // The reservoirs now hold local lights only; an indirect vertex stealing one would lose the sun.
       args.enableRtxdiSampleStealing = 0u;
@@ -988,6 +1010,11 @@ namespace dxvk {
       ImGui::TextDisabled("  dedicated sun sample %s", dedicatedSunActive() ? "in use" : "not in use");
       if ((bvhDedicatedSunSample() || (bvhDedicatedSunSampleWithSkyProvider() && s_skyProviderLatched)) && active() && !dedicatedSunActive()) {
         ImGui::TextDisabled("  inactive: needs the separate select pass and ray-query direct integration (no NRC deferred setup)");
+      }
+      RemixGui::SliderFloat("Local Shadow Cull Ratio (share of visible sun)", &bvhLocalShadowCullRatioObject(), 0.f, 0.2f, "%.3f");
+      if (PtPerformance::active()) {
+        ImGui::TextDisabled("  Path Tracing: Performance uses %u candidates and cull ratio %.3f (its own settings)",
+                            resolvedPrimaryCandidates(), resolvedLocalShadowCullRatio());
       }
       RemixGui::Checkbox("Replace NEE Cache Analytic Light Sampling", &bvhOverrideNeeCacheAnalyticLightsObject());
       RemixGui::Checkbox("Use Surface Normal in Importance", &bvhUseSurfaceNormalObject());

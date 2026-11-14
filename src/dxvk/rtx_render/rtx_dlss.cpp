@@ -119,8 +119,8 @@ namespace dxvk {
     if (RtxOptions::graphicsPreset() == GraphicsPreset::Medium) {
       // When using medium preset, bias DLSS more towards performance
       desiredProfile = (DLSSProfile)std::max(0, (int) desiredProfile - 1);
-    } else if (RtxOptions::graphicsPreset() == GraphicsPreset::Low) {
-      // When using low preset, give me all the perf I can get!!!
+    } else if (RtxOptions::graphicsPreset() == GraphicsPreset::Low || RtxOptions::graphicsPreset() == GraphicsPreset::VeryLow) {
+      // The Low and Very Low presets bias DLSS two steps toward performance.
       desiredProfile = (DLSSProfile) std::max(0, (int) desiredProfile - 2);
     }
 
@@ -144,7 +144,7 @@ namespace dxvk {
       outRenderSize[1] = mInputSize[1];
       return;
     }
-    
+
     mActualProfile = actualProfile;
 
     // We need to force a recreation of resources before running DLSS.

@@ -167,14 +167,19 @@ The preset is in the Alt+X menu. **Auto** (the default) picks one for your GPU:
 
 | GPU | Auto picks |
 | :-- | :-- |
-| NVIDIA RTX 40 and 50 series | High |
-| NVIDIA RTX 30 series | Medium |
+| NVIDIA RTX 30, 40 and 50 series | Medium |
 | NVIDIA RTX 20 series, other GPUs | Low |
 
-GPUs with 8 GB of video memory or less get one step lower (Low at the bottom).
+RTX 30 series GPUs with 8 GB of video memory or less get Low.
+
+Medium, Low and Very Low run Path Tracing: Performance ([PtPerformance.md](documentation/PtPerformance.md)): path tracing
+with one cached indirect bounce, sparse shading with Ray Reconstruction, and a first hit that is rasterized or traced,
+whichever is cheaper. Ultra and High path-trace every
+pixel. Very Low runs Low's settings.
 
 | | Ultra | High | Medium | Low |
 | :-- | :-- | :-- | :-- | :-- |
+| **performance mode** | Off | Off | On | On |
 | **Light bounces** | 1 to 4 | 1 to 4 | 0 to 2 | 0 to 2 |
 | **Indirect lighting** (SHaRC; ReSTIR GI on GPUs without 64-bit buffer atomics) | Ultra cache update | High cache update, about half the cost of Ultra | Medium | Medium |
 | **Separate direct and indirect denoising** | On | On | Off | Off |

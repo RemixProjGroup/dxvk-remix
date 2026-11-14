@@ -38,6 +38,7 @@
 #include "rtx_imgui.h"
 #include "rtx_neural_radiance_cache.h"
 #include "rtx_ray_reconstruction.h"
+#include "rtx_pt_performance.h"
 
 #include <rtx_shaders/rtxdi_initial_sampling.h>
 #include <rtx_shaders/rtxdi_initial_sampling_no_portals.h>
@@ -338,13 +339,47 @@ namespace dxvk {
     }
   }
 
+  namespace {
+    // Performance mode's reduced direct light. Each count bounds the option it applies to,
+    // so the reduction never costs more than the preset's settings.
+    constexpr uint32_t kReducedMaxInitialSampleCount = 2;
+    constexpr uint32_t kReducedMaxSpatialSamples = 1;
+    constexpr uint32_t kReducedMaxDisocclusionSamples = 2;
+
+    bool reducesDirectLight() {
+      return PtPerformance::active() && PtPerformance::reducedDirectLight();
+    }
+  }
+
+  uint32_t DxvkRtxdiRayQuery::effectiveInitialSampleCount() {
+    return reducesDirectLight() ? std::min(initialSampleCount(), kReducedMaxInitialSampleCount) : initialSampleCount();
+  }
+
+  // Without the initial visibility ray, the direct integration's shadow ray still clears occluded samples
+  // from the reservoir, so the next frame's temporal reuse does not keep them (rtx.di.enableDiscardInvisibleSamples).
+  bool DxvkRtxdiRayQuery::effectiveInitialVisibility() {
+    return enableInitialVisibility() && !reducesDirectLight();
+  }
+
+  bool DxvkRtxdiRayQuery::effectiveRayTracedBiasCorrection() {
+    return enableRayTracedBiasCorrection() && !reducesDirectLight();
+  }
+
+  uint32_t DxvkRtxdiRayQuery::effectiveSpatialSamples() {
+    return reducesDirectLight() ? std::min(spatialSamples(), kReducedMaxSpatialSamples) : spatialSamples();
+  }
+
+  uint32_t DxvkRtxdiRayQuery::effectiveDisocclusionSamples() {
+    return reducesDirectLight() ? std::min(disocclusionSamples(), kReducedMaxDisocclusionSamples) : disocclusionSamples();
+  }
+
   void DxvkRtxdiRayQuery::setRaytraceArgs(Resources::RaytracingOutput& rtOutput) const {
     // ToDo should pass the rayTrace args directly like in the other cases...
     // ToDo add a struct for RTXDI within raytraceArgs and retain same names for options & refs in code. These diffs make it much more hard to look for ref in code...
     rtOutput.m_raytraceArgs.enableRtxdiCrossPortalLight = enableCrossPortalLight() && useRtxdiPortalShaderVariants();
-    rtOutput.m_raytraceArgs.enableRtxdiInitialVisibility = enableInitialVisibility();
+    rtOutput.m_raytraceArgs.enableRtxdiInitialVisibility = effectiveInitialVisibility();
     rtOutput.m_raytraceArgs.enableRtxdiPermutationSampling = permutationSamplingNthFrame() > 0 && (rtOutput.m_raytraceArgs.frameIdx % permutationSamplingNthFrame()) == 0;
-    rtOutput.m_raytraceArgs.enableRtxdiRayTracedBiasCorrection = enableRayTracedBiasCorrection();
+    rtOutput.m_raytraceArgs.enableRtxdiRayTracedBiasCorrection = effectiveRayTracedBiasCorrection();
     rtOutput.m_raytraceArgs.enableRtxdiSampleStealing = enableSampleStealing();
     rtOutput.m_raytraceArgs.enableRtxdiStealBoundaryPixelSamplesWhenOutsideOfScreen = stealBoundaryPixelSamplesWhenOutsideOfScreen();
     rtOutput.m_raytraceArgs.enableRtxdiSpatialReuse = enableSpatialReuse();
@@ -355,9 +390,9 @@ namespace dxvk {
     rtOutput.m_raytraceArgs.enableRtxdiTemporalReuse = enableTemporalReuse() && !LightBvh::modeSwitchedThisFrame();
     rtOutput.m_raytraceArgs.enableRtxdiDiscardInvisibleSamples = enableDiscardInvisibleSamples();
     rtOutput.m_raytraceArgs.enableRtxdiDiscardEnlargedPixels= enableDiscardEnlargedPixels();
-    rtOutput.m_raytraceArgs.rtxdiDisocclusionSamples = disocclusionSamples();
+    rtOutput.m_raytraceArgs.rtxdiDisocclusionSamples = effectiveDisocclusionSamples();
     rtOutput.m_raytraceArgs.rtxdiDisocclusionFrames = float(disocclusionFrames());
-    rtOutput.m_raytraceArgs.rtxdiSpatialSamples = spatialSamples();
+    rtOutput.m_raytraceArgs.rtxdiSpatialSamples = effectiveSpatialSamples();
     rtOutput.m_raytraceArgs.rtxdiMaxHistoryLength = maxHistoryLength();
 
     // Note: best light sampling uses data written into the RtxdiBestLights texture by the confidence pass on the previous frame.

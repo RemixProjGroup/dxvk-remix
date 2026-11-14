@@ -25,6 +25,7 @@
 #include "rtx.h"
 #include "rtx_options.h"
 #include "rtx_pre_exposure.h"
+#include "rtx_pt_performance.h"
 #include "rtx/pass/nrd_args.h"
 #include "../../util/util_string.h"
 #include "../../util/util_global_time.h"
@@ -1023,12 +1024,25 @@ namespace dxvk {
     {
       const void* denoiserSettings = nullptr;
 
+      // Performance mode's reduced denoiser changes copies, so the settings the menu edits stay as they are.
+      nrd::ReblurSettings reblurSettings = m_settings.m_reblurSettings;
+      nrd::RelaxSettings relaxSettings = m_settings.m_relaxSettings;
+      if (PtPerformance::reducesDenoiser()) {
+        reblurSettings.diffusePrepassBlurRadius = 0.0f;
+        reblurSettings.specularPrepassBlurRadius = 0.0f;
+        reblurSettings.maxStabilizedFrameNum = 0;
+
+        relaxSettings.diffusePrepassBlurRadius = 0.0f;
+        relaxSettings.specularPrepassBlurRadius = 0.0f;
+        relaxSettings.atrousIterationNum = std::min(relaxSettings.atrousIterationNum, 3u);
+      }
+
       switch (m_settings.m_denoiserDesc.denoiser) {
       case nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR:
-        denoiserSettings = static_cast<void*>(&m_settings.m_reblurSettings);
+        denoiserSettings = static_cast<const void*>(&reblurSettings);
         break;
       case nrd::Denoiser::RELAX_DIFFUSE_SPECULAR:
-        denoiserSettings = static_cast<void*>(&m_settings.m_relaxSettings);
+        denoiserSettings = static_cast<const void*>(&relaxSettings);
         break;
       case nrd::Denoiser::REFERENCE:
         denoiserSettings = static_cast<void*>(&m_settings.m_referenceSettings);

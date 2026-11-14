@@ -30,6 +30,7 @@
 #include "dxvk_context.h"
 #include "rtx_context.h"
 #include "rtx_imgui.h"
+#include "rtx_pt_performance.h"
 #include "rtx/pass/raytrace_args.h"
 
 #include <rtx_shaders/demodulate.h>
@@ -104,8 +105,12 @@ namespace dxvk {
     RemixGui::DragInt("Reshuffle Max Age", &reshuffleMaxAgeObject(), 0.1f, 0, 15, "%d", ImGuiSliderFlags_AlwaysClamp);
   }
 
+  bool NeeCachePass::resolvedEnable() {
+    return enable() && !PtPerformance::active();
+  }
+
   bool NeeCachePass::isEnabled() const {
-    return enable();
+    return resolvedEnable();
   }
 
   bool NeeCachePass::onActivation(Rc<DxvkContext>&) {

@@ -68,6 +68,10 @@ layout(r32ui, binding = INTEGRATE_INDIRECT_BINDING_SHARED_MATERIAL_DATA1_INPUT)
 Texture2D<uint> SharedMaterialData1;
 #endif
 
+// Sparse rendering's active pixels. The SHARC update of performance mode picks its source pixels with it.
+layout(binding = INTEGRATE_INDIRECT_BINDING_SPARSE_ACTIVE_PIXEL_MASK_INPUT)
+Texture2D<uint> SparseRenderingActivePixelMask;
+
 // Inputs
 
 layout(r16f, binding = INTEGRATE_INDIRECT_BINDING_PRIMARY_CONE_RADIUS_INPUT)

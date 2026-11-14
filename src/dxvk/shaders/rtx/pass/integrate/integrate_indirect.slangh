@@ -96,6 +96,78 @@ bool nrcCombinedToGbufferPixelCoordinate(
   return true;
 }
 
+#if SHARC_UPDATE
+// Returns the bits of an active-pixel mask block that lie inside the pixel rectangle [rectMin, rectEnd).
+uint sharcTileMaskBits(uvec2 block, uvec2 rectMin, uvec2 rectEnd)
+{
+  const uvec2 blockSize = uvec2(ACTIVE_PIXEL_MASK_BLOCK_WIDTH, ACTIVE_PIXEL_MASK_BLOCK_HEIGHT);
+  const uvec2 blockMin = block * blockSize;
+  const uvec2 localMin = max(rectMin, blockMin) - blockMin;
+  const uvec2 localEnd = min(rectEnd, blockMin + blockSize) - blockMin;
+  const uint rowBits = ((1u << localEnd.x) - 1u) & ~((1u << localMin.x) - 1u);
+
+  uint insideBits = 0u;
+  for (uint y = localMin.y; y < localEnd.y; ++y)
+  {
+    insideBits |= rowBits << (y * ACTIVE_PIXEL_MASK_BLOCK_WIDTH);
+  }
+
+  return SparseRenderingActivePixelMask[block] & insideBits;
+}
+
+// Picks the update's source pixel among the pixels of the rectangle [rectMin, rectEnd) that sparse rendering
+// shaded this frame. The pick selects the active pixel, counted in mask order, modulo their count.
+// Returns false when the rectangle holds no active pixel.
+bool sharcTileActivePixel(uvec2 rectMin, uvec2 rectEnd, uint pick, out uvec2 pixel)
+{
+  pixel = rectMin;
+
+  const uvec2 blockSize = uvec2(ACTIVE_PIXEL_MASK_BLOCK_WIDTH, ACTIVE_PIXEL_MASK_BLOCK_HEIGHT);
+  const uvec2 blockMin = rectMin / blockSize;
+  const uvec2 blockEnd = (rectEnd + blockSize - 1u) / blockSize;
+
+  uint activeCount = 0u;
+  for (uint by = blockMin.y; by < blockEnd.y; ++by)
+  {
+    for (uint bx = blockMin.x; bx < blockEnd.x; ++bx)
+    {
+      activeCount += countbits(sharcTileMaskBits(uvec2(bx, by), rectMin, rectEnd));
+    }
+  }
+
+  if (activeCount == 0u)
+  {
+    return false;
+  }
+
+  uint remaining = pick % activeCount;
+  for (uint by = blockMin.y; by < blockEnd.y; ++by)
+  {
+    for (uint bx = blockMin.x; bx < blockEnd.x; ++bx)
+    {
+      uint bits = sharcTileMaskBits(uvec2(bx, by), rectMin, rectEnd);
+      const uint bitCount = countbits(bits);
+      if (remaining >= bitCount)
+      {
+        remaining -= bitCount;
+        continue;
+      }
+
+      for (uint i = 0u; i < remaining; ++i)
+      {
+        bits &= bits - 1u;
+      }
+
+      const uint bitIndex = firstbitlow(bits);
+      pixel = uvec2(bx, by) * blockSize + uvec2(bitIndex % ACTIVE_PIXEL_MASK_BLOCK_WIDTH, bitIndex / ACTIVE_PIXEL_MASK_BLOCK_WIDTH);
+      return true;
+    }
+  }
+
+  return false;
+}
+#endif
+
 // Returns true if this is an active pixel
 // Returns false if the thread should terminate
 bool initPixelCoordinateOnLaunch(inout uvec2 gbufferPixelCoordinate, out bool isNrcUpdate)
@@ -111,9 +183,31 @@ bool initPixelCoordinateOnLaunch(inout uvec2 gbufferPixelCoordinate, out bool is
     return false;
   }
 
-  const uvec2 tileOffset = sharcTileOffset(gbufferPixelCoordinate, tileSize);
-  gbufferPixelCoordinate = min(gbufferPixelCoordinate * tileSize + tileOffset,
+  const uvec2 tile = gbufferPixelCoordinate;
+  const uvec2 tileOffset = sharcTileOffset(tile, tileSize);
+  gbufferPixelCoordinate = min(tile * tileSize + tileOffset,
                                cb.camera.resolution - 1u);
+
+  // A pixel sparse rendering did not shade this frame holds an older frame's continuation, so the update takes one
+  // of the tile's shaded pixels where it has any, and keeps its own choice otherwise.
+  // The rotating slot also picks among the shaded pixels, so the tile still varies its source pixel every frame.
+  if (cb.sharcArgs.updatePicksActivePixel && cb.sparseRenderingArgs.mode != SparseRenderingMode::Off &&
+      !isActivePixelFromMask(SparseRenderingActivePixelMask, gbufferPixelCoordinate))
+  {
+    const uvec2 tileMin = tile * tileSize;
+    const uvec2 tileEnd = min(tileMin + tileSize, cb.camera.resolution);
+    uvec2 activePixel;
+    if (sharcTileActivePixel(tileMin, tileEnd, tileOffset.y * tileSize + tileOffset.x, activePixel))
+    {
+      gbufferPixelCoordinate = activePixel;
+    }
+  }
+
+  // Performance mode's update schedule skips the tiles of unscheduled blocks, except where the source pixel shows a moving surface.
+  if (!sharcUpdateTileScheduled(tile) && !sharcUpdateSurfaceMoves(SharedSurfaceIndex[gbufferPixelCoordinate]))
+  {
+    return false;
+  }
   return true;
 #else
   if (!nrcCombinedToGbufferPixelCoordinate(

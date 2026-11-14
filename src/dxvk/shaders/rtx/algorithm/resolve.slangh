@@ -328,6 +328,23 @@ void resolveVertexFinalMiss<let overrideRayInteraction : bool, T : IBasePayloadS
 #endif
 }
 
+#ifndef RAY_TRACING_PRIMARY_RAY
+// Simple secondary hits (SECONDARY_RAY_FLAG_SIMPLE_SHADING) read only the albedo, opacity and emission textures, at the
+// mip that cb.secondaryGradientScale selects, and skip parallax. Shading uses the geometry normal and the
+// material's roughness and metallic constants.
+void resolveSimplifySecondaryHit(inout OpaqueSurfaceMaterial opaqueSurfaceMaterial, inout SurfaceInteraction surfaceInteraction)
+{
+  opaqueSurfaceMaterial.normalTextureIndex = BINDING_INDEX_INVALID;
+  opaqueSurfaceMaterial.tangentTextureIndex = BINDING_INDEX_INVALID;
+  opaqueSurfaceMaterial.roughnessTextureIndex = BINDING_INDEX_INVALID;
+  opaqueSurfaceMaterial.metallicTextureIndex = BINDING_INDEX_INVALID;
+  opaqueSurfaceMaterial.flags &= ~uint16_t(OPAQUE_SURFACE_MATERIAL_FLAG_HAS_DISPLACEMENT);
+
+  surfaceInteraction.textureGradientX *= cb.secondaryGradientScale;
+  surfaceInteraction.textureGradientY *= cb.secondaryGradientScale;
+}
+#endif
+
 // Resolves a single vertex of the resolve loop. Note this should be called first thing from the function handling the hit logic.
 // Emissive radiance and attenuation may be accumulated immediately but the continueResolving flag must be checked to see if the
 // function should return and continue attempting to resolve an interaction. If false, the Ray Interaction can then be checked
@@ -350,7 +367,9 @@ void resolveVertex<T: IBasePayloadState>(
   // Needed for RayQuery paths for visibility rays from CHS as they don't run material specific hit groups
   // Visibility rays are expected not to start from RayPortal surfaces, and thus only RayPortal path is force enabled
   const bool forceEnableResolveRayPortal = false,
-  const bool useStochasticAlphaBlend = false)
+  const bool useStochasticAlphaBlend = false,
+  // SECONDARY_RAY_FLAG_* for the indirect and cache update hits (cb.secondaryRayFlags), 0 elsewhere.
+  const uint secondaryRayFlags = 0)
 {
   const Camera camera = cb.camera;
   bool teleport = false;
@@ -429,7 +448,14 @@ void resolveVertex<T: IBasePayloadState>(
   if (SURFACE_MATERIAL_RESOLVE_TYPE_ACTIVE_MASK & SURFACE_MATERIAL_RESOLVE_TYPE_OPAQUE &&
       polymorphicType == surfaceMaterialTypeOpaque)
   {
-    const OpaqueSurfaceMaterial opaqueSurfaceMaterial = opaqueSurfaceMaterialCreate(memoryPolymorphicSurfaceMaterial);
+    OpaqueSurfaceMaterial opaqueSurfaceMaterial = opaqueSurfaceMaterialCreate(memoryPolymorphicSurfaceMaterial);
+
+#ifndef RAY_TRACING_PRIMARY_RAY
+    if ((secondaryRayFlags & SECONDARY_RAY_FLAG_SIMPLE_SHADING) != 0)
+    {
+      resolveSimplifySecondaryHit(opaqueSurfaceMaterial, surfaceInteraction);
+    }
+#endif
 
 #if defined(RAY_TRACING_PRIMARY_RAY) && defined(OPAQUE_MATERIAL_USE_POM)
     // The SCCR shell march of displaced primary and PSR hits (sccr_shell_march.slangh). It re-frames the surface
@@ -444,6 +470,17 @@ void resolveVertex<T: IBasePayloadState>(
     OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteraction =
       opaqueSurfaceMaterialInteractionCreate(opaqueSurfaceMaterial, surface, surfaceInteraction, rayInteraction);
 
+#ifndef RAY_TRACING_PRIMARY_RAY
+    // Alpha-tested surfaces are solid with SECONDARY_RAY_FLAG_ALPHA_AS_OPAQUE where the leg that reaches them is at
+    // least cb.secondaryAlphaOpaqueDistance long. The resolve then stops at that cutout, and the path samples no
+    // opacity transmission lobe there. A leg starts at the previous interaction, so it is never longer than the ray.
+    if ((secondaryRayFlags & SECONDARY_RAY_FLAG_ALPHA_AS_OPAQUE) != 0 && surface.isBlendingDisabled &&
+        rayInteraction.hitDistance >= cb.secondaryAlphaOpaqueDistance)
+    {
+      opaqueSurfaceMaterialInteraction.opacity = 1.0f;
+    }
+#endif
+
     // Blend any decal(s) that happened before this interaction
     if (decalMaterialBlending && resolveVertexState.decalEncountered)
     {
@@ -453,7 +490,7 @@ void resolveVertex<T: IBasePayloadState>(
       DecalMaterialInteraction decalMaterialInteraction = decalMaterialInteractionUnpack(memory);
 
       decalMaterialInteractionBlend(decalMaterialInteraction, opaqueSurfaceMaterialInteraction);
-      
+
       resolveVertexState.decalEncountered = false;
     }
 

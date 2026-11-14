@@ -298,7 +298,7 @@
 #define DEBUG_VIEW_SPARSE_RENDERING_ACTIVE_PIXELS_OUTPUT_SCALE 905
 #define DEBUG_VIEW_SPARSE_RENDERING_ACTIVE_THREADS 910
 
-// 870-884 and 912 stay unused, so saved configs that select them fall through to the default view.
+// 586-588, 870-884 and 912 stay unused, so saved configs that select them fall through to the default view.
 
 // Primary surface cutout diagnosis (geometry_resolver.slangh).
 // R = texel alpha < 0.5, G = surface fully opaque, B = alpha test set.
@@ -307,6 +307,15 @@
 // Sky provider cloud motion vectors (composite.comp.slang applyCloudMotionVectors).
 // R = the cloud's weight in the motion vector, G = cloud opacity, B = the depth is the cloud's.
 #define DEBUG_VIEW_CLOUD_MOTION_VECTOR_MASK 914
+
+// Performance mode's raster first hit (geometryResolverRasterFirstHit in geometry_resolver.slangh).
+// Coverage: green = the first hit came from the visibility buffer, red = the pixel had a raster surface the camera ray
+// missed or saw from behind (it traced), blue = no raster surface (it traced), black = not using the visibility buffer.
+#define DEBUG_VIEW_RASTER_FIRST_HIT_COVERAGE 915
+// Validation against one traced camera ray: gray = the same triangle (brighter is nearer), yellow = another triangle no
+// nearer than the raster one (coplanar or decal geometry), red = the ray found a nearer surface (a raster miss, or a
+// transparent texel the raster alpha test skipped), blue = only the raster found a surface, black = both missed.
+#define DEBUG_VIEW_RASTER_FIRST_HIT_VALIDATION 916
 
 enum class CompositeDebugView : uint32_t {
   Disabled = 0,

@@ -133,6 +133,13 @@ struct ShadowTerminatorArgs
 
 #define OBJECT_PICKING_INVALID (cb.clearColorPicking)
 
+// RaytraceArgs::secondaryRayFlags.
+// Alpha-tested surfaces are solid to indirect, cache update and secondary shadow rays.
+#define SECONDARY_RAY_FLAG_ALPHA_AS_OPAQUE (1u << 0)
+// Opaque surfaces at indirect and cache update hits are shaded from the albedo, opacity and emission textures only
+// (resolveSimplifySecondaryHit).
+#define SECONDARY_RAY_FLAG_SIMPLE_SHADING (1u << 1)
+
 // Constant buffer
 struct RaytraceArgs {
   // NOTE: this class should be kept as all structs, then all non-structs.  This is because the padding rules are different between C++ and shaders.
@@ -560,6 +567,24 @@ struct RaytraceArgs {
   // softOmmFlags: SOFT_OMM_FLAG_* (software_omm_shared.h).
   uint surfaceSoftOmmTable;
   uint softOmmFlags;
+
+  // The cheaper rays after the primary hit (rtx.ptPerformance.indirect*), see resolveVertex and
+  // evalNEESecondary. secondaryRayFlags holds SECONDARY_RAY_FLAG_*. secondaryRayMaxDistance is floatMax while no
+  // length limit applies, and secondaryGradientScale is 1 without SECONDARY_RAY_FLAG_SIMPLE_SHADING.
+  // With SECONDARY_RAY_FLAG_ALPHA_AS_OPAQUE, an alpha-tested hit is solid when the ray leg that reaches it is at least
+  // secondaryAlphaOpaqueDistance long (world units, 0 makes every alpha-tested hit solid).
+  uint secondaryRayFlags;
+  float secondaryRayMaxDistance;
+  float secondaryGradientScale;
+  float secondaryAlphaOpaqueDistance;
+
+  // 1 while performance mode's cache counters count (rtx/pass/pt_performance_counters.h).
+  uint ptPerformanceCounters;
+
+  // LightBvh::resolvedLocalShadowCullRatio() while the dedicated sun sample is used, 0 otherwise. A primary local light
+  // sample whose unshadowed luminance is below this share of the visible sun luminance skips its shadow ray and adds no
+  // light (integrator_direct.slangh).
+  float lightBvhLocalShadowCullRatio;
 
   // NOTE: Add structs to the top section of RaytraceArgs, not the bottom.
   // NOTE: bool does not work in debug builds, use uint instead.

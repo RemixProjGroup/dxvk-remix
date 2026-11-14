@@ -15,6 +15,10 @@
 #include "rtx_light_manager.h"
 #include "rtx_rtxdi_rayquery.h"
 #include "rtx_sharc.h"
+#include "rtx_pt_performance.h"
+#include "rtx_raster_first_hit.h"
+#include "rtx_sparse_rendering.h"
+#include "rtx_pathtracer_integrate_indirect.h"
 #include "rtx_options.h"
 #include "../dxvk_device.h"
 #include "../dxvk_cs.h"
@@ -51,6 +55,12 @@ namespace dxvk {
     std::string f2(double v) {
       char buf[32];
       std::snprintf(buf, sizeof(buf), "%.2f", v);
+      return buf;
+    }
+
+    std::string f3(double v) {
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%.3f", v);
       return buf;
     }
 
@@ -604,6 +614,27 @@ namespace dxvk {
     // Render/output resolution from the most recent frame in the ring.
     const FrameRec& last = m_ring[(ctx.getDevice()->getCurrentFrameId()) % kRing];
 
+    // Performance mode's cache counters since the last line, in percent, or "-" where nothing was counted.
+    const DxvkPathtracerIntegrateIndirect::PtPerformanceCounters ptPerformanceCounters =
+      ctx.getCommonObjects()->metaPathtracerIntegrateIndirect().takePtPerformanceCounters();
+    const auto& rc = ptPerformanceCounters.counts;
+
+    // The sampling rate sparse rendering applies this frame, 0 while it does not run.
+    const SparseRendering& sparseRendering = ctx.getCommonObjects()->metaSparseRendering();
+    const float sparseRate = sparseRendering.isActive() ? sparseRendering.getSamplingRate() : 0.0f;
+
+    // The distance in meters from which indirect rays treat alpha-tested surfaces as solid, negative while none do.
+    const bool nvidiaGpu = ctx.getDevice()->adapter()->deviceProperties().vendorID == static_cast<uint32_t>(DxvkGpuVendor::Nvidia);
+    const float alphaOpaqueDistance = PtPerformance::active() ? PtPerformance::resolvedIndirectAlphaOpaqueDistance(nvidiaGpu) : -1.0f;
+
+    const auto pctOrDash = [](uint64_t a, uint64_t b) { return b ? f2(100.0 * double(a) / double(b)) : std::string("-"); };
+    // The first queries the adaptive cache update interval counts (RtxSharc::onPtPerformanceCounters).
+    const uint64_t unresolvableQueries = rc[PT_PERFORMANCE_COUNTER_MISS_REJECTED] + rc[PT_PERFORMANCE_COUNTER_MISS_TOO_CLOSE] +
+                                         rc[PT_PERFORMANCE_COUNTER_MISS_FOOTPRINT];
+    const uint64_t resolvableQueries = rc[PT_PERFORMANCE_COUNTER_CACHE_QUERIES] > unresolvableQueries
+      ? rc[PT_PERFORMANCE_COUNTER_CACHE_QUERIES] - unresolvableQueries
+      : 0;
+
     Logger::info(str::format("[SceneStats] tlasInstances=", accel.getTlasInstanceCount(),
       " piSlots=", accel.getPointInstancerSlotCount(), " piBatches=", accel.getPointInstancerBatchCount(),
       " surfaces=", instances, " hidden=", hidden,
@@ -621,12 +652,32 @@ namespace dxvk {
       " sphere=", lightsByType[uint32_t(RtLightType::Sphere)], " rect=", lightsByType[uint32_t(RtLightType::Rect)],
       " disk=", lightsByType[uint32_t(RtLightType::Disk)], " cylinder=", lightsByType[uint32_t(RtLightType::Cylinder)],
       " distant=", lightsByType[uint32_t(RtLightType::Distant)],
-      " rtxdiInitialSamples=", DxvkRtxdiRayQuery::initialSampleCount(), " risLightSamples=", RtxOptions::risLightSampleCount(),
+      " rtxdiInitialSamples=", DxvkRtxdiRayQuery::effectiveInitialSampleCount(), " risLightSamples=", RtxOptions::risLightSampleCount(),
       " | portals=", scene.getRayPortalManager().getRayPortalInfoSceneData().numActiveRayPortals,
       " portalDuplicatesHidden=", scene.getRayPortalManager().getDuplicatesHidden(),
-      " | bounces=", uint32_t(RtxOptions::pathMinBounces()), "-", uint32_t(RtxOptions::pathMaxBounces()),
+      " | bounces=", uint32_t(RtxOptions::resolvedPathMinBounces()), "-", uint32_t(RtxOptions::resolvedPathMaxBounces()),
       " indirectMode=", int(RtxOptions::resolvedIntegrateIndirectMode()), " (0 IS,1 ReSTIR-GI,2 NRC,3 SHaRC)",
       " indirectFromCache=", RtxSharc::indirectFromCache() ? 1 : 0,
+      " ptPerformance=", PtPerformance::active() ? 1 : 0, " neeCache=", ctx.getCommonObjects()->metaNeeCache().isActive() ? 1 : 0,
+      " firstHit=", ctx.getCommonObjects()->metaRasterFirstHit().isActive() ? 1 : 0,
+      " firstHitAuto=", !PtPerformance::active() || PtPerformance::firstHit() != PtPerformanceFirstHit::Auto ? "-" : PtPerformance::firstHitRaster() ? "raster" : "trace",
+      " sparseRate=", f3(sparseRate),
+      " separateDenoisers=", RtxOptions::resolvedDenoiseDirectAndIndirectLightingSeparately() ? 1 : 0,
+      " reducedDenoiser=", PtPerformance::reducesDenoiser() ? 1 : 0,
+      " indirectAlphaOpaqueFrom=", alphaOpaqueDistance < 0.0f ? std::string("-") : f2(alphaOpaqueDistance),
+      " cacheHit=", pctOrDash(rc[PT_PERFORMANCE_COUNTER_CACHE_HITS], rc[PT_PERFORMANCE_COUNTER_CACHE_QUERIES]),
+      " cacheHitResolvable=", pctOrDash(rc[PT_PERFORMANCE_COUNTER_CACHE_HITS], resolvableQueries),
+      " extraBounce=", pctOrDash(rc[PT_PERFORMANCE_COUNTER_EXTRA_QUERIES], rc[PT_PERFORMANCE_COUNTER_CACHE_QUERIES]),
+      " extraCacheHit=", pctOrDash(rc[PT_PERFORMANCE_COUNTER_EXTRA_HITS], rc[PT_PERFORMANCE_COUNTER_EXTRA_QUERIES]),
+      " missReject=", pctOrDash(rc[PT_PERFORMANCE_COUNTER_MISS_REJECTED], rc[PT_PERFORMANCE_COUNTER_CACHE_QUERIES]),
+      " missClose=", pctOrDash(rc[PT_PERFORMANCE_COUNTER_MISS_TOO_CLOSE], rc[PT_PERFORMANCE_COUNTER_CACHE_QUERIES]),
+      " missFootprint=", pctOrDash(rc[PT_PERFORMANCE_COUNTER_MISS_FOOTPRINT], rc[PT_PERFORMANCE_COUNTER_CACHE_QUERIES]),
+      " missNoEntry=", pctOrDash(rc[PT_PERFORMANCE_COUNTER_MISS_NO_ENTRY], rc[PT_PERFORMANCE_COUNTER_CACHE_QUERIES]),
+      " missUnfilled=", pctOrDash(rc[PT_PERFORMANCE_COUNTER_MISS_UNFILLED], rc[PT_PERFORMANCE_COUNTER_CACHE_QUERIES]),
+      " sky=", pctOrDash(rc[PT_PERFORMANCE_COUNTER_SKY], rc[PT_PERFORMANCE_COUNTER_CACHE_QUERIES] + rc[PT_PERFORMANCE_COUNTER_SKY]),
+      " cacheUpdate=", ctx.getCommonObjects()->metaSharc().getUpdateTileSize(), "/",
+      ctx.getCommonObjects()->metaSharc().getUpdateInterval(),
+      " countedFrames=", ptPerformanceCounters.frames,
       " | render=", last.cpu.renderW, "x", last.cpu.renderH, " output=", last.cpu.outputW, "x", last.cpu.outputH,
       " upscaler=", int(RtxOptions::upscalerType()), " rayReconstruction=", RtxOptions::isRayReconstructionEnabled() ? 1 : 0,
       " dlssProfile=", int(RtxOptions::qualityDLSS()), " dlssNR=", last.cpu.dlssNr ? 1 : 0,

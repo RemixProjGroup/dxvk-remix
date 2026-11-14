@@ -57,6 +57,15 @@ namespace dxvk {
     // Selects between the compact and full propagation depth update shaders.
     uint32_t getUpdateBounces() const { return m_args.updateBounces; }
     uint32_t getUpdateTileSize() const { return m_args.updateTileSize; }
+    uint32_t getUpdateInterval() const { return m_args.updateInterval; }
+
+    // Feeds the adaptive update interval of performance mode (rtx.ptPerformance.cacheUpdateAdaptive) with the first indirect
+    // queries and cache hits that frame sourceFrame counted, read back some frames later. unresolvable counts the
+    // first queries that miss whatever the update does (rejected, too close to the primary surface, footprint).
+    void onPtPerformanceCounters(uint64_t queries, uint64_t hits, uint64_t unresolvable, uint32_t sourceFrame);
+    // The smoothed resolvable hit ratio: cache hits over the first indirect queries that are not unresolvable.
+    // Returns a negative value before any count.
+    float getPtPerformanceResolvableHitRatio() const { return m_ptPerformanceHitRatio; }
 
     // Applies the tier by writing the individual knobs below, as NRC does.
     static void onQualityPresetChanged(DxvkDevice* device);
@@ -156,6 +165,8 @@ namespace dxvk {
 
     bool allocateBuffers(uint32_t capacity);
     static void fallBackFromCache();
+    // Sets the adaptive update interval and logs the change, at most once per kAdaptiveLogFrames frames.
+    void setAdaptiveInterval(uint32_t interval, uint32_t frame, const char* reason);
 
     Rc<DxvkBuffer> m_hash;
     Rc<DxvkBuffer> m_accumulation;
@@ -174,5 +185,16 @@ namespace dxvk {
     uint32_t m_lastFrame = ~0u;
     bool m_clearedThisFrame = true;
     const char* m_status = "Inactive";
+
+    // Performance mode's adaptive update interval. Counts are read back with latency, so the interval relaxes only on
+    // counts from frames that already ran at the current interval.
+    static constexpr uint32_t kAdaptiveRelaxSamples = 8;
+    static constexpr uint32_t kAdaptiveLogFrames = 120;
+    float m_ptPerformanceHitRatio = -1.0f;
+    uint32_t m_adaptiveInterval = 1;
+    uint32_t m_adaptiveChangeFrame = 0;
+    uint32_t m_adaptiveRelaxSamples = 0;
+    uint32_t m_adaptiveLastLogFrame = ~0u;
+    uint32_t m_adaptiveUnloggedChanges = 0;
   };
 }

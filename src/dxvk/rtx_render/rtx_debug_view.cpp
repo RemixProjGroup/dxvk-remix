@@ -222,6 +222,8 @@ namespace dxvk {
         {DEBUG_VIEW_SHARC_TERMINATION_BOUNCE, "SHARC Termination Bounce"},
         {DEBUG_VIEW_SHARC_GRID_CELLS, "SHARC Grid Cells"},
         {DEBUG_VIEW_SHARC_CELL_AGE, "SHARC Cell Age"},
+        {DEBUG_VIEW_RASTER_FIRST_HIT_COVERAGE, "Raster First Hit Coverage (green raster, red rejected, blue traced)"},
+        {DEBUG_VIEW_RASTER_FIRST_HIT_VALIDATION, "Raster First Hit vs Camera Ray (gray same, yellow other surface, red nearer ray hit, blue raster only)"},
 
         {DEBUG_VIEW_RTXDI_GRADIENTS, "RTXDI Gradients"},
         {DEBUG_VIEW_RTXDI_CONFIDENCE, "RTXDI Confidence"},
@@ -1307,7 +1309,7 @@ namespace dxvk {
 
 
     // Todo: Add cases for secondary denoiser.
-    if (RtxOptions::denoiseDirectAndIndirectLightingSeparately()) {
+    if (RtxOptions::resolvedDenoiseDirectAndIndirectLightingSeparately()) {
       switch (debugViewIdx()) {
       case DEBUG_VIEW_DENOISED_PRIMARY_DIRECT_DIFFUSE_RADIANCE:
       case DEBUG_VIEW_DENOISED_PRIMARY_DIRECT_SPECULAR_RADIANCE:
@@ -1432,7 +1434,7 @@ namespace dxvk {
 
     // NRD Validation Layer bindings
     {
-      DxvkDenoise& denoiser0 = RtxOptions::denoiseDirectAndIndirectLightingSeparately() 
+      DxvkDenoise& denoiser0 = RtxOptions::resolvedDenoiseDirectAndIndirectLightingSeparately() 
         ? ctx->getCommonObjects()->metaPrimaryDirectLightDenoiser() 
         : ctx->getCommonObjects()->metaPrimaryCombinedLightDenoiser();
       DxvkDenoise& denoiser1 = ctx->getCommonObjects()->metaPrimaryIndirectLightDenoiser();

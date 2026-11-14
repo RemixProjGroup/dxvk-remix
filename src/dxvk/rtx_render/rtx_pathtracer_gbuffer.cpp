@@ -98,6 +98,18 @@
 #include <rtx_shaders/gbuffer_rayquery_psr_prepare_stochastic_alpha_psr_wboit_lean_compact.h>
 #include <rtx_shaders/gbuffer_rayquery_psr_prepare_stochastic_alpha_psr_wboit_slimpom_compact.h>
 #include <rtx_shaders/gbuffer_rayquery_psr_prepare_stochastic_alpha_psr_wboit_leanpom_compact.h>
+// The primary-ray kernels that read the raster first hit's visibility buffer.
+#include <rtx_shaders/gbuffer_rayquery_psr_prepare_wboit_visibility.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_prepare_wboit_slim_visibility.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_prepare_wboit_lean_visibility.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_prepare_wboit_slimpom_visibility.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_prepare_wboit_leanpom_visibility.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_prepare_stochastic_alpha_wboit_visibility.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_prepare_stochastic_alpha_wboit_slim_visibility.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_prepare_stochastic_alpha_wboit_lean_visibility.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_prepare_stochastic_alpha_wboit_slimpom_visibility.h>
+#include <rtx_shaders/gbuffer_rayquery_psr_prepare_stochastic_alpha_wboit_leanpom_visibility.h>
+#include <rtx_shaders/gbuffer_rayquery_debug_wboit_visibility.h>
 #include "rtx_scene_manager.h"
 #include "rtx_composite.h"
 #include "rtx/pass/instance_definitions.h"
@@ -134,6 +146,8 @@
 #include "rtx_context.h"
 #include "rtx_opacity_micromap_manager.h"
 #include "rtx_sparse_rendering.h"
+#include "rtx_raster_first_hit.h"
+#include "rtx_pt_performance.h"
 
 namespace dxvk {
 
@@ -235,6 +249,9 @@ namespace dxvk {
         // The compact PSR lists.
         RW_STRUCTURED_BUFFER(GBUFFER_BINDING_COMPACT_PSR_LIST)
         RW_STRUCTURED_BUFFER(GBUFFER_BINDING_COMPACT_PSR_ARGS)
+
+        // The raster first hit's visibility buffer.
+        TEXTURE2D(GBUFFER_BINDING_RASTER_FIRST_HIT_INPUT)
 
       END_PARAMETER()
     };
@@ -630,6 +647,44 @@ namespace dxvk {
         }
       }
     }
+
+    // The primary-ray kernel of this feature set and slim level that reads the raster first hit's visibility buffer
+    // (gbuffer_rayquery_visibility.comp.slang), or null when there is none. Only WBOIT kernels have it.
+    Rc<DxvkShader> getGbufferRayQueryVisibilityComputeShader(const uint32_t featureVariant, const GbufferSlimLevel level) {
+      if (featureVariant == kGbufferRayQueryFeaturesDebug) {
+        return level == GbufferSlimLevel::Full ? GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_debug_wboit_visibility) : nullptr;
+      }
+      if (featureVariant == kGbufferRayQueryFeaturesPsrPrepare) {
+        switch (level) {
+        case GbufferSlimLevel::Full: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_prepare_wboit_visibility);
+        case GbufferSlimLevel::Slim: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_prepare_wboit_slim_visibility);
+        case GbufferSlimLevel::Lean: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_prepare_wboit_lean_visibility);
+        case GbufferSlimLevel::SlimPom: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_prepare_wboit_slimpom_visibility);
+        case GbufferSlimLevel::LeanPom: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_prepare_wboit_leanpom_visibility);
+        }
+      }
+      if (featureVariant == kGbufferRayQueryFeaturesPsrPrepareStochasticAlpha) {
+        switch (level) {
+        case GbufferSlimLevel::Full: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_prepare_stochastic_alpha_wboit_visibility);
+        case GbufferSlimLevel::Slim: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_prepare_stochastic_alpha_wboit_slim_visibility);
+        case GbufferSlimLevel::Lean: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_prepare_stochastic_alpha_wboit_lean_visibility);
+        case GbufferSlimLevel::SlimPom: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_prepare_stochastic_alpha_wboit_slimpom_visibility);
+        case GbufferSlimLevel::LeanPom: return GBUFFER_SLIM_COMPUTE(gbuffer_rayquery_psr_prepare_stochastic_alpha_wboit_leanpom_visibility);
+        }
+      }
+      return nullptr;
+    }
+
+    // Every visibility kernel of the configured feature set (with or without stochastic alpha), plus the debug one.
+    void prewarmGbufferVisibilityComputeShaders(const bool stochasticAlpha) {
+      const GbufferSlimLevel levels[] = { GbufferSlimLevel::Full, GbufferSlimLevel::Slim, GbufferSlimLevel::Lean,
+                                          GbufferSlimLevel::SlimPom, GbufferSlimLevel::LeanPom };
+      for (const GbufferSlimLevel level : levels) {
+        getGbufferRayQueryVisibilityComputeShader(
+          stochasticAlpha ? kGbufferRayQueryFeaturesPsrPrepareStochasticAlpha : kGbufferRayQueryFeaturesPsrPrepare, level);
+      }
+      getGbufferRayQueryVisibilityComputeShader(kGbufferRayQueryFeaturesDebug, GbufferSlimLevel::Full);
+    }
 #undef GBUFFER_SLIM_COMPUTE
 
     // The slim level is picked per frame, so warm every level of the feature set the configuration runs, or of all.
@@ -871,6 +926,9 @@ namespace dxvk {
       // The compact PSR kernels.
       prewarmGbufferCompactPSRComputeShaders(false);
       prewarmGbufferCompactPSRComputeShaders(true);
+      // The raster first hit kernels.
+      prewarmGbufferVisibilityComputeShaders(false);
+      prewarmGbufferVisibilityComputeShaders(true);
     } else {
       // Note: The getters for these SER/OMM enabled flags also check if SER/OMMs are supported, so we do not need to check for that manually.
       const bool serEnabled = RtxOptions::isShaderExecutionReorderingInPathtracerGbufferEnabled();
@@ -908,6 +966,10 @@ namespace dxvk {
         // above already request these (they warm every level of the configured feature set); this adds the Full PSR
         // Prepare kernel with portals configured and follows the table when entries are added.
         prewarmGbufferVariantTable(nrcEnabled, CompositePass::enableStochasticAlphaBlend(), wboitEnabled);
+        // The raster first hit kernels, when the option is set at startup.
+        if (PtPerformance::firstHitRaster() && wboitEnabled && !nrcEnabled) {
+          prewarmGbufferVisibilityComputeShaders(CompositePass::enableStochasticAlphaBlend());
+        }
         break;
       case RaytraceMode::RayQueryRayGen:
       case RaytraceMode::TraceRay:
@@ -1257,13 +1319,27 @@ namespace dxvk {
         // rtx.frameFeatures.validate binds the Full kernel's validation variant when one exists.
         Rc<DxvkShader> validateShader = RtxOptions::FrameFeatures::validate()
           ? getGbufferRayQueryValidateComputeShader(rayQueryFeatureVariant, nrcEnabled, wboitEnabled) : nullptr;
+        // Performance mode's raster first hit: the kernel that takes the first interaction from the visibility buffer, when the
+        // pass drew one this frame. While it compiles, the frame traces its first hit.
+        const RtxRasterFirstHit& rasterFirstHit = ctx->getCommonObjects()->metaRasterFirstHit();
+        Rc<DxvkShader> visibilityShader = validateShader == nullptr && rasterFirstHit.isActive() && wboitEnabled && !nrcEnabled
+          ? getGbufferRayQueryVisibilityComputeShader(rayQueryFeatureVariant, slimLevel) : nullptr;
+        if (visibilityShader != nullptr && variantFallbackActive(*ctx) && !isVariantComputeShaderReady(*ctx, visibilityShader)) {
+          visibilityShader = nullptr;
+        }
         if (validateShader != nullptr) {
           noteFrameFeaturesValidateKernel(FrameFeaturesValidateKernel::GBuffer);
           ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, validateShader);
+        } else if (visibilityShader != nullptr) {
+          ctx->bindResourceView(GBUFFER_BINDING_RASTER_FIRST_HIT_INPUT, rasterFirstHit.getVisibilityIds().view, nullptr);
+          ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, visibilityShader);
         } else {
           ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, getComputeShader(rayQueryFeatureVariant, false, nrcEnabled, wboitEnabled, slimLevel));
         }
         ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
+        if (visibilityShader != nullptr) {
+          ctx->bindResourceView(GBUFFER_BINDING_RASTER_FIRST_HIT_INPUT, nullptr, nullptr);
+        }
       }
 
       stamp("GBufferPrimaryRays");
@@ -1600,6 +1676,17 @@ namespace dxvk {
       return lean ? SlimLevel::Lean : SlimLevel::Slim;
     }
     return lean ? SlimLevel::LeanPom : SlimLevel::SlimPom;
+  }
+
+  bool DxvkPathtracerGbuffer::canReadRasterFirstHit(const RaytraceArgs& args, const bool nrcEnabled) {
+    if (RtxOptions::renderPassGBufferRaytraceMode() != RaytraceMode::RayQuery || !RtxOptions::wboitEnabled() ||
+        RtxOptions::FrameFeatures::validate() || nrcEnabled) {
+      return false;
+    }
+    const uint32_t featureVariant = frameRayQueryFeatureVariant(args, nrcEnabled);
+    return featureVariant == kGbufferRayQueryFeaturesPsrPrepare ||
+           featureVariant == kGbufferRayQueryFeaturesPsrPrepareStochasticAlpha ||
+           featureVariant == kGbufferRayQueryFeaturesDebug;
   }
 
   uint32_t DxvkPathtracerGbuffer::frameRayQueryFeatureVariant(const RaytraceArgs& args, const bool nrcEnabled) {

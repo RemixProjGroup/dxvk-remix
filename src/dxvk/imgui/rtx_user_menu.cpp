@@ -45,6 +45,7 @@
 #include "rtx_render/rtx_tone_mapping.h"
 #include "rtx_render/rtx_rtxdi_rayquery.h"
 #include "rtx_render/rtx_restir_gi_rayquery.h"
+#include "rtx_render/rtx_pt_performance.h"
 #include "rtx_render/rtx_neural_radiance_cache.h"
 #include "rtx_render/rtx_numos_ui.h"
 #include "rtx_render/rtx_option_layer_gui.h"
@@ -98,6 +99,7 @@ namespace dxvk {
         {GraphicsPreset::High, "High"},
         {GraphicsPreset::Medium, "Medium"},
         {GraphicsPreset::Low, "Low"},
+        {GraphicsPreset::VeryLow, "Very Low"},
         {GraphicsPreset::Custom, "Custom"},
     } }
   };
@@ -800,6 +802,8 @@ namespace dxvk {
 
     graphicsPresetCombo.getKey(&RtxOptions::graphicsPresetObject());
 
+    RemixGui::Checkbox("Path Tracing: Performance", &PtPerformance::enableObject());
+
     // Map settings to indirect particle level
     int indirectLightParticlesLevel = 0;
     if (RtxOptions::enableUnorderedResolveInIndirectRays()) {
@@ -863,9 +867,10 @@ namespace dxvk {
         ImGui::EndDisabled();
       }
 
-      // Note: Medium and Low presets disable all post effects, so no value in changing the individual settings.
+      // Note: Medium, Low and Very Low presets disable all post effects, so no value in changing the individual settings.
       // High and Ultra allow these to be changed without requiring Custom, so leave enabled for those.
-      ImGui::BeginDisabled(RtxOptions::graphicsPreset() == GraphicsPreset::Medium || RtxOptions::graphicsPreset() == GraphicsPreset::Low);
+      ImGui::BeginDisabled(RtxOptions::graphicsPreset() == GraphicsPreset::Medium || RtxOptions::graphicsPreset() == GraphicsPreset::Low ||
+                           RtxOptions::graphicsPreset() == GraphicsPreset::VeryLow);
       {
         columns.beginSubItems();
 

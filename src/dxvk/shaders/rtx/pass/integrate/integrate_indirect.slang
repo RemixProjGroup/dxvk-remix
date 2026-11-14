@@ -737,6 +737,99 @@
 //!>       INDIRECT_SLIM_NEE_CACHE_ONLY=1
 //!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
 
+/* Lean SHARC variants that keep the RIS and light BVH sampling of secondary NEE (_leanls): POM and the
+   translucent and thin-opaque NEE visibility handling are compiled out. The host binds them on frames where the
+   NEE cache does not take every secondary light sample, such as performance mode, which runs without the NEE cache. */
+
+//!variant integrate_indirect_sharc_update4_wboit_leanls.rgen
+//!>       RAY_PIPELINE
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_PROPAGATION_DEPTH=4
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_sharc_update4_wboit_leanls_df.rgen
+//!>       RAY_PIPELINE
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_DEFERRED_FLUSH=1
+//!>       SHARC_PROPAGATION_DEPTH=4
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_sharc_update4_ser_wboit_leanls_df.rgen
+//!>       RT_TRACE_RAY
+//!>       RAY_PIPELINE
+//!>       RT_SHADER_EXECUTION_REORDERING
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_DEFERRED_FLUSH=1
+//!>       SHARC_PROPAGATION_DEPTH=4
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_sharc_update8_wboit_leanls.rgen
+//!>       RAY_PIPELINE
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_PROPAGATION_DEPTH=8
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_sharc_update8_wboit_leanls_df.rgen
+//!>       RAY_PIPELINE
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_DEFERRED_FLUSH=1
+//!>       SHARC_PROPAGATION_DEPTH=8
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_sharc_update8_ser_wboit_leanls_df.rgen
+//!>       RT_TRACE_RAY
+//!>       RAY_PIPELINE
+//!>       RT_SHADER_EXECUTION_REORDERING
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_DEFERRED_FLUSH=1
+//!>       SHARC_PROPAGATION_DEPTH=8
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_sharc_query_wboit_leanls.rgen
+//!>       RT_TRACE_RAY
+//!>       RAY_PIPELINE
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_sharc_query_ser_wboit_leanls.rgen
+//!>       RT_TRACE_RAY
+//!>       RAY_PIPELINE
+//!>       RT_SHADER_EXECUTION_REORDERING
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
 /* SHARC update and query as compute shaders with inline RayQuery, dispatched without a ray tracing pipeline.
    The host binds them where rtx.renderPassIntegrateIndirectRaytraceMode is RayQuery, as for the other indirect
    compute variants. They have no slim levels and no OMM 2-state ray flag. The update covers the inline flush and,
@@ -794,6 +887,62 @@
 //!>       SHARC_QUERY=1
 //!>       NEE_CACHE_ENABLE=1
 //!>       UNORDERED_RESOLVE_WBOIT
+
+/* Lean compute variants (WBOIT) with the RIS and light BVH sampling of secondary NEE kept: the SHARC update and
+   query (_leanls) and the indirect integration without the NEE cache (_lean). POM and the translucent and
+   thin-opaque NEE visibility handling are compiled out. */
+
+//!variant integrate_indirect_sharc_update4_rayquery_wboit_leanls.comp
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_PROPAGATION_DEPTH=4
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_sharc_update4_rayquery_wboit_leanls_df.comp
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_DEFERRED_FLUSH=1
+//!>       SHARC_PROPAGATION_DEPTH=4
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_sharc_update8_rayquery_wboit_leanls.comp
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_PROPAGATION_DEPTH=8
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_sharc_update8_rayquery_wboit_leanls_df.comp
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_DEFERRED_FLUSH=1
+//!>       SHARC_PROPAGATION_DEPTH=8
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_sharc_query_rayquery_wboit_leanls.comp
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
+
+//!variant integrate_indirect_rayquery_wboit_lean.comp
+//!>       NEE_CACHE_ENABLE=0
+//!>       UNORDERED_RESOLVE_WBOIT
+//!>       INDIRECT_SLIM_NO_POM
+//!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
 
 //!end-variants
 #define ATMOSPHERE_AVAILABLE

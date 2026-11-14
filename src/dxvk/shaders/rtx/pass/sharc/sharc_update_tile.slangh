@@ -1,0 +1,98 @@
+/*
+* Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
+*
+* Permission is hereby granted, free of charge, to any person obtaining a
+* copy of this software and associated documentation files (the "Software"),
+* to deal in the Software without restriction, including without limitation
+* the rights to use, copy, modify, merge, publish, distribute, sublicense,
+* and/or sell copies of the Software, and to permit persons to whom the
+* Software is furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+* DEALINGS IN THE SOFTWARE.
+*/
+#pragma once
+
+// The update's choice of source pixel per tile, and performance mode's update schedule.
+
+// Kensler's cycle-walking permutation (Correlated Multi-Jittered Sampling, 2013): a bijection on
+// [0, count) for any count, seeded by seed. A power-of-two count takes one iteration, and any other
+// count takes about 1.8 on average. The guard bounds the loop.
+uint sharcPermute(uint index, uint count, uint seed)
+{
+  uint w = count - 1;
+  w |= w >> 1; w |= w >> 2; w |= w >> 4; w |= w >> 8; w |= w >> 16;
+  [loop]
+  for (uint guard = 0; guard < 16u; ++guard)
+  {
+    index ^= seed;              index *= 0xe170893du;
+    index ^= seed >> 16;
+    index ^= (index & w) >> 4;
+    index ^= seed >> 8;         index *= 0x0929eb3fu;
+    index ^= seed >> 23;
+    index ^= (index & w) >> 1;  index *= 1u | (seed >> 27);
+                                index *= 0x6935fa69u;
+    index ^= (index & w) >> 11; index *= 0x74dcb303u;
+    index ^= (index & w) >> 2;  index *= 0x9e501cc3u;
+    index ^= (index & w) >> 2;  index *= 0xc860a3dfu;
+    index &= w;
+    index ^= index >> 5;
+    if (index < count)
+    {
+      break;
+    }
+  }
+  // Still in range if the guard expires, so the worst case is one imperfect draw.
+  return (index + seed) % count;
+}
+
+// Performance mode's update schedule (rtx.ptPerformance.cacheUpdateInterval and cacheUpdateAdaptive). Tiles update
+// in blocks the size of the compute update's thread group, so a skipped block leaves whole waves idle. Each frame one
+// of every cb.sharcArgs.updateInterval block diagonals updates. The interval is 1 while performance mode is off.
+static const uvec2 kSharcUpdateBlockTiles = uvec2(16u, 8u);
+
+uint sharcUpdateInterval()
+{
+  return max(cb.sharcArgs.updateInterval, 1u);
+}
+
+// Returns true when the tile's block is scheduled this frame.
+bool sharcUpdateTileScheduled(uvec2 tile)
+{
+  const uvec2 block = tile / kSharcUpdateBlockTiles;
+  return (block.x + block.y + cb.frameIdx) % sharcUpdateInterval() == 0u;
+}
+
+// Returns true when the primary surface at a source pixel moved or deformed this frame. Such tiles update
+// every frame, so the cache fills the cells a moving instance reaches without waiting for its block.
+bool sharcUpdateSurfaceMoves(uint surfaceIndex)
+{
+  return surfaceIndex != SURFACE_INDEX_INVALID && !surfaces[surfaceIndex].isStatic;
+}
+
+// The frame count that steps the source pixel inside a tile. Under performance mode's update schedule it steps once
+// per scheduled frame of the tile, so a tile still visits all its positions.
+uint sharcTileFrame()
+{
+  return cb.frameIdx / sharcUpdateInterval();
+}
+
+// Which pixel inside its tile this update invocation samples this frame.
+// The dispatch is one thread per tile. Every tile visits all tileSize^2 positions once per tileSize^2 frames,
+// each in its own order, because a shared order would correlate neighbouring tiles.
+uvec2 sharcTileOffset(uvec2 tile, uint tileSize)
+{
+  uint seed = (tile.x * 73856093u) ^ (tile.y * 19349663u);
+  seed ^= seed >> 15; seed *= 0x2c1b3c6du; seed ^= seed >> 12;
+  const uint positions = tileSize * tileSize;
+  const uint slot = sharcPermute(sharcTileFrame() % positions, positions, seed);
+  return uvec2(slot % tileSize, slot / tileSize);
+}

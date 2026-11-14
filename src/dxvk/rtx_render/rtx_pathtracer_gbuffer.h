@@ -79,6 +79,10 @@ namespace dxvk {
     // records it.
     static uint32_t frameRayQueryFeatureVariant(const RaytraceArgs& args, const bool nrcEnabled);
 
+    // Whether this frame's primary-ray kernel has a form that reads the raster first hit's visibility buffer
+    // (rtx.ptPerformance.firstHit): RayQuery, WBOIT, no NRC and no validation, with the PSR Prepare or debug feature set.
+    static bool canReadRasterFirstHit(const RaytraceArgs& args, const bool nrcEnabled);
+
     // Exhaustive check of the variant table against selectSlimLevel (rtx_fork_variant_tables.h).
     static void runVariantTableSelfCheck(VariantTableSelfCheckResult& result);
 
