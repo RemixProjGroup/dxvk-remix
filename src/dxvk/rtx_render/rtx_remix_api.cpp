@@ -672,7 +672,7 @@ namespace {
           extOpaque->metallicConstant,
           tovec3(info.emissiveColorConstant),
           info.emissiveIntensity > 0.f,
-          false, // OpaqueMaterial::SkyLitParticle - not exposed via remixapi
+          true, // OpaqueMaterial::SkyLitParticle - acts only when the material is drawn as a particle
           info.spriteSheetRow,
           info.spriteSheetCol,
           info.spriteSheetFps,
