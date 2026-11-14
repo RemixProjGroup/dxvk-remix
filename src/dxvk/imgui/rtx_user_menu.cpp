@@ -822,7 +822,7 @@ namespace dxvk {
       // NRC Quality Preset dropdown
       NeuralRadianceCache& nrc = common->metaNeuralRadianceCache();
       if (nrc.checkIsSupported(m_device)) {
-        bool enableNeuralRadianceCache = RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
+        bool enableNeuralRadianceCache = RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
 
         // Disable NRC quality preset combo when NRC is not enabled.
         ImGui::BeginDisabled(!enableNeuralRadianceCache);

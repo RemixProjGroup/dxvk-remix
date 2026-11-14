@@ -430,9 +430,9 @@ namespace dxvk {
                                       upscaledExtent, m_resetHistory, mainCamera.isCameraCut());
 
     // Force history reset on integrate indirect mode change to discard incompatible history 
-    if (RtxOptions::integrateIndirectMode() != m_prevIntegrateIndirectMode) {
+    if (RtxOptions::resolvedIntegrateIndirectMode() != m_prevIntegrateIndirectMode) {
       m_resetHistory = true;
-      m_prevIntegrateIndirectMode = RtxOptions::integrateIndirectMode();
+      m_prevIntegrateIndirectMode = RtxOptions::resolvedIntegrateIndirectMode();
     }
 
     // A sparse rendering sampling rate change resets history, so the image converges at the new rate from scratch.
@@ -442,7 +442,7 @@ namespace dxvk {
       m_prevSparseRenderingSamplingRate = sparseRenderingSamplingRate;
     }
 
-    if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache &&
+    if (RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache &&
         m_common->metaNeuralRadianceCache().isResettingHistory()) {
       m_resetHistory = true;
     }
@@ -2208,10 +2208,19 @@ namespace dxvk {
     }
 
     // SHARC is the default mode, so a device without its features falls back before the first frame.
-    if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::Sharc &&
-        !RtxSharc::checkIsSupported(m_device.ptr())) {
+    const char* sharcMissingFeature = RtxSharc::missingFeature(m_device.ptr());
+    if (sharcMissingFeature != nullptr) {
+      Logger::warn(str::format("[RTX] SHARC is not supported: the device lacks ", sharcMissingFeature, "."));
+    }
+    if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::Sharc && sharcMissingFeature != nullptr) {
       Logger::warn(str::format("[RTX] SHARC is not supported. Switching indirect illumination mode to ReSTIR GI."));
       RtxOptions::integrateIndirectMode.setImmediately(IntegrateIndirectMode::ReSTIRGI, RtxOptionLayer::getQualityLayer());
+    }
+
+    // rtx.sharc.indirectFromCache would select SHARC on its own, so it is turned off as well.
+    if (RtxSharc::indirectFromCache() && sharcMissingFeature != nullptr) {
+      Logger::warn(str::format("[RTX] SHARC is not supported. Turning off rtx.sharc.indirectFromCache."));
+      RtxSharc::indirectFromCache.setImmediately(false, RtxOptionLayer::getQualityLayer());
     }
   }
 

@@ -170,7 +170,7 @@ namespace dxvk {
     }
 
     // ReSTIR GI would have to apply bsdfFactor2.x to inactive pixels as well, which the sparse path does not do.
-    if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::ReSTIRGI) {
+    if (RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::ReSTIRGI) {
       ONCE(Logger::warn("[RTX Sparse Rendering] ReSTIR GI indirect illumination is not supported with sparse rendering; sparse rendering will not run. "
                         "It will resume automatically when another indirect illumination mode is selected."));
       return false;
@@ -322,7 +322,7 @@ namespace dxvk {
     if (!RtxOptions::isRayReconstructionEnabled()) {
       return false;
     }
-    if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::ReSTIRGI) {
+    if (RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::ReSTIRGI) {
       return false;
     }
     return true;

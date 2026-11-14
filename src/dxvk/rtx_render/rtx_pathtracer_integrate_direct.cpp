@@ -241,7 +241,7 @@ namespace dxvk {
       // Note: The getter for OMM enabled also checks if OMMs are supported, so we do not need to check for that manually.
       const bool ommEnabled = RtxOptions::getEnableOpacityMicromap();
       const bool deferredNrcTrainingSetup = SparseRendering::isEnabledByOptions() &&
-        RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
+        RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
 
       switch (RtxOptions::renderPassIntegrateDirectRaytraceMode()) {
       case RaytraceMode::RayQuery:

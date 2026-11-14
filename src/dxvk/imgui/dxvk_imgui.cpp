@@ -2203,9 +2203,9 @@ namespace dxvk {
         } else {
           resourceAliasingQueryText += "NRD, ";
         }
-        if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache) {
+        if (RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache) {
           resourceAliasingQueryText += "NRC)";
-        } else if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::ReSTIRGI) {
+        } else if (RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::ReSTIRGI) {
           resourceAliasingQueryText += "ReSTIR-GI)";
         } else {
           resourceAliasingQueryText += "ImportanceSampled)";
@@ -4194,7 +4194,8 @@ namespace dxvk {
       RemixGui::Checkbox("Indirect Ray Query Mode Runs the Compute Kernel on NVIDIA", &DxvkPathtracerIntegrateIndirect::rayQueryComputeKernelObject());
       RemixGui::SetTooltipToLastWidgetOnHover(
         "rtx.integrateIndirect.rayQueryComputeKernel. Off, Ray Query mode traces the ray query kernel as a ray generation shader\n"
-        "on NVIDIA GPUs, where the compute dispatch of this kernel faults the device. Other GPUs always run the compute kernel.");
+        "on NVIDIA GPUs, where the compute dispatch of this kernel faults the device, and the SHARC update and query run through\n"
+        "their ray tracing pipelines there. Other GPUs always run the compute kernels.");
       showVariantTablesImguiSettings();
       showFrameFeaturesImguiSettings();
       RemixGui::Checkbox("Log Pipeline Shader Stats (restart required)", &RtxPipelineStats::logPipelineStatsObject());
@@ -4785,7 +4786,12 @@ namespace dxvk {
         ImGui::Indent();
         integrateIndirectModeCombo.getKey(&RtxOptions::integrateIndirectModeObject());
 
-        if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::ReSTIRGI) {
+        // The cache needs device features some GPUs lack, so the control is disabled there.
+        ImGui::BeginDisabled(!RtxSharc::checkIsSupported(m_device));
+        RemixGui::Checkbox("Indirect Light From Radiance Cache", &RtxSharc::indirectFromCacheObject());
+        ImGui::EndDisabled();
+
+        if (RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::ReSTIRGI) {
           if (RemixGui::CollapsingHeader("ReSTIR GI", collapsingHeaderClosedFlags)) {
             ImGui::Indent();
             ImGui::PushID("ReSTIR GI");
@@ -4794,7 +4800,7 @@ namespace dxvk {
             ImGui::PopID();
             ImGui::Unindent();
           }
-        } else if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache) {
+        } else if (RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache) {
           if (RemixGui::CollapsingHeader("RTX Neural Radiance Cache", collapsingHeaderClosedFlags)) {
 
             ImGui::Indent();
@@ -4804,7 +4810,7 @@ namespace dxvk {
             ImGui::PopID();
             ImGui::Unindent();
           }
-        } else if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::Sharc) {
+        } else if (RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::Sharc) {
           if (RemixGui::CollapsingHeader("SHARC", collapsingHeaderClosedFlags)) {
             ImGui::Indent();
             ImGui::PushID("SHARC");

@@ -211,6 +211,15 @@
 #include <rtx_shaders/integrate_indirect_sharc_update8_closesthit_wboit_lean_df.h>
 #include <rtx_shaders/integrate_indirect_sharc_update4_miss_wboit_df.h>
 #include <rtx_shaders/integrate_indirect_sharc_update8_miss_wboit_df.h>
+// The SHARC compute variants for RayQuery mode.
+#include <rtx_shaders/integrate_indirect_sharc_update4_rayquery.h>
+#include <rtx_shaders/integrate_indirect_sharc_update4_rayquery_wboit.h>
+#include <rtx_shaders/integrate_indirect_sharc_update4_rayquery_wboit_df.h>
+#include <rtx_shaders/integrate_indirect_sharc_update8_rayquery.h>
+#include <rtx_shaders/integrate_indirect_sharc_update8_rayquery_wboit.h>
+#include <rtx_shaders/integrate_indirect_sharc_update8_rayquery_wboit_df.h>
+#include <rtx_shaders/integrate_indirect_sharc_query_rayquery.h>
+#include <rtx_shaders/integrate_indirect_sharc_query_rayquery_wboit.h>
 #include <rtx_shaders/integrate_indirect_raygen_neeCache_wboit_nopom.h>
 #include <rtx_shaders/integrate_indirect_raygen_ser_neeCache_wboit_nopom.h>
 #include <rtx_shaders/integrate_indirect_raygen_nrc_neeCache_wboit_nopom.h>
@@ -656,6 +665,16 @@ namespace dxvk {
       && m_device->adapter()->deviceProperties().vendorID == static_cast<uint32_t>(DxvkGpuVendor::Nvidia);
   }
 
+  void DxvkPathtracerIntegrateIndirect::logRayQueryRaygenOnce() {
+    if (m_rayQueryRaygenLogged) {
+      return;
+    }
+    m_rayQueryRaygenLogged = true;
+    Logger::info("[IntegrateIndirect] Ray Query mode traces the ray query kernels (integrate indirect, SHARC update and "
+                 "query) as ray generation shaders on this GPU (rtx.integrateIndirect.rayQueryComputeKernel runs the "
+                 "compute kernels instead).");
+  }
+
   void DxvkPathtracerIntegrateIndirect::prewarmShaders(DxvkPipelineManager& pipelineManager) const {
     ScopedCpuProfileZoneN("Indirect Integrate Shader Prewarming");
 
@@ -665,7 +684,7 @@ namespace dxvk {
     GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, IntegrateNEEShader, integrate_nee_restir_gi);
     // The assembly slim levels of the configured mode only.
     {
-      const IntegrateIndirectMode mode = RtxOptions::integrateIndirectMode();
+      const IntegrateIndirectMode mode = RtxOptions::resolvedIntegrateIndirectMode();
       const bool nrcMode = mode == IntegrateIndirectMode::NeuralRadianceCache;
       const bool restirGiMode = mode == IntegrateIndirectMode::ReSTIRGI;
       getAssemblyShader(nrcMode, restirGiMode, SlimLevel::Slim);
@@ -718,7 +737,7 @@ namespace dxvk {
       const bool serEnabled = RtxOptions::isShaderExecutionReorderingInPathtracerIntegrateIndirectEnabled();
       const bool ommEnabled = OpacityMicromapManager::checkIsOpacityMicromapSupported(*m_device) && RtxOptions::OpacityMicromap::enable();
       const bool useNeeCache = NeeCachePass::enable();
-      const bool nrcEnabled = RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
+      const bool nrcEnabled = RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
       const bool wboitEnabled = RtxOptions::wboitEnabled();
 
       for (int32_t includesPortals = portalsEnabled; includesPortals >= 0; includesPortals--) {
@@ -748,7 +767,7 @@ namespace dxvk {
 
       // The non-SHARC slim levels this configuration can bind (see
       // selectNonSharcSlimLevel): Slim / Lean have POM off, the POM-kept levels follow pomEnabled.
-      if (RtxOptions::integrateIndirectMode() != IntegrateIndirectMode::Sharc &&
+      if (RtxOptions::resolvedIntegrateIndirectMode() != IntegrateIndirectMode::Sharc &&
           RtxOptions::renderPassIntegrateIndirectRaytraceMode() == RaytraceMode::TraceRay &&
           useNeeCache && wboitEnabled && !portalsEnabled && !useFoliageRaysOmm2StateVariant(ommEnabled)) {
         pipelineManager.registerRaytracingShaders(getPipelineShaders(false, serEnabled, ommEnabled, true, false, false, nrcEnabled, true, SlimLevel::Slim));
@@ -762,14 +781,14 @@ namespace dxvk {
       }
     }
 
-    if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::Sharc) {
+    if (RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::Sharc) {
       prewarmSharcShaders(pipelineManager);
     }
   }
 
   void DxvkPathtracerIntegrateIndirect::logIntegrateIndirectMode() {
-    if (m_integrateIndirectMode != RtxOptions::integrateIndirectMode()) {
-      m_integrateIndirectMode = RtxOptions::integrateIndirectMode();
+    if (m_integrateIndirectMode != RtxOptions::resolvedIntegrateIndirectMode()) {
+      m_integrateIndirectMode = RtxOptions::resolvedIntegrateIndirectMode();
 
       switch (m_integrateIndirectMode) {
       default:
@@ -883,6 +902,37 @@ namespace dxvk {
     return serEnabled && !includePortals && sharcDeferredFlushPossible(ommEnabled, wboitEnabled);
   }
 
+  bool DxvkPathtracerIntegrateIndirect::sharcUsesCompute() const {
+    // GPUs other than NVIDIA run SHARC only as compute kernels, whatever the indirect raytrace mode.
+    if (m_device->adapter()->deviceProperties().vendorID != static_cast<uint32_t>(DxvkGpuVendor::Nvidia)) {
+      return true;
+    }
+    return RtxOptions::renderPassIntegrateIndirectRaytraceMode() == RaytraceMode::RayQuery && !rayQueryUsesRaygen();
+  }
+
+  Rc<DxvkShader> DxvkPathtracerIntegrateIndirect::getSharcUpdateComputeShader(const bool depth4, const bool wboitEnabled, const bool deferredFlush) {
+    // The deferred-flush variants exist for WBOIT only, which sharcDeferredFlushPossible already requires.
+    if (deferredFlush) {
+      return depth4
+        ? GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, IntegrateIndirectSharcUpdateDeferredShader, integrate_indirect_sharc_update4_rayquery_wboit_df)
+        : GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, IntegrateIndirectSharcUpdateDeferredShader, integrate_indirect_sharc_update8_rayquery_wboit_df);
+    }
+    if (depth4) {
+      return wboitEnabled
+        ? GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, IntegrateIndirectSharcUpdateShader, integrate_indirect_sharc_update4_rayquery_wboit)
+        : GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, IntegrateIndirectSharcUpdateShader, integrate_indirect_sharc_update4_rayquery);
+    }
+    return wboitEnabled
+      ? GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, IntegrateIndirectSharcUpdateShader, integrate_indirect_sharc_update8_rayquery_wboit)
+      : GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, IntegrateIndirectSharcUpdateShader, integrate_indirect_sharc_update8_rayquery);
+  }
+
+  Rc<DxvkShader> DxvkPathtracerIntegrateIndirect::getSharcQueryComputeShader(const bool wboitEnabled) {
+    return wboitEnabled
+      ? GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, IntegrateIndirectSharcQueryShader, integrate_indirect_sharc_query_rayquery_wboit)
+      : GET_SHADER_VARIANT(VK_SHADER_STAGE_COMPUTE_BIT, IntegrateIndirectSharcQueryShader, integrate_indirect_sharc_query_rayquery);
+  }
+
   DxvkRaytracingPipelineShaders DxvkPathtracerIntegrateIndirect::getSharcUpdateSerPipelineShaders(
     const bool depth4, const bool ommEnabled, const SlimLevel slimLevel) {
     // The TraceRay + SER update. Raygen with SER, the update hit shader of the same level and the update miss
@@ -937,6 +987,13 @@ namespace dxvk {
     const bool slimPomPossible = slimPossible && slimKeepPom();
     // rtx.sharc.deferredFlush: the _df variants replace the inline ones while the option is on and they exist.
     const bool deferredFlush = sharcDeferredFlushPossible(ommEnabled, wboitEnabled);
+    if (sharcUsesCompute()) {
+      for (int32_t depth4 = 1; depth4 >= 0; depth4--) {
+        getSharcUpdateComputeShader(depth4, wboitEnabled, deferredFlush);
+      }
+      getSharcQueryComputeShader(wboitEnabled);
+      return;
+    }
     for (int32_t depth4 = 1; depth4 >= 0; depth4--) {
       pipelineManager.registerRaytracingShaders(getSharcUpdatePipelineShaders(depth4, ommEnabled, wboitEnabled, SlimLevel::Full, deferredFlush));
       if (slimPossible) {
@@ -1349,6 +1406,11 @@ namespace dxvk {
 
     RtxSharc& sharc = ctx->getCommonObjects()->metaSharc();
 
+    // NVIDIA routes Ray Query mode through the ray tracing pipelines (rayQueryUsesRaygen), SHARC included.
+    if (RtxOptions::renderPassIntegrateIndirectRaytraceMode() == RaytraceMode::RayQuery && !sharcUsesCompute()) {
+      logRayQueryRaygenOnce();
+    }
+
     ctx->bindResourceView(INTEGRATE_INDIRECT_BINDING_SHARED_MATERIAL_DATA0_INPUT, rtOutput.m_sharedMaterialData0.view, nullptr);
     ctx->bindResourceView(INTEGRATE_INDIRECT_BINDING_SHARED_MATERIAL_DATA1_INPUT, rtOutput.m_sharedMaterialData1.view, nullptr);
     sharc.bindResources(*ctx);
@@ -1376,7 +1438,12 @@ namespace dxvk {
       if (deferredFlush) {
         sharc.bindDeferredResources(*ctx);
       }
-      {
+      if (sharcUsesCompute()) {
+        noteSlimLevel(SlimPass::SharcUpdate, SlimLevel::Full);
+        const VkExtent3D workgroups = util::computeBlockCount(updateDims, VkExtent3D { 16, 8, 1 });
+        ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, getSharcUpdateComputeShader(depth4, wboitEnabled, deferredFlush));
+        ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
+      } else {
         SlimLevel updateSlimLevel = selectSharcSlimLevel(ctx, rtOutput, ommEnabled, includePortals, wboitEnabled);
         // The variant table picks the level; the rule above still runs as the check.
         updateSlimLevel = selectSharcVariantLevel(ctx, SlimPass::SharcUpdate, updateSlimLevel);
@@ -1418,6 +1485,14 @@ namespace dxvk {
       ctx->bindResourceView(INTEGRATE_INDIRECT_BINDING_SHARED_MATERIAL_DATA0_INPUT, rtOutput.m_sharedMaterialData0.view, nullptr);
       ctx->bindResourceView(INTEGRATE_INDIRECT_BINDING_SHARED_MATERIAL_DATA1_INPUT, rtOutput.m_sharedMaterialData1.view, nullptr);
       sharc.bindResources(*ctx);
+
+      if (sharcUsesCompute()) {
+        noteSlimLevel(SlimPass::Integration, SlimLevel::Full);
+        const VkExtent3D workgroups = util::computeBlockCount(rayDims, VkExtent3D { 16, 8, 1 });
+        ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, getSharcQueryComputeShader(wboitEnabled));
+        ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
+        return;
+      }
 
       SlimLevel querySlimLevel = selectSharcSlimLevel(ctx, rtOutput, ommEnabled, includePortals, wboitEnabled);
       // The variant table picks the level; the rule above still runs as the check.
@@ -1558,11 +1633,7 @@ namespace dxvk {
         // NVIDIA traces the ray query kernel as a ray generation shader (rayQueryUsesRaygen); the compute
         // dispatch of the same kernel faults the device there.
         if (rayQueryUsesRaygen()) {
-          if (!m_rayQueryRaygenLogged) {
-            m_rayQueryRaygenLogged = true;
-            Logger::info("[IntegrateIndirect] Ray Query mode traces the ray query kernel as a ray generation shader on this GPU "
-                         "(rtx.integrateIndirect.rayQueryComputeKernel runs the compute kernel instead).");
-          }
+          logRayQueryRaygenOnce();
           ctx->bindRaytracingPipelineShaders(getPipelineShaders(true, serEnabled, ommEnabled, neeCacheEnabled, includePortals, pomEnabled, nrcEnabled, wboitEnabled));
           ctx->traceRays(rayDims.width, rayDims.height, rayDims.depth);
           break;

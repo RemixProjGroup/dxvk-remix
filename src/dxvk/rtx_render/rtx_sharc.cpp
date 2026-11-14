@@ -85,21 +85,48 @@ namespace dxvk {
 
   RtxSharc::RtxSharc(DxvkDevice* device) : CommonDeviceObject(device), RtxPass(device) { }
 
-  bool RtxSharc::checkIsSupported(const DxvkDevice* device) {
+  const char* RtxSharc::missingFeature(const DxvkDevice* device) {
     const auto& features = device->features();
 
     // The hash grid is addressed with 64 bit keys updated atomically, and cells resolve to half
     // precision storage.
-    return features.core.features.shaderInt64
-        && features.vulkan12Features.shaderBufferInt64Atomics
-        && features.vulkan12Features.shaderFloat16
-        && features.vulkan11Features.storageBuffer16BitAccess
-        && features.vulkan11Features.uniformAndStorageBuffer16BitAccess
-        && features.khrRayQueryFeatures.rayQuery;
+    if (!features.core.features.shaderInt64) {
+      return "shaderInt64";
+    }
+    if (!features.vulkan12Features.shaderBufferInt64Atomics) {
+      return "shaderBufferInt64Atomics";
+    }
+    if (!features.vulkan12Features.shaderFloat16) {
+      return "shaderFloat16";
+    }
+    if (!features.vulkan11Features.storageBuffer16BitAccess) {
+      return "storageBuffer16BitAccess";
+    }
+    if (!features.vulkan11Features.uniformAndStorageBuffer16BitAccess) {
+      return "uniformAndStorageBuffer16BitAccess";
+    }
+    if (!features.khrRayQueryFeatures.rayQuery) {
+      return "rayQuery";
+    }
+    return nullptr;
+  }
+
+  bool RtxSharc::checkIsSupported(const DxvkDevice* device) {
+    return missingFeature(device) == nullptr;
   }
 
   bool RtxSharc::isEnabled() const {
-    return RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::Sharc;
+    return RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::Sharc;
+  }
+
+  void RtxSharc::fallBackFromCache() {
+    // Both options that can select the cache are cleared, or activation would be retried every frame.
+    if (indirectFromCache()) {
+      indirectFromCache.setDeferred(false);
+    }
+    if (RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::Sharc) {
+      RtxOptions::integrateIndirectMode.setDeferred(IntegrateIndirectMode::ReSTIRGI);
+    }
   }
 
   void RtxSharc::setQualityPreset(QualityPreset preset) {
@@ -176,13 +203,13 @@ namespace dxvk {
   bool RtxSharc::onActivation(Rc<DxvkContext>& ctx) {
     if (!checkIsSupported(m_device)) {
       ONCE(Logger::warn("[RTX SHARC] Device does not support the required features; falling back to importance sampled paths."));
-      RtxOptions::integrateIndirectMode.setDeferred(IntegrateIndirectMode::ReSTIRGI);
+      fallBackFromCache();
       m_status = "Unsupported device; using ReSTIR GI";
       return false;
     }
 
     if (!allocateBuffers(sanitizedCapacity())) {
-      RtxOptions::integrateIndirectMode.setDeferred(IntegrateIndirectMode::ReSTIRGI);
+      fallBackFromCache();
       m_status = "Cache allocation failed; using ReSTIR GI";
       return false;
     }

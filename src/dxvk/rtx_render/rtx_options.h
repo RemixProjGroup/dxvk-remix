@@ -2050,8 +2050,13 @@ namespace dxvk {
       return true;
     }
 
+    // The indirect integrator the runtime runs. It is rtx.integrateIndirectMode, except that rtx.sharc.indirectFromCache
+    // selects SHARC without writing that option. Code that writes presets for one mode reads the option itself instead.
+    // Defined in rtx_options.cpp.
+    static IntegrateIndirectMode resolvedIntegrateIndirectMode();
+
     static bool useReSTIRGI() {
-      return integrateIndirectMode() == IntegrateIndirectMode::ReSTIRGI;
+      return resolvedIntegrateIndirectMode() == IntegrateIndirectMode::ReSTIRGI;
     }
 
     // useRTXDI() && rtx.lightSampling.mode != LightBVH. Gate RTXDI work on this,

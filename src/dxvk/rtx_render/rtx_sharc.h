@@ -45,6 +45,8 @@ namespace dxvk {
     explicit RtxSharc(DxvkDevice* device);
 
     static bool checkIsSupported(const DxvkDevice* device);
+    // Returns the name of the first device feature SHARC needs that the device lacks, or nullptr when it has them all.
+    static const char* missingFeature(const DxvkDevice* device);
 
     void setRaytraceArgs(RtxContext& ctx, RaytraceArgs& args);
     void bindResources(RtxContext& ctx) const;
@@ -68,6 +70,14 @@ namespace dxvk {
                     args.onChangeCallback = &onQualityPresetChanged,
                     args.flags = RtxOptionFlags::UserSetting);
     inline static QualityPreset s_prevQualityPreset = QualityPreset::Count;
+
+    RTX_OPTION_ARGS("rtx.sharc", bool, indirectFromCache, false,
+                    "Takes indirect light from this radiance cache whatever rtx.integrateIndirectMode selects, on any GPU "
+                    "that supports the cache. Each pixel traces one indirect ray and uses the cached light where it lands, "
+                    "and continues the path as usual only where the cache has no answer for that surface. Bounce light gets "
+                    "softer but keeps its brightness, and indirect lighting costs much less than with ReSTIR GI. "
+                    "rtx.integrateIndirectMode keeps its value, so turning this off restores it.",
+                    args.flags = RtxOptionFlags::UserSetting);
 
     RTX_OPTION("rtx.sharc", int, capacityLog2, 22,
                "The cache capacity, as a power of two, from 18 to 22. Each slot takes 40 bytes, so 20 uses 40 MiB, 21 "
@@ -145,6 +155,7 @@ namespace dxvk {
     void onDeactivation() override;
 
     bool allocateBuffers(uint32_t capacity);
+    static void fallBackFromCache();
 
     Rc<DxvkBuffer> m_hash;
     Rc<DxvkBuffer> m_accumulation;

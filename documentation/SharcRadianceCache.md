@@ -95,7 +95,9 @@ than on a scene-change detector.
 ## Requirements and limits
 
 SHARC needs `shaderInt64`, buffer int64 atomics, `shaderFloat16`, 16-bit storage and `rayQuery`. The
-mode is removed from the UI on devices without them.
+mode is removed from the UI on devices without them, and the startup log names the first missing feature. The
+graphics presets select SHARC on every GPU vendor that has them. Off NVIDIA, the update and query always run as
+compute kernels with inline ray queries, whatever the indirect raytrace mode.
 
 The estimator is a spatial and temporal approximation with finite-depth bias. Sharp reflected
 lighting, material detail finer than a cell, and fast lighting changes can show cache bias or lag.

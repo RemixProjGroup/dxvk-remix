@@ -737,6 +737,64 @@
 //!>       INDIRECT_SLIM_NEE_CACHE_ONLY=1
 //!>       INDIRECT_SLIM_LEAN_VISIBILITY=1
 
+/* SHARC update and query as compute shaders with inline RayQuery, dispatched without a ray tracing pipeline.
+   The host binds them where rtx.renderPassIntegrateIndirectRaytraceMode is RayQuery, as for the other indirect
+   compute variants. They have no slim levels and no OMM 2-state ray flag. The update covers the inline flush and,
+   for WBOIT, the deferred flush. */
+
+//!variant integrate_indirect_sharc_update4_rayquery.comp
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_PROPAGATION_DEPTH=4
+//!>       NEE_CACHE_ENABLE=1
+
+//!variant integrate_indirect_sharc_update4_rayquery_wboit.comp
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_PROPAGATION_DEPTH=4
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+
+//!variant integrate_indirect_sharc_update4_rayquery_wboit_df.comp
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_DEFERRED_FLUSH=1
+//!>       SHARC_PROPAGATION_DEPTH=4
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+
+//!variant integrate_indirect_sharc_update8_rayquery.comp
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_PROPAGATION_DEPTH=8
+//!>       NEE_CACHE_ENABLE=1
+
+//!variant integrate_indirect_sharc_update8_rayquery_wboit.comp
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_PROPAGATION_DEPTH=8
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+
+//!variant integrate_indirect_sharc_update8_rayquery_wboit_df.comp
+//!>       ENABLE_SHARC=1
+//!>       SHARC_UPDATE=1
+//!>       SHARC_DEFERRED_FLUSH=1
+//!>       SHARC_PROPAGATION_DEPTH=8
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+
+//!variant integrate_indirect_sharc_query_rayquery.comp
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+
+//!variant integrate_indirect_sharc_query_rayquery_wboit.comp
+//!>       ENABLE_SHARC=1
+//!>       SHARC_QUERY=1
+//!>       NEE_CACHE_ENABLE=1
+//!>       UNORDERED_RESOLVE_WBOIT
+
 //!end-variants
 #define ATMOSPHERE_AVAILABLE
 

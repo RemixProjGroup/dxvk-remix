@@ -138,7 +138,7 @@ namespace dxvk {
   }
 
   void NeuralRadianceCache::prewarmShaders(DxvkPipelineManager& pipelineManager) const {
-    if (RtxOptions::integrateIndirectMode() != IntegrateIndirectMode::NeuralRadianceCache) {
+    if (RtxOptions::resolvedIntegrateIndirectMode() != IntegrateIndirectMode::NeuralRadianceCache) {
       return;
     }
 
@@ -585,7 +585,7 @@ namespace dxvk {
   }
 
   bool NeuralRadianceCache::isEnabled() const {
-    return RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
+    return RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
   }
 
   void NeuralRadianceCache::onFrameBegin(

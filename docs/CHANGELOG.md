@@ -28,6 +28,16 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-10
+
+### SHARC on every GPU vendor by default
+Every graphics preset now selects the SHARC radiance cache on any GPU with its device features (`shaderInt64`, `shaderBufferInt64Atomics`, `shaderFloat16`, 16-bit storage, `rayQuery`), as upstream does, instead of on NVIDIA only. GPUs without them keep ReSTIR GI. Off NVIDIA, the SHARC update and query always run as compute kernels with inline ray queries, whatever `rtx.renderPassIntegrateIndirectRaytraceMode` says, so no ray tracing pipeline runs the cache there. On NVIDIA, Ray Query mode runs them through their ray tracing pipelines, as it already does for the indirect integration. `rtx.sharc.indirectFromCache` integrates indirect light with SHARC whatever `rtx.integrateIndirectMode` says, without writing that option, so presets and user settings keep their values.
+- Options: added `rtx.sharc.indirectFromCache` (default off, "Indirect Light From Radiance Cache" in the developer menu). Default changed: the graphics presets set `rtx.integrateIndirectMode` to SHARC on AMD, Intel and other GPUs with the features. `rtx.integrateIndirect.rayQueryComputeKernel` also covers the SHARC kernels.
+- Logs: the device feature dump lists `shaderBufferInt64Atomics`, `shaderFloat16`, `storageBuffer16BitAccess` and `uniformAndStorageBuffer16BitAccess`. `[RTX] SHARC is not supported: the device lacks <feature>.` names the missing feature, and `[RTX] Graphics preset indirect lighting:` names the path.
+- Not covered: a 64-bit atomics fallback for GPUs without `shaderBufferInt64Atomics`. Not yet run on AMD or Intel GPUs.
+- Commits: the commit that adds this entry.
+- Docs: [SharcRadianceCache.md](../documentation/SharcRadianceCache.md)
+
 ## 2026-11-06
 
 ### Remix API plugin guide

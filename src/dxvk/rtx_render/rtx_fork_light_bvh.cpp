@@ -72,7 +72,7 @@ namespace dxvk {
       return false;
     }
     const bool deferredNrcTrainingSetup = SparseRendering::isEnabledByOptions() &&
-      RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
+      RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
     return !deferredNrcTrainingSetup;
   }
 

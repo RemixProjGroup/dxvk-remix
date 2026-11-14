@@ -875,7 +875,7 @@ namespace dxvk {
       // Note: The getters for these SER/OMM enabled flags also check if SER/OMMs are supported, so we do not need to check for that manually.
       const bool serEnabled = RtxOptions::isShaderExecutionReorderingInPathtracerGbufferEnabled();
       const bool ommEnabled = RtxOptions::getEnableOpacityMicromap();
-      const bool nrcEnabled = RtxOptions::integrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
+      const bool nrcEnabled = RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
       const bool wboitEnabled = RtxOptions::wboitEnabled();
 
       const uint32_t featureVariants[] = {

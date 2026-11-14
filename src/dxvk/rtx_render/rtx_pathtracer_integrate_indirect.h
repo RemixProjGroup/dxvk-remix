@@ -67,11 +67,13 @@ namespace dxvk {
                "rtx.integrateIndirect.slimKeepPom keeps the inline update.");
 
     RTX_OPTION("rtx.integrateIndirect", bool, rayQueryComputeKernel, false,
-               "Runs the Ray Query indirect integration (rtx.renderPassIntegrateIndirectRaytraceMode = 0) as a compute "
-               "shader on NVIDIA GPUs. Off, Ray Query mode traces the same ray query kernel as a ray generation shader "
-               "there, because the compute dispatch of this kernel faults the device (a read of an invalid address on "
-               "its first frame) where the ray generation shader built from the same code does not. Other GPUs always "
-               "run the compute kernel, which keeps the indirect pass off ray tracing pipelines on them.");
+               "Runs the Ray Query indirect integration (rtx.renderPassIntegrateIndirectRaytraceMode = 0), and the SHARC "
+               "update and query with it, as compute shaders on NVIDIA GPUs. Off, Ray Query mode traces the same ray "
+               "query kernel as a ray generation shader there, because the compute dispatch of this kernel faults the "
+               "device (a read of an invalid address on its first frame) where the ray generation shader built from the "
+               "same code does not, and SHARC runs through its ray tracing pipelines. Other GPUs always run the compute "
+               "kernels in Ray Query mode, and run SHARC as compute kernels in every indirect mode, which keeps SHARC "
+               "off ray tracing pipelines on them.");
 
     explicit DxvkPathtracerIntegrateIndirect(DxvkDevice* device);
     ~DxvkPathtracerIntegrateIndirect() = default;
@@ -112,6 +114,12 @@ namespace dxvk {
     // deferred flush, no portals); the caller also checks the level (Full / Slim / Lean) and POM.
     static bool sharcUpdateSerPossible(const bool serEnabled, const bool ommEnabled, const bool wboitEnabled, const bool includePortals);
     static DxvkRaytracingPipelineShaders getSharcUpdateSerPipelineShaders(const bool depth4, const bool ommEnabled, const SlimLevel slimLevel);
+    // True when the SHARC update and query run as compute shaders with inline ray queries: always on GPUs other
+    // than NVIDIA, and on NVIDIA when the indirect pass runs in RayQuery mode without ray generation shaders
+    // (rayQueryUsesRaygen). No ray tracing pipeline is dispatched for SHARC then.
+    bool sharcUsesCompute() const;
+    static Rc<DxvkShader> getSharcUpdateComputeShader(const bool depth4, const bool wboitEnabled, const bool deferredFlush);
+    static Rc<DxvkShader> getSharcQueryComputeShader(const bool wboitEnabled);
     void prewarmSharcShaders(DxvkPipelineManager& pipelineManager) const;
     static SlimLevel selectSharcSlimLevel(RtxContext* ctx, const Resources::RaytracingOutput& rtOutput, const bool ommEnabled, const bool includePortals, const bool wboitEnabled);
     // The selectors on a given mask (the RtxContext overloads pass this frame's), for the table check.
@@ -133,6 +141,8 @@ namespace dxvk {
     enum class SlimPass { SharcUpdate = 0, Integration, Assembly, Count };
     void noteSlimLevel(const SlimPass pass, const SlimLevel level) { m_frameSlimLevels[(uint32_t) pass] = (int32_t) level; }
     void logSlimLevels(const uint32_t frameId);
+    // Logs once that Ray Query mode runs through ray generation shaders on this GPU.
+    void logRayQueryRaygenOnce();
 
     IntegrateIndirectMode m_integrateIndirectMode;
     // The ray generation routing of Ray Query mode is logged once.

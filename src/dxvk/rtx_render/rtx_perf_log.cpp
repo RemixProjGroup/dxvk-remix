@@ -14,6 +14,7 @@
 #include "rtx_fork_d3d9_alpha.h"
 #include "rtx_light_manager.h"
 #include "rtx_rtxdi_rayquery.h"
+#include "rtx_sharc.h"
 #include "rtx_options.h"
 #include "../dxvk_device.h"
 #include "../dxvk_cs.h"
@@ -624,7 +625,8 @@ namespace dxvk {
       " | portals=", scene.getRayPortalManager().getRayPortalInfoSceneData().numActiveRayPortals,
       " portalDuplicatesHidden=", scene.getRayPortalManager().getDuplicatesHidden(),
       " | bounces=", uint32_t(RtxOptions::pathMinBounces()), "-", uint32_t(RtxOptions::pathMaxBounces()),
-      " indirectMode=", int(RtxOptions::integrateIndirectMode()), " (0 IS,1 ReSTIR-GI,2 NRC,3 SHaRC)",
+      " indirectMode=", int(RtxOptions::resolvedIntegrateIndirectMode()), " (0 IS,1 ReSTIR-GI,2 NRC,3 SHaRC)",
+      " indirectFromCache=", RtxSharc::indirectFromCache() ? 1 : 0,
       " | render=", last.cpu.renderW, "x", last.cpu.renderH, " output=", last.cpu.outputW, "x", last.cpu.outputH,
       " upscaler=", int(RtxOptions::upscalerType()), " rayReconstruction=", RtxOptions::isRayReconstructionEnabled() ? 1 : 0,
       " dlssProfile=", int(RtxOptions::qualityDLSS()), " dlssNR=", last.cpu.dlssNr ? 1 : 0,

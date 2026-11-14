@@ -1805,6 +1805,10 @@ namespace dxvk {
       // NV-DXVK
       "\n  scalarBlockLayout                      : ", features.vulkan12Features.scalarBlockLayout ? "1" : "0",
       "\n  uniformBufferStandardLayout            : ", features.vulkan12Features.uniformBufferStandardLayout ? "1" : "0",
+      "\n  shaderBufferInt64Atomics               : ", features.vulkan12Features.shaderBufferInt64Atomics ? "1" : "0",
+      "\n  shaderFloat16                          : ", features.vulkan12Features.shaderFloat16 ? "1" : "0",
+      "\n  storageBuffer16BitAccess               : ", features.vulkan11Features.storageBuffer16BitAccess ? "1" : "0",
+      "\n  uniformAndStorageBuffer16BitAccess     : ", features.vulkan11Features.uniformAndStorageBuffer16BitAccess ? "1" : "0",
       // NV-DXVK end
       "\n", VK_EXT_4444_FORMATS_EXTENSION_NAME,
       "\n  formatA4R4G4B4                         : ", features.ext4444Formats.formatA4R4G4B4 ? "1" : "0",

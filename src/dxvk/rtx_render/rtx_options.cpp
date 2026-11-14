@@ -324,6 +324,10 @@ namespace dxvk {
     return archInfo.implementation_id;
   }
 
+  IntegrateIndirectMode RtxOptions::resolvedIntegrateIndirectMode() {
+    return RtxSharc::indirectFromCache() ? IntegrateIndirectMode::Sharc : integrateIndirectMode();
+  }
+
   void RtxOptions::updatePathTracerPreset(PathTracerPreset preset) {
     // Code-driven changes for path tracer preset (automatically routes to User layer when preset is Custom)
     RtxOptionLayerTarget layerTarget(RtxOptionEditTarget::Derived);
@@ -340,7 +344,7 @@ namespace dxvk {
       DxvkRtxdiRayQuery::enableSampleStealing.setDeferred(false);
 
       // ReSTIR GI
-      if (RtxOptions::useReSTIRGI()) {
+      if (integrateIndirectMode() == IntegrateIndirectMode::ReSTIRGI) {
         DxvkReSTIRGIRayQuery::setToRayReconstructionPreset();
       }
 
@@ -373,7 +377,7 @@ namespace dxvk {
       DxvkRtxdiRayQuery::enableSampleStealingObject().resetToDefault();
 
       // ReSTIR GI
-      if (RtxOptions::useReSTIRGI()) {
+      if (integrateIndirectMode() == IntegrateIndirectMode::ReSTIRGI) {
         DxvkReSTIRGIRayQuery::setToNRDPreset();
       }
 
@@ -522,10 +526,9 @@ namespace dxvk {
 
     const uint32_t deviceVendorID = device->adapter()->devicePropertiesExt().core.properties.vendorID;
     const bool isNvidiaGpu = deviceVendorID == static_cast<uint32_t>(DxvkGpuVendor::Nvidia);
-    const bool isSharcVendor = isNvidiaGpu;
 
-    // Every preset selects SHARC on NVIDIA GPUs that support it, and ReSTIR GI everywhere else.
-    // The SHARC update is a ray tracing pipeline, and other GPUs run only Ray Query passes (see updateRaytraceModePresets).
+    // Every preset selects SHARC on GPUs that support it, and ReSTIR GI on the others.
+    // Off NVIDIA, SHARC runs as compute kernels with inline ray queries (DxvkPathtracerIntegrateIndirect::sharcUsesCompute).
     // NRC runs only on NVIDIA GPUs, so it is chosen by hand with the Custom preset. Its tier still follows the preset.
     auto setIndirectPreset = [&](RtxSharc::QualityPreset sharcPreset, NeuralRadianceCache::QualityPreset nrcPreset) {
       NeuralRadianceCache& nrc = common->metaNeuralRadianceCache();
@@ -534,14 +537,15 @@ namespace dxvk {
       }
       // TODO[REMIX-4105] a frame that uses NRC where it isn't supported crashes, and a lower layer may select NRC,
       // so this needs to be setImmediately.
-      if (isSharcVendor && RtxSharc::checkIsSupported(device)) {
+      const char* sharcMissingFeature = RtxSharc::missingFeature(device);
+      if (sharcMissingFeature == nullptr) {
         RtxOptions::integrateIndirectMode.setImmediately(IntegrateIndirectMode::Sharc);
         common->metaSharc().setQualityPreset(sharcPreset);
-        Logger::info("[RTX] Graphics preset indirect lighting: SHARC (NVIDIA GPU).");
+        Logger::info(str::format("[RTX] Graphics preset indirect lighting: SHARC (",
+                                 isNvidiaGpu ? "NVIDIA GPU" : "compute kernels", ", vendor ID 0x", std::hex, deviceVendorID, ")."));
       } else {
         RtxOptions::integrateIndirectMode.setImmediately(IntegrateIndirectMode::ReSTIRGI);
-        Logger::info(str::format("[RTX] Graphics preset indirect lighting: ReSTIR GI (",
-                                 isSharcVendor ? "SHARC is not supported" : "SHARC is off on this GPU vendor",
+        Logger::info(str::format("[RTX] Graphics preset indirect lighting: ReSTIR GI (SHARC needs ", sharcMissingFeature,
                                  ", vendor ID 0x", std::hex, deviceVendorID, ")."));
       }
     };
