@@ -28,6 +28,13 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-14
+
+### Fix: small particles in large world units are no longer dropped
+The particle geometry pass dropped every particle under 0.1 authored units, assuming the authored unit is a centimetre. With `rtx.sceneScale` 1 in a game whose unit is a metre that is 10 cm, so snowflakes and raindrops never showed. The guard now drops only degenerate sizes, and the existing screen-space test decides visibility.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-11
 
 ### Weather Presets window easier to read
