@@ -28,6 +28,13 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-14
+
+### Particle screen-size cull as an option
+Particles under a fixed 2 pixels of the render resolution were not drawn. An upscaler halves that resolution in its performance modes, so small particles such as snowflakes vanished within a few metres. The threshold is now an option with a menu control.
+- Options: added `rtx.particles.minScreenSize` (default 2, the previous fixed value). Preset-independent: the right value depends on a game's particle sizes rather than on the GPU, and the default keeps the previous behaviour.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-11
 
 ### Weather Presets window easier to read
