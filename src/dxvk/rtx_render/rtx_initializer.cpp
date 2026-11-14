@@ -45,6 +45,7 @@
 #include "rtx_auto_exposure.h"
 #include "rtx_numos.h"
 #include "rtx_numos_settings.h"
+#include "rtx_opacity_micromap_manager.h"
 #include "rtx_option_manager.h"
 #include "rtx_stress.h"
 
@@ -131,6 +132,9 @@ namespace dxvk {
     // The prewarm reads SER support through RtxOptions before RtxContext records it.
     // SER SPIR-V must never reach a driver without VK_NV_ray_tracing_invocation_reorder.
     RtxOptions::enableShaderExecutionReordering = RtxContext::checkIsShaderExecutionReorderingSupported(*m_device);
+    // RtxOptions::getEnableOpacityMicromap() picks the micromap flag of the ray tracing pipelines the prewarm registers,
+    // so it must give the answer the frames will get.
+    RtxOptions::setIsOpacityMicromapSupported(OpacityMicromapManager::checkIsOpacityMicromapSupported(*m_device));
 
     // Kick off shader prewarming
     startPrewarmShaders();
@@ -357,6 +361,8 @@ namespace dxvk {
     Logger::info(str::format("[ShaderPrewarm] first ", uint32_t(kFirstFramesReportSeconds), " s of 3D frames: ", onDemand,
                              " pipelines compiled on demand (", onDemandMs, " ms the frames waited), ", background,
                              " compiled in the background (", backgroundMs, " ms)"));
+    // Every pipeline compiled since the startup prewarm finished, the wait screen and the first 3D frames included.
+    Logger::info(str::format("[ShaderPrewarm] missed by the prewarm: ", cache->lateCompileList()));
   }
 
   void RtxInitializer::waitForShaderPrewarm() {

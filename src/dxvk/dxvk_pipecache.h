@@ -105,10 +105,14 @@ namespace dxvk {
     void setStartupPrewarmDone() { m_startupPrewarmDone.store(true); }
     bool startupPrewarmDone() const { return m_startupPrewarmDone.load(); }
 
-    // Counts a late compile.
-    // Returns whether it is still within the first kLoggedLateCompiles of the run, which are logged by name.
+    // Counts a late compile and keeps the first kLoggedLateCompiles of the run by name for lateCompileList.
+    // Returns whether it is still within those, which are also logged one line each.
     static constexpr uint32_t kLoggedLateCompiles = 64;
-    bool noteLateCompile() { return m_lateCompiles.fetch_add(1) < kLoggedLateCompiles; }
+    bool noteLateCompile(const char* kind, const std::string& name, bool background);
+
+    // Returns the late compiles kept so far as "<kind> <name> (on demand)" or "(in the background)", joined by "; ".
+    // Returns "none" when there were none.
+    std::string lateCompileList() const;
 
   private:
 
@@ -134,6 +138,8 @@ namespace dxvk {
     std::atomic<bool>       m_saving { false };
     std::atomic<bool>       m_startupPrewarmDone { false };
     std::atomic<uint32_t>   m_lateCompiles { 0 };
+    mutable dxvk::mutex     m_lateCompileMutex;
+    std::vector<std::string> m_lateCompileNames;
     LoadResult              m_loadResult = LoadResult::Disabled;
     std::atomic<uint32_t>   m_remixCreated { 0 };
     std::atomic<uint32_t>   m_remixCompiled { 0 };

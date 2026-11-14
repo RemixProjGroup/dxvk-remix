@@ -14,6 +14,39 @@
 #include "../util/util_singleton.h"
 
 namespace dxvk {
+  namespace {
+    // Returns "<pipeline debug name> [<shader>, <shader>, ...]" with every distinct shader in group order and
+    // ", OMM" for a micromap pipeline, so the log tells variants that share a debug name apart.
+    std::string creationLogName(const DxvkRaytracingPipelineShaders& shaders) {
+      std::string name = shaders.debugName ? shaders.debugName : "<debug name missing>";
+      std::vector<const DxvkShader*> seen;
+      const char* separator = " [";
+      auto add = [&](const Rc<DxvkShader>& shader) {
+        if (shader == nullptr || std::find(seen.begin(), seen.end(), shader.ptr()) != seen.end()) {
+          return;
+        }
+        seen.push_back(shader.ptr());
+        name += separator;
+        name += shader->debugName();
+        separator = ", ";
+      };
+      for (const DxvkRaytracingShaderGroup& group : shaders.groups) {
+        add(group.generalShader);
+        add(group.closestHitShader);
+        add(group.anyHitShader);
+        add(group.intersectionShader);
+      }
+      if (shaders.pipelineFlags & VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT) {
+        name += separator;
+        name += "OMM";
+      }
+      if (!seen.empty()) {
+        name += "]";
+      }
+      return name;
+    }
+  }
+
   namespace WAR4000939 {
     // Due to an NVIDIA driver bug the OMM pipelines must be compiled BEFORE the
     // non-OMM counterparts.
@@ -297,17 +330,17 @@ namespace dxvk {
     feedbackInfo.pPipelineCreationFeedback = &feedback;
     struct CreationLog {
       DxvkPipelineCache* cache;
-      const char* name;
+      const DxvkRaytracingPipelineShaders& shaders;
       const VkPipelineCreationFeedback& feedback;
       std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
       ~CreationLog() {
-        RtxPipelineStats::logCreation(cache, "raytracing", name ? name : "<debug name missing>",
-          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(),
+        const double milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        RtxPipelineStats::logCreation(cache, "raytracing", creationLogName(shaders), milliseconds,
           (feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT) == 0 ? -1
             : (feedback.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT) != 0 ? 1 : 0,
           true);
       }
-    } creationLog { m_pipeMgr->m_cache.ptr(), m_shaders.debugName, feedback };
+    } creationLog { m_pipeMgr->m_cache.ptr(), m_shaders, feedback };
 
     assert(m_layout != nullptr);
 

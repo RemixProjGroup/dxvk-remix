@@ -205,6 +205,32 @@ namespace dxvk {
   }
 
 
+  bool DxvkPipelineCache::noteLateCompile(const char* kind, const std::string& name, bool background) {
+    if (m_lateCompiles.fetch_add(1) >= kLoggedLateCompiles) {
+      return false;
+    }
+    std::lock_guard<dxvk::mutex> lock(m_lateCompileMutex);
+    m_lateCompileNames.push_back(str::format(kind, " ", name, background ? " (in the background)" : " (on demand)"));
+    return true;
+  }
+
+
+  std::string DxvkPipelineCache::lateCompileList() const {
+    std::lock_guard<dxvk::mutex> lock(m_lateCompileMutex);
+    if (m_lateCompileNames.empty()) {
+      return "none";
+    }
+    std::string list;
+    for (const std::string& entry : m_lateCompileNames) {
+      if (!list.empty()) {
+        list += "; ";
+      }
+      list += entry;
+    }
+    return list;
+  }
+
+
   DxvkPipelineCache::CompileCounts DxvkPipelineCache::compileCounts() const {
     CompileCounts counts;
     counts.remixCreated = m_remixCreated.load();

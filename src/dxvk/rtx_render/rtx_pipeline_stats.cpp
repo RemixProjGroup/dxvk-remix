@@ -210,7 +210,7 @@ namespace dxvk {
       cache->notePipelineCreated(hit, milliseconds, remix, compiled, t_backgroundThread);
     if (compiled && cache != nullptr && cache->startupPrewarmDone()) {
       // Logger::status skips the logger's repeat limit. noteLateCompile caps these lines instead.
-      if (cache->noteLateCompile()) {
+      if (cache->noteLateCompile(kind, name, t_backgroundThread)) {
         Logger::status(str::format("[ShaderCompile] after the startup prewarm: ", kind, " pipeline ", name, ": ",
                                    uint32_t(milliseconds), " ms", hit == 0 ? " (not in the pipeline cache)" : " (no creation feedback)",
                                    t_backgroundThread ? ", in the background" : ", on demand (the frame waited)"));

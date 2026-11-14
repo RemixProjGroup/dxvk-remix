@@ -266,14 +266,18 @@ namespace dxvk {
         Rc<DxvkShader> shader = createShader(info);
         info.m_shader.push_back(shader);
 
+        // A thread that lost the race to create this shader returns the winner's object. Pipelines are keyed on the
+        // shader objects, so a second object would never match the pipelines registered for the first.
         m_shaderMapLock.lock();
         pShaderPair = m_shaderMap.find(shaderName);
         if (pShaderPair == m_shaderMap.end()) {
           m_shaderMap[shaderName] = info;
+        } else {
+          shader = pShaderPair->second.m_shader.back();
         }
 
         m_shaderMapLock.unlock();
-        return info.m_shader.back();
+        return shader;
       } else {
         m_shaderMapLock.unlock();
         return pShaderPair->second.m_shader.back();

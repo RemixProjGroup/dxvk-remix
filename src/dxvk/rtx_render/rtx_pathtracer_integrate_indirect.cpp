@@ -774,7 +774,7 @@ namespace dxvk {
     } else {
       // Note: The getters for these SER/OMM enabled flags also check if SER/OMMs are supported, so we do not need to check for that manually.
       const bool serEnabled = RtxOptions::isShaderExecutionReorderingInPathtracerIntegrateIndirectEnabled();
-      const bool ommEnabled = OpacityMicromapManager::checkIsOpacityMicromapSupported(*m_device) && RtxOptions::OpacityMicromap::enable();
+      const bool ommEnabled = RtxOptions::getEnableOpacityMicromap();
       const bool useNeeCache = NeeCachePass::resolvedEnable();
       const bool nrcEnabled = RtxOptions::resolvedIntegrateIndirectMode() == IntegrateIndirectMode::NeuralRadianceCache;
       const bool wboitEnabled = RtxOptions::wboitEnabled();
