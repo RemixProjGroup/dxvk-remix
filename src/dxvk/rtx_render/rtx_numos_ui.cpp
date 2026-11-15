@@ -388,6 +388,14 @@ namespace dxvk {
                                                 "upscaling the full rate (submodules/numos/docs/cloud-temporal-filter.md).");
       }
       setting("cloudTemporalHistoryWeight", "Temporal History", 0.005f, 0.0f, 0.98f, "%.3f");
+      {
+        static const int values[] = { 0, 2, 1, 3 };
+        static const char* names[] = { "One Pass", "Split", "Split, Cross-Tile", "Split, Cross-Tile, Full Precision" };
+        choice("cloudQuarterMarchSchedule", "Quarter March Schedule", values, names, 4);
+      }
+      setting("cloudEmptyPixelSkip", "Skip Empty Pixels");
+      setting("cloudMarchRayBudgetMillions", "March Ray Budget (Millions)", 0.05f, 0.0f, 8.0f, "%.2f");
+      setting("cloudMarchEarlyExit", "Early Exit in Thick Cloud");
       setting("cloudTemporalStillSamples", "Still History (samples)", 0.5f, 1.0f, 1024.0f);
       setting("cloudSpatialDenoise", "Spatial Denoise", 0.01f, 0.0f, 1.0f, "%.2f");
       setting("cloudHistoryDepthTolerance", "Screen Reuse Depth Tolerance", 0.005f, 0.0f, 1.0f, "%.3f");
@@ -408,6 +416,7 @@ namespace dxvk {
       setting("nubis3AdaptiveStepKm", "Adaptive Step Floor", 0.001f, 0.0f, 0.2f, "%.3f km");
       setting("nvdfStepScale", "SDF Step Scale", 0.01f, 0.1f, 2.0f, "%.2f");
       setting("cloudLightingLodThreshold", "Lighting LOD", 0.002f, 0.0f, 0.25f, "%.3f");
+      setting("cloudLightingLodByDistance", "Lighting LOD by Distance");
       setting("nubis3JitterAnimateKm", "Jitter Animation Distance", 1.0f, 0.0f, 1.0e9f, "%.0f km");
       setting("cloudVoxelGridRebakeGranularityKm", "Lighting Grid Re-bake Step", 0.01f, 0.0f, 10.0f, "%.2f km");
       if (ImGui::TreeNode("Profiling")) {

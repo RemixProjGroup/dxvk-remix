@@ -28,6 +28,14 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-15
+
+### Cheaper NUMOS clouds
+The cloud screen pass splits the quarter march into a march-only pass, a rebuild with no march compiled in, and a fallback that marches only the silhouette pixels no fresh sample covers, so the march's registers no longer set the occupancy of every resolved pixel. Empty pixels skip the history reprojection, rays with no cloud span skip the per-ray setup, the detail noise reads mips by footprint, and the lighting LOD threshold grows with distance past 20 km. Moves NUMOS to 079c035, which also brings the magnifier-lens clouds (inactive without a host that sends lenses).
+- Options: added `rtx.atmosphere.cloudQuarterMarchSchedule` (default 2, the split path; its image matches the one-pass path exactly), `rtx.atmosphere.cloudEmptyPixelSkip` (default on), `rtx.atmosphere.cloudLightingLodByDistance` (default on), `rtx.atmosphere.cloudMarchRayBudgetMillions` (default 0, off) and `rtx.atmosphere.cloudMarchEarlyExit` (default off); default flipped `rtx.atmosphere.cloudDetailLodMode` → 2.
+- Measured: NUMOS viewer at 2560x1600, cloud pass 12-30% cheaper across clear, storm, overcast, layer 2, under-deck, in-deck, lens and flying views; confirmed in New Vegas.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-11
 
 ### Weather Presets window easier to read
