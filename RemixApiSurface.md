@@ -77,6 +77,7 @@ the API, see [`docs/RemixApi.md`](docs/RemixApi.md).
 | `remixapi_LightHandle` | `struct remixapi_LightHandle_T*` |
 | `remixapi_TextureHandle` | `struct remixapi_TextureHandle_T*` |
 | `remixapi_Path` | `const wchar_t*` |
+| `remixapi_DetailLayerWeightFlags` | `uint32_t` |
 | `remixapi_InstanceCategoryFlags` | `uint32_t` |
 | `remixapi_D3D11TextureToken` | `void*` |
 
@@ -129,6 +130,10 @@ the API, see [`docs/RemixApi.md`](docs/RemixApi.md).
 | `REMIXAPI_STRUCT_TYPE_CONFIG_LAYER_INFO_EXT` | `0x4E560005` |  |
 | `REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TEXTURE_TRANSFORM_EXT` | `0x4E560006` |  |
 | `REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_DECAL_ORDER_EXT` | `0x4E560007` |  |
+| `REMIXAPI_STRUCT_TYPE_MESH_INFO_SECONDARY_TEXCOORD_EXT` | `0x4E560008` |  |
+| `REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_DETAIL_LAYERS_EXT` | `0x4E560009` |  |
+| `REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_CLEAR_COAT_EXT` | `0x4E56000A` |  |
+| `REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_DETAIL_LAYER_WEIGHTS_EXT` | `0x4E56000B` |  |
 
 ### `remixapi_ErrorCode`
 
@@ -154,6 +159,13 @@ the API, see [`docs/RemixApi.md`](docs/RemixApi.md).
 | `REMIXAPI_ERROR_CODE_HRESULT_GRAPHICS_QUEUE_FAMILY_MISSING` | `0x88960006` |  |
 | `REMIXAPI_ERROR_CODE_FEATURE_UNAVAILABLE` | `0x4E560001` | Remix Plus error codes live from 0x4E560000 on, like the Remix Plus struct types. The device or the current output does not support the requested feature. |
 | `REMIXAPI_ERROR_CODE_BUFFER_TOO_SMALL` | `0x4E560002` | The output buffer is too small. The call reports the size it needs. |
+
+### `remixapi_DetailLayerWeightFlagBits`
+
+| Member | Value | Notes |
+| :-- | :-: | :-- |
+| `REMIXAPI_DETAIL_LAYER_WEIGHT_FLAG_DETAIL_NORMAL` | `1 << 0` | detailNormalStrength is multiplied by the vertex colour's detailNormalWeightChannel. |
+| `REMIXAPI_DETAIL_LAYER_WEIGHT_FLAG_LAYER_MASK_THRESHOLD` | `1 << 1` | The layer mask is thresholded by the vertex colour's layerMaskWeightChannel. |
 
 ### `remixapi_CameraType`
 
@@ -404,6 +416,85 @@ untinted.
 | `void*` | `pNext` |  |
 | `remixapi_Float3D` | `albedoTint` |  |
 
+### `remixapi_MaterialInfoOpaqueDetailLayersEXT`
+
+Valid only if remixapi_MaterialInfo contains remixapi_MaterialInfoOpaqueEXT in its pNext chain. Two layers over
+the base material, both read with the mesh's second texture coordinate set (remixapi_MeshInfoSecondaryTexcoordEXT).
+The base material keeps the first set. A mesh without a second set reads the layers with the first one.
+The layers add surface detail that is mapped apart from the base material, such as wear, grime or a second finish.
+Detail normal: a tangent-space normal map blended over the base normal (reoriented normal mapping). It is
+encoded like the base normal map: Remix's octahedral encoding, or tangent XY for a texture imported with
+REMIXAPI_TEXTURE_ENCODING_NORMAL_TANGENT_XY. detailNormalStrength 0 or no texture disables it.
+Masked layer: mask = (texture ? the layerMaskChannel channel of the texture : 1) * layerMaskStrength. The
+albedo, roughness and metallic blend towards layerAlbedo (gamma), layerRoughness and layerMetallic by the
+mask, for example worn edges that expose a different material. layerMaskStrength 0 disables it.
+Each texture's coordinates are the second set times its *TexcoordScale. The material's sampler is used.
+Check remixapi_GetSecondaryTexcoordVersion() before chaining it: a runtime that predates it ignores the struct.
+See documentation/SecondaryTexcoordLayers.md.
+
+| Type | Field | Notes |
+| :-- | :-- | :-- |
+| `remixapi_StructType` | `sType` | REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_DETAIL_LAYERS_EXT |
+| `void*` | `pNext` |  |
+| `remixapi_Path` | `detailNormalTexture` |  |
+| `float` | `detailNormalStrength` | 0..1 |
+| `remixapi_Float2D` | `detailNormalTexcoordScale` | (0, 0) is read as (1, 1). |
+| `remixapi_Path` | `layerMaskTexture` |  |
+| `uint32_t` | `layerMaskChannel` | 0: red, 1: green, 2: blue, 3: alpha. |
+| `float` | `layerMaskStrength` | 0..1 |
+| `remixapi_Float3D` | `layerAlbedo` | Gamma-encoded, 0..1. |
+| `float` | `layerRoughness` | Perceptual, 0..1. |
+| `float` | `layerMetallic` | 0..1 |
+| `remixapi_Float2D` | `layerTexcoordScale` | (0, 0) is read as (1, 1). |
+
+### `remixapi_MaterialInfoOpaqueDetailLayerWeightsEXT`
+
+Valid only if remixapi_MaterialInfo contains remixapi_MaterialInfoOpaqueDetailLayersEXT in its pNext chain.
+Weights the detail layers per vertex by the mesh's interpolated vertex colour (remixapi_HardcodedVertex::color,
+each channel read as a linear 0..1 value, before the baked lighting normalization). w is the chosen channel.
+The weights apply before the layers' strengths.
+REMIXAPI_DETAIL_LAYER_WEIGHT_FLAG_DETAIL_NORMAL: the detail normal's strength is w * detailNormalStrength.
+REMIXAPI_DETAIL_LAYER_WEIGHT_FLAG_LAYER_MASK_THRESHOLD: the mask is
+smoothstep(t - e, t + e, m) * layerMaskStrength, with the per-vertex threshold t = (1 - w) * (1 + 2e) - e and
+e = layerMaskEdgeWidth / 2, where m is the mask texture's channel, or 1 without a texture.
+The layer shows where m is above t, so w 0 shows none of it and w 1 shows all of it.
+layerMaskEdgeWidth 0 makes the edge a hard step.
+Without the flag, the mask is m * layerMaskStrength.
+The struct does not change how the vertex colour affects the albedo.
+Check remixapi_GetSecondaryTexcoordVersion() >= 2 before chaining it: an older runtime ignores the struct and
+renders the layers unweighted. See documentation/SecondaryTexcoordLayers.md.
+
+| Type | Field | Notes |
+| :-- | :-- | :-- |
+| `remixapi_StructType` | `sType` | REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_DETAIL_LAYER_WEIGHTS_EXT |
+| `void*` | `pNext` |  |
+| `remixapi_DetailLayerWeightFlags` | `flags` | remixapi_DetailLayerWeightFlagBits |
+| `uint32_t` | `detailNormalWeightChannel` | 0: red, 1: green, 2: blue, 3: alpha. |
+| `uint32_t` | `layerMaskWeightChannel` | 0: red, 1: green, 2: blue, 3: alpha. |
+| `float` | `layerMaskEdgeWidth` | 0..1. The width of the fade around t. 0 is a hard step. |
+
+### `remixapi_MaterialInfoOpaqueClearCoatEXT`
+
+Valid only if remixapi_MaterialInfo contains remixapi_MaterialInfoOpaqueEXT in its pNext chain. Layers for coated
+and lacquered surfaces, such as varnished wood, glazed ceramics, coated plastics or automotive finishes:
+Clear coat: a second, dielectric GGX specular lobe over the base (index of refraction 1.5, so 4% reflectance at
+normal incidence). The coat's Fresnel-weighted share of the light goes to the coat and the rest reaches the
+base. It reads the base's shading normal. clearCoatWeight 0 disables it.
+Pearlescent: the albedo turns from the base colour at normal incidence towards pearlescentColor (gamma) at
+grazing angles, by pearlescentWeight * (1 - n.v)^pearlescentExponent. pearlescentWeight 0 disables it.
+Check remixapi_GetClearCoatMaterialVersion() before chaining it: a runtime that predates it ignores the struct and
+renders the base material alone. See documentation/ClearCoatMaterial.md.
+
+| Type | Field | Notes |
+| :-- | :-- | :-- |
+| `remixapi_StructType` | `sType` | REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_CLEAR_COAT_EXT |
+| `void*` | `pNext` |  |
+| `float` | `clearCoatWeight` | 0..1 |
+| `float` | `clearCoatRoughness` | Perceptual, 0..1. |
+| `remixapi_Float3D` | `pearlescentColor` | Gamma-encoded, 0..1. |
+| `float` | `pearlescentWeight` | 0..1 |
+| `float` | `pearlescentExponent` | 0.1..32. 0 is read as 3. |
+
 ### `remixapi_MaterialInfoTextureTransformEXT`
 
 Chained onto remixapi_MaterialInfo, next to remixapi_MaterialInfoOpaqueEXT or
@@ -543,6 +634,32 @@ registered one -- a changed surface count is a different mesh, not a morph.
 | :-- | :-- | :-- |
 | `remixapi_StructType` | `sType` |  |
 | `void*` | `pNext` |  |
+
+### `remixapi_MeshInfoSurfaceSecondaryTexcoord`
+
+The second texture coordinate set of one surface: one coordinate per vertex, in the surface's vertex order.
+A surface with texcoords_values NULL, or with texcoords_count other than its vertices_count, has no second set.
+
+| Type | Field | Notes |
+| :-- | :-- | :-- |
+| `const remixapi_Float2D*` | `texcoords_values` |  |
+| `uint64_t` | `texcoords_count` |  |
+
+### `remixapi_MeshInfoSecondaryTexcoordEXT`
+
+Link into remixapi_MeshInfo::pNext to give the mesh a second texture coordinate set, which the layers of
+remixapi_MaterialInfoOpaqueDetailLayersEXT read. surfaces_values[i] belongs to remixapi_MeshInfo::surfaces_values[i].
+Surfaces past surfaces_count have no second set. The coordinates are not transformed by the material's texture
+transform. The set is interpolated with the hit like the first one, and a mesh without it costs nothing extra.
+Check remixapi_GetSecondaryTexcoordVersion() before relying on it: a runtime that predates it ignores the struct.
+See documentation/SecondaryTexcoordLayers.md.
+
+| Type | Field | Notes |
+| :-- | :-- | :-- |
+| `remixapi_StructType` | `sType` | REMIXAPI_STRUCT_TYPE_MESH_INFO_SECONDARY_TEXCOORD_EXT |
+| `void*` | `pNext` |  |
+| `const remixapi_MeshInfoSurfaceSecondaryTexcoord*` | `surfaces_values` |  |
+| `uint32_t` | `surfaces_count` |  |
 
 ### `remixapi_CameraInfoParameterizedEXT`
 
@@ -1197,6 +1314,14 @@ Parameters:
 
 - *(none)*
 
+### `PFN_remixapi_GetClearCoatMaterialVersion`
+
+Returns: `uint32_t`
+
+Parameters:
+
+- *(none)*
+
 ### `PFN_remixapi_CreateMaterial`
 
 Returns: `remixapi_ErrorCode`
@@ -1213,6 +1338,14 @@ Returns: `remixapi_ErrorCode`
 Parameters:
 
 - `remixapi_MaterialHandle handle`
+
+### `PFN_remixapi_GetSecondaryTexcoordVersion`
+
+Returns: `uint32_t`
+
+Parameters:
+
+- *(none)*
 
 ### `PFN_remixapi_CreateMesh`
 

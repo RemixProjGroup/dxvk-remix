@@ -188,6 +188,15 @@ namespace dxvk {
     surface.texcoordBufferIndex = geo.texcoordBufferIndex;
     surface.texcoordOffset      = geo.texcoordBuffer.offsetFromSlice();
     surface.texcoordStride      = geo.texcoordBuffer.stride();
+    surface.texcoord1DwordOffset = 0;
+    if (geo.texcoord1Buffer.defined() && geo.texcoordBuffer.defined() && geo.texcoord1Buffer.matches(geo.texcoordBuffer) &&
+        geo.texcoord1Buffer.stride() == geo.texcoordBuffer.stride() &&
+        geo.texcoord1Buffer.offsetFromSlice() > geo.texcoordBuffer.offsetFromSlice()) {
+      const uint32_t byteOffset = uint32_t(geo.texcoord1Buffer.offsetFromSlice() - geo.texcoordBuffer.offsetFromSlice());
+      if (byteOffset % 4 == 0 && byteOffset / 4 <= SURFACE_TEXCOORD1_DWORD_OFFSET_MAX) {
+        surface.texcoord1DwordOffset = byteOffset / 4;
+      }
+    }
     surface.previousPositionBufferIndex = geo.previousPositionBufferIndex;
     surface.indexBufferIndex    = geo.indexBufferIndex;
     surface.indexStride         = geo.indexBuffer.stride();

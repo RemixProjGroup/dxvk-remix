@@ -186,6 +186,8 @@ namespace {
     std::vector<float> blendWeights;
     std::vector<uint32_t> blendIndices;
     remixapi_MaterialHandle material;
+    // The vertices' padding holds a second texture coordinate set (writeSecondaryTexcoords).
+    bool hasSecondaryTexcoords = false;
   };
   struct PendingMeshCreate {
     remixapi_MeshHandle handle;
@@ -268,6 +270,32 @@ namespace {
     }
     if (fix.indices != 0) {
       countInput(dxvk::SceneInput::Index);
+    }
+  }
+
+  // The second texture coordinate set rides in the vertex's padding, so the runtime's copy of an interleaved vertex
+  // buffer keeps it next to the first set. See documentation/SecondaryTexcoordLayers.md.
+  constexpr uint32_t kSecondaryTexcoordOffset = offsetof(remixapi_HardcodedVertex, _pad0);
+  static_assert(offsetof(remixapi_HardcodedVertex, _pad1) == kSecondaryTexcoordOffset + sizeof(float));
+
+  // Returns surface surfaceIndex's second texture coordinates from remixapi_MeshInfoSecondaryTexcoordEXT.
+  // Returns null when the surface has none or the count does not match its vertices.
+  const remixapi_Float2D* findSecondaryTexcoords(const remixapi_MeshInfo& info, size_t surfaceIndex, uint64_t vertexCount) {
+    const auto ext = pnext::find<remixapi_MeshInfoSecondaryTexcoordEXT>(&info);
+    if (ext == nullptr || ext->surfaces_values == nullptr || surfaceIndex >= ext->surfaces_count) {
+      return nullptr;
+    }
+    const remixapi_MeshInfoSurfaceSecondaryTexcoord& surface = ext->surfaces_values[surfaceIndex];
+    if (surface.texcoords_values == nullptr || surface.texcoords_count != vertexCount) {
+      return nullptr;
+    }
+    return surface.texcoords_values;
+  }
+
+  // Writes the second texture coordinates into the copied vertices' padding.
+  void writeSecondaryTexcoords(remixapi_HardcodedVertex* vertices, uint64_t vertexCount, const remixapi_Float2D* texcoords) {
+    for (uint64_t i = 0; i < vertexCount; i++) {
+      std::memcpy(reinterpret_cast<uint8_t*>(&vertices[i]) + kSecondaryTexcoordOffset, &texcoords[i], sizeof(remixapi_Float2D));
     }
   }
 
@@ -438,12 +466,15 @@ namespace {
       std::filesystem::path subsurfaceThicknessTexture;
       std::filesystem::path subsurfaceSingleScatteringAlbedoTexture;
       std::filesystem::path subsurfaceRadiusTexture;
+      std::filesystem::path detailNormalTexture;
+      std::filesystem::path layerMaskTexture;
     };
 
     PreloadSource makePreloadSource(const remixapi_MaterialInfo& info) {
       // TODO: C++20 designated initializers
       if (auto extOpaque = pnext::find<remixapi_MaterialInfoOpaqueEXT>(&info)) {
         auto extSubsurface = pnext::find<remixapi_MaterialInfoOpaqueSubsurfaceEXT>(&info);
+        auto extDetailLayers = pnext::find<remixapi_MaterialInfoOpaqueDetailLayersEXT>(&info);
         return PreloadSource {
           topath(info.albedoTexture),   // albedoTexture;
           topath(info.normalTexture),   // normalTexture;
@@ -457,6 +488,8 @@ namespace {
           topath(extSubsurface ? extSubsurface->subsurfaceThicknessTexture              : nullptr), // subsurfaceThicknessTexture;
           topath(extSubsurface ? extSubsurface->subsurfaceSingleScatteringAlbedoTexture : nullptr), // subsurfaceSingleScatteringAlbedoTexture;
           topath(s_apiVersion >= REMIXAPI_VERSION_MAKE(0, 5, 1) && extSubsurface ? extSubsurface->subsurfaceRadiusTexture : nullptr), // subsurfaceRadiusTexture;
+          topath(extDetailLayers ? extDetailLayers->detailNormalTexture : nullptr), // detailNormalTexture;
+          topath(extDetailLayers ? extDetailLayers->layerMaskTexture    : nullptr), // layerMaskTexture;
         };
       }
       if (auto extTranslucent = pnext::find<remixapi_MaterialInfoTranslucentEXT>(&info)) {
@@ -519,7 +552,7 @@ namespace {
       case MaterialDataType::Opaque:
       {
         const auto& src = materialWithoutPreload.getOpaqueMaterialData();
-        return MaterialData { OpaqueMaterialData{
+        OpaqueMaterialData opaque {
           preloadTexture(preload.albedoTexture),
           preloadTexture(preload.normalTexture),
           preloadTexture(preload.tangentTexture),
@@ -580,9 +613,16 @@ namespace {
           src.getTextureScale(),
           src.getTextureOffset(),
           src.getTextureRotation()
-        } };
+        };
+        if (src.getLayers().isSet()) {
+          OpaqueMaterialLayers layers = src.getLayers();
+          layers.detailNormalTexture = preloadTexture(preload.detailNormalTexture);
+          layers.layerMaskTexture = preloadTexture(preload.layerMaskTexture);
+          opaque.setLayers(layers);
+        }
+        return MaterialData { opaque };
       }
-      case MaterialDataType::Translucent: 
+      case MaterialDataType::Translucent:
       {
         const auto& src = materialWithoutPreload.getTranslucentMaterialData();
         return MaterialData { TranslucentMaterialData {
@@ -633,6 +673,43 @@ namespace {
       }
     }
 
+    // The layers' values without their textures, which toRtMaterialFinalized loads. Any extension may be null.
+    OpaqueMaterialLayers toOpaqueMaterialLayers(const remixapi_MaterialInfoOpaqueDetailLayersEXT* detailLayers,
+                                                const remixapi_MaterialInfoOpaqueDetailLayerWeightsEXT* detailLayerWeights,
+                                                const remixapi_MaterialInfoOpaqueClearCoatEXT* clearCoat) {
+      const auto toScale = [](const remixapi_Float2D& scale) {
+        return (scale.x == 0.f && scale.y == 0.f) ? Vector2(1.f) : Vector2(scale.x, scale.y);
+      };
+      OpaqueMaterialLayers layers;
+      if (detailLayers != nullptr) {
+        layers.detailNormalStrength = topath(detailLayers->detailNormalTexture).empty() ? 0.f : detailLayers->detailNormalStrength;
+        layers.detailNormalTexcoordScale = toScale(detailLayers->detailNormalTexcoordScale);
+        layers.layerMaskChannel = detailLayers->layerMaskChannel;
+        layers.layerMaskStrength = detailLayers->layerMaskStrength;
+        layers.layerAlbedo = tovec3(detailLayers->layerAlbedo);
+        layers.layerRoughness = detailLayers->layerRoughness;
+        layers.layerMetallic = detailLayers->layerMetallic;
+        layers.layerTexcoordScale = toScale(detailLayers->layerTexcoordScale);
+        if (detailLayerWeights != nullptr) {
+          static_assert(OpaqueMaterialLayers::kVertexWeightDetailNormal == REMIXAPI_DETAIL_LAYER_WEIGHT_FLAG_DETAIL_NORMAL);
+          static_assert(OpaqueMaterialLayers::kVertexWeightLayerMaskThreshold == REMIXAPI_DETAIL_LAYER_WEIGHT_FLAG_LAYER_MASK_THRESHOLD);
+          layers.vertexWeightFlags = detailLayerWeights->flags;
+          layers.detailNormalWeightChannel = detailLayerWeights->detailNormalWeightChannel;
+          layers.layerMaskWeightChannel = detailLayerWeights->layerMaskWeightChannel;
+          layers.layerMaskEdgeWidth = detailLayerWeights->layerMaskEdgeWidth;
+        }
+      }
+      if (clearCoat != nullptr) {
+        layers.clearCoatWeight = clearCoat->clearCoatWeight;
+        layers.clearCoatRoughness = clearCoat->clearCoatRoughness;
+        layers.pearlescentColor = tovec3(clearCoat->pearlescentColor);
+        layers.pearlescentWeight = clearCoat->pearlescentWeight;
+        layers.pearlescentExponent = clearCoat->pearlescentExponent == 0.f ? 3.f : clearCoat->pearlescentExponent;
+      }
+      layers.sanitize();
+      return layers;
+    }
+
     MaterialData toRtMaterialWithoutTexturePreload(const remixapi_MaterialInfo& info) {
       auto extTextureTransform = pnext::find<remixapi_MaterialInfoTextureTransformEXT>(&info);
       const float textureScrollRate = extTextureTransform ? extTextureTransform->textureScrollRate : 0.f;
@@ -651,7 +728,7 @@ namespace {
         auto extAlbedoTint = pnext::find<remixapi_MaterialInfoOpaqueAlbedoTintEXT>(&info);
         // Upstream introduced these fields at 0.6.5; on the Remix Plus ABI line that is 0.1000.1.
         const bool hasDlssControlMask = s_apiVersion >= REMIXAPI_VERSION_MAKE(0, 1000, 1);
-        return MaterialData { OpaqueMaterialData {
+        OpaqueMaterialData opaque {
           {},
           {},
           {},
@@ -720,7 +797,14 @@ namespace {
           textureScale,
           textureOffset,
           textureRotation,
-        } };
+        };
+        const OpaqueMaterialLayers layers = toOpaqueMaterialLayers(
+          pnext::find<remixapi_MaterialInfoOpaqueDetailLayersEXT>(&info), pnext::find<remixapi_MaterialInfoOpaqueDetailLayerWeightsEXT>(&info),
+          pnext::find<remixapi_MaterialInfoOpaqueClearCoatEXT>(&info));
+        if (layers.isSet()) {
+          opaque.setLayers(layers);
+        }
+        return MaterialData { opaque };
       }
       if (auto extTranslucent = pnext::find<remixapi_MaterialInfoTranslucentEXT>(&info)) {
         return MaterialData { TranslucentMaterialData {
@@ -1295,6 +1379,34 @@ namespace {
         pod(albedoTint->sType);
         pod(albedoTint->albedoTint);
       }
+      if (auto detailLayers = pnext::find<remixapi_MaterialInfoOpaqueDetailLayersEXT>(&info)) {
+        pod(detailLayers->sType);
+        path(detailLayers->detailNormalTexture);
+        pod(detailLayers->detailNormalStrength);
+        pod(detailLayers->detailNormalTexcoordScale);
+        path(detailLayers->layerMaskTexture);
+        pod(detailLayers->layerMaskChannel);
+        pod(detailLayers->layerMaskStrength);
+        pod(detailLayers->layerAlbedo);
+        pod(detailLayers->layerRoughness);
+        pod(detailLayers->layerMetallic);
+        pod(detailLayers->layerTexcoordScale);
+      }
+      if (auto detailLayerWeights = pnext::find<remixapi_MaterialInfoOpaqueDetailLayerWeightsEXT>(&info)) {
+        pod(detailLayerWeights->sType);
+        pod(detailLayerWeights->flags);
+        pod(detailLayerWeights->detailNormalWeightChannel);
+        pod(detailLayerWeights->layerMaskWeightChannel);
+        pod(detailLayerWeights->layerMaskEdgeWidth);
+      }
+      if (auto clearCoat = pnext::find<remixapi_MaterialInfoOpaqueClearCoatEXT>(&info)) {
+        pod(clearCoat->sType);
+        pod(clearCoat->clearCoatWeight);
+        pod(clearCoat->clearCoatRoughness);
+        pod(clearCoat->pearlescentColor);
+        pod(clearCoat->pearlescentWeight);
+        pod(clearCoat->pearlescentExponent);
+      }
     } else if (auto translucent = pnext::find<remixapi_MaterialInfoTranslucentEXT>(&info)) {
       pod(translucent->sType);
       path(translucent->transmittanceTexture);
@@ -1510,6 +1622,10 @@ namespace {
       }
       fixSurface(static_cast<remixapi_HardcodedVertex*>(vertexSlice.mapPtr(0)), src.vertices_count,
                  indexDataSize > 0 ? static_cast<uint32_t*>(indexSlice.mapPtr(0)) : nullptr, src.indices_count);
+      const remixapi_Float2D* secondaryTexcoords = findSecondaryTexcoords(*info, i, src.vertices_count);
+      if (secondaryTexcoords != nullptr) {
+        writeSecondaryTexcoords(static_cast<remixapi_HardcodedVertex*>(vertexSlice.mapPtr(0)), src.vertices_count, secondaryTexcoords);
+      }
 
       auto blendWeightsSlice = dxvk::DxvkBufferSlice {};
       auto blendIndicesSlice = dxvk::DxvkBufferSlice {};
@@ -1577,6 +1693,9 @@ namespace {
         dst.normalBuffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, normal), sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32B32_SFLOAT };
         dst.texcoordBuffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, texcoord), sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32_SFLOAT };
         dst.color0Buffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, color), sizeof(remixapi_HardcodedVertex), VK_FORMAT_B8G8R8A8_UNORM };
+        if (secondaryTexcoords != nullptr) {
+          dst.texcoord1Buffer = dxvk::RasterBuffer { vertexSlice, kSecondaryTexcoordOffset, sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32_SFLOAT };
+        }
         if (src.skinning_hasvalue) {
           dst.numBonesPerVertex = src.skinning_value.bonesPerVertex;
           dst.blendWeightBuffer = dxvk::RasterBuffer { blendWeightsSlice, 0, uint32_t(sizeof(float) * src.skinning_value.bonesPerVertex), VK_FORMAT_R32_SFLOAT };
@@ -1730,6 +1849,9 @@ namespace {
       dst.normalBuffer   = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, normal),   sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32B32_SFLOAT };
       dst.texcoordBuffer = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, texcoord), sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32_SFLOAT };
       dst.color0Buffer   = dxvk::RasterBuffer { vertexSlice, offsetof(remixapi_HardcodedVertex, color),    sizeof(remixapi_HardcodedVertex), VK_FORMAT_B8G8R8A8_UNORM };
+      if (src.hasSecondaryTexcoords) {
+        dst.texcoord1Buffer = dxvk::RasterBuffer { vertexSlice, kSecondaryTexcoordOffset, sizeof(remixapi_HardcodedVertex), VK_FORMAT_R32G32_SFLOAT };
+      }
       if (src.hasSkinning) {
         dst.numBonesPerVertex = src.bonesPerVertex;
         dst.blendWeightBuffer  = dxvk::RasterBuffer { blendWeightsSlice, 0, uint32_t(sizeof(float) * src.bonesPerVertex), VK_FORMAT_R32_SFLOAT };
@@ -1849,6 +1971,10 @@ namespace {
         memcpy(dst.indices.data(), src.indices_values, src.indices_count * sizeof(uint32_t));
       }
       fixSurface(dst.vertices.data(), src.vertices_count, dst.indices.data(), src.indices_count);
+      if (const remixapi_Float2D* secondaryTexcoords = findSecondaryTexcoords(*info, i, src.vertices_count)) {
+        writeSecondaryTexcoords(dst.vertices.data(), src.vertices_count, secondaryTexcoords);
+        dst.hasSecondaryTexcoords = true;
+      }
 
       dst.hasSkinning = src.skinning_hasvalue;
       if (src.skinning_hasvalue) {
@@ -3667,6 +3793,14 @@ extern "C"
   }
 
   REMIXAPI uint32_t REMIXAPI_CALL remixapi_GetMaterialAlbedoTintVersion(void) {
+    return 1;
+  }
+
+  REMIXAPI uint32_t REMIXAPI_CALL remixapi_GetSecondaryTexcoordVersion(void) {
+    return 2;
+  }
+
+  REMIXAPI uint32_t REMIXAPI_CALL remixapi_GetClearCoatMaterialVersion(void) {
     return 1;
   }
 

@@ -145,9 +145,11 @@ const bool hasMaterialOverride = pfnOverrideVersion != NULL && pfnOverrideVersio
 ```
 
 Versioned extensions have a version query: `remixapi_GetSpecGlossMaterialVersion`,
-`remixapi_GetMaterialAlbedoTintVersion` and `remixapi_GetInstanceMaterialOverrideVersion` (each returns 1). Chain the
-matching struct only when the query exists and returns a revision you support. A runtime without the struct skips
-it, and the result is then wrong rather than an error: an untinted texture, a spec map read as roughness, or the
+`remixapi_GetMaterialAlbedoTintVersion`, `remixapi_GetInstanceMaterialOverrideVersion`,
+`remixapi_GetSecondaryTexcoordVersion` and `remixapi_GetClearCoatMaterialVersion`.
+`remixapi_GetSecondaryTexcoordVersion` returns 2, as revision 2 adds the detail layers' vertex weights, and the others
+return 1. Chain the matching struct only when the query exists and returns a revision you support. A runtime
+without the struct skips it, and the result is then wrong rather than an error: an untinted texture, a spec map read as roughness, or the
 mesh's own material.
 
 Some typedefs at the end of the header (`PFN_remixapi_RegisterD3D11Device`, the retained-instance and D3D11 overlay

@@ -598,6 +598,7 @@ namespace dxvk {
       vertex(geometry.positionBuffer);
       vertex(geometry.normalBuffer);
       vertex(geometry.texcoordBuffer);
+      vertex(geometry.texcoord1Buffer);
       vertex(geometry.color0Buffer);
       vertex(geometry.blendWeightBuffer);
       vertex(geometry.blendIndicesBuffer);

@@ -108,7 +108,7 @@ Detect each feature at startup and fall back to the old path when it is missing.
 
 - **Look up every new export with `GetProcAddress`** on the runtime DLL (`remixapi_CreateRetainedInstance`, `remixapi_RenderD3D11`, `remixapi_ImportD3D11TextureEx` and the rest). Null means that runtime does not have it: use the old call.
 - **`CreateMeshBatched`** sits in the interface table. Check the pointer for null and fall back to `CreateMesh`.
-- **Versioned extensions** have a version query export: `remixapi_GetInstanceMaterialOverrideVersion`, `remixapi_GetMaterialAlbedoTintVersion`, `remixapi_GetSpecGlossMaterialVersion`. Chain the matching `pNext` struct only when the query exists and returns a version you support.
+- **Versioned extensions** have a version query export: `remixapi_GetInstanceMaterialOverrideVersion`, `remixapi_GetMaterialAlbedoTintVersion`, `remixapi_GetSpecGlossMaterialVersion`, `remixapi_GetSecondaryTexcoordVersion`, `remixapi_GetClearCoatMaterialVersion`. Chain the matching `pNext` struct only when the query exists and returns a version you support.
 - **Keep the old path compiled in, behind a setting.** It is the fallback for other runtimes, and the visual reference when checking the new path.
 - **One frame, one order, one thread where possible:** `SetupCamera`, updates, `DrawRetainedInstances`, per-frame `DrawInstance`s, then `RenderD3D11` (or `Present` on D3D9). Every call takes the API mutex and the device context lock.
 

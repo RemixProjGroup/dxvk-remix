@@ -224,6 +224,8 @@ struct RtSurface {
     uint16_t flags0 = 0;
     flags0 |= normalFormat == VK_FORMAT_R32_UINT ? 1 : 0;
     flags0 |= isVertexColorBakedLighting ? (1 << 1) : 0;
+    assert(texcoord1DwordOffset <= SURFACE_TEXCOORD1_DWORD_OFFSET_MAX);
+    flags0 |= uint16_t(texcoord1DwordOffset << SURFACE_TEXCOORD1_DWORD_OFFSET_SHIFT);
     // NOTE: Spare flags bits here
 
     writeGPUHelper(data, offset, flags0);
@@ -432,6 +434,9 @@ struct RtSurface {
   uint32_t texcoordBufferIndex = kSurfaceInvalidBufferIndex;
   uint32_t texcoordOffset = 0;
   uint32_t texcoordStride = 0;
+  // The second texture coordinate set's offset after the first, in dwords, in the same buffer and with the same stride.
+  // 0 means the surface has no second set.
+  uint32_t texcoord1DwordOffset = 0;
 
   uint32_t indexBufferIndex = kSurfaceInvalidBufferIndex;
   uint32_t firstIndex = 0;
@@ -474,6 +479,7 @@ struct RtSurface {
         && normalOffset == surface.normalOffset
         && texcoordBufferIndex == surface.texcoordBufferIndex
         && texcoordOffset == surface.texcoordOffset
+        && texcoord1DwordOffset == surface.texcoord1DwordOffset
         && color0BufferIndex == surface.color0BufferIndex
         && color0Offset == surface.color0Offset
         && firstIndex == surface.firstIndex;
@@ -503,6 +509,7 @@ struct RtSurface {
       "  texcoordBufferIndex: ", texcoordBufferIndex, "\n",
       "  texcoordOffset: ", texcoordOffset, "\n",
       "  texcoordStride: ", texcoordStride, "\n",
+      "  texcoord1DwordOffset: ", texcoord1DwordOffset, "\n",
       "  indexBufferIndex: ", indexBufferIndex, "\n",
       "  firstIndex: ", firstIndex, "\n",
       "  indexStride: ", indexStride, "\n",
@@ -1676,6 +1683,45 @@ private:
 // Extension of the three basic types of materials.
 // Don't use material types below standalone. Instead, attach them to the materials above as side load data.
 
+// The layers a surface material extension entry carries besides its subsurface data and albedo tint, already in their
+// GPU encoding: SURFACE_MATERIAL_EXTENSION_FLAG_* bits and words 16-31 of the entry (SubsurfaceMaterial in surface_material.h).
+struct RtSurfaceMaterialLayers {
+  static constexpr uint32_t kFirstWord = 16;
+  static constexpr uint32_t kWordCount = 16;
+  // Word indices, relative to kFirstWord.
+  static constexpr uint32_t kDetailNormalTextureIndex = 0;
+  static constexpr uint32_t kDetailNormalStrength = 1;
+  static constexpr uint32_t kDetailNormalTexcoordScale = 2;
+  static constexpr uint32_t kLayerMaskTextureIndex = 4;
+  static constexpr uint32_t kLayerMaskStrength = 5;
+  static constexpr uint32_t kLayerAlbedo = 6;
+  static constexpr uint32_t kLayerRoughnessMetallic = 7;
+  static constexpr uint32_t kLayerTexcoordScale = 8;
+  static constexpr uint32_t kClearCoat = 10;
+  static constexpr uint32_t kPearlescentColor = 11;
+  static constexpr uint32_t kPearlescentWeight = 12;
+  static constexpr uint32_t kPearlescentExponent = 13;
+  static constexpr uint32_t kLayerMaskEdgeWidth = 14;
+  static constexpr uint32_t kVertexWeightChannels = 15;
+
+  uint32_t flags = 0;
+  uint16_t words[kWordCount] = {};
+
+  bool isSet() const {
+    return flags != 0;
+  }
+
+  template<typename Fn>
+  void forEachTextureIndex(Fn&& fn) const {
+    if (flags & SURFACE_MATERIAL_EXTENSION_FLAG_DETAIL_NORMAL) {
+      fn(uint32_t(words[kDetailNormalTextureIndex]));
+    }
+    if ((flags & SURFACE_MATERIAL_EXTENSION_FLAG_MASKED_LAYER) && words[kLayerMaskTextureIndex] != uint16_t(BINDING_INDEX_INVALID)) {
+      fn(uint32_t(words[kLayerMaskTextureIndex]));
+    }
+  }
+};
+
 // Subsurface Material
 struct RtSubsurfaceMaterial {
   RtSubsurfaceMaterial(
@@ -1694,7 +1740,9 @@ struct RtSubsurfaceMaterial {
     const bool hasAlbedoTint = false,
     const Vector3& albedoTint = Vector3(1.f),
     // SURFACE_MATERIAL_EXTENSION_FLAG_TRANSMITTANCE_* bits (rtx.subsurface.transmittanceFollowsAlbedo).
-    const uint8_t transmittanceFlags = 0)
+    const uint8_t transmittanceFlags = 0,
+    // The opaque material's layers, carried by the extension entry.
+    const RtSurfaceMaterialLayers& layers = {})
     :
     m_subsurfaceTransmittanceTextureIndex(subsurfaceTransmittanceTextureIndex),
     m_subsurfaceThicknessTextureIndex(subsurfaceThicknessTextureIndex),
@@ -1713,7 +1761,8 @@ struct RtSubsurfaceMaterial {
     m_albedoTint { hasAlbedoTint ? albedoTint : Vector3(1.f) },
     m_hasSubsurface { hasSubsurface },
     m_hasAlbedoTint { hasAlbedoTint },
-    m_transmittanceFlags { transmittanceFlags }
+    m_transmittanceFlags { transmittanceFlags },
+    m_layers { layers }
   {
     updateCachedHash();
   }
@@ -1735,6 +1784,7 @@ struct RtSubsurfaceMaterial {
     }
     flags |= uint16_t(m_transmittanceFlags & (SURFACE_MATERIAL_EXTENSION_FLAG_TRANSMITTANCE_TINT |
                                               SURFACE_MATERIAL_EXTENSION_FLAG_TRANSMITTANCE_SRGB));
+    flags |= uint16_t(m_layers.flags);
 
     // data[0]
     writeGPUHelperExplicit<2>(data, offset, flags);
@@ -1781,8 +1831,10 @@ struct RtSubsurfaceMaterial {
     writeGPUHelper(data, offset, glm::packHalf1x16(m_albedoTint.y));
     writeGPUHelper(data, offset, glm::packHalf1x16(m_albedoTint.z));
 
-    // data[16-31]
-    writeGPUPadding<32>(data, offset);
+    // data[16-31]: the layers (RtSurfaceMaterialLayers), 0 when unused
+    for (uint32_t i = 0; i < RtSurfaceMaterialLayers::kWordCount; i++) {
+      writeGPUHelper(data, offset, m_layers.words[i]);
+    }
     assert(offset - oldOffset == kSurfaceMaterialGPUSize);
   }
 
@@ -1796,6 +1848,10 @@ struct RtSubsurfaceMaterial {
 
   const Vector3& getAlbedoTint() const {
     return m_albedoTint;
+  }
+
+  const RtSurfaceMaterialLayers& getLayers() const {
+    return m_layers;
   }
 
   bool operator==(const RtSubsurfaceMaterial& r) const {
@@ -1851,13 +1907,14 @@ struct RtSubsurfaceMaterial {
     fn(m_subsurfaceTransmittanceTextureIndex);
     fn(m_subsurfaceThicknessTextureIndex);
     fn(m_subsurfaceSingleScatteringAlbedoTextureIndex);
+    m_layers.forEachTextureIndex(fn);
   }
 
 private:
 
   void updateCachedHash() {
     static_assert(
-      sizeof(*this) == 88,
+      sizeof(*this) == 128,
       "add new member for hashing if needed: add a MEMBER into the struct + add a VALUE into the list-init"
     );
     struct HashStruct {
@@ -1875,6 +1932,7 @@ private:
       uint32_t m_hasSubsurface;   // NOTE: uint32_t to avoid padding
       uint32_t m_hasAlbedoTint;   // NOTE: uint32_t to avoid padding
       uint32_t m_transmittanceFlags; // NOTE: uint32_t to avoid padding
+      RtSurfaceMaterialLayers m_layers;
       // NOTE: There must be NO padding between members, as the struct is used for hashing
     };
     static_assert(alignof(HashStruct) == 4 && sizeof(HashStruct) % 4 == 0);
@@ -1893,6 +1951,7 @@ private:
       m_hasSubsurface,
       m_hasAlbedoTint,
       m_transmittanceFlags,
+      m_layers,
     };
     m_cachedHash = XXH3_64bits(&hashData, sizeof(hashData));
   }
@@ -1920,7 +1979,8 @@ private:
   Vector3 m_albedoTint;
   bool m_hasSubsurface;
   bool m_hasAlbedoTint;
-  uint8_t m_transmittanceFlags; // Fits the tail padding, so sizeof stays 88.
+  uint8_t m_transmittanceFlags;
+  RtSurfaceMaterialLayers m_layers;
 
   XXH64_hash_t m_cachedHash;
 };

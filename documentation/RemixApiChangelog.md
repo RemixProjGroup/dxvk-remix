@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 2026-11-18: a second texture coordinate set for API meshes and two material layers that read it.
+  `remixapi_MeshInfoSecondaryTexcoordEXT` (`REMIXAPI_STRUCT_TYPE_MESH_INFO_SECONDARY_TEXCOORD_EXT`, `0x4E560008`)
+  chains on `remixapi_MeshInfo` with one `remixapi_MeshInfoSurfaceSecondaryTexcoord` per surface.
+  `remixapi_MaterialInfoOpaqueDetailLayersEXT` (`REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_DETAIL_LAYERS_EXT`,
+  `0x4E560009`) chains next to `remixapi_MaterialInfoOpaqueEXT` and adds a detail normal map and a masked albedo,
+  roughness and metallic layer on the second set. `remixapi_MaterialInfoOpaqueDetailLayerWeightsEXT`
+  (`REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_DETAIL_LAYER_WEIGHTS_EXT`, `0x4E56000B`) chains next to the detail layers
+  and weights them by a vertex colour channel: the detail normal's strength, and a per-vertex threshold that reveals the
+  layer mask with a smoothstep edge, `smoothstep(t - e, t + e, m)` with `t = (1 - w) * (1 + 2e) - e` and
+  `e = layerMaskEdgeWidth / 2` (`remixapi_DetailLayerWeightFlagBits`, `layerMaskEdgeWidth`). The named export
+  `remixapi_GetSecondaryTexcoordVersion` returns 2: revision 1 is the second set and the detail layers, and revision 2
+  adds the vertex colour weights. See `documentation/SecondaryTexcoordLayers.md`.
+- 2026-11-18: `remixapi_MaterialInfoOpaqueClearCoatEXT` (`REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_CLEAR_COAT_EXT`,
+  `0x4E56000A`) chains next to `remixapi_MaterialInfoOpaqueEXT` and adds a clear coat (weight, roughness; index of
+  refraction 1.5) and a pearlescent tint (colour, weight, exponent), for lacquered and coated surfaces. The named export
+  `remixapi_GetClearCoatMaterialVersion` returns 1. See `documentation/ClearCoatMaterial.md`.
 - 2026-11-02: `remixapi_UpdateTexture`, a named export that writes rectangles of a
   `CreateTexture` texture in place and regenerates the lower mips of the changed area.
   Adds `remixapi_TextureUpdateInfo` and `remixapi_TextureUpdateRect`.

@@ -29,12 +29,13 @@ namespace dxvk {
   // lists in rtx_material_data.h. Adding a field changes every API material key, so mods keyed on material hashes stop
   // matching. The lists are not visible here, so the guard is the size of each material struct: change it only together
   // with a bump of AssetResolver::kKeyDerivationVersion (and a note for mod authors), unless the field only enters
-  // the hash with a non-default value, as the texture transform fields do (isHashedOnlyWhenSet).
+  // the hash with a non-default value, as the texture transform fields (isHashedOnlyWhenSet) and the API-only layers
+  // (getLayers) do.
   template<size_t Size, size_t Expected> struct CheckMaterialKeyFields {
     static_assert(Size == Expected, "a material struct changed: check whether its hashed fields (material keys) changed");
   };
-  [[maybe_unused]] CheckMaterialKeyFields<sizeof(OpaqueMaterialData), 728> kOpaqueKeyFields;
-  [[maybe_unused]] CheckMaterialKeyFields<sizeof(TranslucentMaterialData), 232> kTranslucentKeyFields;
-  [[maybe_unused]] CheckMaterialKeyFields<sizeof(RayPortalMaterialData), 136> kPortalKeyFields;
+  [[maybe_unused]] CheckMaterialKeyFields<sizeof(OpaqueMaterialData), 904> kOpaqueKeyFields;
+  [[maybe_unused]] CheckMaterialKeyFields<sizeof(TranslucentMaterialData), 240> kTranslucentKeyFields;
+  [[maybe_unused]] CheckMaterialKeyFields<sizeof(RayPortalMaterialData), 144> kPortalKeyFields;
 
 } // namespace dxvk

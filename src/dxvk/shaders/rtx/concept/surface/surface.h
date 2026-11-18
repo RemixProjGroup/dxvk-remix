@@ -305,6 +305,13 @@ struct Surface
     set { data0b.z = newValue ? packedFlagSet(data0b.z, 1 << 1) : packedFlagUnset(data0b.z, 1 << 1); }
   }
 
+  // The second texture coordinate set's offset after the first, in dwords, in the texcoord buffer.
+  // Returns 0 when the surface has no second set.
+  property uint texcoord1DwordOffset
+  {
+    get { return (uint(data0b.z) >> SURFACE_TEXCOORD1_DWORD_OFFSET_SHIFT) & SURFACE_TEXCOORD1_DWORD_OFFSET_MAX; }
+  }
+
   property uint16_t hashPacked
   {
     get { return data0b.w; }
@@ -537,6 +544,10 @@ struct SurfaceInteraction : MinimalSurfaceInteraction
   vec2 textureCoordinates = 0..xx;
   vec2 textureGradientX = 0..xx;
   vec2 textureGradientY = 0..xx;
+  // The second texture coordinate set and its gradients. They are set only where surfaceHasTextureCoordinates1 holds.
+  vec2 textureCoordinates1 = 0..xx;
+  vec2 textureGradient1X = 0..xx;
+  vec2 textureGradient1Y = 0..xx;
   vec3 rawTangent = 0.f;
   vec3 rawBitangent = 0.f;
   vec4 vertexColor = 0.0f;

@@ -2470,6 +2470,73 @@ namespace dxvk {
         && albedoOpacityTextureIndex != kSurfaceMaterialInvalidTextureIndex
         && (albedoTint.x != 1.f || albedoTint.y != 1.f || albedoTint.z != 1.f);
 
+      // The layers (remixapi_MaterialInfoOpaqueDetailLayersEXT, remixapi_MaterialInfoOpaqueDetailLayerWeightsEXT,
+      // remixapi_MaterialInfoOpaqueClearCoatEXT), carried by the surface material extension entry.
+      // White mode drops them with the other textures.
+      RtSurfaceMaterialLayers materialLayers;
+      const OpaqueMaterialLayers& layers = opaqueMaterialData.getLayers();
+      if (layers.isSet() && !RtxOptions::useWhiteMaterialMode()) {
+        const auto unorm = [](float v, float maxCode) {
+          return uint16_t(std::clamp(v, 0.0f, 1.0f) * maxCode + 0.5f);
+        };
+        uint16_t* words = materialLayers.words;
+
+        if (layers.hasDetailNormal()) {
+          uint32_t detailNormalTextureIndex = kSurfaceMaterialInvalidTextureIndex;
+          trackTexture(layers.detailNormalTexture, detailNormalTextureIndex, hasTexcoords, true, &samplerFeedbackStamp);
+          if (detailNormalTextureIndex != kSurfaceMaterialInvalidTextureIndex) {
+            materialLayers.flags |= SURFACE_MATERIAL_EXTENSION_FLAG_DETAIL_NORMAL;
+            if (layers.detailNormalTexture.getHostEncoding() == HostTextureEncoding::NormalTangentXY) {
+              materialLayers.flags |= SURFACE_MATERIAL_EXTENSION_FLAG_DETAIL_NORMAL_TANGENT_XY;
+            }
+            words[RtSurfaceMaterialLayers::kDetailNormalTextureIndex] = uint16_t(detailNormalTextureIndex);
+            words[RtSurfaceMaterialLayers::kDetailNormalStrength] = glm::packHalf1x16(layers.detailNormalStrength);
+            words[RtSurfaceMaterialLayers::kDetailNormalTexcoordScale + 0] = glm::packHalf1x16(layers.detailNormalTexcoordScale.x);
+            words[RtSurfaceMaterialLayers::kDetailNormalTexcoordScale + 1] = glm::packHalf1x16(layers.detailNormalTexcoordScale.y);
+            if (layers.hasDetailNormalVertexWeight()) {
+              materialLayers.flags |= SURFACE_MATERIAL_EXTENSION_FLAG_DETAIL_NORMAL_VERTEX_WEIGHT;
+              words[RtSurfaceMaterialLayers::kVertexWeightChannels] |= uint16_t(layers.detailNormalWeightChannel);
+            }
+          }
+        }
+
+        if (layers.hasMaskedLayer()) {
+          // Without a mask texture the mask is the strength everywhere.
+          uint32_t layerMaskTextureIndex = kSurfaceMaterialInvalidTextureIndex;
+          trackTexture(layers.layerMaskTexture, layerMaskTextureIndex, hasTexcoords, true, &samplerFeedbackStamp);
+          materialLayers.flags |= SURFACE_MATERIAL_EXTENSION_FLAG_MASKED_LAYER |
+                                  (layers.layerMaskChannel << SURFACE_MATERIAL_EXTENSION_LAYER_MASK_CHANNEL_SHIFT);
+          words[RtSurfaceMaterialLayers::kLayerMaskTextureIndex] = uint16_t(layerMaskTextureIndex);
+          words[RtSurfaceMaterialLayers::kLayerMaskStrength] = glm::packHalf1x16(layers.layerMaskStrength);
+          words[RtSurfaceMaterialLayers::kLayerAlbedo] = uint16_t(
+            unorm(layers.layerAlbedo.x, 31.0f) | (unorm(layers.layerAlbedo.y, 63.0f) << 5) | (unorm(layers.layerAlbedo.z, 31.0f) << 11));
+          words[RtSurfaceMaterialLayers::kLayerRoughnessMetallic] = uint16_t(
+            unorm(layers.layerRoughness, 255.0f) | (unorm(layers.layerMetallic, 255.0f) << 8));
+          words[RtSurfaceMaterialLayers::kLayerTexcoordScale + 0] = glm::packHalf1x16(layers.layerTexcoordScale.x);
+          words[RtSurfaceMaterialLayers::kLayerTexcoordScale + 1] = glm::packHalf1x16(layers.layerTexcoordScale.y);
+          if (layers.hasLayerMaskVertexThreshold()) {
+            materialLayers.flags |= SURFACE_MATERIAL_EXTENSION_FLAG_LAYER_MASK_VERTEX_THRESHOLD;
+            words[RtSurfaceMaterialLayers::kLayerMaskEdgeWidth] = glm::packHalf1x16(layers.layerMaskEdgeWidth);
+            words[RtSurfaceMaterialLayers::kVertexWeightChannels] |= uint16_t(layers.layerMaskWeightChannel << 2);
+          }
+        }
+
+        if (layers.hasClearCoat()) {
+          materialLayers.flags |= SURFACE_MATERIAL_EXTENSION_FLAG_CLEAR_COAT;
+          words[RtSurfaceMaterialLayers::kClearCoat] = uint16_t(
+            unorm(layers.clearCoatWeight, 255.0f) | (unorm(layers.clearCoatRoughness, 255.0f) << 8));
+        }
+
+        if (layers.hasPearlescent()) {
+          materialLayers.flags |= SURFACE_MATERIAL_EXTENSION_FLAG_GRAZING_TINT;
+          words[RtSurfaceMaterialLayers::kPearlescentColor] = uint16_t(
+            unorm(layers.pearlescentColor.x, 31.0f) | (unorm(layers.pearlescentColor.y, 63.0f) << 5) |
+            (unorm(layers.pearlescentColor.z, 31.0f) << 11));
+          words[RtSurfaceMaterialLayers::kPearlescentWeight] = glm::packHalf1x16(layers.pearlescentWeight);
+          words[RtSurfaceMaterialLayers::kPearlescentExponent] = glm::packHalf1x16(layers.pearlescentExponent);
+        }
+      }
+
       subsurfaceMeasurementDistance = opaqueMaterialData.getSubsurfaceMeasurementDistance() * RtxOptions::SubsurfaceScattering::surfaceThicknessScale();
 
       const bool isSubsurfaceScatteringDiffusionProfile = opaqueMaterialData.getSubsurfaceDiffusionProfile();
@@ -2544,10 +2611,11 @@ namespace dxvk {
           hasAlbedoTint,
           albedoTint,
           transmittanceFlags,
+          materialLayers,
         };
         subsurfaceMaterialIndex = trackSurfaceExtension(subsurfaceMaterial, build.liveKey, extensionPatch);
-      } else if (hasAlbedoTint) {
-        // An extension entry that carries only the albedo tint.
+      } else if (hasAlbedoTint || materialLayers.isSet()) {
+        // An extension entry that carries only the albedo tint or the layers.
         const auto tintOnlyMaterial = RtSubsurfaceMaterial{
           kSurfaceMaterialInvalidTextureIndex,
           kSurfaceMaterialInvalidTextureIndex,
@@ -2556,8 +2624,10 @@ namespace dxvk {
           0.f, // radius scale 0: counted as neither SSS nor thin opaque
           0.f,
           false, // hasSubsurface
-          true,
+          hasAlbedoTint,
           albedoTint,
+          0,
+          materialLayers,
         };
         subsurfaceMaterialIndex = trackSurfaceExtension(tintOnlyMaterial, build.liveKey, extensionPatch);
       }

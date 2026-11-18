@@ -28,6 +28,20 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-18
+
+### Remix API: second texture coordinate set and detail layers
+API meshes can carry a second texture coordinate set (`remixapi_MeshInfoSecondaryTexcoordEXT`), and opaque materials can read a detail normal map and a masked albedo, roughness and metallic layer with it (`remixapi_MaterialInfoOpaqueDetailLayersEXT`), for surface detail that is mapped apart from the base material, such as tiled detail normals, wear or grime. A vertex colour channel can weight the layers per vertex (`remixapi_MaterialInfoOpaqueDetailLayerWeightsEXT`): it scales the detail normal, and it sets a per-vertex threshold that reveals the layer mask with an adjustable soft edge, `smoothstep(t - e, t + e, m)` with `t = (1 - w)(1 + 2e) - e` and `e = layerMaskEdgeWidth / 2`, so a weight of 0 shows none of the layer and 1 shows all of it. The set rides in the vertex padding, so meshes and materials without it read no extra data and keep their hashes.
+- Options: none. The named export `remixapi_GetSecondaryTexcoordVersion` returns 2.
+- Commits: the commit that adds this entry.
+- Docs: [SecondaryTexcoordLayers.md](../documentation/SecondaryTexcoordLayers.md), [RemixApi.md](RemixApi.md)
+
+### Remix API: clear coat and pearlescent materials
+Opaque API materials can have a clear coat, a second dielectric GGX specular lobe over the base that every lighting path samples and evaluates, and a pearlescent albedo shift towards grazing angles (`remixapi_MaterialInfoOpaqueClearCoatEXT`), for layered materials such as lacquered or coated surfaces. The coat's reflection is part of the specular signal, and the denoisers' roughness blends towards the coat's. Materials without the struct render as before: every coat path is a branch on a coat weight of exactly 0.
+- Options: none. The named export `remixapi_GetClearCoatMaterialVersion` returns 1.
+- Commits: the commit that adds this entry.
+- Docs: [ClearCoatMaterial.md](../documentation/ClearCoatMaterial.md), [RemixApi.md](RemixApi.md)
+
 ## 2026-11-15
 
 ### Cheaper NUMOS clouds

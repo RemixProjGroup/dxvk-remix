@@ -288,6 +288,69 @@ vec4 surfaceVertexColor(Surface surface, uint vertexIndex)
   return color;
 }
 
+// Returns true when surfaceInteractionCreate sets the second texture coordinate set of the surface's interactions.
+// The second set is read from the texcoord buffer, so a surface whose first set is generated has none.
+bool surfaceHasTextureCoordinates1(Surface surface)
+{
+  return surface.texcoord1DwordOffset != 0 && surface.texcoordBufferIndex != BINDING_INDEX_INVALID &&
+         surface.texcoordGenerationMode == uint(TexGenMode::None);
+}
+
+// Returns a vertex's second texture coordinates (Surface::texcoord1DwordOffset), which share the first set's buffer and stride.
+vec2 surfaceRawTextureCoordinate1(Surface surface, uint vertexIndex)
+{
+  const uint texcoordBufferIndex = surface.texcoordBufferIndex;
+  const uint elementIndex =
+    (vertexIndex * uint(surface.texcoordStride) + surface.texcoordOffset) / 4 + surface.texcoord1DwordOffset;
+
+  return vec2(
+    BUFFER_ARRAY(geometries, texcoordBufferIndex, elementIndex + 0),
+    BUFFER_ARRAY(geometries, texcoordBufferIndex, elementIndex + 1));
+}
+
+// Interpolates the second texture coordinate set at the hit and derives its gradients from the first set's.
+// texcoords are the first set's coordinates at the triangle's vertices, after the texture transform, and the first
+// set's gradients must be set. Over a triangle the second set is a linear function of the first, so mapping the
+// gradients through that function gives the footprint the first set's would have had.
+// See documentation/SecondaryTexcoordLayers.md.
+void surfaceInteractionCalcTextureCoordinates1(
+  Surface surface, uint idx[3], vec2 texcoords[3], vec3 bary, inout SurfaceInteraction surfaceInteraction)
+{
+  vec2 texcoords1[3];
+
+  for (uint i = 0; i < 3; i++)
+  {
+    texcoords1[i] = surfaceRawTextureCoordinate1(surface, idx[i]);
+  }
+
+  surfaceInteraction.textureCoordinates1 = sanitize(interpolateHitAttribute(texcoords1, bary), vec2(0.0f, 0.0f));
+
+  const vec2 edge01 = texcoords[1] - texcoords[0];
+  const vec2 edge02 = texcoords[2] - texcoords[0];
+  const vec2 edge01Second = texcoords1[1] - texcoords1[0];
+  const vec2 edge02Second = texcoords1[2] - texcoords1[0];
+  const float determinant = edge01.x * edge02.y - edge02.x * edge01.y;
+
+  if (abs(determinant) > 1e-20f)
+  {
+    // Expresses a first-set gradient in the triangle's edge basis, then rebuilds it from the second set's edges.
+    const float inverseDeterminant = 1.0f / determinant;
+    const vec2 gradientX = surfaceInteraction.textureGradientX;
+    const vec2 gradientY = surfaceInteraction.textureGradientY;
+    const vec2 edgeWeightsX = vec2(edge02.y * gradientX.x - edge02.x * gradientX.y, edge01.x * gradientX.y - edge01.y * gradientX.x) * inverseDeterminant;
+    const vec2 edgeWeightsY = vec2(edge02.y * gradientY.x - edge02.x * gradientY.y, edge01.x * gradientY.y - edge01.y * gradientY.x) * inverseDeterminant;
+
+    surfaceInteraction.textureGradient1X = sanitize(edge01Second * edgeWeightsX.x + edge02Second * edgeWeightsX.y, vec2(0.0f, 0.0f));
+    surfaceInteraction.textureGradient1Y = sanitize(edge01Second * edgeWeightsY.x + edge02Second * edgeWeightsY.y, vec2(0.0f, 0.0f));
+  }
+  else
+  {
+    // The first set is degenerate over this triangle, so the triangle's own extent in the second set stands in.
+    surfaceInteraction.textureGradient1X = sanitize(edge01Second / 3.0f, vec2(0.0f, 0.0f));
+    surfaceInteraction.textureGradient1Y = sanitize(edge02Second / 3.0f, vec2(0.0f, 0.0f));
+  }
+}
+
 SurfaceInteraction surfaceInteractionCreate<let GenerateTangents : bool>(
   Surface surface, RayInteraction rayInteraction, Ray ray,
   bool usePreviousPositions = false, uint footprintMode = kFootprintFromRayDirection)
@@ -680,6 +743,11 @@ SurfaceInteraction surfaceInteractionCreate<let GenerateTangents : bool>(
     {
       surfaceInteraction.textureGradientX = (texcoords[1] - texcoords[0]) / 3.0f;
       surfaceInteraction.textureGradientY = (texcoords[2] - texcoords[0]) / 3.0f;
+    }
+
+    if (surfaceHasTextureCoordinates1(surface))
+    {
+      surfaceInteractionCalcTextureCoordinates1(surface, idx, texcoords, bary, surfaceInteraction);
     }
   }
   else

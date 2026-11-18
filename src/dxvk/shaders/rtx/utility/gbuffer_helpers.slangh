@@ -151,6 +151,15 @@ PolymorphicSurfaceMaterialInteraction polymorphicSurfaceMaterialInteractionReadF
     polymorphicSurfaceMaterialInteraction.bdata2 = 0;
   }
 
+  // The G-buffer keeps only the clear coat's flag, so the coat is read from the pixel's material.
+  if (polymorphicSurfaceMaterialInteraction.type == surfaceMaterialTypeOpaque &&
+      (polymorphicSurfaceMaterialInteraction.bdata0 & OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_HAS_CLEAR_COAT))
+  {
+    OpaqueSurfaceMaterialInteraction coat;
+    opaqueSurfaceMaterialInteractionLoadClearCoat(coat, surfaceIndexTexture[position]);
+    polymorphicSurfaceMaterialInteraction.idata0 = opaqueSurfaceMaterialInteractionPackClearCoat(coat);
+  }
+
   return polymorphicSurfaceMaterialInteraction;
 }
 
@@ -185,6 +194,18 @@ void polymorphicSurfaceMaterialInteractionWriteToGBuffer(
 
   f16vec3 virtualShadingNormal = gBufferMemoryPolymorphicSurfaceMaterialInteraction.worldShadingNormal;
 
+  // The denoisers and DLSS-RR filter the specular signal by this roughness. A clear coat's reflection is in the specular
+  // signal, so the roughness blends towards the coat's by its weight. See documentation/ClearCoatMaterial.md.
+  float denoisingPerceptualRoughness = gBufferMemoryPolymorphicSurfaceMaterialInteraction.perceptualRoughness;
+  if (polymorphicSurfaceMaterialInteractionGetTypeHelper(polymorphicSurfaceMaterialInteraction) == surfaceMaterialTypeOpaque &&
+      (polymorphicSurfaceMaterialInteraction.bdata0 & OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_HAS_CLEAR_COAT))
+  {
+    OpaqueSurfaceMaterialInteraction coat;
+    opaqueSurfaceMaterialInteractionUnpackClearCoat(coat, polymorphicSurfaceMaterialInteraction.idata0);
+    denoisingPerceptualRoughness =
+      mix(denoisingPerceptualRoughness, roughnessToPerceptualRoughness(coat.clearCoatRoughness), saturate(coat.clearCoatWeight));
+  }
+
   // If primary ray direction was altered world data needs to be transformed to virtual world space
   if (directionAltered && cb.enableCalculateVirtualShadingNormals)
   {
@@ -209,12 +230,12 @@ void polymorphicSurfaceMaterialInteractionWriteToGBuffer(
   // Note: snorm->unorm conversion for shading normal to match what denoiser expects.
   virtualWorldShadingNormalPerceptualRoughnessTexture[position] = vec4(
     virtualShadingNormal * 0.5f + 0.5f,
-    gBufferMemoryPolymorphicSurfaceMaterialInteraction.perceptualRoughness);
+    denoisingPerceptualRoughness);
 
   if (writeDenoisingNormal)
   {
     virtualWorldShadingNormalPerceptualRoughnessDenoisingTexture[position] = NRD_FrontEnd_PackNormalAndRoughness(
-      virtualShadingNormal, gBufferMemoryPolymorphicSurfaceMaterialInteraction.perceptualRoughness, MATERIAL_ID_DEFAULT);
+      virtualShadingNormal, denoisingPerceptualRoughness, MATERIAL_ID_DEFAULT);
   }
 
   // Note: Write stochastic textures only when desired. Bit hacky to have this logic here rather than in the geometery resolver but

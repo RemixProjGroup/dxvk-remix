@@ -89,6 +89,9 @@ struct RasterGeometry {
   RasterBuffer positionBuffer;
   RasterBuffer normalBuffer;
   RasterBuffer texcoordBuffer;
+  // The second texture coordinate set. The ray tracing geometry keeps it only when it is interleaved with the
+  // positions, as remixapi_MeshInfoSecondaryTexcoordEXT gives it.
+  RasterBuffer texcoord1Buffer;
   RasterBuffer color0Buffer;
   RasterBuffer indexBuffer;
   RasterBuffer blendWeightBuffer;

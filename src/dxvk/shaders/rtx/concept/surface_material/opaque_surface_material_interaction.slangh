@@ -54,6 +54,96 @@ float opaqueSurfaceMaterialInteractionGetFresnelGrazing(OpaqueSurfaceMaterialInt
 }
 // NV-DXVK end
 
+// Clear coat helpers. The coat is a dielectric GGX layer with an index of refraction of 1.5 over the base lobes.
+// See documentation/ClearCoatMaterial.md.
+
+static const float clearCoatBaseReflectivity = 0.04f;
+
+// Returns the share of the light the clear coat reflects at the cosine cosTheta, times the coat's weight.
+float opaqueSurfaceMaterialInteractionCalcClearCoatFresnel(OpaqueSurfaceMaterialInteraction material, float cosTheta)
+{
+  return material.clearCoatWeight *
+    (clearCoatBaseReflectivity + (1.0f - clearCoatBaseReflectivity) * invClampPow5(cosTheta));
+}
+
+// Returns the share of the base lobes' light that crosses the clear coat towards the view and from the input direction.
+float opaqueSurfaceMaterialInteractionCalcClearCoatBaseAttenuation(
+  OpaqueSurfaceMaterialInteraction material, float normalDotOutputDirection, float normalDotInputDirection)
+{
+  return (1.0f - opaqueSurfaceMaterialInteractionCalcClearCoatFresnel(material, normalDotOutputDirection)) *
+         (1.0f - opaqueSurfaceMaterialInteractionCalcClearCoatFresnel(material, normalDotInputDirection));
+}
+
+// Returns the clear coat alone as an interaction with the coat's roughness and reflectivity, for the base specular
+// lobe's GGX sampling and PDF code.
+OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreateClearCoatLayer(OpaqueSurfaceMaterialInteraction material)
+{
+  OpaqueSurfaceMaterialInteraction coat = material;
+  coat.baseReflectivity = vec3(clearCoatBaseReflectivity);
+  coat.isotropicRoughness = material.clearCoatRoughness;
+  coat.anisotropicRoughness = vec2(material.clearCoatRoughness, material.clearCoatRoughness);
+  coat.thinFilmThickness = 0.0f;
+  coat.flags = uint8_t(material.flags & ~OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_USE_LEGACY_DEFAULTS);
+  coat.clearCoatWeight = 0.0f;
+  return coat;
+}
+
+// Returns the probability of sampling the clear coat once the specular lobe is picked: the coat's share of the
+// specular albedo estimate opaqueSurfaceMaterialInteractionCalcLobeProbability uses.
+float opaqueSurfaceMaterialInteractionCalcClearCoatSelectionProbability(
+  OpaqueSurfaceMaterialInteraction material, float normalDotOutputDirection)
+{
+  const float coatReflectance = opaqueSurfaceMaterialInteractionCalcClearCoatFresnel(material, normalDotOutputDirection);
+  const vec3 baseFresnel = evalOpaqueSchlickFresnel(material.baseReflectivity, normalDotOutputDirection,
+    opaqueSurfaceMaterialInteractionGetFresnelGrazing(material));
+  const float baseReflectance = (1.0f - coatReflectance) * calcBt709Luminance(baseFresnel);
+  return coatReflectance / max(coatReflectance + baseReflectance, 1e-6f);
+}
+
+// Loads the clear coat of a surface's opaque material into an interaction decoded from the G-buffer, which keeps only
+// OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_HAS_CLEAR_COAT.
+void opaqueSurfaceMaterialInteractionLoadClearCoat(inout OpaqueSurfaceMaterialInteraction material, uint surfaceIndex)
+{
+  material.clearCoatWeight = 0.0f;
+  material.clearCoatRoughness = 0.0f;
+
+  if (surfaceIndex == SURFACE_INDEX_INVALID || !surfaceMaterials[surfaceIndex].isOpaque())
+  {
+    return;
+  }
+
+  const OpaqueSurfaceMaterial opaqueSurfaceMaterial = opaqueSurfaceMaterialCreate(surfaceMaterials[surfaceIndex]);
+  if (opaqueSurfaceMaterial.subsurfaceMaterialIndex == SURFACE_INDEX_INVALID)
+  {
+    return;
+  }
+
+  const SubsurfaceMaterial extensionMaterial =
+    subsurfaceMaterialCreate(surfaceMaterialExtensions[opaqueSurfaceMaterial.subsurfaceMaterialIndex]);
+  if (extensionMaterial.flags & SURFACE_MATERIAL_EXTENSION_FLAG_CLEAR_COAT)
+  {
+    const uint bits = uint(extensionMaterial.clearCoat);
+    float isotropicRoughness;
+    vec2 anisotropicRoughness;
+    calcRoughness(float((bits >> 8) & 0xFFu) / 255.0f, 0.0f, isotropicRoughness, anisotropicRoughness);
+    material.clearCoatWeight = float(bits & 0xFFu) / 255.0f;
+    material.clearCoatRoughness = isotropicRoughness;
+  }
+}
+
+// Unpacks the clear coat the polymorphic interaction carries in idata0 (two halves: weight, GGX roughness).
+void opaqueSurfaceMaterialInteractionUnpackClearCoat(inout OpaqueSurfaceMaterialInteraction material, uint packedClearCoat)
+{
+  material.clearCoatWeight = uint16BitsToHalf(uint16_t(packedClearCoat & 0xFFFFu));
+  material.clearCoatRoughness = uint16BitsToHalf(uint16_t(packedClearCoat >> 16));
+}
+
+uint opaqueSurfaceMaterialInteractionPackClearCoat(OpaqueSurfaceMaterialInteraction material)
+{
+  return uint(float16BitsToUint16(float16_t(material.clearCoatWeight))) |
+         (uint(float16BitsToUint16(float16_t(material.clearCoatRoughness))) << 16);
+}
+
 #ifdef OPAQUE_MATERIAL_USE_POM
 // Parallax Occlusion Mapping Helper Functions
 // Define a `box` as a region in tangent space that corresponds to a pixel in a mipmap level, with min_z = 0 and max_z equal to the max height in that region.
@@ -804,6 +894,145 @@ float opaqueSurfaceMaterialInteractionCalcOpacity(
   return opacity;
 }
 
+// Returns the first set's tangent-space normal XY for a detail normal sampled with the second set, whose texture axes
+// are turned and scaled against the first set's. A normal's XY follows the height field's gradient, so it maps by the
+// transpose of the linear map from the first set to the second, recovered from the two sets' gradients. The map's area
+// scale is divided out, so tiling the detail map does not change its slopes. Degenerate gradients keep XY as it is.
+// See documentation/SecondaryTexcoordLayers.md.
+vec2 secondaryTexcoordNormalToFirstSet(
+  vec2 normalXY, vec2 gradientX, vec2 gradientY, vec2 gradient1X, vec2 gradient1Y)
+{
+  const float firstDeterminant = gradientX.x * gradientY.y - gradientY.x * gradientX.y;
+  if (!(abs(firstDeterminant) > 1e-30f))
+  {
+    return normalXY;
+  }
+
+  // map = [gradient1X gradient1Y] * inverse([gradientX gradientY]), with the gradients as columns.
+  const float inverseDeterminant = 1.0f / firstDeterminant;
+  const vec2 inverseColumn0 = vec2(gradientY.y, -gradientX.y) * inverseDeterminant;
+  const vec2 inverseColumn1 = vec2(-gradientY.x, gradientX.x) * inverseDeterminant;
+  const vec2 mapColumn0 = gradient1X * inverseColumn0.x + gradient1Y * inverseColumn0.y;
+  const vec2 mapColumn1 = gradient1X * inverseColumn1.x + gradient1Y * inverseColumn1.y;
+  const float mapDeterminant = mapColumn0.x * mapColumn1.y - mapColumn1.x * mapColumn0.y;
+  if (!(abs(mapDeterminant) > 1e-30f) || isinf(mapDeterminant))
+  {
+    return normalXY;
+  }
+
+  // transpose(map) * normalXY
+  const vec2 mapped = vec2(dot(mapColumn0, normalXY), dot(mapColumn1, normalXY));
+  return sanitize(mapped / sqrt(abs(mapDeterminant)), normalXY);
+}
+
+// Applies the layers a surface material extension entry reads with the second texture coordinate set
+// (SURFACE_MATERIAL_EXTENSION_FLAGS_SECONDARY_TEXCOORD_LAYERS): a detail normal blended over the shading normal, and a
+// masked layer that blends the albedo (linear), the perceptual roughness and the metallic towards constants.
+// A surface without a second set reads them with the first. The surface interaction is taken by value, as its texture
+// coordinates are replaced for the reads. vertexColor is the interpolated vertex colour before the texture operations
+// normalize it, which the layers' vertex weights read. See documentation/SecondaryTexcoordLayers.md.
+void opaqueSurfaceMaterialApplySecondaryTexcoordLayers(
+  SubsurfaceMaterial extensionMaterial,
+  uint16_t samplerIndex,
+  Surface surface,
+  SurfaceInteraction surfaceInteraction,
+  vec4 vertexColor,
+  f16mat3 worldToTangent,
+  float lodBias,
+  inout vec3 normal,
+  inout vec3 albedo,
+  inout float roughness,
+  inout float metallic)
+{
+  const vec2 firstGradientX = surfaceInteraction.textureGradientX;
+  const vec2 firstGradientY = surfaceInteraction.textureGradientY;
+
+  vec2 coordinates = surfaceInteraction.textureCoordinates;
+  vec2 gradientX = firstGradientX;
+  vec2 gradientY = firstGradientY;
+  if (surfaceHasTextureCoordinates1(surface))
+  {
+    coordinates = surfaceInteraction.textureCoordinates1;
+    gradientX = surfaceInteraction.textureGradient1X;
+    gradientY = surfaceInteraction.textureGradient1Y;
+  }
+
+  const uint vertexWeightChannels = uint(extensionMaterial.vertexWeightChannels);
+
+  float detailNormalStrength = float(extensionMaterial.detailNormalStrength);
+  if (extensionMaterial.flags & SURFACE_MATERIAL_EXTENSION_FLAG_DETAIL_NORMAL_VERTEX_WEIGHT)
+  {
+    detailNormalStrength *= saturate(vertexColor[vertexWeightChannels & 0x3u]);
+  }
+
+  if (extensionMaterial.flags & SURFACE_MATERIAL_EXTENSION_FLAG_DETAIL_NORMAL)
+  {
+    const vec2 scale = vec2(float(extensionMaterial.detailNormalTexcoordScaleX), float(extensionMaterial.detailNormalTexcoordScaleY));
+    surfaceInteraction.textureCoordinates = coordinates * scale;
+    surfaceInteraction.textureGradientX = gradientX * scale;
+    surfaceInteraction.textureGradientY = gradientY * scale;
+
+    vec4 detailNormalSample;
+    if (surfaceMaterialInteractionTextureReadHelper(extensionMaterial.detailNormalTextureIndex, samplerIndex, surfaceInteraction, detailNormalSample, lodBias))
+    {
+      vec3 detailTangentNormal = (extensionMaterial.flags & SURFACE_MATERIAL_EXTENSION_FLAG_DETAIL_NORMAL_TANGENT_XY)
+        ? unsignedTangentXYToHemisphereDirection(vec2(detailNormalSample.xy), cb.opaqueMaterialArgs.normalIntensity)
+        : unsignedOctahedralToHemisphereDirection(vec2(detailNormalSample.xy), cb.opaqueMaterialArgs.normalIntensity);
+      detailTangentNormal.xy = secondaryTexcoordNormalToFirstSet(
+        detailTangentNormal.xy, firstGradientX, firstGradientY, surfaceInteraction.textureGradientX, surfaceInteraction.textureGradientY);
+      detailTangentNormal = safeNormalize(
+        mix(vec3(0.0f, 0.0f, 1.0f), detailTangentNormal, detailNormalStrength), vec3(0.0f, 0.0f, 1.0f));
+
+      const vec3 baseTangentNormal = safeNormalize(mul(worldToTangent, normal), vec3(0.0f, 0.0f, 1.0f));
+      const vec3 blendedTangentNormal = normalBlendRNM(baseTangentNormal, detailTangentNormal);
+      normal = safeNormalize(mul(transpose(worldToTangent), blendedTangentNormal), normal);
+    }
+  }
+
+  if (extensionMaterial.flags & SURFACE_MATERIAL_EXTENSION_FLAG_MASKED_LAYER)
+  {
+    float mask = 1.0f;
+
+    const vec2 scale = vec2(float(extensionMaterial.layerTexcoordScaleX), float(extensionMaterial.layerTexcoordScaleY));
+    surfaceInteraction.textureCoordinates = coordinates * scale;
+    surfaceInteraction.textureGradientX = gradientX * scale;
+    surfaceInteraction.textureGradientY = gradientY * scale;
+
+    vec4 maskSample;
+    if (surfaceMaterialInteractionTextureReadHelper(extensionMaterial.layerMaskTextureIndex, samplerIndex, surfaceInteraction, maskSample, lodBias))
+    {
+      const uint channel = (uint(extensionMaterial.flags) >> SURFACE_MATERIAL_EXTENSION_LAYER_MASK_CHANNEL_SHIFT) & 0x3u;
+      mask = saturate(float(maskSample[channel]));
+    }
+
+    // The layer shows where the mask is above a threshold that falls as the vertex weight w rises, and fades in over the
+    // edge width around it. The threshold spans [-e, 1 + e], so w 0 shows none of the layer and w 1 shows all of it.
+    // The minimum half width turns an edge width of 0 into a hard step.
+    if (extensionMaterial.flags & SURFACE_MATERIAL_EXTENSION_FLAG_LAYER_MASK_VERTEX_THRESHOLD)
+    {
+      const float weight = saturate(vertexColor[(vertexWeightChannels >> 2) & 0x3u]);
+      const float halfEdgeWidth = max(0.5f * float(extensionMaterial.layerMaskEdgeWidth), 1.0e-4f);
+      const float threshold = (1.0f - weight) * (1.0f + 2.0f * halfEdgeWidth) - halfEdgeWidth;
+      mask = smoothstep(threshold - halfEdgeWidth, threshold + halfEdgeWidth, mask);
+    }
+
+    mask *= float(extensionMaterial.layerMaskStrength);
+
+    const uint albedoBits = uint(extensionMaterial.layerAlbedo);
+    const vec3 layerAlbedo = gammaToLinear(vec3(
+      float(albedoBits & 0x1Fu) / 31.0f,
+      float((albedoBits >> 5) & 0x3Fu) / 63.0f,
+      float((albedoBits >> 11) & 0x1Fu) / 31.0f));
+    const uint roughnessMetallicBits = uint(extensionMaterial.layerRoughnessMetallic);
+    const float layerRoughness = float(roughnessMetallicBits & 0xFFu) / 255.0f;
+    const float layerMetallic = float((roughnessMetallicBits >> 8) & 0xFFu) / 255.0f;
+
+    albedo = mix(albedo, layerAlbedo, mask);
+    roughness = mix(roughness, layerRoughness, mask);
+    metallic = mix(metallic, layerMetallic, mask);
+  }
+}
+
 // Opaque Surface Material Interaction Functions
 
 OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
@@ -940,6 +1169,8 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
 
 #endif
 
+  // The layers' vertex weights read the vertex colour before the texture operations normalize it.
+  const vec4 layerVertexColor = surfaceInteraction.vertexColor;
   opaqueSurfaceMaterialApplyTextureOperations(opaqueSurfaceMaterial, surface, surfaceInteraction,
     albedo, opacity, emissiveBlendOverrideInfluence);
 
@@ -1103,6 +1334,19 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
 
   metallic = saturate(metallic * cb.opaqueMaterialArgs.metallicScale + cb.opaqueMaterialArgs.metallicBias);
 
+  // The layers read with the second texture coordinate set (remixapi_MaterialInfoOpaqueDetailLayersEXT).
+  if (opaqueSurfaceMaterial.subsurfaceMaterialIndex != SURFACE_INDEX_INVALID)
+  {
+    const SubsurfaceMaterial extensionMaterial =
+      subsurfaceMaterialCreate(surfaceMaterialExtensions[opaqueSurfaceMaterial.subsurfaceMaterialIndex]);
+    if (extensionMaterial.flags & SURFACE_MATERIAL_EXTENSION_FLAGS_SECONDARY_TEXCOORD_LAYERS)
+    {
+      opaqueSurfaceMaterialApplySecondaryTexcoordLayers(
+        extensionMaterial, opaqueSurfaceMaterial.samplerIndex, surface, surfaceInteraction, layerVertexColor, worldToTangent,
+        materialLodBias, normal, albedo, roughness, metallic);
+    }
+  }
+
   // Transform to desired Opaque Material Interaction values
 
   opaqueSurfaceMaterialInteraction.shadingNormal = getBentNormal(surfaceInteraction.geometryNormal, normal, -minimalRayInteraction.viewDirection);
@@ -1110,6 +1354,39 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
   // Todo: Shading tangent/bitangent for anisotropy?
   opaqueSurfaceMaterialInteraction.opacity = opacity;
   opaqueSurfaceMaterialInteraction.thinFilmThickness = thinFilmThickness;
+
+  // The pearlescent tint and the clear coat (remixapi_MaterialInfoOpaqueClearCoatEXT). See documentation/ClearCoatMaterial.md.
+  opaqueSurfaceMaterialInteraction.clearCoatWeight = 0.0f;
+  opaqueSurfaceMaterialInteraction.clearCoatRoughness = 0.0f;
+  if (!surface.isMatte && opaqueSurfaceMaterial.subsurfaceMaterialIndex != SURFACE_INDEX_INVALID)
+  {
+    const SubsurfaceMaterial extensionMaterial =
+      subsurfaceMaterialCreate(surfaceMaterialExtensions[opaqueSurfaceMaterial.subsurfaceMaterialIndex]);
+
+    if (extensionMaterial.flags & SURFACE_MATERIAL_EXTENSION_FLAG_GRAZING_TINT)
+    {
+      const float normalDotView = saturate(dot(opaqueSurfaceMaterialInteraction.shadingNormal, minimalRayInteraction.viewDirection));
+      const float tint = float(extensionMaterial.pearlescentWeight) *
+        pow(1.0f - normalDotView, max(float(extensionMaterial.pearlescentExponent), 0.1f));
+      const uint colorBits = uint(extensionMaterial.pearlescentColor);
+      const vec3 pearlescentColor = gammaToLinear(vec3(
+        float(colorBits & 0x1Fu) / 31.0f,
+        float((colorBits >> 5) & 0x3Fu) / 63.0f,
+        float((colorBits >> 11) & 0x1Fu) / 31.0f));
+      albedo = mix(albedo, pearlescentColor, saturate(tint));
+    }
+
+    if (extensionMaterial.flags & SURFACE_MATERIAL_EXTENSION_FLAG_CLEAR_COAT)
+    {
+      const uint coatBits = uint(extensionMaterial.clearCoat);
+      float coatIsotropicRoughness;
+      vec2 coatAnisotropicRoughness;
+      calcRoughness(float((coatBits >> 8) & 0xFFu) / 255.0f, 0.0f, coatIsotropicRoughness, coatAnisotropicRoughness);
+      opaqueSurfaceMaterialInteraction.clearCoatWeight = float(coatBits & 0xFFu) / 255.0f;
+      opaqueSurfaceMaterialInteraction.clearCoatRoughness = coatIsotropicRoughness;
+      opaqueSurfaceMaterialInteraction.flags |= OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_HAS_CLEAR_COAT;
+    }
+  }
 
   // Note: Opacity factored into albedo and base reflectivity to ensure NEE and indirect lighting off of objects with opacity properly
   // account for how much light is being transmitted due to the opacity (similar to how Fresnel on glass works).
@@ -1215,6 +1492,7 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(Polymorp
 
   opaqueSurfaceMaterialInteraction.dlssControlMask = polymorphicSurfaceMaterialInteraction.dlssControlMask;
   opaqueSurfaceMaterialInteraction.flags = polymorphicSurfaceMaterialInteraction.bdata0;
+  opaqueSurfaceMaterialInteractionUnpackClearCoat(opaqueSurfaceMaterialInteraction, polymorphicSurfaceMaterialInteraction.idata0);
 
   return opaqueSurfaceMaterialInteraction;
 }
@@ -1264,6 +1542,9 @@ OpaqueSurfaceMaterialInteraction opaqueSurfaceMaterialInteractionCreate(
 
   // We don't store this in the G-buffer
   opaqueSurfaceMaterialInteraction.normalDetail = float(0.0f);
+  // Nor this. polymorphicSurfaceMaterialInteractionReadFromGBuffer loads it for HAS_CLEAR_COAT.
+  opaqueSurfaceMaterialInteraction.clearCoatWeight = 0.0f;
+  opaqueSurfaceMaterialInteraction.clearCoatRoughness = 0.0f;
   opaqueSurfaceMaterialInteraction.dlssControlMask = float4x32ToUnorm4x8(1.0f.rrrr);
 
   // Note thin opaque properties are stored later into PolymorphicSurfaceMaterialInteraction
@@ -1279,7 +1560,8 @@ SurfaceMaterialInteractionLobeInformation opaqueSurfaceMaterialInteractionGetLob
   surfaceMaterialInteractionLobeInformation.diffuseReflectionPresent =
     any(greaterThanEqual(opaqueSurfaceMaterialInteraction.albedo, albedoThreshold));
   surfaceMaterialInteractionLobeInformation.specularReflectionPresent =
-    any(greaterThanEqual(opaqueSurfaceMaterialInteraction.baseReflectivity, baseReflectivityThreshold));
+    any(greaterThanEqual(opaqueSurfaceMaterialInteraction.baseReflectivity, baseReflectivityThreshold)) ||
+    opaqueSurfaceMaterialInteraction.clearCoatWeight > 0.0f;
   surfaceMaterialInteractionLobeInformation.diffuseTransmissionPresent = false;
   surfaceMaterialInteractionLobeInformation.specularTransmissionPresent = false;
 
@@ -1326,8 +1608,16 @@ bool opaqueSurfaceMaterialInteractionCalcLobeProbability(
   // Note: Perceptual luminance also used to reduce tristimulus color to a single probability value to hopefully look better to
   // the human eye than a simple average. This is done at the very end of calculations so that interactions between colors take
   // effect rather than being reduced to a single value too soon.
-  const float diffuseReflectionAlbedoApprox = calcBt709Luminance((vec3(1.0f) - fresnel) * albedo);
-  const float specularReflectionAlbedoApprox = calcBt709Luminance(fresnel);
+  float diffuseReflectionAlbedoApprox = calcBt709Luminance((vec3(1.0f) - fresnel) * albedo);
+  float specularReflectionAlbedoApprox = calcBt709Luminance(fresnel);
+
+  // The clear coat joins the specular lobe and takes its share from the base lobes below it.
+  if (opaqueSurfaceMaterialInteraction.clearCoatWeight > 0.0f)
+  {
+    const float coatReflectance = opaqueSurfaceMaterialInteractionCalcClearCoatFresnel(opaqueSurfaceMaterialInteraction, normalDotOutputDirection);
+    diffuseReflectionAlbedoApprox *= 1.0f - coatReflectance;
+    specularReflectionAlbedoApprox = specularReflectionAlbedoApprox * (1.0f - coatReflectance) + coatReflectance;
+  }
   const float opacityTransmissionAlbedoApprox = 1.0f - opaqueSurfaceMaterialInteraction.opacity;
   const float diffuseTransmissionAlbedoApprox = calcBt709Luminance(vec3(1.0f) - fresnel);
 
@@ -1842,10 +2132,46 @@ void opaqueSurfaceMaterialInteractionCalcSample(
     surfaceMaterialInteractionSample = opaqueSurfaceMaterialInteractionCalcDiffuseReflectionSample(
       opaqueSurfaceMaterialInteraction, randomState, tangentToWorldSpaceQuaternion, minimalRayInteraction);
 
+    if (opaqueSurfaceMaterialInteraction.clearCoatWeight > 0.0f)
+    {
+      surfaceMaterialInteractionSample.throughput *= opaqueSurfaceMaterialInteractionCalcClearCoatBaseAttenuation(
+        opaqueSurfaceMaterialInteraction,
+        dot(opaqueSurfaceMaterialInteraction.shadingNormal, minimalRayInteraction.viewDirection),
+        dot(opaqueSurfaceMaterialInteraction.shadingNormal, surfaceMaterialInteractionSample.inputDirection));
+    }
+
     break;
   case uint(opaqueLobeTypeSpecularReflection):
-    surfaceMaterialInteractionSample = opaqueSurfaceMaterialInteractionCalcSpecularReflectionSample(
-      opaqueSurfaceMaterialInteraction, randomState, tangentToWorldSpaceQuaternion, minimalRayInteraction);
+    if (opaqueSurfaceMaterialInteraction.clearCoatWeight > 0.0f)
+    {
+      // The specular lobe holds the clear coat and the base specular. One of them is sampled, and the throughput is
+      // divided by the probability of that choice. See documentation/ClearCoatMaterial.md.
+      const float normalDotOutputDirection = dot(opaqueSurfaceMaterialInteraction.shadingNormal, minimalRayInteraction.viewDirection);
+      const float coatProbability =
+        opaqueSurfaceMaterialInteractionCalcClearCoatSelectionProbability(opaqueSurfaceMaterialInteraction, normalDotOutputDirection);
+
+      if (getNextSampleBlueNoise(randomState) < coatProbability)
+      {
+        surfaceMaterialInteractionSample = opaqueSurfaceMaterialInteractionCalcSpecularReflectionSample(
+          opaqueSurfaceMaterialInteractionCreateClearCoatLayer(opaqueSurfaceMaterialInteraction),
+          randomState, tangentToWorldSpaceQuaternion, minimalRayInteraction);
+        surfaceMaterialInteractionSample.throughput *= opaqueSurfaceMaterialInteraction.clearCoatWeight / coatProbability;
+      }
+      else
+      {
+        surfaceMaterialInteractionSample = opaqueSurfaceMaterialInteractionCalcSpecularReflectionSample(
+          opaqueSurfaceMaterialInteraction, randomState, tangentToWorldSpaceQuaternion, minimalRayInteraction);
+        surfaceMaterialInteractionSample.throughput *= opaqueSurfaceMaterialInteractionCalcClearCoatBaseAttenuation(
+          opaqueSurfaceMaterialInteraction, normalDotOutputDirection,
+          dot(opaqueSurfaceMaterialInteraction.shadingNormal, surfaceMaterialInteractionSample.inputDirection)) /
+          (1.0f - coatProbability);
+      }
+    }
+    else
+    {
+      surfaceMaterialInteractionSample = opaqueSurfaceMaterialInteractionCalcSpecularReflectionSample(
+        opaqueSurfaceMaterialInteraction, randomState, tangentToWorldSpaceQuaternion, minimalRayInteraction);
+    }
 
     break;
   case uint(opaqueLobeTypeOpacityTransmission):
@@ -1884,8 +2210,11 @@ SurfaceMaterialInteractionPSRSample opaqueSurfaceMaterialInteractionCalcPSRRefle
     opaqueSurfaceMaterialInteractionGetLobeInformation(opaqueSurfaceMaterialInteraction);
 
   // Note: Indicate reflection PSR should occur only if no diffuse lobe is present (to prevent
-  // the need to split paths) and if a specular dirac lobe is present.
+  // the need to split paths) and if a specular dirac lobe is present. A clear coat is a second specular lobe that PSR
+  // would not follow, so coated materials take no PSR. The flag is used rather than the coat weight, because the
+  // G-buffer PSR passes decode the interaction without the coat's values.
   if (
+    (opaqueSurfaceMaterialInteraction.flags & OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_HAS_CLEAR_COAT) ||
     lobeInformation.diffuseReflectionPresent ||
     !lobeInformation.specularReflectionPresent ||
     !lobeInformation.specularReflectionDirac ||
@@ -2122,7 +2451,18 @@ float opaqueSurfaceMaterialInteractionCalcSolidAnglePdf(
     diffuseReflectionProbability, specularReflectionProbability, opacityTransmissionProbability, diffuseTransmissionProbability);
 
   const float diffuseSolidAnglePdf = opaqueSurfaceMaterialInteractionCalcDiffuseReflectionSolidAnglePdf(opaqueSurfaceMaterialInteraction, minimalRayInteraction, inputDirection);
-  const float specularSolidAnglePdf = opaqueSurfaceMaterialInteractionCalcSpecularReflectionSolidAnglePdf(opaqueSurfaceMaterialInteraction, minimalRayInteraction, inputDirection);
+  float specularSolidAnglePdf = opaqueSurfaceMaterialInteractionCalcSpecularReflectionSolidAnglePdf(opaqueSurfaceMaterialInteraction, minimalRayInteraction, inputDirection);
+
+  // The specular lobe samples the clear coat or the base specular (opaqueSurfaceMaterialInteractionCalcSample).
+  if (opaqueSurfaceMaterialInteraction.clearCoatWeight > 0.0f)
+  {
+    const float coatProbability = opaqueSurfaceMaterialInteractionCalcClearCoatSelectionProbability(
+      opaqueSurfaceMaterialInteraction, dot(opaqueSurfaceMaterialInteraction.shadingNormal, minimalRayInteraction.viewDirection));
+    const float coatSolidAnglePdf = opaqueSurfaceMaterialInteractionCalcSpecularReflectionSolidAnglePdf(
+      opaqueSurfaceMaterialInteractionCreateClearCoatLayer(opaqueSurfaceMaterialInteraction), minimalRayInteraction, inputDirection);
+    specularSolidAnglePdf = mix(specularSolidAnglePdf, coatSolidAnglePdf, coatProbability);
+  }
+
   const float diffuseTransmissionSolidAnglePdf = opaqueSurfaceMaterialInteractionCalcDiffuseTransmissionSolidAnglePdf(opaqueSurfaceMaterialInteraction, minimalRayInteraction, inputDirection);
 
   return diffuseSolidAnglePdf * diffuseReflectionProbability +
@@ -2190,8 +2530,20 @@ SurfaceMaterialInteractionSplitWeight opaqueSurfaceMaterialInteractionCalcApprox
   const float normalDistributionFunction = evalGGXNormalDistributionIsotropic(opaqueSurfaceMaterialInteraction.isotropicRoughness, normalDotMicrofacetNormal);
   // Note: Actual shadowing/masking (G) function omitted from visibility calculation for a cheaper approximation.
   const float visibility = safePositiveDivide(float(1), float(4) * normalDotInputDirection * normalDotOutputDirection, materialEpsilon);
-  const vec3 diffuseReflectionWeight = opaqueSurfaceMaterialInteraction.albedo;
-  const vec3 specularReflectionWeight = min(normalDistributionFunction * visibility * fresnel, vec3(float16Max));
+  vec3 diffuseReflectionWeight = opaqueSurfaceMaterialInteraction.albedo;
+  vec3 specularReflectionWeight = min(normalDistributionFunction * visibility * fresnel, vec3(float16Max));
+
+  // The clear coat lobe, with the same approximations, over the attenuated base lobes.
+  if (opaqueSurfaceMaterialInteraction.clearCoatWeight > 0.0f)
+  {
+    const float attenuation = opaqueSurfaceMaterialInteractionCalcClearCoatBaseAttenuation(
+      opaqueSurfaceMaterialInteraction, normalDotOutputDirection, normalDotInputDirection);
+    const float coatFresnel = opaqueSurfaceMaterialInteractionCalcClearCoatFresnel(opaqueSurfaceMaterialInteraction, outputDirectionDotMicrofacetNormal);
+    const float coatNormalDistributionFunction =
+      evalGGXNormalDistributionIsotropic(opaqueSurfaceMaterialInteraction.clearCoatRoughness, normalDotMicrofacetNormal);
+    diffuseReflectionWeight *= attenuation;
+    specularReflectionWeight = min(specularReflectionWeight * attenuation + coatNormalDistributionFunction * visibility * coatFresnel, vec3(float16Max));
+  }
 
   // Create a split weight
   SurfaceMaterialInteractionSplitWeight splitWeight;
@@ -2303,11 +2655,30 @@ SurfaceMaterialInteractionSplitWeight opaqueSurfaceMaterialInteractionCalcProjec
   // which makes it non-trivial to modify. This should be fine though as the thin film will only add a small bit of extra reflection in some cases (due to having two Fresnel layers),
   // or attenuate the reflected signal due to destructive interference, nothing major enough that'd majorly change the amount of transmitted light to make the diffuse contribution look very
   // wrong, though it may be slightly the wrong color in some instances, assuming that transmitted light interferes in the same way.
-  const vec3 diffuseReflectionWeight = evalHammonDiffuse(
+  vec3 diffuseReflectionWeight = evalHammonDiffuse(
     opaqueSurfaceMaterialInteraction.albedo, opaqueSurfaceMaterialInteraction.isotropicRoughness,
     inputDirectionDotOutputDirection, normalDotInputDirection,
     normalDotOutputDirection, normalDotMicrofacetNormal);
-  const vec3 specularReflectionWeight = min(finalFresnel * normalDistributionFunction * visibility, vec3(float16Max));
+  vec3 specularReflectionWeight = min(finalFresnel * normalDistributionFunction * visibility, vec3(float16Max));
+
+  // The clear coat's GGX lobe over the base lobes, which keep the light that crosses the coat both ways.
+  // See documentation/ClearCoatMaterial.md.
+  if (opaqueSurfaceMaterialInteraction.clearCoatWeight > 0.0f)
+  {
+    const vec2 coatRoughness = vec2(opaqueSurfaceMaterialInteraction.clearCoatRoughness, opaqueSurfaceMaterialInteraction.clearCoatRoughness);
+    const float coatFresnel = opaqueSurfaceMaterialInteractionCalcClearCoatFresnel(opaqueSurfaceMaterialInteraction, outputDirectionDotMicrofacetNormal);
+    const float coatNormalDistributionFunction = evalGGXNormalDistribution(
+      coatRoughness, tangentDotMicrofacetNormal, bitangentDotMicrofacetNormal, normalDotMicrofacetNormal);
+    const float coatVisibility = evalHeightCorrelatedGGXVisibility(
+      coatRoughness, tangentDotInputDirection, tangentDotOutputDirection, bitangentDotInputDirection,
+      bitangentDotOutputDirection, normalDotInputDirection, normalDotOutputDirection);
+    const float attenuation = opaqueSurfaceMaterialInteractionCalcClearCoatBaseAttenuation(
+      opaqueSurfaceMaterialInteraction, normalDotOutputDirection, normalDotInputDirection);
+
+    diffuseReflectionWeight *= attenuation;
+    specularReflectionWeight = min(
+      specularReflectionWeight * attenuation + coatFresnel * coatNormalDistributionFunction * coatVisibility, vec3(float16Max));
+  }
 
   // Create a split weight
 

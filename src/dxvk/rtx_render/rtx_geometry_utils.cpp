@@ -1150,6 +1150,9 @@ namespace dxvk {
 
     if (desc.hasColor0) 
       output.color0Buffer = RaytraceBuffer(targetSlice, desc.color0Offset, desc.stride, VK_FORMAT_B8G8R8A8_UNORM);
+
+    // The interleaved layout has no second texture coordinate set.
+    output.texcoord1Buffer = RaytraceBuffer();
   }
 
   void RtxGeometryUtils::processGeometryBuffers(const RasterGeometry& input, RaytraceGeometry& output) {
@@ -1165,6 +1168,14 @@ namespace dxvk {
 
     if (input.color0Buffer.defined())
       output.color0Buffer = RaytraceBuffer(slice, input.color0Buffer.offsetFromSlice(), input.color0Buffer.stride(), input.color0Buffer.vertexFormat());
+
+    // The vertices are copied whole, so a second texture coordinate set interleaved with them is copied too.
+    const bool texcoord1Interleaved = input.texcoord1Buffer.defined() && input.texcoordBuffer.defined() &&
+      input.positionBuffer.matches(input.texcoord1Buffer) && input.positionBuffer.stride() == input.texcoord1Buffer.stride() &&
+      input.texcoord1Buffer.vertexFormat() == VK_FORMAT_R32G32_SFLOAT;
+    output.texcoord1Buffer = texcoord1Interleaved
+      ? RaytraceBuffer(slice, input.texcoord1Buffer.offsetFromSlice(), input.texcoord1Buffer.stride(), input.texcoord1Buffer.vertexFormat())
+      : RaytraceBuffer();
   }
 
   size_t RtxGeometryUtils::computeOptimalVertexStride(const RasterGeometry& input, bool forceNormals) {

@@ -188,8 +188,40 @@ struct SubsurfaceMaterial
   // 13-15: valid when flags has SURFACE_MATERIAL_EXTENSION_FLAG_ALBEDO_TINT
   f16vec3 albedoTint;
 
-  // padding (to keep size matching with MemoryPolymorphicSurfaceMaterial)
-  uint16_t data[16];
+  // 16-19: valid when flags has SURFACE_MATERIAL_EXTENSION_FLAG_DETAIL_NORMAL
+  uint16_t detailNormalTextureIndex;
+  float16_t detailNormalStrength;
+  float16_t detailNormalTexcoordScaleX;
+  float16_t detailNormalTexcoordScaleY;
+
+  // 20-25: valid when flags has SURFACE_MATERIAL_EXTENSION_FLAG_MASKED_LAYER
+  uint16_t layerMaskTextureIndex;
+  float16_t layerMaskStrength;
+  // Gamma-encoded RGB565.
+  uint16_t layerAlbedo;
+  // Perceptual roughness in the low byte and metallic in the high byte, unorm8 each.
+  uint16_t layerRoughnessMetallic;
+  float16_t layerTexcoordScaleX;
+  float16_t layerTexcoordScaleY;
+
+  // 26: valid when flags has SURFACE_MATERIAL_EXTENSION_FLAG_CLEAR_COAT
+  // Weight in the low byte and perceptual roughness in the high byte, unorm8 each.
+  uint16_t clearCoat;
+
+  // 27-29: valid when flags has SURFACE_MATERIAL_EXTENSION_FLAG_GRAZING_TINT
+  // Gamma-encoded RGB565.
+  uint16_t pearlescentColor;
+  float16_t pearlescentWeight;
+  float16_t pearlescentExponent;
+
+  // 30: valid when flags has SURFACE_MATERIAL_EXTENSION_FLAG_LAYER_MASK_VERTEX_THRESHOLD
+  // The width of the mask's fade around the threshold, 0..1.
+  float16_t layerMaskEdgeWidth;
+
+  // 31: the vertex colour channels of the detail layers' weights, 0-3 for red, green, blue and alpha.
+  // Bits 0-1 weight the detail normal (SURFACE_MATERIAL_EXTENSION_FLAG_DETAIL_NORMAL_VERTEX_WEIGHT).
+  // Bits 2-3 threshold the layer mask (SURFACE_MATERIAL_EXTENSION_FLAG_LAYER_MASK_VERTEX_THRESHOLD).
+  uint16_t vertexWeightChannels;
 };
 
 struct SubsurfaceMaterialInteraction
@@ -216,6 +248,10 @@ struct OpaqueSurfaceMaterialInteraction
   SubsurfaceMaterialInteraction subsurfaceMaterialInteraction;
   // Note: A value of 0 in the thin film thickness indicates the thin film is disabled.
   float thinFilmThickness;
+  // The clear coat's weight and GGX (not perceptual) roughness. A weight of 0 means the material has no coat, and every
+  // coat path is skipped. See documentation/ClearCoatMaterial.md.
+  float clearCoatWeight;
+  float clearCoatRoughness;
   uint32_t dlssControlMask;
   uint8_t flags;
 };

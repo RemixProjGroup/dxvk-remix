@@ -329,6 +329,9 @@ Optional extensions chain next to the type-specific one:
 | Extension | When to use |
 | :-- | :-- |
 | `remixapi_MaterialInfoTextureTransformEXT` | Scale, rotate, offset or scroll all of an opaque or translucent material's textures. Not forwarded by the 32-bit bridge. See [`TextureTransforms.md`](../documentation/TextureTransforms.md). |
+| `remixapi_MaterialInfoOpaqueClearCoatEXT` | Coated and lacquered surfaces: a clear coat (a second, dielectric GGX specular lobe over the base) and a pearlescent albedo shift towards grazing angles. Opaque only. Check `remixapi_GetClearCoatMaterialVersion`. Not forwarded by the 32-bit bridge. See [`ClearCoatMaterial.md`](../documentation/ClearCoatMaterial.md). |
+| `remixapi_MaterialInfoOpaqueDetailLayersEXT` | A detail normal map and a masked layer (albedo, roughness and metallic towards constants) read with the mesh's second texture coordinate set, for example a tiled detail normal and worn edges. Opaque only. Check `remixapi_GetSecondaryTexcoordVersion`. Not forwarded by the 32-bit bridge. See [`SecondaryTexcoordLayers.md`](../documentation/SecondaryTexcoordLayers.md). |
+| `remixapi_MaterialInfoOpaqueDetailLayerWeightsEXT` | Weights the detail layers per vertex by a vertex colour channel: the detail normal's strength, and a threshold on the layer mask. Next to `remixapi_MaterialInfoOpaqueDetailLayersEXT` only. Check `remixapi_GetSecondaryTexcoordVersion` >= 2. Not forwarded by the 32-bit bridge. See [`SecondaryTexcoordLayers.md`](../documentation/SecondaryTexcoordLayers.md#vertex-colour-weights). |
 
 ---
 
@@ -395,6 +398,14 @@ vertex/index arrays, an optional `remixapi_MeshInfoSkinning` block
 The vertex format is `remixapi_HardcodedVertex` — position(3) +
 normal(3) + texcoord(2) + color(uint32) + padding to 64 bytes. The
 padding is reserved for future runtime use; leave it zeroed.
+
+Chain `remixapi_MeshInfoSecondaryTexcoordEXT` on `remixapi_MeshInfo` to give
+the mesh a second texture coordinate set: one `remixapi_Float2D` array per
+surface, in the surface order of `surfaces_values`. Materials read it through
+`remixapi_MaterialInfoOpaqueDetailLayersEXT`. Check the named export
+`remixapi_GetSecondaryTexcoordVersion` (returns 2) before relying on it. Not
+forwarded by the 32-bit bridge. See
+[`SecondaryTexcoordLayers.md`](../documentation/SecondaryTexcoordLayers.md).
 
 ### Asset keys (`remixapi_AssetKeyEXT`)
 

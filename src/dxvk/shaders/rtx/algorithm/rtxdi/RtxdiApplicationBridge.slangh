@@ -391,6 +391,8 @@ RAB_Surface RAB_GetGBufferSurface(ivec2 pixel, bool previousFrame)
 
   const uint subsurfaceMaterialIndex = getSubsurfaceMaterialIndex(surfaceMaterials[primarySurfaceIndex], samplerIndex);
   surface.opaqueSurfaceMaterialInteraction.subsurfaceMaterialInteraction = subSurfaceMaterialReadHelper(SharedSubsurfaceData[pixel], SharedSubsurfaceDiffusionProfileData[pixel]);
+  // The G-buffer has no clear coat values, so they come from the material.
+  opaqueSurfaceMaterialInteractionLoadClearCoat(surface.opaqueSurfaceMaterialInteraction, primarySurfaceIndex);
 
   GeometryFlags geometryFlags = geometryFlagsReadFromGBuffer(pixel, SharedFlags);
   surface.portalSpace = geometryFlags.portalSpace;

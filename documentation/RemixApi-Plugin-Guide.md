@@ -179,7 +179,8 @@ two plugins in one process, the version of the last `remixapi_InitializeLibrary`
 Newer features are named exports rather than table slots. Look each one up with `GetProcAddress` on the DLL handle,
 and treat a null pointer as "this runtime does not have it". Extensions that come with a version query
 (`remixapi_GetSpecGlossMaterialVersion`, `remixapi_GetMaterialAlbedoTintVersion`,
-`remixapi_GetInstanceMaterialOverrideVersion`) should be chained only when the query exists and returns a revision
+`remixapi_GetInstanceMaterialOverrideVersion`, `remixapi_GetSecondaryTexcoordVersion`,
+`remixapi_GetClearCoatMaterialVersion`) should be chained only when the query exists and returns a revision
 you support. [RemixApi-Migration.md](../docs/RemixApi-Migration.md#2-version-and-compatibility) has the version
 table and the probing pattern.
 

@@ -40,6 +40,11 @@ enum class BlendType : uint8_t {
 
 static const uint32_t surfaceBlendTypeMask = 0xfu;
 
+// Bits 2-7 of the Surface's buffer flags hold the second texture coordinate set's offset after the first, in dwords.
+// 0 means the surface has no second set.
+#define SURFACE_TEXCOORD1_DWORD_OFFSET_SHIFT 2
+#define SURFACE_TEXCOORD1_DWORD_OFFSET_MAX 0x3F
+
 // Note: Use caution when changing this enum, must match the values defined on the MDL side of things
 // as well as matching Vulkan's alpha compare operations due to conversions from these values at some points
 // in the code.

@@ -327,6 +327,8 @@ struct RaytraceGeometry {
   RaytraceBuffer previousPositionBuffer;
   RaytraceBuffer normalBuffer;
   RaytraceBuffer texcoordBuffer;
+  // The second texture coordinate set, in the same buffer as the first. The Surface stores its offset from the first.
+  RaytraceBuffer texcoord1Buffer;
   RaytraceBuffer color0Buffer;
   RaytraceBuffer indexBuffer;
 

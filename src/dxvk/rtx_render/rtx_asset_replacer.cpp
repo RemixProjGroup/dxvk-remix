@@ -337,6 +337,8 @@ uint32_t AssetReplacer::applyTextureRefreshes() {
       refresh(m.getSubsurfaceSingleScatteringAlbedoTexture());
       refresh(m.getSubsurfaceRadiusTexture());
       refresh(m.getSecondaryTexture());
+      refresh(m.getLayers().detailNormalTexture);
+      refresh(m.getLayers().layerMaskTexture);
       break;
     }
     case MaterialDataType::Translucent: {

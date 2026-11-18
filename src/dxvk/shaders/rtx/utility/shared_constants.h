@@ -74,6 +74,9 @@ static const uint8_t surfaceMaterialTypeMask = uint8_t(0x3u);
 
 #define OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_HAS_HEIGHT_TEXTURE (1 << 0)
 #define OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_USE_THIN_FILM_LAYER (1 << 1)
+// The interaction has a clear coat (OpaqueSurfaceMaterialInteraction::clearCoatWeight). The G-buffer keeps only this bit,
+// and its decode reads the coat from the surface's material. See documentation/ClearCoatMaterial.md.
+#define OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_HAS_CLEAR_COAT (1 << 3)
 // flags overlap with type field when in gbuffer, which occupies last 2 bits.
 #define OPAQUE_SURFACE_MATERIAL_INTERACTION_FLAG_MASK 0x3F
 
@@ -82,12 +85,29 @@ static const uint8_t surfaceMaterialTypeMask = uint8_t(0x3u);
 // OpaqueSurfaceMaterial::subsurfaceMaterialIndex). They take no opaque material flag bits.
 // The entry carries an albedo tint (SubsurfaceMaterial::albedoTint, a gamma-space RGB multiplier on the albedo texture).
 #define SURFACE_MATERIAL_EXTENSION_FLAG_ALBEDO_TINT (1 << 0)
-// The entry exists only for the tint, so subsurface reads treat it as absent.
+// The entry exists only for the tint or the layers below, so subsurface reads treat it as absent.
 #define SURFACE_MATERIAL_EXTENSION_FLAG_NO_SUBSURFACE (1 << 1)
 // rtx.subsurface.transmittanceFollowsAlbedo makes the diffusion-profile transmittance texture the albedo texture.
 // TINT multiplies it by albedoTint like the albedo. SRGB means its view is sRGB, so the shader skips gammaToLinear.
 #define SURFACE_MATERIAL_EXTENSION_FLAG_TRANSMITTANCE_TINT (1 << 2)
 #define SURFACE_MATERIAL_EXTENSION_FLAG_TRANSMITTANCE_SRGB (1 << 3)
+// The entry carries a detail normal map read with the second texture coordinate set (SubsurfaceMaterial::detailNormal*).
+// TANGENT_XY means it holds tangent-space X and Y, as OPAQUE_SURFACE_MATERIAL_FLAG_NORMAL_TANGENT_XY does for the base.
+#define SURFACE_MATERIAL_EXTENSION_FLAG_DETAIL_NORMAL (1 << 4)
+#define SURFACE_MATERIAL_EXTENSION_FLAG_DETAIL_NORMAL_TANGENT_XY (1 << 5)
+// The entry carries a masked layer read with the second texture coordinate set (SubsurfaceMaterial::layer*).
+// The two bits at SURFACE_MATERIAL_EXTENSION_LAYER_MASK_CHANNEL_SHIFT pick the mask texture's channel.
+#define SURFACE_MATERIAL_EXTENSION_FLAG_MASKED_LAYER (1 << 6)
+#define SURFACE_MATERIAL_EXTENSION_LAYER_MASK_CHANNEL_SHIFT 7
+// The entry carries a clear coat (SubsurfaceMaterial::clearCoat) and a pearlescent tint (SubsurfaceMaterial::pearlescent*).
+#define SURFACE_MATERIAL_EXTENSION_FLAG_CLEAR_COAT (1 << 9)
+#define SURFACE_MATERIAL_EXTENSION_FLAG_GRAZING_TINT (1 << 10)
+// The detail normal's strength is weighted by a vertex colour channel, and the masked layer's mask is thresholded by one
+// (SubsurfaceMaterial::layerMaskEdgeWidth, SubsurfaceMaterial::vertexWeightChannels).
+#define SURFACE_MATERIAL_EXTENSION_FLAG_DETAIL_NORMAL_VERTEX_WEIGHT (1 << 11)
+#define SURFACE_MATERIAL_EXTENSION_FLAG_LAYER_MASK_VERTEX_THRESHOLD (1 << 12)
+#define SURFACE_MATERIAL_EXTENSION_FLAGS_SECONDARY_TEXCOORD_LAYERS \
+  (SURFACE_MATERIAL_EXTENSION_FLAG_DETAIL_NORMAL | SURFACE_MATERIAL_EXTENSION_FLAG_MASKED_LAYER)
 
 // Note: Bits for flags field in TranslucentSurfaceMaterial and TranslucentSurfaceMaterialInteraction
 // If set, then the texture bound to transmittanceOrDiffuseTextureIndex is an albedo map for the diffuse layer
