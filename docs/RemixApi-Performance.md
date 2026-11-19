@@ -64,6 +64,11 @@ and an unchanged retained object about 0.3 µs (19,300 entries = 6.1 ms), measur
 20,000 static objects, that is about 116 ms against about 6 ms. A later A/B of the scene-owned path alone measured
 scene A −1.51 ms, and scene B render thread CPU 10.1 → 7.7 ms per frame.
 
+**Skip the engine's own work too.** Once Remix holds an object as a retained instance, the engine no longer needs to
+build or issue its own draws for it while Remix is showing. One API host that skips the engine's render passes for
+retained static objects measured a CPU-bound scene at 51 -> 91 fps, with GPU use going from 44% to 77%. It gains
+nothing while the GPU is the limit.
+
 A scene of a few hundred mostly animated objects gains little. See the
 [decision table](api-host-path-migration.md#when-to-migrate).
 
