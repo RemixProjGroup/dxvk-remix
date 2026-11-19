@@ -14,6 +14,19 @@ per-object instances and about 21,000 GPU-instanced slots. Numbers from differen
 exact values. The runtime has improved since the older ones were taken. Your game will differ, so measure it
 ([How to measure](#10-how-to-measure)).
 
+**Retained instances are opt-in.** The D3D9 path builds and keeps its scene from the game's draw calls on its own. The
+API does not do this for you. `DrawInstance` is immediate mode, one call per object per frame, and the runtime cannot
+tell from those calls which objects stayed the same since the last frame. Only your plugin knows that. An integration
+gets the retained path, and most of the CPU savings in this guide, only when it uses the retained instance calls
+([Describe static objects once](#describe-static-objects-once)). Today every API integration has to add that support
+itself.
+
+**What we plan to change.** We plan to make more of this the runtime's job. A later API version is meant to let a host
+describe its engine's data as it already is (vertex layouts, shared buffers, scene conventions, material parameters)
+and let the runtime convert it and keep the scene, instead of each plugin converting everything to the API's formats
+and tracking what changed. It will be additive: the current calls keep their behavior, and the advice in this guide
+stays correct for them. It is not in the public API yet.
+
 ## 1. Find what limits the frame
 
 A frame has three places to run out of time. The fix depends on which one it is.
