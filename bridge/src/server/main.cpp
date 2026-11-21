@@ -1226,7 +1226,16 @@ void ProcessDeviceCommandQueue() {
       case IDirect3DDevice9Ex_GetTransform:
         break;
       case IDirect3DDevice9Ex_MultiplyTransform:
+      {
+        GET_RES(pD3DDevice, gpD3DDevices);
+        PULL(D3DTRANSFORMSTATETYPE, State);
+        D3DMATRIX* pMatrix = nullptr;
+        PULL_DATA(sizeof(D3DMATRIX), pMatrix);
+        const auto hresult = pD3DDevice->MultiplyTransform(State, pMatrix);
+        assert(SUCCEEDED(hresult));
+        SEND_OPTIONAL_SERVER_RESPONSE(hresult, currentUID);
         break;
+      }
       case IDirect3DDevice9Ex_SetViewport:
       {
         GET_RES(pD3DDevice, gpD3DDevices);
@@ -3853,6 +3862,17 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     return 1;
   }
   LocalFree(argList);
+
+  // Windows gives the highest QoS to the process that owns the foreground window, which is the game, not this server.
+  // The server's threads then run at a lower QoS, often on efficiency cores, while the game's frames wait on them.
+  // Opting out of execution speed throttling gives this process HighQoS.
+  PROCESS_POWER_THROTTLING_STATE powerThrottling = {};
+  powerThrottling.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+  powerThrottling.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+  powerThrottling.StateMask = 0;
+  if (!SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &powerThrottling, sizeof(powerThrottling))) {
+    Logger::warn(format_string("Could not opt out of power throttling, error %u", GetLastError()));
+  }
 
   initModuleBridge();
   initDeviceBridge();

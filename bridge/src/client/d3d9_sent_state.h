@@ -29,7 +29,8 @@
 // - StateBlock Apply, Reset / ResetEx: everything (invalidateAll);
 // - SetRenderTarget(0): viewport and scissor (D3D9 resets both to the new target);
 // - DrawPrimitiveUP / DrawIndexedPrimitiveUP: stream 0, and the indices for the indexed one;
-// - SetFVF / SetVertexDeclaration: each other (one replaces the other on the server).
+// - SetFVF / SetVertexDeclaration: each other (one replaces the other on the server);
+// - MultiplyTransform: that transform (the server computes the product).
 // While a state block is being recorded, setters bypass this class entirely (the server records them all and its
 // device state does not change).
 //
@@ -123,6 +124,12 @@ public:
   void invalidateViewportAndScissor() {
     m_viewport.gen = 0;
     m_scissor.gen = 0;
+  }
+
+  void invalidateTransform(uint32_t state) {
+    if (state < kTransforms) {
+      m_transforms[state].gen = 0;
+    }
   }
 
   // A UP draw unbinds stream 0 on the server, and an indexed UP draw also unbinds the index buffer.

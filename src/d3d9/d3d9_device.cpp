@@ -1804,14 +1804,24 @@ namespace dxvk {
     ScopedCpuProfileZone();
     D3D9DeviceLock lock = LockDevice();
 
+    bool validState = (TransformState >= D3DTS_VIEW && TransformState <= D3DTS_PROJECTION) || (TransformState >= D3DTS_TEXTURE0 && TransformState <= D3DTS_TEXTURE7) || (TransformState >= D3DTS_WORLDMATRIX(0) && TransformState <= D3DTS_WORLDMATRIX(255));
+    if (unlikely(pMatrix == nullptr || !validState))
+      return D3DERR_INVALIDCALL;
+
     const uint32_t idx = GetTransformIndex(TransformState);
 
     m_state.transforms[idx] = m_state.transforms[idx] * ConvertMatrix(pMatrix);
 
     m_flags.set(D3D9DeviceFlag::DirtyFFVertexData);
 
+    // Texture transforms sit between PROJECTION and WORLD; they feed the material's texture transform.
+    if (idx != GetTransformIndex(D3DTS_VIEW) && idx != GetTransformIndex(D3DTS_PROJECTION) && idx < GetTransformIndex(D3DTS_WORLD))
+      ++m_remixMaterialStateVersion;
+
     if (idx == GetTransformIndex(D3DTS_VIEW) || idx >= GetTransformIndex(D3DTS_WORLD))
       m_flags.set(D3D9DeviceFlag::DirtyFFVertexBlend);
+
+    m_rtx.SetTransformDirty(idx);
 
     return D3D_OK;
   }

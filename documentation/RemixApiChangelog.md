@@ -39,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `remixapi_ConfigLayerBlend` and `REMIXAPI_ERROR_CODE_BUFFER_TOO_SMALL` (`0x4E560002`).
 
 ### Changed
+- 2026-11-18: `remixapi_InitializeLibrary` writes only the part of
+  `remixapi_Interface` that the caller's version knows, in the runtime and in the
+  bridge client. Every accepted version knows the whole current table, so callers
+  see no difference until a minor version appends a function pointer. The bridge
+  zero-initializes struct fields that it does not forward. The surface is
+  unchanged.
 - 2026-11-02: `SetConfigVariable` writes an option flagged `NoSave` to the Derived
   layer instead of the User layer, so the runtime's menus can change it afterwards.
 

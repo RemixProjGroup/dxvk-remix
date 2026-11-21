@@ -27,6 +27,7 @@
 #include "util_bridgecommand.h"
 #include "util_devicecommand.h"
 #include "util_remixapi.h"
+#include "../../../src/util/util_remix_api_version.h"
 
 using namespace remixapi::util;
 
@@ -42,24 +43,7 @@ bool isRemixApiVersionCompatible(uint64_t appVersion) {
     REMIXAPI_VERSION_MINOR,
     REMIXAPI_VERSION_PATCH);
 
-  // Callers built against the 0.1000.x header of rebased-9-19 and rc1 use the same interface table and structs as
-  // 1.0, so a 1.x client accepts them. Other 0.x lines have other layouts and stay rejected.
-  if (REMIXAPI_VERSION_GET_MAJOR(kCompiledVersion) == 1 &&
-      REMIXAPI_VERSION_GET_MAJOR(appVersion) == 0 &&
-      REMIXAPI_VERSION_GET_MINOR(appVersion) == 1000) {
-    return true;
-  }
-
-  const bool isDevelopment =
-    REMIXAPI_VERSION_GET_MAJOR(appVersion) == 0 &&
-    REMIXAPI_VERSION_GET_MAJOR(kCompiledVersion) == 0;
-
-  if (isDevelopment) {
-    return REMIXAPI_VERSION_GET_MINOR(appVersion) == REMIXAPI_VERSION_GET_MINOR(kCompiledVersion);
-  }
-
-  return REMIXAPI_VERSION_GET_MAJOR(appVersion) == REMIXAPI_VERSION_GET_MAJOR(kCompiledVersion) &&
-         REMIXAPI_VERSION_GET_MINOR(appVersion) <= REMIXAPI_VERSION_GET_MINOR(kCompiledVersion);
+  return remixapi_version::isClientVersionCompatible(appVersion, kCompiledVersion);
 }
 
 }
@@ -567,7 +551,8 @@ extern "C" {
       // interf.pick_HighlightObjects = remixapi_pick_HighlightObjects;
     }
 
-    *out_result = interf;
+    // Older apps allocate a shorter interface, so only the prefix they know is written.
+    std::memcpy(out_result, &interf, remixapi_version::clientInterfaceSize(info->version));
     remixapi::g_appRemixApiVersion = info->version;
     remixapi::g_bInterfaceInitialized = true;
 

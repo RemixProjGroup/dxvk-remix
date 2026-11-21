@@ -20,6 +20,7 @@
 * DEALINGS IN THE SOFTWARE.
 */
 #include "rtx/pass/particles/particle_system_bindings.slangh"
+#include "rtx/pass/particles/particle_drag.h"
 
 #include "rtx/utility/common.slangh"
 #include "rtx/utility/noise.slangh"
@@ -47,23 +48,28 @@ RWStructuredBuffer<int> Counter;
 // small bias to avoid re-penetration
 static const float kCollisionBias = 1e-3f;
 
-void collideParticleWithScene(inout GpuParticle p)
+bool collideParticleWithScene(inout GpuParticle p)
 {
   // Reproject current world-space pos into last frame's clip
   float4 prevClip = mul(particleCb.prevWorldToProjection, float4(p.position, 1.0f));
+  if (prevClip.w <= 0.0f)
+  {
+    return false;
+  }
+
   float2 prevNdc  = prevClip.xy / prevClip.w;
   float2 prevUv   = prevNdc * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
 
-  // early-out if outside [0,1] UV
-  if (prevUv.x < 0.0f || prevUv.x > 1.0f || prevUv.y < 0.0f || prevUv.y > 1.0f)
+  // Reject invalid projections and UVs outside the texture.
+  if (any(isnan(prevUv)) || any(prevUv < 0.0f) || any(prevUv >= 1.0f))
   {
-    return;
+    return false;
   }
 
-  // compute pixel coords in your depth/normal buffer
+  // Use the containing pixel so valid UVs cannot round beyond the texture.
   uint2 pixel = uint2(
-    prevUv.x * particleCb.renderingWidth  + 0.5f,
-    prevUv.y * particleCb.renderingHeight + 0.5f
+    prevUv.x * particleCb.renderingWidth,
+    prevUv.y * particleCb.renderingHeight
   );
 
   // fetch the MinimalSurfaceInteraction from last frame
@@ -71,28 +77,16 @@ void collideParticleWithScene(inout GpuParticle p)
 
   if (!si.isValid)
   {
-    return;
+    return false;
   }
   
   // unpack, normalize
   float3 n = normalize(float3(si.geometryNormal));
   
-  float2 screenVelocity = PreviousPrimaryScreenSpaceMotionVector[pixel];
-  
-  // fetch the MinimalSurfaceInteraction from 2 frames ago
-  MinimalSurfaceInteraction si2 = minimalSurfaceInteractionReadFromGBuffer(pixel + screenVelocity, PreviousWorldPosition_WorldTriangleNormal);
-
-  float3 sceneVel = 0..xxx;
-  if (si2.isValid)
+  // Assume zero world-space surface velocity because this G-buffer contains only one frame of surface positions.
+  if (dot(p.velocity, n) >= 0.0f)
   {
-    float3 relativePos = (si.position - si2.position);
-    sceneVel = relativePos;
-  }
-  
-  float3 relVel = p.velocity - sceneVel;
-  if (dot(relVel, n) >= 0.0f)
-  {
-    return;
+    return false;
   }
 
   // signed distance along that normal
@@ -107,8 +101,8 @@ void collideParticleWithScene(inout GpuParticle p)
       case ParticleCollisionMode::Bounce:
       {
         // reflect & apply restitution
-        float3 vRef = reflect(relVel, n);
-        p.velocity = vRef * particleCb.particleSystem.desc.collisionRestitution + sceneVel;
+        float3 vRef = reflect(p.velocity, n);
+        p.velocity = vRef * particleCb.particleSystem.desc.collisionRestitution;
       } break;
       case ParticleCollisionMode::Stop:
       {
@@ -120,7 +114,9 @@ void collideParticleWithScene(inout GpuParticle p)
         p.timeToLive = 0.f;
       } break;
     }
+    return true;
   }
+  return false;
 }
 
 float3 attractorAcceleration(const GpuParticleSystem particleSystem, float3 particlePos)
@@ -140,24 +136,24 @@ float3 attractorAcceleration(const GpuParticleSystem particleSystem, float3 part
 // Updates a particles state for one time step
 void evolve(inout GpuParticle particle, const GpuParticleSystem particleSystem)
 {
+  const float3 initialVelocity = particle.velocity;
+  float3 acceleration = particleCb.upDirection * particleSystem.desc.gravityForce * particleCb.sceneScale;
   if (particleSystem.desc.useTurbulence)
   {
     float scaledTurbFreq = particleSystem.desc.turbulenceFrequency * particleCb.sceneScale;
-    particle.velocity += curlOfValueNoise(particle.position * scaledTurbFreq, particleCb.absoluteTimeSecs * scaledTurbFreq) * particleSystem.desc.turbulenceForce * particleCb.sceneScale * particleCb.deltaTimeSecs;
+    acceleration += curlOfValueNoise(particle.position * scaledTurbFreq, particleCb.absoluteTimeSecs * scaledTurbFreq) * particleSystem.desc.turbulenceForce * particleCb.sceneScale;
   }
-  
-  // Gravity
-  particle.velocity += particleCb.upDirection * particleSystem.desc.gravityForce * particleCb.sceneScale * particleCb.deltaTimeSecs;
-  
-  // Attractor
-  particle.velocity += attractorAcceleration(particleSystem, particle.position) * particleCb.deltaTimeSecs;
-  
-  // Drag
-  particle.velocity *= max(1.f - particleSystem.desc.dragCoefficient * particleCb.deltaTimeSecs, 0.f);
-  
+
+  acceleration += attractorAcceleration(particleSystem, particle.position);
+  const ParticleDragStep dragStep = particleDragStep(particleSystem.desc.dragCoefficient, particleCb.deltaTimeSecs);
+  particle.velocity = initialVelocity * dragStep.velocityScale + acceleration * dragStep.velocityIntegral;
+  float3 displacement = initialVelocity * dragStep.velocityIntegral + acceleration * dragStep.accelerationIntegral;
+  const float3 integratedVelocity = particle.velocity;
+
+  bool collided = false;
   if (particleSystem.desc.enableCollisionDetection)
   {
-    collideParticleWithScene(particle);
+    collided = collideParticleWithScene(particle);
   }
   
   // Per axis motion restriction
@@ -167,7 +163,15 @@ void evolve(inout GpuParticle particle, const GpuParticleSystem particleSystem)
   float16_t3 maxVelocity = particle.maxVelocity(particleSystem, animationDataTex) * float16_t(particleCb.sceneScale);
   particle.velocity = select(maxVelocity > 0.h, clamp(particle.velocity, -maxVelocity, maxVelocity), particle.velocity);
   
-  particle.position += particle.velocity * particleCb.deltaTimeSecs;
+  // Collision responses and constrained axes retain their authored motion limits.
+  const bool3 constrainedAxes = bool3(particleSystem.desc.restrictVelocityX, particleSystem.desc.restrictVelocityY, particleSystem.desc.restrictVelocityZ) | (particle.velocity != integratedVelocity);
+  displacement.x = particleDragDisplacement(displacement.x, initialVelocity.x, particle.velocity.x,
+    maxVelocity.x, particleCb.deltaTimeSecs, collided || constrainedAxes.x);
+  displacement.y = particleDragDisplacement(displacement.y, initialVelocity.y, particle.velocity.y,
+    maxVelocity.y, particleCb.deltaTimeSecs, collided || constrainedAxes.y);
+  displacement.z = particleDragDisplacement(displacement.z, initialVelocity.z, particle.velocity.z,
+    maxVelocity.z, particleCb.deltaTimeSecs, collided || constrainedAxes.z);
+  particle.position += displacement;
   
   if (!particleSystem.desc.enableMotionTrail)
   {

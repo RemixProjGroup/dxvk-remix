@@ -41,6 +41,56 @@ Opaque API materials can have a clear coat, a second dielectric GGX specular lob
 - Options: none. The named export `remixapi_GetClearCoatMaterialVersion` returns 1.
 - Commits: the commit that adds this entry.
 - Docs: [ClearCoatMaterial.md](../documentation/ClearCoatMaterial.md), [RemixApi.md](RemixApi.md)
+### Best-light sampling stays on with DLSS-RR
+The Ray Reconstruction path tracer preset turned off RTXDI best-light sampling (`rtx.di.enableBestLightSampling`), which feeds the previous frame's strongest nearby light into initial sampling. It now keeps the option's value (default on), so direct lighting under DLSS-RR has less noise from scenes with many lights. This changes the image with DLSS-RR, and the best-light pass and its illuminance buffers now run with RR as they do with NRD. Port of upstream `35a52d5ca`.
+- Options: the Ray Reconstruction preset no longer sets `rtx.di.enableBestLightSampling` to false.
+- Commits: the commit that adds this entry.
+
+### Fix: frame generation while the window has no swap chain
+With DLSS frame generation on, minimizing the window left the frame generation presenter creating backbuffers with a zero extent and an undefined format and handing them out. While the window has no swap chain it now holds no backbuffers, reports no images, and reports the swap chain out of date on acquire, like the regular presenter. Port of the frame generation part of upstream `33ef09e0e`; the rest was already in `d5fa4e2a5`.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### Particle drag independent of frame rate
+Drag scaled velocity by `1 - k * dt` each frame, so the same effect slowed down differently at different frame rates, and strong drag at a low frame rate stopped particles in one frame. Drag is now integrated exactly over the step (velocity retention `exp(-k * dt)`), together with gravity, turbulence and attractor acceleration, so velocity and travel are the same however the elapsed time is split into frames. Effects with strong drag may travel farther than before. Effects without drag move as before. Port of upstream `693b787e2`.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### Fix: particles gain no spurious velocity on collision
+Particle collisions estimated the surface's velocity from two G-buffer reads of the same frame, which gave colliding particles velocity the surface never had. Collisions now treat the surface as static. Particles behind the previous camera, or with an invalid reprojection, skip the collision test instead of reading a wrapped pixel. Port of upstream `1541c0fd2`.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### Fix: G-buffer screenshots in scenes without subsurface materials
+The debug G-buffer screenshot also wrote the two subsurface buffers, which exist only while the scene has subsurface or thin opaque materials, so it handed a null image to the screenshot code in every other scene. It now skips buffers that are not allocated. Port of upstream `07f5c6b37`.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### Fix: bridge MultiplyTransform and state block capture
+The bridge client multiplied `MultiplyTransform` into its own state in the wrong order and never sent it to the server, so bridged games that use it rendered with stale transforms. The client now computes the server's product, sends the call, and forgets that transform in the sent-state cache. Like the runtime, it applies the multiply to the device state even while a state block is recorded. Also fixed: state block capture flags for sampler states were set one slot off, a reset device read its depth enable from the released swapchain, and the client's `D3DRS_POINTSIZE_MAX` default is the D3D9 default of 64. The runtime's `MultiplyTransform` now validates its arguments and marks the transform and texture transform state changed, as `SetTransform` does. Port of upstream `f963a4455`.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### Remix API: interface copy sized by the caller's version
+`remixapi_InitializeLibrary` copied the whole `remixapi_Interface` into the caller's table, so once a minor version appends a function pointer, an older caller's smaller table would be overrun. The runtime and the bridge client now share one version table (`src/util/util_remix_api_version.h`) and write only the prefix the caller's version knows. All accepted versions (0.1000.x and 1.0.x) know the whole current table, so nothing changes for existing callers. The bridge also zero-initializes struct fields it does not forward. Port of upstream `4ea991be3`, with our own version table.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApiChangelog.md](../documentation/RemixApiChangelog.md), [RemixSDK.md](../documentation/RemixSDK.md#extensibility)
+
+### Fix: external presenter frame latency
+The external presenter, which hands frames to an out-of-process viewer such as an editor, never waited on frame latency, so the runtime could run far enough ahead to reuse a frame's resources while the GPU still used them and crash. It now caps frames in flight one below the per-frame resource count and waits and signals like the windowed swapchain. Port of upstream `159afc39b`.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### RTXDI moved to c04c1de: volumetric NEE page-fault workaround
+A texture fetch in divergent control flow in the RTXDI volumetrics' `evalVolumetricNEE` page-faults the GPU in ray query compute kernels on NVIDIA drivers (NVBUGS 7020086). The SDK at `c04c1de` makes every lane fetch from a valid coordinate. The submodule stays unmodified; only its pin moves. Port of upstream `d22f9608c`.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### Bridge server runs at high QoS
+Windows gives the highest QoS to the process that owns the foreground window, which is the game, so the bridge server's threads could land on efficiency cores while the game waited on them. The server now opts out of execution speed throttling. Port of upstream `10b605850`.
+- Options: none.
+- Commits: the commit that adds this entry.
 
 ## 2026-11-15
 

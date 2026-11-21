@@ -1040,7 +1040,10 @@ The API version is 1.0.0. The runtime accepts a caller with the same major
 and a minor no higher than its own. It also accepts a 0.1000.x caller (the
 header of `rebased-9-19` and rc1), whose interface table and structs are the
 same as 1.0's, and rejects every other 0.x caller (NVIDIA dxvk-remix and other
-forks). The patch is not compared. The bridge client applies the same rule. See
+forks). The patch is not compared. The bridge client applies the same rule.
+Initialization writes only the part of `remixapi_Interface` that the caller's
+version knows, so a function pointer appended in a later minor version never
+writes past an older caller's table. See
 [`RemixApi-Migration.md`](RemixApi-Migration.md#2-version-and-compatibility).
 
 `remixapi_StructType` values are append-only — never reorder. Adding

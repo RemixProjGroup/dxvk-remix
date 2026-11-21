@@ -52,6 +52,7 @@
 #include "../dxvk_util.h"
 
 #include "../../util/util_math.h"
+#include "../../util/util_remix_api_version.h"
 #include "../../util/util_vector.h"
 #include "../../util/util_string.h"
 #include "../../util/util_sentry.h"
@@ -2770,32 +2771,7 @@ namespace {
   bool isVersionCompatible(uint64_t userVersion) {
     constexpr uint64_t compiledVersion = REMIXAPI_VERSION_MAKE(REMIXAPI_VERSION_MAJOR, REMIXAPI_VERSION_MINOR, REMIXAPI_VERSION_PATCH);
 
-    // Callers built against the 0.1000.x header of rebased-9-19 and rc1 use the same interface table and structs as
-    // 1.0, so a 1.x runtime accepts them. Other 0.x lines have other layouts and stay rejected.
-    if (REMIXAPI_VERSION_GET_MAJOR(compiledVersion) == 1 &&
-        REMIXAPI_VERSION_GET_MAJOR(userVersion) == 0 &&
-        REMIXAPI_VERSION_GET_MINOR(userVersion) == 1000) {
-      return true;
-    }
-
-    bool isDevelopment = 
-      REMIXAPI_VERSION_GET_MAJOR(userVersion) == 0 &&
-      REMIXAPI_VERSION_GET_MAJOR(compiledVersion) == 0;
-
-    if (isDevelopment) {
-      // each minor change is breaking
-      return REMIXAPI_VERSION_GET_MINOR(userVersion) == REMIXAPI_VERSION_GET_MINOR(compiledVersion);
-    }
-
-    if (REMIXAPI_VERSION_GET_MAJOR(userVersion) == REMIXAPI_VERSION_GET_MAJOR(compiledVersion)) {
-      // user version must be before the currently compiled version:
-      // features that are requested by a user must be available in the current binary
-      if (REMIXAPI_VERSION_GET_MINOR(userVersion) <= REMIXAPI_VERSION_GET_MINOR(compiledVersion)) {
-        return true;
-      }
-    }
-
-    return false;
+    return remixapi_version::isClientVersionCompatible(userVersion, compiledVersion);
   }
 }
 
@@ -3882,7 +3858,8 @@ extern "C"
     }
     static_assert(sizeof(interf) == 328, "Add/remove function registration");
 
-    *out_result = interf;
+    // Older clients allocate a shorter interface, so only the prefix they know is written.
+    std::memcpy(out_result, &interf, remixapi_version::clientInterfaceSize(info->version));
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 

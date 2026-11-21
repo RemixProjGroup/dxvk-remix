@@ -113,4 +113,63 @@ Ports land on four branches: fix/20261029-upstream-small-fixes, fix/20261029-ups
 | `0384d427d` | 10-28 | Painkiller crash fixes | take | fix/20261029-upstream-crash-fixes, without the bone staging change, which our D3D9 path already covers. |
 | `6d1b3eab3` | 10-28 | First-hit decals before cached inline PSR | skip | Builds on upstream's first-hit decal resolve before inline PSR (`geometryResolverResolveDecalBeforePSR`), which our G-buffer does not have. |
 
-Last reviewed: `0ba9973fd`.
+## Pass 3: 2026-11-18, `0ba9973fd..3ec3592eb` (52 commits)
+
+Ports land on feat/20261118-upstream-ports, one commit each. Commits marked "taken earlier" or "have equivalent" were already on the trunk in our own form.
+
+| Upstream | Date | Subject | Decision | Notes |
+| --- | --- | --- | --- | --- |
+| `59e78479d` | 10-30 | Skinned frozen poses and crowd motion vectors | maybe | Old-path draw call cache code. Take only if a game on the legacy lane shows frozen poses. |
+| `89257d282` | 10-30 | Incremental bindless buffer descriptors | taken earlier | 11-02, see the section above. |
+| `35a52d5ca` | 11-02 | DLSS-RR best-light override removed | taken → `c21df0e13` | Changes the image under DLSS-RR. |
+| `d22f9608c` | 11-02 | RTXDI pin c04c1de, NVBUGS 7020086 workaround | taken → `71e4d2f78` | Pin move of the unmodified submodule. Not `dc8eb03`, which needs `b92ba2404`. Possibly the same driver fault as the one `9969d7d2d` works around in the integrate indirect kernel; untested. |
+| `f9dfbae8c` | 11-02 | Color inversion post effect | skip | RemixFX covers post effects. |
+| `f963a4455` | 11-02 | Bridge MultiplyTransform and state block capture | taken → `18ac2acb6` | MultiplyTransform stays unrecorded in state blocks, as in our runtime (upstream DXVK behavior). The sent-state cache forgets the transform. |
+| `766c0cacf` | 11-03 | Nearest magnification for texture grid thumbnails | have equivalent | `b3a06e461`. |
+| `82927c101` | 11-03 | Decals with PSR and ray-traced render targets | skip | Builds on upstream's first-hit decal resolve, which our G-buffer does not have. |
+| `5331681a2` | 10-26 | Live camera emission and material opacity | skip | Port when a game needs it. |
+| `f04d7182d` | 11-04 | API skinning tuple stride | have equivalent | Our own identical fix. |
+| `634daa831` | 11-04 | Private meson subdirs | skip | No private subdirs here. |
+| `8b31054d4` | 10-26 | Render-target camera motion reprojection | skip | Port with `5331681a2` if needed. |
+| `98ea39bdb` | 11-04 | Skip API draws during capture | skip | Opposite of our design: we capture API meshes by key. Check that GH:671's crash does not reproduce. |
+| `1541c0fd2` | 10-31 | Particle collision velocity | taken → `a80a1802c` | With its credits line. The AGENTS.md changes are not taken. |
+| `4ea991be3` | 11-04 | Version-sized interface copy | taken → `4938c3870` | Mechanism only, with our version table (0.1000.x and 1.x). Upstream's 0.x patch rule does not apply to API 1.0. Runtime and bridge client. |
+| `b3cdaca9c` | 11-04 | No refit of a pooled BLAS built with OMMs | have equivalent | `PooledBlas::hasOmm` and `rtx.mergedBlasNoRefitOfOmmBlas`. |
+| `55a9cf1ce` | 11-06 | DLSS-NR image tests | skip | CI. |
+| `d3327ae0c` | 11-06 | Point instancer upload savings | maybe | Small gain on top of our diffed uploads; only for mods with large point instancers. |
+| `f6d7b2cbe` | 10-10 | Bridge volume texture lock pitches | have equivalent | Already on the trunk. |
+| `bb2ea8b7c` | 11-06 | Surface-area particle spawn distribution | maybe | API struct needs an id in our range. |
+| `10b605850` | 11-06 | Bridge server opts out of power throttling | taken → `35a644381` | |
+| `b1f1618b0` | 11-06 | Eye reflections, eye whites, parallax | maybe | With `eada2cb93`; HL2-family value. |
+| `6809bb070` | 11-09 | API: any 0.x patch, 0.6.3 clients | skip | Upstream's 0.x line; we reject 0.6.x. |
+| `6c552c53a` | 11-09 | Per-emitter particle screen size | maybe | We have only the global `rtx.particles.minScreenSize`. |
+| `a0be2f7c3` | 11-09 | Particle emitter picking | maybe | API struct needs an id in our range. |
+| `63845ae64` | 11-09 | AGENTS.md documentation guidance | skip | Docs. |
+| `62f5d63a5` | 11-09 | Bridge launch argument checks | have equivalent | Our server already checks them. |
+| `4af259dfa` | 11-09 | Pending USD capture requests | maybe | Quality of life. |
+| `878b12bc5` | 11-09 | Water simulation and water POM silhouettes | maybe | Multi-day port across the resolver and our slim variants. |
+| `693b787e2` | 11-10 | Frame-rate-independent particle drag | taken → `c873399ae` | With its unit test. Our evolve pass has no rejected-spawn early-out. `documentation/particle-drag.md` is not taken. |
+| `159afc39b` | 11-10 | External presenter frame latency | taken → `2f7f66763` | |
+| `27d1fdedd` | 11-10 | Queued particle emitters across instance compaction | maybe | Check against retained-scene instance lifetimes first. |
+| `07f5c6b37` | 11-10 | G-buffer screenshot skips unallocated subsurface buffers | taken → `d507e504d` | |
+| `33ef09e0e` | 11-10 | No-swapchain handling | taken, split | The D3D9 swapchain half was already in `d5fa4e2a5`; the DLFG presenter half → `29faeb2c0`. |
+| `28ca08bee` | 11-10 | Bounded unordered resolve rays at translucent surfaces | skip | Reverted upstream by `6163b6ca4`. |
+| `62c1a5452` | 11-11 | USDG mesh packages | maybe | Port when mods ship `.usdg`. |
+| `a7ae74674` | 11-12 | Alpha-blend dissolve | maybe | Touches alpha state, OMM and the opaque material shader; needs a preset decision. Not its ImGui file moves. |
+| `b92ba2404` | 11-13 | Compact RTXDI reservoirs, sparse-aware reuse | maybe | Its own project, with `ca4d79cac` re-evaluated first. Needs RTXDI pin `dc8eb03`. |
+| `bca249fcf` | 11-13 | USDG converter finalization | maybe | With `62c1a5452`. |
+| `c1afa7110` | 11-14 | USDG descriptor transfer | maybe | With `62c1a5452`. |
+| `6163b6ca4` | 11-16 | Revert of `28ca08bee` | skip | |
+| `f04dd6d20` | 11-02 | SHaRC anisotropic roughness clamp | have equivalent | Our PR #160. |
+| `9a0817a8b` | 11-02 | SHaRC duplicate slider | have equivalent | Our PR #162. |
+| `2fcd29fbc` | 11-13 | SHaRC High preset update record target 65536 | maybe | Compare with our `rtx.sharc.*` preset values. |
+| `32f5aa4e6` | 11-16 | SHaRC comment tidy, goldens | skip | Comments and test images. |
+| `ef58374dc` | 11-13 | Visible-set dump for out-of-process tools | maybe | Rewrites the instance manager's debug output; useful for tooling. |
+| `1f949b810` | 11-16 | Shader compile metric | skip | CI. |
+| `e26315c91` | 11-09 | Hand-written NoSave keys kept when saving a layer | maybe | Our config layers touch the same file. |
+| `d84321535` | 11-16 | Dissolve noise | maybe | With `a7ae74674`. |
+| `8fc80e27f` | 11-17 | Color grading after the local tonemapper | skip | We replaced the tonemapper. |
+| `22f4acb08` | 11-17 | VRAM robustness phase 0 | maybe | Take the fault injection and fallback counters as a test tool for our pressure levels. |
+| `c45f785d4` | 11-17 | Experimental GPU-resident scene for API hosts | skip | A separate opt-in path; our retained scene covers all hosts. Design input for API v-next naming and stable slots. |
+
+Last reviewed: `3ec3592eb`.
