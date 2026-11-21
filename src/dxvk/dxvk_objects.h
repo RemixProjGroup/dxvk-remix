@@ -65,6 +65,7 @@
 #include "rtx_render/rtx_raster_first_hit.h"
 #include "rtx_render/rtx_settings_sweep.h"
 #include "rtx_render/rtx_frame_export.h"
+#include "rtx_render/rtx_frame_generation_status.h"
 #include "rtx_render/rtx_fork_pom_cone_map.h"
 #include "rtx_render/rtx_fork_sccr_shell.h"
 #include "rtx_render/rtx_gpu_crash.h"
@@ -273,6 +274,10 @@ namespace dxvk {
       return m_fsrFrameGen.get();
     }
 
+    FrameGenerationStatus& metaFrameGenerationStatus() {
+      return m_frameGenerationStatus.get();
+    }
+
     DxvkRCAS& metaRCAS() {
       return m_rcas.get();
     }
@@ -463,6 +468,7 @@ namespace dxvk {
     Active<DxvkXeSS>                        m_xess;
     Active<DxvkFSR>                         m_fsr;
     Active<DxvkFSRFrameGen>                 m_fsrFrameGen;
+    Active<FrameGenerationStatus>           m_frameGenerationStatus;
     Active<DxvkRCAS>                        m_rcas;
     Active<CompositePass>                   m_composite;
     Active<GpuCrashPass>                    m_gpuCrash;

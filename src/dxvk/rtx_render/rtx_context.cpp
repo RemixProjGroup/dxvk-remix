@@ -608,9 +608,7 @@ namespace dxvk {
 
     RtxOptions::replaceUnsupportedUpscaler(m_device.ptr());
 
-    if (DxvkDLFG::enable() && !common->metaDLFG().supportsDLFG()) {
-      DxvkDLFG::enable.setDeferred(false);
-    }
+    common->metaFrameGenerationStatus().update();
     
 #ifdef REMIX_DEVELOPMENT
     // Update the Shader Manager

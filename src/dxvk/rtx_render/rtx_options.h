@@ -132,8 +132,7 @@ namespace dxvk {
     YawRotation
   };
 
-  // Frame Generation technology selection. Selecting a backend here *is* the
-  // enable action - there is no separate per-backend enable checkbox in the UI.
+  // The frame generation backend. This selection is the only control that enables frame generation.
   enum class FrameGenerationType : int {
     None = 0,    // Frame generation disabled
     DLSS,        // NVIDIA DLSS Frame Generation (DLSS 3.0/4.0)
@@ -141,12 +140,9 @@ namespace dxvk {
   };
 
   namespace fork_hooks {
-    // Drives DxvkDLFG::enable / DxvkFSRFrameGen::enable from
-    // rtx.frameGenerationType. Wired as that option's onChange handler so the
-    // invariant holds for config files, DXVK_FRAMEGEN_TYPE and the API - not
-    // just while the settings menu happens to be open.
-    // Declared here rather than pulled in from rtx_fork_hooks.h to avoid a
-    // circular include. Implementation in rtx_fork_upscaler_ui.cpp.
+    // Sets Reflex to Low Latency when DLSS Frame Generation is selected.
+    // It is the onChange handler of rtx.frameGenerationType, so it also runs for config files, DXVK_FRAMEGEN_TYPE and the API.
+    // It is declared here because including rtx_fork_hooks.h would be circular. Implementation in rtx_fork_upscaler_ui.cpp.
     void applyFrameGenerationType(DxvkDevice* device);
   } // namespace fork_hooks
 
@@ -696,9 +692,8 @@ namespace dxvk {
                     args.environment = "DXVK_UPSCALER_TYPE",
                     args.flags = RtxOptionFlags::UserSetting);
     RTX_OPTION_ARGS("rtx", FrameGenerationType, frameGenerationType, FrameGenerationType::None,
-                    "The frame generation technology, and the control that enables it. 0: None (off), 1: DLSS (NVIDIA "
-                    "DLSS Frame Generation), 2: FSR (AMD FSR Frame Generation). This sets rtx.dlfg.enable and "
-                    "rtx.fsrfg.enable, so do not set those directly.",
+                    "The frame generation technology, and the only control that enables frame generation. 0: None "
+                    "(off), 1: DLSS (NVIDIA DLSS Frame Generation), 2: FSR (AMD FSR Frame Generation).",
                     args.environment = "DXVK_FRAMEGEN_TYPE",
                     args.onChangeCallback = &fork_hooks::applyFrameGenerationType,
                     args.flags = RtxOptionFlags::UserSetting);

@@ -244,7 +244,6 @@ namespace dxvk {
     void showSccrSettings(DxvkObjects* common);
     void showDeveloperSection(const Rc<DxvkContext>& ctx);
 
-    void showDLFGOptions(const Rc<DxvkContext>& ctx);
     void showReflexOptions(const Rc<DxvkContext>& ctx, bool displayStatsWindowToggle);
     void showReflexLatencyStats();
 

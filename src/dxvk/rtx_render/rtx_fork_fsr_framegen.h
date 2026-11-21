@@ -78,6 +78,8 @@ namespace dxvk {
       VkFormat backBufferFormat = VK_FORMAT_UNDEFINED;
       bool contextFailed = false;       // The proxy or the frame generation context could not be created.
       bool prepareFailed = false;       // The prepare dispatch kept failing, so frame generation is off for the session.
+      std::string failureReason;        // The error behind contextFailed or prepareFailed, as the log prints it.
+      bool generating = false;          // Frame generation is configured on for the latest present.
       std::string versionName;          // The frame generation version FFX picked. Empty without a context.
     };
 
@@ -99,9 +101,6 @@ namespace dxvk {
 
     Stats getStats() const;
 
-    RTX_OPTION_ENV("rtx.fsrfg", bool, enable, false, "RTX_FSRFG_ENABLE",
-      "Enables AMD FSR frame generation, which inserts interpolated frames to raise the frame rate. Set "
-      "rtx.frameGenerationType instead of this option.");
     RTX_OPTION("rtx.fsrfg", bool, interpolateHud, false,
       "Interpolates the whole presented image, HUD included, instead of drawing the current HUD over the generated "
       "frame. When off, every pixel that differs from the Remix output counts as HUD and repeats the real frame. Turn "
@@ -124,7 +123,8 @@ namespace dxvk {
     // Submission thread, right before the proxy present: prepares and configures this frame.
     void beginPresent(VkSwapchainKHR swapchain, const DxvkFrameInterpolationInfo& frame, bool enabled, const vk::PresenterInfo& info);
     bool prepare(const DxvkFrameInterpolationInfo& frame, uint64_t frameId, bool reset);
-    void setContextFailed(bool failed);
+    // Logs the error and records it as the reason the proxy or the frame generation context is missing.
+    void setContextFailed(const std::string& reason);
     void logStats();
 
     // Runs inside the proxy's present call, on the submission thread.
@@ -156,6 +156,7 @@ namespace dxvk {
     bool m_presentingReset = false;
     uint32_t m_consecutiveSkips = 0;
     uint32_t m_consecutivePrepareFailures = 0;
+    int32_t m_lastPrepareError = 0;
     std::atomic<bool> m_prepareFailedForSession = { false };
     DxvkDLFGCommandListArray m_prepareCommandLists;
 

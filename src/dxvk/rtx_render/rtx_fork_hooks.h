@@ -383,12 +383,12 @@ namespace dxvk {
     // Implementation in rtx_fork_fsr.cpp.
     uint32_t fsrJitterSequenceLength(uint32_t finalWidth, uint32_t renderWidth);
 
-    // Returns true when FSR frame generation is selected, enabled and supported on this device.
+    // Returns true when FSR frame generation is selected and supported on this device, and has not failed for the session.
     // Backs DxvkContext::isFSRFGEnabled, which D3D9SwapChainEx uses to choose its presenter.
     // Implementation in rtx_fork_fsr_framegen.cpp.
     bool isFsrFrameGenEnabled(DxvkDevice* device);
 
-    // Returns true when either frame-generation backend is enabled.
+    // Returns true when a frame-generation backend is selected.
     // The dev menu disables its V-Sync widgets while this is true.
     // Implementation in rtx_fork_upscaler_ui.cpp.
     bool anyFrameGenerationEnabled();
@@ -397,10 +397,9 @@ namespace dxvk {
     // Implementation in rtx_fork_upscaler_ui.cpp.
     bool anyFrameGenerationSupported(const Rc<DxvkContext>& ctx, bool isDlfgSupported);
 
-    // Draws the frame-generation panel: the Off / DLSS / FSR combo, a status line
+    // Draws the frame-generation panel: the Off / DLSS / FSR combo, the status with its reason,
     // and the selected backend's extra controls.
-    // The combo is the enable control (see fork_hooks::applyFrameGenerationType),
-    // so the menus call this instead of ImGUI::showDLFGOptions.
+    // The combo, rtx.frameGenerationType, is the only control that enables frame generation.
     // Implementation in rtx_fork_upscaler_ui.cpp.
     void showFrameGenerationOptions(const Rc<DxvkContext>& ctx, bool isDlfgSupported);
 

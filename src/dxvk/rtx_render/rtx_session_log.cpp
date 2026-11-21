@@ -58,7 +58,7 @@ namespace dxvk {
       { "rtx.qualityDLSS",             { "UltraPerformance", "Performance", "Balanced", "Quality", "Auto", "FullResolution" } },
       { "rtx.resolutionScale",         {} },
       { "rtx.enableRayReconstruction", {} },
-      { "rtx.dlfg.enable",             {} },
+      { "rtx.frameGenerationType",     { "None", "DLSS", "FSR" } },
       { "rtx.neuralUplift.enable",     {} },
       { "rtx.neuralUplift.passCount",  {} },
       { "rtx.d3d9v2.direct",           {} },

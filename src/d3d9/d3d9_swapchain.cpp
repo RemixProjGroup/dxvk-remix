@@ -1719,6 +1719,11 @@ namespace dxvk {
         presenterDesc);
     }
 
+    const FrameGenerationPresenter presenterKind = dlfgEnabled
+      ? FrameGenerationPresenter::DLSS
+      : (createFsrfgPresenter ? FrameGenerationPresenter::FSR : FrameGenerationPresenter::Standard);
+    m_device->getCommon()->metaFrameGenerationStatus().setPresenter(presenterKind, "D3D9");
+
     GetPresenter()->setFrameRateLimit(m_parent->GetOptions()->maxFrameRate);
     GetPresenter()->setFrameRateLimiterRefreshRate(m_displayRefreshRate);
     // NV-DXVK end

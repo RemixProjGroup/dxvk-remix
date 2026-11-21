@@ -67,6 +67,20 @@ namespace dxvk {
     return m_hasDLFGFailed && !s_dlfgPresetRequest.load();
   }
 
+  std::string DxvkDLFG::getFailureReason() const {
+    std::lock_guard<std::mutex> lock(m_failureMutex);
+    return m_failureReason;
+  }
+
+  void DxvkDLFG::setFailed(const std::string& reason) {
+    Logger::err(str::format("DLFG: ", reason));
+    {
+      std::lock_guard<std::mutex> lock(m_failureMutex);
+      m_failureReason = reason;
+    }
+    m_hasDLFGFailed = true;
+  }
+
   template<uint numBarriers>
   class DxvkDLFGImageBarrierSet {
   public:
@@ -1392,8 +1406,7 @@ namespace dxvk {
       const uint32_t requestedPreset = s_dlfgPresetRequest.exchange(0);
       if (requestedPreset && (requestedPreset != s_dlfgPreset.load() || m_hasDLFGFailed)) {
         if (m_device->vkd()->vkQueueWaitIdle(m_device->queues().__DLFG_QUEUE.queueHandle) != VK_SUCCESS) {
-          Logger::err("DLFG runtime preset: failed to drain the FG queue");
-          m_hasDLFGFailed = true;
+          setFailed("The frame generation queue could not be drained to switch the preset.");
           return false;
         }
         s_dlfgPreset = requestedPreset;
@@ -1411,7 +1424,7 @@ namespace dxvk {
       m_dlfgContext = m_device->getCommon()->metaNGXContext().createDLFGContext();
       m_contextDirty = true;
       if (!m_dlfgContext) {
-        m_hasDLFGFailed = true;
+        setFailed("The NGX frame generation context could not be created. The NGX log lines above have the cause.");
         return false;
       }
     }
@@ -1429,8 +1442,7 @@ namespace dxvk {
       assert(m_dlfgContext != nullptr);
 
       if (m_device->vkd()->vkQueueWaitIdle(m_device->queues().__DLFG_QUEUE.queueHandle) != VK_SUCCESS) {
-        Logger::err("DxvkDLFG::dispatch: vkQueueWaitIdle failed");
-        m_hasDLFGFailed = true;
+        setFailed("The frame generation queue could not be drained to resize the frame generation feature.");
         return false;
       }
 
@@ -1440,7 +1452,8 @@ namespace dxvk {
                                 m_currentDisplaySize,
                                 outputImage->info().format,
                                 s_dlfgPreset.load() == kLitePreset)) {
-        m_hasDLFGFailed = true;
+        setFailed(str::format("The NGX frame generation feature could not be initialized for ",
+          m_currentDisplaySize[0], "x", m_currentDisplaySize[1], ", preset ", getPresetName(), "."));
         return false;
       }
       m_contextDirty = false;
@@ -1471,8 +1484,7 @@ namespace dxvk {
 
       switch (res) {
       case NGXDLFGContext::EvaluateResult::Failure:
-        Logger::err("NGX DLFG evaluate failed");
-        m_hasDLFGFailed = true;
+        setFailed("The NGX frame generation evaluation failed.");
         return false;
 
       case NGXDLFGContext::EvaluateResult::Success:

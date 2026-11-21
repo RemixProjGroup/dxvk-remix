@@ -93,6 +93,11 @@ The bridge client sized a skinned mesh's blend weights and blend indices as `cou
 - Options: none.
 - Commits: the commit that adds this entry.
 - Docs: [RemixApi-Plugin-Guide.md](../documentation/RemixApi-Plugin-Guide.md)
+### The frame generation dropdown is the only frame generation switch
+The dropdown could show FSR while FSR frame generation stayed off with the status "selected but inactive": it wrote the hidden `rtx.fsrfg.enable` switch on the derived-settings layer, so a saved `rtx.fsrfg.enable = False` in `user.conf`, a stronger layer, won. Both hidden switches are removed, and `rtx.frameGenerationType` alone decides whether DLSS or FSR frame generation runs. Every status other than active or off now names its reason in the menu and logs it once per change as a `[FrameGen] status:` line: not supported (with the missing DLL, the NGX reason or the missing queues), failed (with the error from the log), off for the session after repeated prepare failures, waiting for the swap chain or the frame generation presenter, paused while presents have no ray-traced frame, and the D3D11 swap chain, which cannot present generated frames.
+- Options: removed `rtx.dlfg.enable` (env `RTX_DLFG_ENABLE`) and `rtx.fsrfg.enable` (env `RTX_FSRFG_ENABLE`). Use `rtx.frameGenerationType` (env `DXVK_FRAMEGEN_TYPE`) instead. Stale values in a config file are ignored, and the next save of that file drops them.
+- Commits: the commit that adds this entry.
+
 ### Light debug view no longer crashes
 Turning on `rtx.lights.enableDebugMode` could crash at once, most often with Remix API lights. The view read lights through pointers into the light tables from the UI thread while the render thread freed and rebuilt them: garbage collection erased lights after the list was built, and the light prepare rebuilt the list and replaced API lights without the lock. The render thread now copies what the view shows into a list of plain values at the end of the light prepare, only while the view is on, and the view reads only that copy. The lock that the render thread held from the first light added in a frame until garbage collection is removed, and the light clear that a light settings change in the menu triggers is now queued for the render thread's next light prepare.
 - Options: none.

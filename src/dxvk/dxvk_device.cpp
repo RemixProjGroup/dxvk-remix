@@ -625,6 +625,7 @@ namespace dxvk {
     m_xess(device),
     m_fsr(device),
     m_fsrFrameGen(device),
+    m_frameGenerationStatus(device),
     m_rcas(device),
     m_composite(device),
     m_gpuCrash(device),

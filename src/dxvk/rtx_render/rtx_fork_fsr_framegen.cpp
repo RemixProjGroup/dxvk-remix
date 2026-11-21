@@ -215,7 +215,7 @@ namespace dxvk {
       " async=", asyncQueue.queueFamily, " asyncEnabled=", asyncQueue.queueHandle != VK_NULL_HANDLE));
 
     if (presentQueue.queueHandle == VK_NULL_HANDLE || acquireQueue.queueHandle == VK_NULL_HANDLE) {
-      Logger::err("FSR FG: no usable present or image acquire queue for this surface; frame generation is off");
+      setContextFailed("No queue can present to this window or acquire its images, so the swap chain proxy was not created.");
       return false;
     }
 
@@ -254,7 +254,7 @@ namespace dxvk {
     const VkSwapchainKHR originalSwapchain = *pSwapchain;
     ffx::ReturnCode retCode = ffx::CreateContext(asContext(m_swapChainContext), nullptr, createSwapChainDesc, swapChainVersionDesc);
     if (retCode != ffx::ReturnCode::Ok) {
-      Logger::err(str::format("FSR FG: Failed to create swapchain context: ", static_cast<int>(retCode)));
+      setContextFailed(str::format("The swap chain proxy could not be created (FFX error ", static_cast<int>(retCode), ")."));
       m_swapChainContext = nullptr;
       return false;
     }
@@ -262,7 +262,7 @@ namespace dxvk {
     ffx::QueryDescSwapchainReplacementFunctionsVK replacementFunctions{};
     retCode = ffx::Query(asContext(m_swapChainContext), replacementFunctions);
     if (retCode != ffx::ReturnCode::Ok) {
-      Logger::err(str::format("FSR FG: Failed to query replacement functions: ", static_cast<int>(retCode)));
+      setContextFailed(str::format("The swap chain proxy functions could not be queried (FFX error ", static_cast<int>(retCode), ")."));
       *pSwapchain = originalSwapchain;
       ffx::DestroyContext(asContext(m_swapChainContext));
       m_swapChainContext = nullptr;
@@ -284,16 +284,18 @@ namespace dxvk {
     return true;
   }
 
-  void DxvkFSRFrameGen::setContextFailed(bool failed) {
+  void DxvkFSRFrameGen::setContextFailed(const std::string& reason) {
+    Logger::err(str::format("FSR FG: ", reason));
     std::lock_guard<std::mutex> lock(m_statsMutex);
-    m_stats.contextFailed = failed;
+    m_stats.contextFailed = true;
+    m_stats.failureReason = reason;
   }
 
   bool DxvkFSRFrameGen::createFrameGenContext(const vk::PresenterInfo& info) {
     const VkFormat backBufferFormat = info.format.format;
     const uint32_t ffxBackBufferFormat = toFfxSurfaceFormat(backBufferFormat);
     if (ffxBackBufferFormat == FFX_API_SURFACE_FORMAT_UNKNOWN) {
-      Logger::err(str::format("FSR FG: Unsupported back buffer format ", static_cast<int>(backBufferFormat)));
+      setContextFailed(str::format("The back buffer format ", static_cast<int>(backBufferFormat), " is not supported."));
       return false;
     }
 
@@ -338,9 +340,8 @@ namespace dxvk {
 
     const ffx::ReturnCode retCode = ffx::CreateContext(asContext(m_frameGenContext), nullptr, createFg, versionDesc, backendDesc);
     if (retCode != ffx::ReturnCode::Ok) {
-      Logger::err(str::format("FSR FG: Failed to create frame gen context: ", static_cast<int>(retCode)));
+      setContextFailed(str::format("The frame generation context could not be created (FFX error ", static_cast<int>(retCode), ")."));
       m_frameGenContext = nullptr;
-      setContextFailed(true);
       return false;
     }
 
@@ -365,6 +366,7 @@ namespace dxvk {
       m_stats.hdr = m_hdr;
       m_stats.backBufferFormat = backBufferFormat;
       m_stats.contextFailed = false;
+      m_stats.failureReason.clear();
       m_stats.versionName = versionName;
     }
 
@@ -540,6 +542,7 @@ namespace dxvk {
 
     if (retCode != ffx::ReturnCode::Ok) {
       Logger::err(str::format("[FSRFG] prepare dispatch failed: ", static_cast<int>(retCode)));
+      m_lastPrepareError = static_cast<int32_t>(retCode);
       return false;
     }
 
@@ -635,6 +638,7 @@ namespace dxvk {
     if (!generate) {
       ++m_stats.disabled;
     }
+    m_stats.generating = generate;
     ++m_stats.presents;
     m_stats.hudLess = hasInputs && frame.hudLessColor != nullptr;
     const bool logNow = m_stats.presents % kLogIntervalPresents == 0;
@@ -688,6 +692,10 @@ namespace dxvk {
         m_resetNext = true;
         ++m_stats.skipped;
         m_stats.prepareFailed = giveUp;
+        if (giveUp) {
+          m_stats.failureReason = str::format("The prepare dispatch failed on ", m_consecutivePrepareFailures,
+            " consecutive frames (FFX error ", m_lastPrepareError, ").");
+        }
         lock.unlock();
       }
     }
@@ -764,16 +772,16 @@ namespace dxvk {
 
   void DxvkFSRFGPresenter::createProxy() {
     if (::GetModuleHandleA("winevulkan.dll") != nullptr) {
-      Logger::warn("FSR FG Presenter: winevulkan detected, disabling FSR FG for this session to avoid present deadlocks");
       m_disableForSession = true;
-      m_device->getCommon()->metaFSRFrameGen().setContextFailed(true);
+      m_device->getCommon()->metaFSRFrameGen().setContextFailed(
+        "Wine's Vulkan driver (winevulkan) is loaded, and presenting through the swap chain proxy deadlocks on it.");
       return;
     }
 
+    // createContexts records the reason when it fails.
     DxvkFSRFrameGen& fsrFrameGen = m_device->getCommon()->metaFSRFrameGen();
     if (!fsrFrameGen.createContexts(&m_swapchain, m_info, m_surface)) {
       m_disableForSession = true;
-      fsrFrameGen.setContextFailed(true);
       return;
     }
     m_proxyActive = true;
@@ -878,7 +886,8 @@ namespace dxvk {
 
     std::lock_guard<dxvk::mutex> proxyLock(m_proxyMutex);
     DxvkFSRFrameGen& fsrFrameGen = m_device->getCommon()->metaFSRFrameGen();
-    fsrFrameGen.beginPresent(m_swapchain, frameInterpolationInfo, DxvkFSRFrameGen::enable() && !m_disableForSession, m_info);
+    const bool selected = RtxOptions::frameGenerationType() == FrameGenerationType::FSR;
+    fsrFrameGen.beginPresent(m_swapchain, frameInterpolationInfo, selected && !m_disableForSession, m_info);
 
     // The proxy does not accept a pNext chain on the present info.
     const VkSemaphore presentSemaphore = m_presentSemaphores.at(m_imageIndex);
@@ -946,9 +955,6 @@ namespace dxvk {
 
     bool isFsrFrameGenEnabled(DxvkDevice* device) {
       if (device == nullptr || RtxOptions::frameGenerationType() != FrameGenerationType::FSR) {
-        return false;
-      }
-      if (!DxvkFSRFrameGen::enable()) {
         return false;
       }
       const DxvkFSRFrameGen& fsrFrameGen = device->getCommon()->metaFSRFrameGen();

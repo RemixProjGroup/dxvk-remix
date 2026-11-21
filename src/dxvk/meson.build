@@ -257,6 +257,8 @@ dxvk_src = files([
   'rtx_render/rtx_fork_d3d9_alpha.h',
   'rtx_render/rtx_frame_export.cpp',
   'rtx_render/rtx_frame_export.h',
+  'rtx_render/rtx_frame_generation_status.cpp',
+  'rtx_render/rtx_frame_generation_status.h',
   'rtx_render/rtx_frontend_interface.cpp',
   'rtx_render/rtx_frontend_interface.h',
   'rtx_render/rtx_frontend_ui.cpp',

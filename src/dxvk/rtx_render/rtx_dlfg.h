@@ -22,6 +22,8 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
+#include <string>
 
 #include "../dxvk_include.h"
 #include "rtx_resources.h"
@@ -309,6 +311,9 @@ namespace dxvk {
 
     bool hasDLFGFailed() const;
 
+    // Returns the error that made hasDLFGFailed true, as the log prints it.
+    std::string getFailureReason() const;
+
     bool supportsPresentMetering() const;
 
     // returns the maximum number of interpolated frames we can generate on the current system
@@ -316,9 +321,6 @@ namespace dxvk {
     // returns the currently configured number of interpolated frames
     uint32_t getInterpolatedFrameCount();
 
-    RTX_OPTION_ARGS("rtx.dlfg", bool, enable, true, "Enables DLSS 3.0 frame generation which generates interpolated frames to increase framerate at the cost of slightly more latency.",
-                    args.environment = "RTX_DLFG_ENABLE",
-                    args.flags = RtxOptionFlags::UserSetting); // note: always use DxvkDevice::isDLFGEnabled() to check if DLFG is enabled, not this option directly
     RTX_OPTION_ARGS("rtx.dlfg", uint32_t, maxInterpolatedFrames, 2, "For DLSS 4.5 frame generation, controls the number of interpolated frames for each rendered frame. Ignored for DLSS 3.0.",
                     args.minValue = 1, args.maxValue = 6,
                     args.flags = RtxOptionFlags::UserSetting);
@@ -329,8 +331,13 @@ namespace dxvk {
     RTX_OPTION("rtx.dlfg", bool, enablePresentMetering, true, "Use hardware present metering for DLSS 4.0 frame generation instead of CPU pacing.");
 
   private:
+    // Logs the error, records it as the failure reason and stops frame generation until a preset is selected.
+    void setFailed(const std::string& reason);
+
     std::unique_ptr<NGXDLFGContext> m_dlfgContext = nullptr;
     std::atomic<bool> m_hasDLFGFailed = { false };
+    mutable std::mutex m_failureMutex;
+    std::string m_failureReason;
     uint32_t m_currentDisplaySize[2] = { 0,0 };
     bool m_contextDirty = true;
     

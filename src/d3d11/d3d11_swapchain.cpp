@@ -3,6 +3,7 @@
 #include "d3d11_swapchain.h"
 
 #include "../dxvk/dxvk_perf_counters.h"
+#include "../dxvk/dxvk_objects.h"
 
 #include <mutex>
 #include <unordered_map>
@@ -575,6 +576,9 @@ namespace dxvk {
       m_device->vkd(),
       presenterDevice,
       presenterDesc);
+
+    // This swap chain has no frame generation presenter, so the status names it as the reason.
+    m_device->getCommon()->metaFrameGenerationStatus().setPresenter(FrameGenerationPresenter::Unsupported, "D3D11");
     
     m_presenter->setFrameRateLimit(m_parent->GetOptions()->maxFrameRate);
     m_presenter->setFrameRateLimiterRefreshRate(m_displayRefreshRate);

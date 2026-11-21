@@ -3983,42 +3983,6 @@ namespace dxvk {
     }
   }
 
-  void ImGUI::showDLFGOptions(const Rc<DxvkContext>& ctx) {
-    const bool supportsDLFG = ctx->getCommonObjects()->metaNGXContext().supportsDLFG() && !ctx->getCommonObjects()->metaDLFG().hasDLFGFailed();
-    const uint32_t maxInterpolatedFrames = ctx->getCommonObjects()->metaNGXContext().dlfgMaxInterpolatedFrames();
-    const bool supportsMultiFrame = maxInterpolatedFrames > 1;
-
-    if (!supportsDLFG) {
-      ImGui::BeginDisabled();
-    }
-
-    bool dlfgChanged = RemixGui::Checkbox("Enable DLSS Frame Generation", &DxvkDLFG::enableObject());
-    if (supportsMultiFrame) {
-      dlfgMfgModeCombo.getKey(&DxvkDLFG::maxInterpolatedFramesObject());
-    }
-
-    const auto& reason = ctx->getCommonObjects()->metaNGXContext().getDLFGNotSupportedReason();
-    if (reason.size()) {
-      RemixGui::SetTooltipToLastWidgetOnHover(reason.c_str());
-      ImGui::TextWrapped(reason.c_str());
-    }
-
-    if (!supportsDLFG) {
-      ImGui::EndDisabled();
-    }
-
-    // Need to change Reflex in sync with DLFG, not on the next frame.
-    if (dlfgChanged) {
-      if (!supportsDLFG) {
-        DxvkDLFG::enable.setDeferred(false);
-      } else if (!DxvkDLFG::enable()){
-        // DLFG was just enabled.  force Reflex to Low Latency.
-        RtxOptions::reflexMode.setDeferred(ReflexMode::LowLatency);
-      }
-    }
-
-  }
-
   void ImGUI::showReflexOptions(const Rc<DxvkContext>& ctx, bool displayStatsWindowToggle) {
     RtxReflex& reflex = m_device->getCommon()->metaReflex();
 
