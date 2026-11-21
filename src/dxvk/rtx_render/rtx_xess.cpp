@@ -132,6 +132,14 @@ namespace dxvk {
     m_initialized = false;
   }
 
+  bool DxvkXeSS::supportsXeSS() {
+    if (!m_supportChecked) {
+      m_supported = validateXeSSSupport(device());
+      m_supportChecked = true;
+    }
+    return m_supported;
+  }
+
   bool DxvkXeSS::isXeSSLibraryAvailable() {
     // Try to get XeSS version to test if library is available
     xess_version_t version;

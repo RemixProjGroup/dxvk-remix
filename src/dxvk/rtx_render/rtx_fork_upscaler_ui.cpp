@@ -169,6 +169,9 @@ namespace dxvk {
               if (stats.contextFailed) {
                 ImGui::TextColored(kStatusFault, "Status: unavailable - rendering every frame.");
                 ImGui::TextWrapped("AMD FSR Frame Generation could not start on this GPU. The log has the reason.");
+              } else if (stats.prepareFailed) {
+                ImGui::TextColored(kStatusFault, "Status: off - rendering every frame.");
+                ImGui::TextWrapped("AMD FSR Frame Generation kept failing to prepare its inputs, so it is off until the game restarts. The log has the error.");
               } else if (stats.versionName.empty()) {
                 ImGui::TextColored(kStatusOff, "Status: starting.");
               } else if (ffxVersionMajor(stats.versionName) >= kFfxFirstMlMajorVersion) {

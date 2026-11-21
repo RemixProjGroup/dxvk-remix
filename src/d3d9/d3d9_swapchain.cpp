@@ -468,6 +468,13 @@ namespace dxvk {
     }
     // NV-DXVK end
 
+    // The FFX proxy presents from its own thread, so it is drained and released before waitForIdle idles the queues.
+    // The device can still hold a reference, which waitForIdle drops before vkDeviceWaitIdle.
+    if (m_fsrfgPresenter != nullptr) {
+      m_fsrfgPresenter->synchronize();
+      m_fsrfgPresenter = nullptr;
+    }
+
     m_device->waitForIdle();
   }
 

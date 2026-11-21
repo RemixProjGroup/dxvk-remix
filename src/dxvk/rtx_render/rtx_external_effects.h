@@ -62,10 +62,6 @@ namespace dxvk {
       const std::string& effectId,
       const std::string& parameterId,
       std::vector<float>& values) const;
-    bool setParameter(
-      const std::string& effectId,
-      const std::string& parameterId,
-      const std::vector<float>& values);
 
     void dispatch(
       Rc<RtxContext> ctx,
@@ -234,6 +230,11 @@ namespace dxvk {
     };
     void releaseTextures(Effect& effect, TextureReleaseScope scope);
     void loadPersistedState(Effect& effect, const Effect* previous) const;
+    // Applies the effect's entry from the parsed effectEnabledStates, if it has one.
+    // Returns true when the enabled state changed.
+    static bool applyEnabledState(Effect& effect, const std::unordered_map<std::string, std::string>& states);
+    // Applies the effect's entries from the parsed effectParameterValues, clamped to each parameter's bounds.
+    static void applyParameterValues(Effect& effect, const std::unordered_map<std::string, std::string>& values);
     // Moves persistent textures from the replaced effect into the new one.
     // Scratch is refilled by the next frame, and file textures are re-uploaded to pick up edits.
     void carryTexturesAcrossReload(Effect& effect, Effect* previous) const;
@@ -284,10 +285,17 @@ namespace dxvk {
                "Optional path to slangc.exe for compiling external effects. When empty, Remix searches beside the runtime and game executable.");
     RTX_OPTION("rtx.postfx.external", bool, hotReload, true,
                "Recompiles an external effect when its source, or a file it includes, is saved.");
-    RTX_OPTION("rtx.postfx.external", std::string, effectEnabledStates, std::string(""),
-               "The saved enabled state of each discovered external effect. Written by the dev menu.");
-    RTX_OPTION("rtx.postfx.external", std::string, effectParameterValues, std::string(""),
-               "The saved parameter values of external effects. Written by the dev menu.");
+    static void effectEnabledStatesOnChange(DxvkDevice* device);
+    RTX_OPTION_ARGS("rtx.postfx.external", std::string, effectEnabledStates, std::string(""),
+                    "The enabled state of external effects, as ';'-separated 'effectId=1' or 'effectId=0' entries. "
+                    "The dev menu writes it. A change, for example from a config file or the Remix API, applies at runtime.",
+                    args.onChangeCallback = &effectEnabledStatesOnChange);
+    static void effectParameterValuesOnChange(DxvkDevice* device);
+    RTX_OPTION_ARGS("rtx.postfx.external", std::string, effectParameterValues, std::string(""),
+                    "The parameter values of external effects, as ';'-separated 'effectId/parameterId=value' entries, with "
+                    "space-separated values for vector parameters. The dev menu writes it. A change, for example from a "
+                    "config file or the Remix API, applies at runtime. Values are clamped to the parameter's bounds.",
+                    args.onChangeCallback = &effectParameterValuesOnChange);
   };
 
 } // namespace dxvk

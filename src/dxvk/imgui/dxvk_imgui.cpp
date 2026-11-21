@@ -4656,9 +4656,7 @@ namespace dxvk {
 
       RtxOptions::updatePresetFromUpscaler();
 
-      if (RtxOptions::upscalerType() == UpscalerType::DLSS && !ctx->getCommonObjects()->metaDLSS().supportsDLSS()) {
-        RtxOptions::upscalerType.setDeferred(UpscalerType::TAAU);
-      }
+      RtxOptions::replaceUnsupportedUpscaler(ctx->getDevice().ptr());
 
       if (RtxOptions::isRayReconstructionEnabled()) {
         dlssProfileCombo.getKey(&RtxOptions::qualityDLSSObject());

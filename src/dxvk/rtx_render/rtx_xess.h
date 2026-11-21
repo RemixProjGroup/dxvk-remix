@@ -82,6 +82,9 @@ namespace dxvk {
     // XeSS 2.1 public helper methods
     uint32_t calcRecommendedJitterSequenceLength() const;
 
+    // Returns true when the XeSS library loads and can create a context on this device. The result is cached.
+    bool supportsXeSS();
+
   protected:
 
     // RtxPass interface
@@ -126,6 +129,9 @@ namespace dxvk {
     uint64_t m_dispatches = 0;
     uint64_t m_resets = 0;
 
+    bool m_supportChecked = false;
+    bool m_supported = false;
+
 #else
 
     // Constructor with device
@@ -155,6 +161,10 @@ namespace dxvk {
     // XeSS 2.1 public helper methods
     uint32_t calcRecommendedJitterSequenceLength() const {
       return 1;
+    }
+
+    bool supportsXeSS() {
+      return false;
     }
 
   protected:

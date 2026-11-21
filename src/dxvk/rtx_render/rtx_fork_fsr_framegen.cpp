@@ -54,6 +54,8 @@ namespace dxvk {
   namespace {
     // Presents without frame generation inputs before frame generation is configured off.
     constexpr uint32_t kMaxConsecutiveSkips = 4;
+    // Consecutive failed prepare dispatches before frame generation is turned off for the session.
+    constexpr uint32_t kMaxConsecutivePrepareFailures = 30;
     constexpr uint64_t kLogIntervalPresents = 600;
 
     // The FFX state of an image in this layout. FFX transitions registered resources from it and back.
@@ -144,6 +146,7 @@ namespace dxvk {
   }
 
   void DxvkFSRFrameGen::onDestroy() {
+    waitForPresents();
     destroyContexts();
     delete reinterpret_cast<ffx::ConfigureDescFrameGeneration*>(m_frameGenConfig);
     m_frameGenConfig = nullptr;
@@ -576,6 +579,8 @@ namespace dxvk {
 
   void DxvkFSRFrameGen::beginPresent(VkSwapchainKHR swapchain, const DxvkFrameInterpolationInfo& frame, bool enabled,
                                      const vk::PresenterInfo& info) {
+    enabled = enabled && !hasFailedForSession();
+
     // Every configure, including the one that switches generation off before a context is destroyed, targets
     // the current proxy.
     ffx::ConfigureDescFrameGeneration& config = asFrameGenConfig(m_frameGenConfig);
@@ -614,7 +619,8 @@ namespace dxvk {
         ++m_stats.resetsGap;
       }
       m_resetNext = false;
-      m_consecutiveSkips = 0;
+      // Failed prepares count as skips, so frame generation is configured off while they keep failing.
+      m_consecutiveSkips = m_consecutivePrepareFailures;
     } else {
       // No inputs for this present: a frame without ray tracing (a menu or a loading screen) or a second present
       // of the same frame.
@@ -625,7 +631,7 @@ namespace dxvk {
 
     // Frame generation stays configured on through short gaps, since every enable change makes the proxy wait
     // for its presents and restart its pacing thread.
-    const bool generate = enabled && (hasInputs || m_consecutiveSkips <= kMaxConsecutiveSkips);
+    const bool generate = enabled && m_consecutiveSkips <= kMaxConsecutiveSkips;
     if (!generate) {
       ++m_stats.disabled;
     }
@@ -665,12 +671,25 @@ namespace dxvk {
     }
 
     // A failed prepare leaves this frame without valid inputs, so its generated frame repeats the real one.
-    if (hasInputs && !prepare(frame, frameId, reset)) {
-      reset = true;
-      lock.lock();
-      m_resetNext = true;
-      ++m_stats.skipped;
-      lock.unlock();
+    if (hasInputs) {
+      if (prepare(frame, frameId, reset)) {
+        m_consecutivePrepareFailures = 0;
+      } else {
+        reset = true;
+        ++m_consecutivePrepareFailures;
+        const bool giveUp = m_consecutivePrepareFailures >= kMaxConsecutivePrepareFailures;
+        if (giveUp) {
+          Logger::err(str::format("[FSRFG] the prepare dispatch failed on ", m_consecutivePrepareFailures,
+            " consecutive frames; frame generation is off for the rest of the session"));
+          m_prepareFailedForSession.store(true, std::memory_order_release);
+        }
+
+        lock.lock();
+        m_resetNext = true;
+        ++m_stats.skipped;
+        m_stats.prepareFailed = giveUp;
+        lock.unlock();
+      }
     }
 
     m_presentingReset = reset;
@@ -836,6 +855,15 @@ namespace dxvk {
     return m_acquireStatus;
   }
 
+  void DxvkFSRFGPresenter::synchronize() {
+    // DxvkDevice::waitForIdle calls this with the device queue lock held. The FFX present thread only waits
+    // on work that is already submitted, so the wait needs neither that lock nor the submission thread.
+    std::lock_guard<dxvk::mutex> proxyLock(m_proxyMutex);
+    if (m_proxyActive) {
+      m_device->getCommon()->metaFSRFrameGen().waitForPresents();
+    }
+  }
+
   VkResult DxvkFSRFGPresenter::presentImage(
     std::atomic<VkResult>* status,
     const DxvkPresentInfo& presentInfo,
@@ -848,6 +876,7 @@ namespace dxvk {
         acquiredImageIndex, isDlfgPresenting, presentMetering);
     }
 
+    std::lock_guard<dxvk::mutex> proxyLock(m_proxyMutex);
     DxvkFSRFrameGen& fsrFrameGen = m_device->getCommon()->metaFSRFrameGen();
     fsrFrameGen.beginPresent(m_swapchain, frameInterpolationInfo, DxvkFSRFrameGen::enable() && !m_disableForSession, m_info);
 
@@ -922,7 +951,8 @@ namespace dxvk {
       if (!DxvkFSRFrameGen::enable()) {
         return false;
       }
-      return device->getCommon()->metaFSRFrameGen().supportsFSRFrameGen();
+      const DxvkFSRFrameGen& fsrFrameGen = device->getCommon()->metaFSRFrameGen();
+      return fsrFrameGen.supportsFSRFrameGen() && !fsrFrameGen.hasFailedForSession();
     }
 
   } // namespace fork_hooks

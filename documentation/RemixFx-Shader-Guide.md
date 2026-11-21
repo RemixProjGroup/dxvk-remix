@@ -957,27 +957,33 @@ some options take effect at once and some only when effects are next loaded.
 | `rtx.postfx.stackOrder` | The order of the stack, comma-separated. A file effect appears as `external:<effect id>`. An effect cannot be moved across tone mapping |
 | `rtx.postfx.external.hotReload` | Recompile on save |
 
-**Read only when effects are loaded:**
+**Applied to the loaded effects when they change, and read again at every load:**
 
 | Option | Format |
 |---|---|
 | `rtx.postfx.external.effectEnabledStates` | `<id>=1;<id>=0;...` |
 | `rtx.postfx.external.effectParameterValues` | `<id>/<param>=<v1> <v2> ...;...`, one value per component, separated by spaces |
+
+**Read only when effects are loaded:**
+
+| Option | Format |
+|---|---|
 | `rtx.postfx.external.effectSearchPath`, `rtx.postfx.external.slangCompilerPath` | Paths |
 
 Effects are loaded on the first frame that runs the post-processing stack (or
 when the panel is first drawn, if that comes first), when the user presses
 **Reload External Effects**, when a file in the effects folder
 is saved while hot reload is on, and after the graphics device is recreated.
-There is no API call that triggers a load, and no API call that changes one
-parameter while the game runs. Setting the two strings before the first frame
-should therefore apply them to the first load; that follows from the code but
-has not been tested.
+There is no API call that triggers a load. A change to the two strings applies
+to the loaded effects at the end of the frame it is set in, and a string set
+before the first load applies to that load.
 
 Details that affect a mod:
 
 - `SetConfigVariable` replaces the whole string, and the API has no way to read
-  it back, so write every entry you want to keep.
+  it back. A change leaves the effects and parameters it does not list as they
+  are, but only what the string holds is saved, so write every entry you want
+  to keep.
 - A parameter value is used only when it has exactly the parameter's number of
   components, and it is clamped to the declared range. An entry for an unknown
   effect or parameter is ignored.

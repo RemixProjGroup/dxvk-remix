@@ -238,14 +238,14 @@ namespace dxvk {
     drawList->AddText(data->Font, data->FontSize, offsetText, IM_COL32_WHITE, str.c_str());
   }
 
-  void drawLightHashes(const RtLight& light, const Matrix4& worldToProj, ImDrawList* drawList) {
+  void drawLightHashes(const LightDebugInfo& light, const Matrix4& worldToProj, ImDrawList* drawList) {
     if (!LightManagerGuiSettings::debugDrawLightHashes()) {
       return;
     }
-    drawLightHash(light.getInitialHash(), light.getPosition(), worldToProj, drawList);
+    drawLightHash(light.initialHash, light.position, worldToProj, drawList);
   }
 
-  void drawToolTip(const RtLight& light) {
+  void drawToolTip(const LightDebugInfo& light) {
     const ImVec2 windowSize = ImVec2(100, 200); 
     ImGui::SetNextWindowSize(windowSize, ImGuiCond_Once);
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetMousePos().x + windowSize.x / 2, ImGui::GetMousePos().y + windowSize.y / 2), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
@@ -259,41 +259,37 @@ namespace dxvk {
             { RtLightType::Cylinder, "Cylinder" },
             { RtLightType::Distant,  "Distant" },
           };
-      ImGui::Text("Position: %.2f %.2f %.2f", light.getPosition().x, light.getPosition().y, light.getPosition().z);
-      ImGui::Text("Direction: %.2f %.2f %.2f", light.getDirection().x, light.getDirection().y, light.getDirection().z);
-      ImGui::Text("Radiance: %.2f %.2f %.2f", light.getRadiance().x, light.getRadiance().y, light.getRadiance().z);
-      
-      ImGui::Text("Type: %s", lightTypes[(uint32_t) light.getType()].second);
-      const RtLightShaping* pShaping = nullptr;
-      switch (light.getType()) {
+      ImGui::Text("Position: %.2f %.2f %.2f", light.position.x, light.position.y, light.position.z);
+      ImGui::Text("Direction: %.2f %.2f %.2f", light.direction.x, light.direction.y, light.direction.z);
+      ImGui::Text("Radiance: %.2f %.2f %.2f", light.radiance.x, light.radiance.y, light.radiance.z);
+
+      ImGui::Text("Type: %s", lightTypes[(uint32_t) light.type].second);
+      switch (light.type) {
       case RtLightType::Sphere:
-        pShaping = &light.getSphereLight().getShaping();
-        ImGui::Text("\tRadius: %.2f", light.getSphereLight().getRadius());
+        ImGui::Text("\tRadius: %.2f", light.radius);
         break;
       case RtLightType::Rect:
-        pShaping = &light.getRectLight().getShaping();
-        ImGui::Text("\tDimensions: %.2f %.2f", light.getRectLight().getDimensions().x, light.getRectLight().getDimensions().y);
+        ImGui::Text("\tDimensions: %.2f %.2f", light.dimensions.x, light.dimensions.y);
         break;
       case RtLightType::Disk:
-        pShaping = &light.getDiskLight().getShaping();
-        ImGui::Text("\tHalf-Dimensions: %.2f %.2f", light.getDiskLight().getHalfDimensions().x, light.getDiskLight().getHalfDimensions().y);
+        ImGui::Text("\tHalf-Dimensions: %.2f %.2f", light.dimensions.x, light.dimensions.y);
         break;
       case RtLightType::Cylinder:
-        ImGui::Text("\tRadius: %.2f", light.getCylinderLight().getRadius());
-        ImGui::Text("\tLength: %.2f", light.getCylinderLight().getAxisLength());
-        ImGui::Text("\tAxis: %.2f %.2f %.2f", light.getCylinderLight().getAxis().x, light.getCylinderLight().getAxis().y, light.getCylinderLight().getAxis().z);
+        ImGui::Text("\tRadius: %.2f", light.radius);
+        ImGui::Text("\tLength: %.2f", light.axisLength);
+        ImGui::Text("\tAxis: %.2f %.2f %.2f", light.axis.x, light.axis.y, light.axis.z);
         break;
       case RtLightType::Distant:
         break;
       }
 
-      if (pShaping) {
-        if (pShaping->getEnabled()) {
+      if (light.shapingSupported) {
+        if (light.shapingEnabled) {
           ImGui::Text("Light Shaping: Enabled");
-          ImGui::Text("\tDirection: %.2f %.2f %.2f", pShaping->getDirection().x, pShaping->getDirection().y, pShaping->getDirection().z);
-          ImGui::Text("\tCone Angle: %.2f deg", std::acos(pShaping->getCosConeAngle()) * kRadiansToDegrees);
-          ImGui::Text("\tCone Softness: %.2f", pShaping->getConeSoftness());
-          ImGui::Text("\tFocus Exponent: %.2f", pShaping->getFocusExponent());
+          ImGui::Text("\tDirection: %.2f %.2f %.2f", light.shapingDirection.x, light.shapingDirection.y, light.shapingDirection.z);
+          ImGui::Text("\tCone Angle: %.2f deg", std::acos(light.shapingCosConeAngle) * kRadiansToDegrees);
+          ImGui::Text("\tCone Softness: %.2f", light.shapingConeSoftness);
+          ImGui::Text("\tFocus Exponent: %.2f", light.shapingFocusExponent);
         } else {
           ImGui::Text("Light Shaping: Disabled");
         }
@@ -301,13 +297,13 @@ namespace dxvk {
         ImGui::Text("Light Shaping: Not Supported");
       }
 
-      ImGui::Text("Volumetric Radiance Scale: %.2f", light.getVolumetricRadianceScale());
-      ImGui::Text("Initial Hash: 0x%" PRIx64, light.getInitialHash());
-      ImGui::Text("Transformed Hash: 0x%" PRIx64, light.getTransformedHash());
-      if (light.getPrimInstanceOwner().getReplacementInstance() != nullptr) {
-        ImGui::Text("Replacement Index: %d", light.getPrimInstanceOwner().getReplacementIndex());
-        ImGui::Text("Is Root: %s", light.getPrimInstanceOwner().isRoot(&light) ? "Yes" : "No");
-        switch (light.getPrimInstanceOwner().getReplacementInstance()->root.getType()) {
+      ImGui::Text("Volumetric Radiance Scale: %.2f", light.volumetricRadianceScale);
+      ImGui::Text("Initial Hash: 0x%" PRIx64, light.initialHash);
+      ImGui::Text("Transformed Hash: 0x%" PRIx64, light.transformedHash);
+      if (light.hasReplacement) {
+        ImGui::Text("Replacement Index: %d", (int) light.replacementIndex);
+        ImGui::Text("Is Root: %s", light.isReplacementRoot ? "Yes" : "No");
+        switch (light.replacementRootType) {
           case PrimInstance::Type::Instance:
             ImGui::Text("Replacement Root is a Mesh");
             break;
@@ -322,11 +318,11 @@ namespace dxvk {
             break;
         }
       }
-      ImGui::Text("Frame last touched: %d", light.getFrameLastTouched());
+      ImGui::Text("Frame last touched: %d", light.frameLastTouched);
       RemixGui::Separator();
 
       if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
-        ImGui::SetClipboardText(hashToString(light.getInitialHash()).c_str());
+        ImGui::SetClipboardText(hashToString(light.initialHash).c_str());
       }
 
     }
@@ -346,14 +342,14 @@ namespace dxvk {
     }
   };
 
-  DrawResult drawSphereLightDebug(const RtSphereLight& sphereLight, const Matrix4& worldToProj, const Vector3& cameraRight, const ImU32 colHex, cFrustum& frustum, ImDrawList* drawList) {
-    if (!sphereIntersectsFrustum(frustum, sphereLight.getPosition(), sphereLight.getRadius())) {
+  DrawResult drawSphereLightDebug(const Vector3& position, const float sphereRadius, const Matrix4& worldToProj, const Vector3& cameraRight, const ImU32 colHex, cFrustum& frustum, ImDrawList* drawList) {
+    if (!sphereIntersectsFrustum(frustum, position, sphereRadius)) {
       return {};
     }
     ImVec2 screenPos[2];
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    transformToScreen(worldToProj, Vector2{ viewport->Size.x, viewport->Size.y }, sphereLight.getPosition(), screenPos[0]);
-    transformToScreen(worldToProj, Vector2{ viewport->Size.x, viewport->Size.y }, sphereLight.getPosition() + cameraRight * sphereLight.getRadius(), screenPos[1]);
+    transformToScreen(worldToProj, Vector2{ viewport->Size.x, viewport->Size.y }, position, screenPos[0]);
+    transformToScreen(worldToProj, Vector2{ viewport->Size.x, viewport->Size.y }, position + cameraRight * sphereRadius, screenPos[1]);
     const float radius = std::max(1.f, sqrtf(ImLengthSqr(ImVec2(screenPos[0].x - screenPos[1].x, screenPos[0].y - screenPos[1].y))));
     drawList->AddCircleFilled(screenPos[0], radius, colHex);
 
@@ -406,10 +402,7 @@ namespace dxvk {
     return DrawResult { false, true };
   }
 
-  DrawResult drawCylinderLightDebug(const RtCylinderLight& cylinderLight, const Matrix4& worldToProj, const ImU32 colHex, cFrustum& frustum, ImDrawList* drawList) {
-    const Vector3 pos = cylinderLight.getPosition();
-    const Vector3 axis = cylinderLight.getAxis();
-    const float radius = cylinderLight.getRadius();
+  DrawResult drawCylinderLightDebug(const Vector3& pos, const Vector3& axis, const float radius, const float axisLength, const Matrix4& worldToProj, const ImU32 colHex, cFrustum& frustum, ImDrawList* drawList) {
     const float sign = axis.z < 0 ? -1.f : 1.f;
 
     const float a = 1.0f / (sign + axis.z);
@@ -419,8 +412,8 @@ namespace dxvk {
     const Vector3 bitangent = Vector3(b, sign + axis.y * axis.y * a, -axis.y);
 
     auto result = DrawResult{};
-    result |= drawDiskLightDebug(pos + axis * cylinderLight.getAxisLength() * 0.5, tangent, bitangent, Vector2(radius, radius), worldToProj, colHex, frustum, drawList);
-    result |= drawDiskLightDebug(pos - axis * cylinderLight.getAxisLength() * 0.5, tangent, bitangent, Vector2(radius, radius), worldToProj, colHex, frustum, drawList);
+    result |= drawDiskLightDebug(pos + axis * axisLength * 0.5, tangent, bitangent, Vector2(radius, radius), worldToProj, colHex, frustum, drawList);
+    result |= drawDiskLightDebug(pos - axis * axisLength * 0.5, tangent, bitangent, Vector2(radius, radius), worldToProj, colHex, frustum, drawList);
 
     const uint32_t numPoints = 16;
     for (uint32_t i = 0; i < numPoints; i++) {
@@ -428,7 +421,7 @@ namespace dxvk {
       float theta1 = (float) (i + 1) * kPi * 2 / numPoints;
       const Vector3 position = pos + radius * cos(theta) * tangent + radius * bitangent * sin(theta);
       const Vector3 position1 = pos + radius * cos(theta1) * tangent + radius * bitangent * sin(theta1);
-      result |= drawRectLightDebug((position + position1) * 0.5f, normalize(position1 - position), axis, Vector2(length(position1 - position), cylinderLight.getAxisLength()), worldToProj, colHex, frustum, drawList);
+      result |= drawRectLightDebug((position + position1) * 0.5f, normalize(position1 - position), axis, Vector2(length(position1 - position), axisLength), worldToProj, colHex, frustum, drawList);
     }
     return result;
   }
@@ -452,44 +445,34 @@ namespace dxvk {
       cFrustum frustum;
       frustum.Setup(NDC_D3D, *reinterpret_cast<const float4x4*>(&worldToProj));
 
-      for (auto&& linearizedLight : m_linearizedLights) {
-        const RtLight* light = linearizedLight;
-        if (light->getType() == RtLightType::Distant) {
+      for (const LightDebugInfo& light : m_lightDebugSnapshot) {
+        if (light.type == RtLightType::Distant) {
           continue;
         }
 
-        if (light->getType() > RtLightType::Distant) {
-          // This happens because the linearizedLights stored pointers to the actual lights.
-          // the actual lights can be garbage collected after linearizedLights is made, but before this function runs.
-          Logger::err("tried to use a deleted light in showImguiDebugVisualization.");
-          continue;
-        }
-
-        Vector4 color = light->getColorAndIntensity();
+        const Vector4& color = light.colorAndIntensity;
         const ImU32 colHex = ImColor(color.x, color.y, color.z);
 
         auto result = DrawResult{};
-        switch (light->getType()) {
+        switch (light.type) {
         case RtLightType::Sphere:
         {
-          result = drawSphereLightDebug(light->getSphereLight(), worldToProj, Vector3{ camera.getViewToWorld(true)[0].xyz() }, colHex, frustum, drawList);
+          result = drawSphereLightDebug(light.position, light.radius, worldToProj, Vector3{ camera.getViewToWorld(true)[0].xyz() }, colHex, frustum, drawList);
           break;
         }
         case RtLightType::Rect:
         {
-          const RtRectLight& rectLight = light->getRectLight();
-          result = drawRectLightDebug(rectLight.getPosition(), rectLight.getXAxis(), rectLight.getYAxis(), rectLight.getDimensions(), worldToProj, colHex, frustum, drawList);
+          result = drawRectLightDebug(light.position, light.xAxis, light.yAxis, light.dimensions, worldToProj, colHex, frustum, drawList);
           break;
         }
         case RtLightType::Disk:
         {
-          const RtDiskLight& diskLight = light->getDiskLight();
-          result = drawDiskLightDebug(diskLight.getPosition(), diskLight.getXAxis(), diskLight.getYAxis(), diskLight.getHalfDimensions(), worldToProj, colHex, frustum, drawList);
+          result = drawDiskLightDebug(light.position, light.xAxis, light.yAxis, light.dimensions, worldToProj, colHex, frustum, drawList);
           break;
         }
         case RtLightType::Cylinder:
         {
-          result = drawCylinderLightDebug(light->getCylinderLight(), worldToProj, colHex, frustum, drawList);
+          result = drawCylinderLightDebug(light.position, light.axis, light.radius, light.axisLength, worldToProj, colHex, frustum, drawList);
           break;
         }
         default:
@@ -498,10 +481,10 @@ namespace dxvk {
         }
 
         if (result.mouseHover) {
-          drawToolTip(*light);
+          drawToolTip(light);
         }
         else if (result.isVisible) {
-          drawLightHashes(*light, worldToProj, drawList);
+          drawLightHashes(light, worldToProj, drawList);
         }
       }
 
@@ -509,6 +492,80 @@ namespace dxvk {
     }
     ImGui::End();
     ImGui::PopStyleColor();
+  }
+
+  void LightManager::updateDebugSnapshot() {
+    // Only the render thread writes the snapshot, so it may check the size without the lock.
+    if (!LightManagerGuiSettings::enableDebugMode()) {
+      if (!m_lightDebugSnapshot.empty()) {
+        std::lock_guard<std::mutex> lock(m_lightUIMutex);
+        m_lightDebugSnapshot.clear();
+      }
+      return;
+    }
+
+    std::vector<LightDebugInfo> snapshot;
+    snapshot.reserve(m_linearizedLights.size());
+
+    for (const RtLight* light : m_linearizedLights) {
+      LightDebugInfo& info = snapshot.emplace_back();
+      info.type = light->getType();
+      info.colorAndIntensity = light->getColorAndIntensity();
+      info.position = light->getPosition();
+      info.direction = light->getDirection();
+      info.radiance = light->getRadiance();
+      info.volumetricRadianceScale = light->getVolumetricRadianceScale();
+      info.initialHash = light->getInitialHash();
+      info.transformedHash = light->getTransformedHash();
+      info.frameLastTouched = light->getFrameLastTouched();
+
+      const RtLightShaping* shaping = nullptr;
+      switch (info.type) {
+      case RtLightType::Sphere:
+        info.radius = light->getSphereLight().getRadius();
+        shaping = &light->getSphereLight().getShaping();
+        break;
+      case RtLightType::Rect:
+        info.xAxis = light->getRectLight().getXAxis();
+        info.yAxis = light->getRectLight().getYAxis();
+        info.dimensions = light->getRectLight().getDimensions();
+        shaping = &light->getRectLight().getShaping();
+        break;
+      case RtLightType::Disk:
+        info.xAxis = light->getDiskLight().getXAxis();
+        info.yAxis = light->getDiskLight().getYAxis();
+        info.dimensions = light->getDiskLight().getHalfDimensions();
+        shaping = &light->getDiskLight().getShaping();
+        break;
+      case RtLightType::Cylinder:
+        info.radius = light->getCylinderLight().getRadius();
+        info.axis = light->getCylinderLight().getAxis();
+        info.axisLength = light->getCylinderLight().getAxisLength();
+        break;
+      default:
+        break;
+      }
+
+      if (shaping) {
+        info.shapingSupported = true;
+        info.shapingEnabled = shaping->getEnabled();
+        info.shapingDirection = shaping->getDirection();
+        info.shapingCosConeAngle = shaping->getCosConeAngle();
+        info.shapingConeSoftness = shaping->getConeSoftness();
+        info.shapingFocusExponent = shaping->getFocusExponent();
+      }
+
+      const PrimInstanceOwner& owner = light->getPrimInstanceOwner();
+      if (owner.getReplacementInstance() != nullptr) {
+        info.hasReplacement = true;
+        info.replacementIndex = owner.getReplacementIndex();
+        info.isReplacementRoot = owner.isRoot(light);
+        info.replacementRootType = owner.getReplacementInstance()->root.getType();
+      }
+    }
+
+    std::lock_guard<std::mutex> lock(m_lightUIMutex);
+    m_lightDebugSnapshot.swap(snapshot);
   }
 
 }  // namespace dxvk

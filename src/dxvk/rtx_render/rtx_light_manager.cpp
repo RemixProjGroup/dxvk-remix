@@ -86,24 +86,15 @@ namespace dxvk {
   }
 
   void LightManager::clear() {
-    if (!m_lightDebugUILock.owns_lock()) {
-      m_lightDebugUILock.lock();
-    }
     m_lights.clear();
     m_linearizedLights.clear();
-    m_lightDebugUILock.unlock();
+
+    std::lock_guard<std::mutex> lock(m_lightUIMutex);
+    m_lightDebugSnapshot.clear();
   }
 
   void LightManager::clearFromUIThread() {
-    // This needs to wait for `m_lightDebugUILock` to be unlocked, so it doesn't
-    // cause crashes.
-    std::lock_guard<std::mutex> lock(m_lightUIMutex);
-    m_lights.clear();
-    m_linearizedLights.clear();
-
-    // Note: Fallback light reset here so that changes to its settings will take effect, does not need to be part
-    // of usual light clearing logic though.
-    m_fallbackLight.reset();
+    m_clearRequested.store(true);
   }
 
   void LightManager::garbageCollectionInternal() {
@@ -147,9 +138,6 @@ namespace dxvk {
   }
 
   void LightManager::garbageCollection(RtCamera& camera) {
-    if (!m_lightDebugUILock.owns_lock()) {
-      m_lightDebugUILock.lock();
-    }
     if (RtxOptions::AntiCulling::isLightAntiCullingEnabled()) {
       cFrustum& cameraLightAntiCullingFrustum = camera.getLightAntiCullingFrustum();
       for (auto& [lightHash, rtLight] : getLightTable()) {
@@ -185,7 +173,6 @@ namespace dxvk {
     }
 
     garbageCollectionInternal();
-    m_lightDebugUILock.unlock();
   }
 
   void LightManager::dynamicLightMatching() {
@@ -240,6 +227,14 @@ namespace dxvk {
 
   void LightManager::prepareSceneData(Rc<DxvkContext> ctx, CameraManager const& cameraManager) {
     ScopedCpuProfileZone();
+
+    // A clear requested by the light settings UI also resets the fallback light, so its new settings take effect.
+    if (m_clearRequested.exchange(false)) {
+      m_lights.clear();
+      m_linearizedLights.clear();
+      m_fallbackLight.reset();
+    }
+
     // Ensure external light updates/removals are applied before we linearize and draw UI
     fork_hooks::flushPendingLightMutations(*this);
     // Note: Early outing in this function (via returns) should be done carefully (or not at all ideally) as it may skip important
@@ -612,6 +607,8 @@ namespace dxvk {
     if (m_currentActiveLightCount == 0)
       clear();
 
+    updateDebugSnapshot();
+
     // Generate a GPU dome light if necessary
     {
       // reset state
@@ -745,11 +742,6 @@ namespace dxvk {
   }
 
   RtLight* LightManager::addLight(const RtLight& rtLight, const RtLightAntiCullingType antiCullingType) {
-    if (!m_lightDebugUILock.owns_lock()) {
-      // As addLight can actually erase old lights, we need to lock the mutex starting from the first call each frame.
-      m_lightDebugUILock.lock();
-    }
-
     // This light is "off". This includes negative valued lights which in D3D games originally would act as subtractive lighting.
     const Vector3 originalRadiance = rtLight.getRadiance();
     if (originalRadiance.x < 0 || originalRadiance.y < 0 || originalRadiance.z < 0
@@ -842,10 +834,6 @@ namespace dxvk {
   // Creates a new externally tracked light. These lights have their lifecycle managed by external systems
   // rather than LightManager's frame-to-frame tracking and anti-culling systems.
   RtLight* LightManager::createExternallyTrackedLight(const RtLight& light) {
-    if (!m_lightDebugUILock.owns_lock()) {
-      m_lightDebugUILock.lock();
-    }
-    
     auto [newLightIt, addedSuccessfully] = m_externallyTrackedLights.try_emplace(m_nextExternallyTrackedLightId, light);
     assert(addedSuccessfully);
     RtLight* newLight = &newLightIt->second;
@@ -857,9 +845,6 @@ namespace dxvk {
   // Updates an existing externally tracked light with new data. The light's lifecycle is managed by external systems
   // rather than LightManager's frame-to-frame tracking and anti-culling systems.
   void LightManager::updateExternallyTrackedLight(RtLight* light, const RtLight& newLight) {
-    if (!m_lightDebugUILock.owns_lock()) {
-      m_lightDebugUILock.lock();
-    }
     assert(light->getExternallyTrackedLightId() != kInvalidExternallyTrackedLightId && " light passed to updateExternallyTrackedLight is not actually externally tracked.");
 
     const uint64_t externalId = light->getExternallyTrackedLightId();

@@ -61,6 +61,31 @@ The bridge client sized a skinned mesh's blend weights and blend indices as `cou
 - Options: none.
 - Commits: the commit that adds this entry.
 - Docs: [RemixApi-Plugin-Guide.md](../documentation/RemixApi-Plugin-Guide.md)
+### Light debug view no longer crashes
+Turning on `rtx.lights.enableDebugMode` could crash at once, most often with Remix API lights. The view read lights through pointers into the light tables from the UI thread while the render thread freed and rebuilt them: garbage collection erased lights after the list was built, and the light prepare rebuilt the list and replaced API lights without the lock. The render thread now copies what the view shows into a list of plain values at the end of the light prepare, only while the view is on, and the view reads only that copy. The lock that the render thread held from the first light added in a frame until garbage collection is removed, and the light clear that a light settings change in the menu triggers is now queued for the render thread's next light prepare.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### FSR frame generation no longer races device teardown at quit
+About one quit in four with FSR frame generation logged `waitForIdle: Operation failed`, because the device was idled while the FFX proxy's present thread could still be presenting. The swapchain now drains and releases the FSR presenter before it idles the device, every device idle waits for the proxy's queued presents, and the frame generation object waits for them before destroying its contexts.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### RemixFX effect states and parameters apply live
+`rtx.postfx.external.effectEnabledStates` and `rtx.postfx.external.effectParameterValues` were read only when effects loaded, so a mod that set them through the Remix API's config call, or a config file change, did nothing until the next reload. A change now applies to the loaded effects at the end of the frame it is set in, with parameter values clamped to their bounds as at load. The unused `RtxExternalEffects::setParameter` is removed.
+- Options: none added. The two options now have change callbacks.
+- Commits: the commit that adds this entry.
+- Docs: [RemixFx.md](RemixFx.md), [RemixFx-Shader-Guide.md](../documentation/RemixFx-Shader-Guide.md)
+
+### FSR or XeSS instead of TAA-U where DLSS is unsupported
+When DLSS is the selected upscaler (the default) but the GPU cannot run it, Remix now picks FSR, then XeSS, then TAA-U, whichever runs first, instead of always falling back to TAA-U. An upscaler the user picked other than DLSS is left alone. The Auto graphics preset on non-NVIDIA GPUs sets the FSR and XeSS presets to Performance, which matches the 0.5 resolution scale it already sets for NIS and TAA-U.
+- Options: none. Auto preset on non-NVIDIA GPUs now also sets `rtx.fsr.preset` → 1 (Performance) and `rtx.xess.preset` → 1 (Performance).
+- Commits: the commit that adds this entry.
+
+### FSR frame generation turns off when its prepare pass keeps failing
+A failed prepare dispatch counts as a present without inputs again, so frame generation is configured off after a few failures instead of showing every real frame twice. After 30 failures in a row it stays off for the rest of the session, with one log line and an "off" status in the frame generation menu. The user's config is not changed.
+- Options: none.
+- Commits: the commit that adds this entry.
 
 ## 2026-11-18
 

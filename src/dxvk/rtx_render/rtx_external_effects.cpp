@@ -1463,18 +1463,32 @@ namespace dxvk {
       }
     }
 
-    const auto enabledStates = parseAssignments(effectEnabledStates());
-    const auto enabledState = enabledStates.find(effect.manifest.id);
-    if (enabledState != enabledStates.end()) {
-      effect.enabled = enabledState->second == "1";
+    applyEnabledState(effect, parseAssignments(effectEnabledStates()));
+    applyParameterValues(effect, parseAssignments(effectParameterValues()));
+  }
+
+  bool RtxExternalEffects::applyEnabledState(Effect& effect, const std::unordered_map<std::string, std::string>& states) {
+    const auto state = states.find(effect.manifest.id);
+    if (state == states.end()) {
+      return false;
     }
 
-    const auto parameterValues = parseAssignments(effectParameterValues());
+    const bool enabled = state->second == "1";
+    if (effect.enabled == enabled) {
+      return false;
+    }
+    effect.enabled = enabled;
+    effect.historyInvalid = true;
+    return true;
+  }
+
+  void RtxExternalEffects::applyParameterValues(Effect& effect, const std::unordered_map<std::string, std::string>& values) {
     for (const RtxExternalEffectParameter& parameter : effect.manifest.parameters) {
-      const auto value = parameterValues.find(effect.manifest.id + "/" + parameter.id);
+      const auto value = values.find(effect.manifest.id + "/" + parameter.id);
       std::vector<float> parsed;
-      if (value != parameterValues.end()
-       && parsePersistedValues(value->second, parameter.valueCount, parsed)) {
+      if (value != values.end()
+       && parsePersistedValues(value->second, parameter.valueCount, parsed)
+       && std::all_of(parsed.begin(), parsed.end(), [](float v) { return std::isfinite(v); })) {
         for (uint32_t i = 0; i < parameter.valueCount; i++) {
           effect.values[parameter.valueOffset + i] = std::clamp(
             parsed[i], parameter.minValues[i], parameter.maxValues[i]);
@@ -1486,6 +1500,22 @@ namespace dxvk {
       } else if (parameter.type == RtxExternalEffectParameterType::Int) {
         effect.values[parameter.valueOffset] = std::round(effect.values[parameter.valueOffset]);
       }
+    }
+  }
+
+  // The callbacks apply the option to the loaded effects without persisting it again, so a menu edit,
+  // which writes the option itself, re-applies the values it already holds.
+  void RtxExternalEffects::effectEnabledStatesOnChange(DxvkDevice* device) {
+    const auto states = parseAssignments(effectEnabledStates());
+    for (Effect& effect : instance().m_effects) {
+      applyEnabledState(effect, states);
+    }
+  }
+
+  void RtxExternalEffects::effectParameterValuesOnChange(DxvkDevice* device) {
+    const auto values = parseAssignments(effectParameterValues());
+    for (Effect& effect : instance().m_effects) {
+      applyParameterValues(effect, values);
     }
   }
 
@@ -1942,41 +1972,6 @@ namespace dxvk {
     values.assign(
       effect->values.begin() + parameter->valueOffset,
       effect->values.begin() + parameter->valueOffset + parameter->valueCount);
-    return true;
-  }
-
-  bool RtxExternalEffects::setParameter(
-    const std::string& effectId,
-    const std::string& parameterId,
-    const std::vector<float>& values) {
-    Effect* effect = findEffect(effectId);
-    if (effect == nullptr) {
-      return false;
-    }
-
-    const auto parameter = std::find_if(
-      effect->manifest.parameters.begin(), effect->manifest.parameters.end(),
-      [&](const RtxExternalEffectParameter& candidate) { return candidate.id == parameterId; });
-    if (parameter == effect->manifest.parameters.end() || values.size() != parameter->valueCount) {
-      return false;
-    }
-
-    if (!std::all_of(values.begin(), values.end(), [](float value) {
-          return std::isfinite(value);
-        })) {
-      return false;
-    }
-
-    for (uint32_t i = 0; i < parameter->valueCount; i++) {
-      effect->values[parameter->valueOffset + i] = std::clamp(
-        values[i], parameter->minValues[i], parameter->maxValues[i]);
-    }
-    if (parameter->type == RtxExternalEffectParameterType::Bool) {
-      effect->values[parameter->valueOffset] = effect->values[parameter->valueOffset] >= 0.5f ? 1.0f : 0.0f;
-    } else if (parameter->type == RtxExternalEffectParameterType::Int) {
-      effect->values[parameter->valueOffset] = std::round(effect->values[parameter->valueOffset]);
-    }
-    persistParameterValues();
     return true;
   }
 

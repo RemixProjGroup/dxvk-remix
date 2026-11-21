@@ -33,6 +33,7 @@
 #include "rtx_composite.h"
 #include "rtx_demodulate.h"
 #include "rtx_dlfg.h"
+#include "rtx_fork_fsr.h"
 #include "rtx_neural_radiance_cache.h"
 #include "rtx_ray_reconstruction.h"
 #include "../util/util_global_time.h"
@@ -46,8 +47,14 @@
 #include "rtx_sparse_rendering.h"
 #include "rtx_numos_settings.h"
 #include "rtx_vram_budget.h"
+#include "rtx_xess.h"
 
 namespace dxvk {
+  // Declared in rtx_fork_hooks.h, which is too heavy to include here. Implemented in rtx_fork_fsr.cpp.
+  namespace fork_hooks {
+    bool fsrUpscalerAvailable();
+  }
+
   namespace {
     // Sets the sky's GPU cost level (rtx.atmosphere.qualityLevel): 0 is High, 1 Medium, 2 Low.
     void setNumosQualityLevel(int32_t level) {
@@ -493,6 +500,9 @@ namespace dxvk {
         // updatePresetFromUpscaler just needs to be called in the right places).
         RtxOptions::nisPreset.setDeferred(NisPreset::Performance);
         RtxOptions::taauPreset.setDeferred(TaauPreset::Performance);
+        // Without DLSS, replaceUnsupportedUpscaler selects FSR or XeSS, so their presets match the resolution scale.
+        DxvkFSR::FSROptions::preset.setDeferred(FSRPreset::Performance);
+        DxvkXeSS::XessOptions::preset.setDeferred(XeSSPreset::Performance);
       }
 
       // figure out how much vidmem we have
@@ -752,6 +762,26 @@ namespace dxvk {
     
     RtxOptions::upscalerType.setDeferred(UpscalerType::DLSS);
     reflexMode.setDeferred(ReflexMode::LowLatency);
+  }
+
+  void RtxOptions::replaceUnsupportedUpscaler(DxvkDevice* device) {
+    DxvkObjects* common = device->getCommon();
+    if (upscalerType() != UpscalerType::DLSS || common->metaDLSS().supportsDLSS()) {
+      return;
+    }
+
+    UpscalerType replacement = UpscalerType::TAAU;
+    const char* replacementName = "TAA-U";
+    if (fork_hooks::fsrUpscalerAvailable() && common->metaFSR().canUpscale()) {
+      replacement = UpscalerType::FSR;
+      replacementName = "FSR";
+    } else if (common->metaXeSS().supportsXeSS()) {
+      replacement = UpscalerType::XeSS;
+      replacementName = "XeSS";
+    }
+
+    ONCE(Logger::info(str::format("[RTX] DLSS is not supported on this device, so the upscaler is ", replacementName, ".")));
+    upscalerType.setDeferred(replacement);
   }
 
   std::string RtxOptions::getCurrentDirectory() {

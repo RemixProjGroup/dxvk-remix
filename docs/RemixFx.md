@@ -886,11 +886,13 @@ the log.
 An external effect is also governed by **Post FX Enabled**, the stack's master
 switch for optional effects.
 
-`effectEnabledStates`, `effectParameterValues`, `effectSearchPath` and
-`slangCompilerPath` are read only when effects are loaded: on first use, on
-**Reload External Effects**, on a hot reload, and after the device is
-recreated. Setting them at any other time, from a config file or the Remix
-API, takes effect at the next load. The other options are read every frame.
+`effectSearchPath` and `slangCompilerPath` are read only when effects are
+loaded: on first use, on **Reload External Effects**, on a hot reload, and
+after the device is recreated. Setting them at any other time, from a config
+file or the Remix API, takes effect at the next load. `effectEnabledStates` and
+`effectParameterValues` are read at every load and are also applied to the
+loaded effects at the end of the frame they change in. The other options are
+read every frame.
 
 ---
 

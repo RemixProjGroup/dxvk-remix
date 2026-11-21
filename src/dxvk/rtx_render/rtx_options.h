@@ -2027,6 +2027,9 @@ namespace dxvk {
 
     static void resetUpscaler();
 
+    // Replaces DLSS when it is selected but unsupported, with FSR, then XeSS, then TAA-U, whichever the device supports first.
+    static void replaceUnsupportedUpscaler(DxvkDevice* device);
+
     static void Create() {
       if (s_instance == nullptr) {
         s_instance = new RtxOptions();

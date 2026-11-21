@@ -22,6 +22,8 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <mutex>
 #include <vector>
 #include <unordered_map>
 #include "../util/rc/util_rc_ptr.h"
@@ -80,6 +82,43 @@ struct LightIdentityGpuEntry {
   uint32_t index;
 };
 
+// A copy of one light's state for the light debug view.
+// The view reads these copies, so it never touches light storage that the render thread changes.
+struct LightDebugInfo {
+  RtLightType type = RtLightType::Sphere;
+  Vector4 colorAndIntensity = Vector4(0.0f);
+  Vector3 position = Vector3(0.0f);
+  Vector3 direction = Vector3(0.0f);
+  Vector3 radiance = Vector3(0.0f);
+
+  // Shape parameters.
+  // The sphere and cylinder use radius, the cylinder also uses axis and axisLength.
+  // The rect uses xAxis, yAxis and dimensions, the disk uses them with dimensions holding its half-dimensions.
+  float radius = 0.0f;
+  Vector3 axis = Vector3(0.0f);
+  float axisLength = 0.0f;
+  Vector3 xAxis = Vector3(0.0f);
+  Vector3 yAxis = Vector3(0.0f);
+  Vector2 dimensions = Vector2(0.0f);
+
+  bool shapingSupported = false;
+  bool shapingEnabled = false;
+  Vector3 shapingDirection = Vector3(0.0f);
+  float shapingCosConeAngle = 1.0f;
+  float shapingConeSoftness = 0.0f;
+  float shapingFocusExponent = 0.0f;
+
+  float volumetricRadianceScale = 1.0f;
+  XXH64_hash_t initialHash = 0;
+  XXH64_hash_t transformedHash = 0;
+  uint32_t frameLastTouched = 0;
+
+  bool hasReplacement = false;
+  size_t replacementIndex = 0;
+  bool isReplacementRoot = false;
+  PrimInstance::Type replacementRootType = PrimInstance::Type::None;
+};
+
 struct LightManager : public CommonDeviceObject {
   // The external-light hooks in rtx_fork_light.cpp use the private external-light state.
   friend void fork_hooks::flushPendingLightMutations(LightManager&);
@@ -131,6 +170,7 @@ public:
   const DomeLightArgs& getDomeLightArgs();
 
   void clear();
+  // Requests a clear of the lights and the fallback light, which the render thread applies in its next prepareSceneData.
   void clearFromUIThread();
 
   void garbageCollection(RtCamera& camera);
@@ -220,11 +260,18 @@ private:
   std::vector<uint16_t> m_lightMappingData{};
   std::vector<LightIdentityGpuEntry> m_lightIdentityData{};
 
-  // Mutex to prevent the debugging UI from accessing the light data after it's been deleted.
+  // The light debug view's copy of this frame's lights, built by prepareSceneData while the view is enabled.
+  // The UI thread reads it while the render thread replaces it, so both hold m_lightUIMutex.
+  std::vector<LightDebugInfo> m_lightDebugSnapshot{};
   mutable std::mutex m_lightUIMutex;
-  std::unique_lock<std::mutex> m_lightDebugUILock = std::unique_lock<std::mutex>(m_lightUIMutex, std::defer_lock);
+
+  // Set by clearFromUIThread and applied on the render thread at the start of prepareSceneData.
+  std::atomic<bool> m_clearRequested { false };
 
   bool getActiveDomeLight(DomeLight& lightOut);
+
+  // Copies m_linearizedLights into m_lightDebugSnapshot while the light debug view is enabled.
+  void updateDebugSnapshot();
 
   void garbageCollectionInternal();
 

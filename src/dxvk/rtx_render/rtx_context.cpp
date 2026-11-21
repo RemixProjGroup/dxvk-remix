@@ -606,9 +606,7 @@ namespace dxvk {
       m_frameLastInjected = m_device->getCurrentFrameId();
     }
 
-    if (RtxOptions::upscalerType() == UpscalerType::DLSS && !common->metaDLSS().supportsDLSS()) {
-      RtxOptions::upscalerType.setDeferred(UpscalerType::TAAU);
-    }
+    RtxOptions::replaceUnsupportedUpscaler(m_device.ptr());
 
     if (DxvkDLFG::enable() && !common->metaDLFG().supportsDLFG()) {
       DxvkDLFG::enable.setDeferred(false);
