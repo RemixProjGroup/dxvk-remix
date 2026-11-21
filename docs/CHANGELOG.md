@@ -104,6 +104,17 @@ When a plugin registered the game's own D3D9 device, the begin-scene callback fi
 - Commits: the commit that adds this entry.
 - Docs: [RemixApi.md](RemixApi.md), [RemixApi-Plugin-Guide.md](../documentation/RemixApi-Plugin-Guide.md), [RemixApiChangelog.md](../documentation/RemixApiChangelog.md)
 
+### Release packages ship the D3D11 and DXGI forwarders
+CI builds the runtime with the D3D11 and DXGI modules, and the x64 package has `d3d11.dll` and `dxgi.dll` in a `d3d11-forwarders` folder, so Remix API plugins for D3D11 games can use a release build. They are not next to `d3d9.dll`, because any D3D11 game that finds them in its folder runs its D3D11 calls through Remix, so a plugin's install copies them in on purpose. The x86 package does not have them.
+- Options: none. The meson defaults stay off for local builds. `build_common.ps1`'s `PerformBuild` takes `-ExtraMesonArgs` for CI.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApi-Migration.md](RemixApi-Migration.md#47-the-d3d11-host-path), [RemixApi-Plugin-Guide.md](../documentation/RemixApi-Plugin-Guide.md#d3d11-host)
+
+### Fix: release packages ship the NUMOS data and the crash handler
+The CI packages left out the `numos` folder (the NUMOS shaders and night sky data) and `crashpad_handler.exe`, which the runtime loads from the folder that holds `d3d9.dll`, so a release build ran without NUMOS shaders and could not write crash dumps. The x64 package has both next to `d3d9.dll`, and the x86 package has both in `.trex`.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-18
 
 ### Remix API: second texture coordinate set and detail layers

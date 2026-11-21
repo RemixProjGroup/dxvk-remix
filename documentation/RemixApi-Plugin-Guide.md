@@ -243,7 +243,9 @@ drops everything you created, so call it only when your plugin is done.
 A D3D11 game registers its `ID3D11Device` once on its render thread with `remixapi_RegisterD3D11Device`, skips
 `Startup`, and ends each frame with `remixapi_RenderD3D11(backBufferTexture, 1)` followed by its own swapchain
 `Present`. `Present` returns `REMIX_DEVICE_WAS_NOT_REGISTERED` on this path. The runtime must be built with the
-D3D11 and DXGI modules. This path also has GPU texture import and GPU UI overlays.
+D3D11 and DXGI modules, and the game must load the runtime's `d3d11.dll` and `dxgi.dll`. Release packages have both
+in the x64 package's `d3d11-forwarders` folder. Your plugin's install steps copy them next to `d3d9.dll`. This path
+also has GPU texture import and GPU UI overlays.
 [RemixApi-Migration.md](../docs/RemixApi-Migration.md#47-the-d3d11-host-path) and
 [api-host-path-migration.md](../docs/api-host-path-migration.md) describe it.
 

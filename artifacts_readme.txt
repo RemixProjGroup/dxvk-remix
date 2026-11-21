@@ -24,6 +24,10 @@ Notes:
   bridge32.log and bridge64.log for a 32-bit game) to bug reports, and after
   a crash the newest .dmp file from rtx-remix/logs/.sentry-native/reports.
 - Bugs go to https://github.com/RemixProjGroup/dxvk-remix/issues, not to NVIDIA.
+- The d3d11-forwarders folder of the x64 package holds d3d11.dll and
+  dxgi.dll for Remix API plugins that render a D3D11 game. Copy them next to
+  d3d9.dll only when a plugin's instructions say so. With them in its folder,
+  any D3D11 game runs its D3D11 calls through Remix, without path tracing.
 
 Licenses and credits:
 

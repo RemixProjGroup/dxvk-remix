@@ -831,6 +831,18 @@ if dxvk_is_ninja or dxvk_is_woa_ec
       )
     endif
 
+    # The D3D11 and DXGI forwarders go in a subfolder of the package, not next to d3d9.dll.
+    # Any D3D11 game that finds them beside its executable runs on DXVK's D3D11, so only a Remix API D3D11 host copies them in.
+    if target_suffix == 'output' and get_option('enable_d3d11') and get_option('enable_dxgi')
+      foreach forwarder : [ 'd3d11', 'dxgi' ]
+        meson.add_install_script(
+          join_paths(global_src_root_norm, 'scripts-common/install_file_in_dir.bat'),
+          join_paths(current_build_dir_norm, 'src', forwarder, forwarder + '.dll'), join_paths(output_path, 'd3d11-forwarders'),
+          install_tag: target_suffix
+        )
+      endforeach
+    endif
+
   endforeach
 
   # generate VS project files for ninja

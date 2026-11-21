@@ -108,6 +108,8 @@ function PerformBuild {
 
 		[string[]]$InstallTags,
 
+		[string[]]$ExtraMesonArgs,
+
 		[bool]$ConfigureOnly = $false,
 
 		[bool]$ShadersOnly = $false,
@@ -139,6 +141,9 @@ function PerformBuild {
 		} Else { If ( $BuildArch -eq "arm64" ) {
 			$mesonArgs += @("--cross-file", "build-wina64.txt")
 		}}
+		if ( $ExtraMesonArgs ) {
+			$mesonArgs += $ExtraMesonArgs
+		}
 
 		& meson setup $mesonArgs
 	Pop-Location

@@ -47,7 +47,7 @@ jobs:
       run: |
         Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
         . .\build_common.ps1
-        PerformBuild -BuildFlavour ${{matrix.build-flavour}} -BuildSubDir ${{matrix.output-subdir}} -Backend ninja -EnableTracy false copy_output
+        PerformBuild -BuildFlavour ${{matrix.build-flavour}} -BuildSubDir ${{matrix.output-subdir}} -Backend ninja -EnableTracy false copy_output -ExtraMesonArgs '-Denable_d3d11=true','-Denable_dxgi=true'
 
     - name: Upload build logs
       if: ${{ always() }}
@@ -73,20 +73,25 @@ jobs:
         name: rtx-remix-for-x64-games-${{github.run_number}}-${{env.GITHUB_SHA_SHORT}}-${{matrix.build-flavour}}
         path: |
           _output\*.dll
+          _output\*.exe
           _output\*.pdb
           _output\*.txt
           _output\LICENSE
           _output\LICENSE-MIT
           _output\CREDITS.md
           _output\usd\*
+          _output\numos\**
+          _output\d3d11-forwarders\*
 
     - name: Move DXVK
       shell: pwsh
       run: |
         mkdir _output\.trex
         Move-Item -Path _output\*.dll -Destination _output\.trex\
+        Move-Item -Path _output\*.exe -Destination _output\.trex\
         Move-Item -Path _output\*.pdb -Destination _output\.trex\
         Move-Item -Path _output\usd -Destination _output\.trex\usd
+        Move-Item -Path _output\numos -Destination _output\.trex\numos
 
     - name: Build Bridge
       shell: pwsh
@@ -118,3 +123,4 @@ jobs:
           _output\.trex\*.exe
           _output\.trex\*.pdb
           _output\.trex\usd\*
+          _output\.trex\numos\**

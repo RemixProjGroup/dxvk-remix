@@ -442,7 +442,9 @@ if (pfnDrawOverlayD3D11(&hud, 1) != REMIXAPI_ERROR_CODE_SUCCESS) {
 
 A D3D11 game can render through its own device instead of the API's D3D9 device. The runtime must be built with the
 D3D11 and DXGI modules (`enable_d3d11`, `enable_dxgi`), and the game must load the runtime's `d3d11.dll` and
-`dxgi.dll`, which forward to `d3d9.dll`. `remixapi_RegisterD3D11Device(device)` takes the game's `ID3D11Device*`,
+`dxgi.dll`, which forward to `d3d9.dll`. Release packages build both modules and ship the two forwarders in the x64
+package's `d3d11-forwarders` folder, so a plugin's install copies them next to `d3d9.dll` on purpose.
+`remixapi_RegisterD3D11Device(device)` takes the game's `ID3D11Device*`,
 once, on the game's render thread. Skip `Startup`. Each frame, after your scene calls,
 `remixapi_RenderD3D11(destination, render)` queues Remix's composition into a single-sample render target of the
 same device. The game's next `Present` of that swapchain ends the frame. `render = false` keeps the game's raster

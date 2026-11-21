@@ -161,6 +161,10 @@ NVIDIA-only features (DLSS, Ray Reconstruction, DLSS-NR).
 The runtime loads many DLLs that ship beside `d3d9.dll`, so a partial copy fails to load. Remix mods go in
 `rtx-remix/mods/`; see [`documentation/RemixModsForPlayers.md`](documentation/RemixModsForPlayers.md).
 
+The x64 package's `d3d11-forwarders` folder holds `d3d11.dll` and `dxgi.dll` for Remix API plugins that render a
+D3D11 game. Copy them next to `d3d9.dll` only when a plugin's instructions say so: any D3D11 game that finds them in
+its folder runs its D3D11 calls through Remix, without path tracing.
+
 ## Graphics presets
 
 The preset is in the Alt+X menu. **Auto** (the default) picks one for your GPU:
