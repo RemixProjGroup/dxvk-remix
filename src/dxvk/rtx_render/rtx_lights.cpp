@@ -1145,7 +1145,15 @@ void RtLight::applyTransform(const Matrix4& lightToWorld) {
 }
 
 bool RtLight::getGoboGPUData(RtLightGoboGPUData& goboData) const {
-  if (m_gobo == nullptr || m_goboTextureIndex == BINDING_INDEX_INVALID || m_type != RtLightType::Sphere || !LightManager::enableGobos()) {
+  if (m_goboTextureIndex == BINDING_INDEX_INVALID || !LightManager::enableGobos()) {
+    return false;
+  }
+
+  return calcGoboProjection(goboData);
+}
+
+bool RtLight::calcGoboProjection(RtLightGoboGPUData& goboData) const {
+  if (m_gobo == nullptr || m_type != RtLightType::Sphere) {
     return false;
   }
 

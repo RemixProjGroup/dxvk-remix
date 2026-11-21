@@ -698,6 +698,14 @@ struct RtLight {
     m_goboTextureIndex = textureIndex;
   }
 
+  uint32_t getGoboTextureIndex() const {
+    return m_goboTextureIndex;
+  }
+
+  // Computes the gobo's projection frame in the form the GPU decodes it, whether or not the gobo is rendered this frame.
+  // Returns false when the light has no gobo or is not a sphere light with shaping.
+  bool calcGoboProjection(RtLightGoboGPUData& goboData) const;
+
   uint32_t isStaticCount = 0;
   bool isDynamic = false;
   // A sky provider's own light (NUMOS sun, moons, lightning): physical already, so the host calibration
