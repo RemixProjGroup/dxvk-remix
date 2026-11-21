@@ -55,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entry point for `remix_replay --identity-trace`, not part of the plugin
   contract; `remix_c.h` and `remixapi_Interface` are unchanged.
 
+### Fixed
+- 2026-11-21: the bridge client's `CreateMesh` no longer hangs when
+  `remixapi_MeshInfo::pNext` is set. It drops each mesh extension with a warning
+  and sends the mesh. The surface is unchanged.
+- 2026-11-21: the bridge client sends a skinned mesh's blend weights and blend
+  indices as `blendWeights_count` and `blendIndices_count` elements, the totals
+  `remix_c.h` defines. It multiplied them by `bonesPerVertex` and the vertex
+  count again and read past the caller's arrays. The surface is unchanged.
+
 ### Changed
 - 2026-10-30: `CreateMaterial` with a live hash no longer ignores the new data. An
   identical description returns at once with no rebuilds, and different data

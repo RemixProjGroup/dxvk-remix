@@ -374,12 +374,6 @@ bool MaterialInfoPortal::compare(const RemixApiT& me, const RemixApiT& other) co
 
 
 using MeshInfo = Expected<remixapi_MeshInfo>;
-static inline uint32_t blendWeightsPerVtx(const remixapi_MeshInfoSkinning& skinning) {
-  return skinning.blendWeights_count * skinning.bonesPerVertex;
-}
-static inline uint32_t blendIndicesSizePerVtx(const remixapi_MeshInfoSkinning& skinning) {
-  return skinning.blendIndices_count * skinning.bonesPerVertex * sizeof(uint32_t);
-}
 void MeshInfo::init() {
   sType = REMIXAPI_STRUCT_TYPE_MESH_INFO;
   pNext = nullptr;
@@ -417,18 +411,16 @@ void MeshInfo::init() {
       remixapi_MeshInfoSkinning& skinning = surface.skinning_value;
       populateReasonableVal(skinning.bonesPerVertex);
       // Blend Weights
-      populateReasonableVal(skinning.blendWeights_count);
-      const size_t blendWeightsPerVtx = skinning.blendWeights_count * skinning.bonesPerVertex;
-      const size_t numBlendWeights = blendWeightsPerVtx * surface.vertices_count;
+      skinning.blendWeights_count = skinning.bonesPerVertex * surface.vertices_count;
+      const size_t numBlendWeights = skinning.blendWeights_count;
       auto* pBlendWeights = new float[numBlendWeights];
       for(size_t iBW = 0; iBW < numBlendWeights; ++iBW) {
         populateVal(pBlendWeights[iBW]);
       }
       skinning.blendWeights_values = pBlendWeights;
       // Blend Indices
-      populateReasonableVal(skinning.blendIndices_count);
-      const size_t blendIdxsPerVtx = skinning.blendIndices_count * skinning.bonesPerVertex;
-      const size_t numBlendIdxs = blendIdxsPerVtx * surface.vertices_count;
+      skinning.blendIndices_count = skinning.bonesPerVertex * surface.vertices_count;
+      const size_t numBlendIdxs = skinning.blendIndices_count;
       auto* pBlendIdxs = new uint32_t[numBlendIdxs];
       for(size_t iBI = 0; iBI < numBlendIdxs; ++iBI) {
         populateVal(pBlendIdxs[iBI]);
@@ -475,14 +467,12 @@ bool MeshInfo::compare(const RemixApiT& me, const RemixApiT& other) const {
       SIMPLE_COMPARE(meSkinning, otherSkinning, bonesPerVertex);
       // Blend Weights
       SIMPLE_COMPARE(meSkinning, otherSkinning, blendWeights_count);
-      const size_t blendWeightsPerVtx = meSkinning.blendWeights_count * meSkinning.bonesPerVertex;
-      const size_t numBlendWeights = blendWeightsPerVtx * meSurface.vertices_count;
+      const size_t numBlendWeights = meSkinning.blendWeights_count;
       PTR_COMPARE(meSkinning, otherSkinning, blendWeights_values, numBlendWeights * sizeof(float));
       // Blend Indices
       SIMPLE_COMPARE(meSkinning, otherSkinning, blendIndices_count);
-      const size_t blendIdxsPerVtx = meSkinning.blendIndices_count * meSkinning.bonesPerVertex;
-      const size_t numBlendIdxs = blendIdxsPerVtx * meSurface.vertices_count;
-      PTR_COMPARE(meSkinning, otherSkinning, blendIndices_values, numBlendWeights * sizeof(uint32_t));
+      const size_t numBlendIdxs = meSkinning.blendIndices_count;
+      PTR_COMPARE(meSkinning, otherSkinning, blendIndices_values, numBlendIdxs * sizeof(uint32_t));
     }
     SIMPLE_COMPARE(meSurface, otherSurface, material);
   }

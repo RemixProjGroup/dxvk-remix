@@ -8,6 +8,10 @@
 namespace dxvk {
   class DxvkContext;
 
+  // The notes above the Sky section's tab bar: a shader load failure and the weather preset that sets
+  // settings. Call it before the tab bar opens, since text inside a tab bar overlaps the first tab's controls.
+  void showNumosNotes(DxvkContext* ctx);
+
   // The Sky, Clouds, Haze, Night and Weather tab items (call inside the Sky section's tab bar).
   void showNumosTabs(DxvkContext* ctx);
 

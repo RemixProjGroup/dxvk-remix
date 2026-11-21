@@ -1,3 +1,9 @@
+// Parts of this file are adapted from pbrt-v4 (https://github.com/mmp/pbrt-v4): LightBounds in
+// src/pbrt/lights.h and CompactLightBounds in src/pbrt/lightsamplers.h. They are changed for this project.
+// pbrt is Copyright(c) 1998-2020 Matt Pharr, Wenzel Jakob, and Greg Humphreys.
+// The pbrt source code is licensed under the Apache License, Version 2.0 (SPDX: Apache-2.0).
+// See ThirdPartyLicenses.txt.
+
 #pragma once
 
 // Light BVH (PBRT 4ed BVHLightSampler) as a selectable alternative to RTXDI for direct lighting and

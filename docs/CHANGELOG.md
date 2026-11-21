@@ -28,6 +28,35 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-21
+
+### Fix: D3D9 suite fails hung and crashed runs
+`tools/remix_replay/d3d9v2_scenarios.sh` passed a run's "the run finishes" check whenever the testhost had printed "frames done", so a run that then hung until the timeout, was killed or exited with an error still counted as finished. The run step now records the testhost's exit code (and a timeout) in the run's `out-` file, and the check also requires exit code 0.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### Fix: NUMOS sky panel note overlapping the first control
+While a weather preset was showing, the note that its settings are set by the preset was drawn inside the Sky section's tab bar, so it overlapped the first control of the open tab (Sun Intensity on the Sky tab). The note and the shader load warning now sit above the tab bar.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### Fix: weather preset Sunlight strength stuck at zero
+In the weather preset editor, a color-and-strength row such as Sunlight split its value into a color and a strength, so a strength of 0 stored black and lost the color, and no later strength could bring the light back. The row now keeps its last nonzero color (white if it never had one) and builds the value from it, so raising the strength from 0 restores the light with its hue.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### Fix: bridge CreateMesh hang with a mesh extension
+The bridge client's `CreateMesh` walked the `pNext` chain without advancing, so any mesh created with a non-null `remixapi_MeshInfo::pNext` hung the game. It now drops each mesh extension with a warning and sends the mesh.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApi-Plugin-Guide.md](../documentation/RemixApi-Plugin-Guide.md)
+
+### Fix: bridge skinned meshes
+The bridge client sized a skinned mesh's blend weights and blend indices as `count * bonesPerVertex * vertexCount`, but the API's counts are already the totals, so it read far past the plugin's arrays and could crash or send garbage. It now sends exactly `blendWeights_count` floats and `blendIndices_count` indices, so skinned meshes work through the bridge.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApi-Plugin-Guide.md](../documentation/RemixApi-Plugin-Guide.md)
+
 ## 2026-11-18
 
 ### Remix API: second texture coordinate set and detail layers

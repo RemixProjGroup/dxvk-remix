@@ -1,4 +1,13 @@
 /*
+* Parts of this file are adapted from pbrt-v4 (https://github.com/mmp/pbrt-v4): BVHLightSampler and
+* CompactLightBounds in src/pbrt/lightsamplers.h and .cpp, LightBounds in src/pbrt/lights.h, and
+* OctahedralVector in src/pbrt/util/vecmath.h. They are changed for this project and rewritten in Slang.
+* pbrt is Copyright(c) 1998-2020 Matt Pharr, Wenzel Jakob, and Greg Humphreys.
+* The pbrt source code is licensed under the Apache License, Version 2.0 (SPDX: Apache-2.0).
+* See ThirdPartyLicenses.txt.
+*/
+
+/*
 * Light BVH sampling.
 *
 * GPU half of PBRT 4ed BVHLightSampler (https://pbr-book.org/4ed/Light_Sources/Light_Sampling).

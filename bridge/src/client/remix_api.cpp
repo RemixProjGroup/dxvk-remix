@@ -258,6 +258,7 @@ remixapi_ErrorCode REMIXAPI_CALL remixapi_CreateMesh(
           break;
         }
       }
+      infoItr = pNext;
     }
     sendHandle(c, newHandle);
   }

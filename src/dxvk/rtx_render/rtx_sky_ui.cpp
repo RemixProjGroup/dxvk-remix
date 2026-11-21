@@ -71,6 +71,9 @@ namespace dxvk {
     skyModeCombo.getKey(&RtxOptions::skyModeObject());
     RemixGui::SetTooltipToLastWidgetOnHover("Original game sky uses the game's skybox. Numos creates a sky with atmosphere, clouds, and weather.");
 
+    if (skyProvider) {
+      showNumosNotes(ctx);
+    }
     if (ImGui::BeginTabBar("SkyPages", ImGuiTabBarFlags_FittingPolicyScroll)) {
       if (skyProvider) {
         showNumosTabs(ctx);

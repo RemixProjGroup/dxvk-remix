@@ -1,6 +1,7 @@
 #include "rtx_numos_ui.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cfloat>
 #include <climits>
@@ -10,6 +11,7 @@
 #include <limits>
 #include <random>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "imgui/imgui.h"
@@ -831,7 +833,7 @@ namespace dxvk {
     }
   }
 
-  void showNumosTabs(DxvkContext* ctx) {
+  void showNumosNotes(DxvkContext* ctx) {
     beginPage(ctx);
     RtxNumos& numosObject = ctx->getCommonObjects()->metaNumos();
     if (!numosObject.gpu().shadersValid()) {
@@ -842,6 +844,10 @@ namespace dxvk {
                          "Presets window (Weather tab).",
                          g_weatherPreset->name.c_str());
     }
+  }
+
+  void showNumosTabs(DxvkContext* ctx) {
+    beginPage(ctx);
     if (ImGui::BeginTabItem("Sky")) {
       showSkyTab();
       ImGui::EndTabItem();
@@ -1030,6 +1036,9 @@ namespace dxvk {
       std::string seedStatus;
       bool confirmDelete = false;
       bool confirmImport = false;
+
+      // The last nonzero color of each color-and-strength row, normalized to a largest channel of 1, by setting index.
+      std::unordered_map<size_t, std::array<float, 3>> rowColours;
     };
 
     PresetWindow& presetWindow() {
@@ -1204,7 +1213,7 @@ namespace dxvk {
     // Unticked, the control shows the sky's value read-only, in the hint color on a faint field.
     // A multiplier shows the value it gives over the user's setting, and an edit stores the
     // shown value as an absolute one.
-    void presetRow(NumosWeather& weather, NumosWeather::Preset& p, const PresetRow& row) {
+    void presetRow(NumosWeather& weather, NumosWeather::Preset& p, PresetWindow& window, const PresetRow& row) {
       const std::string key = std::string(kKeyPrefix) + row.name;
       const numos::SettingInfo* info = numos::findSetting(key);
       const ImVec4 hint = hintTextColor();
@@ -1298,16 +1307,24 @@ namespace dxvk {
           v = numos::Vector3(c[0], c[1], c[2]);
         } else {
           // An HDR value split into a color and a strength (its largest channel).
-          const float strength = std::max(std::max(v.x, v.y), std::max(v.z, 1e-4f));
-          float c[3] = { v.x / strength, v.y / strength, v.z / strength };
+          // A black value shows the row's last nonzero color, or white, so a strength of zero keeps the hue.
+          auto& hue = window.rowColours.try_emplace(i, std::array<float, 3>{ 1.0f, 1.0f, 1.0f }).first->second;
+          const float strength = std::max(std::max(v.x, v.y), std::max(v.z, 0.0f));
+          if (strength > 0.0f) {
+            hue = { v.x / strength, v.y / strength, v.z / strength };
+          }
+          float c[3] = { hue[0], hue[1], hue[2] };
           float s = strength;
           edited = ImGui::ColorEdit3("##value", c, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs);
           ImGui::SameLine();
           ImGui::SetNextItemWidth(controlWidth);
           const std::string format = std::string("strength ") + row.format;
           edited |= ImGui::DragFloat("##strength", &s, row.speed, row.mn, row.mx, format.c_str(), kClamp);
-          const float cmax = std::max(std::max(c[0], c[1]), std::max(c[2], 1e-4f));
-          v = numos::Vector3(c[0] * s / cmax, c[1] * s / cmax, c[2] * s / cmax);
+          const float cmax = std::max(std::max(c[0], c[1]), c[2]);
+          if (cmax > 0.0f) {
+            hue = { c[0] / cmax, c[1] / cmax, c[2] / cmax };
+          }
+          v = numos::Vector3(hue[0] * s, hue[1] * s, hue[2] * s);
         }
         if (edited && own) {
           presetField<numos::Vector3>(*p.values, *info) = v;
@@ -1570,7 +1587,7 @@ namespace dxvk {
             if ((row.follow > 0 && !follows) || (row.follow < 0 && follows)) {
               continue;
             }
-            presetRow(weather, p, row);
+            presetRow(weather, p, window, row);
           }
           ImGui::EndTable();
         }

@@ -145,8 +145,8 @@ exports, such as retained instances or host settings.
 
 Chained structs: the client forwards the opaque, subsurface, translucent and portal extensions of a material; the
 object picking, blend, bone transform and particle system extensions of an instance; and every light shape. It drops
-every other extension with a warning. Keep `remixapi_MeshInfo::pNext` null through the bridge: the client forwards no
-mesh extension. Send static meshes only. The bridge's mesh serializer does not handle skinning data yet.
+every other extension with a warning, including every extension chained to `remixapi_MeshInfo::pNext`. The client forwards each surface's skinning data (`remixapi_MeshInfoSkinning`), with
+`blendWeights_count` and `blendIndices_count` set to `bonesPerVertex * vertices_count` as `remix_c.h` requires.
 
 Handles work differently. Through the bridge, a handle is a number the client counts up, not the `hash` you passed,
 so keep the handle each create call returns and pass that.

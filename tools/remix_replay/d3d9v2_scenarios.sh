@@ -17,6 +17,7 @@
 #        recorded run (a cold cache can leave a whole run without a ray traced interval).
 # FRAMES frames per run (default 720: the [D3D9v2] and [SceneStats] lines come every 300 frames, so the last full
 #        interval, frames 300-599, holds each scenario's event at frame 450).
+# TIMEOUT seconds per run (default 600). A run that times out or exits with a nonzero code fails.
 # WAIT_BUSY 1: wait for another replay or testhost run to end instead of stopping.
 # STRESS 1: every run with stress mode on (rtx.debug.stress.*), once per seed in SEEDS
 #        (default "1"), each seed's logs and checks in $OUT/stress-seed<n>. The checks are the same, plus a [Stress] line
@@ -291,6 +292,9 @@ for sc in $SCENARIOS; do
   fi
   timeout $TIMEOUT "$TH" --runtime "$RT" --frames $((FRAMES + EXTRA_FRAMES)) "${ARGS[@]}" > "$OUT/out-$name.txt" 2>&1
   rc=$?
+  # The checks read these lines: a run passes only if it printed "frames done" and exited with 0.
+  [ $rc = 124 ] && echo "testhost timed out after ${TIMEOUT} s" >> "$OUT/out-$name.txt"
+  echo "testhost exit $rc" >> "$OUT/out-$name.txt"
   unset DXVK_DUMP_SCREENSHOT_FRAME DXVK_SCREENSHOT_PATH
   if [ -f "$LOG" ]; then cp "$LOG" "$OUT/log-$name.txt"; else : > "$OUT/log-$name.txt"; fi
   echo "=== $name exit $rc"
@@ -329,6 +333,8 @@ class Log:
         self.lines = read(os.path.join(folder, f"log-{sc}-{mode}.txt"))
         self.out = read(os.path.join(folder, f"out-{sc}-{mode}.txt"))
         self.done = any("frames done" in l for l in self.out)
+        # The testhost's exit code that the run step appends (124: timed out). None if the line is missing.
+        self.exit = next((int(m.group(1)) for m in (re.match(r"testhost exit (\d+)$", l) for l in self.out) if m), None)
         self.skip = next((l for l in self.out if l.startswith("SKIP")), None)
         # [D3D9v2] inputs intervals, each with the notEligible line printed right after it (none when empty).
         self.inputs = []
@@ -550,8 +556,9 @@ for sc in sys.argv[3:]:
     if on.skip:
         report("SKIP", sc, "-", on.skip)
         continue
-    if not on.done:
-        report("FAIL", sc, "run", "the run finishes (testhost: ... frames done)", f"{on.done}")
+    if not on.done or on.exit != 0:
+        report("FAIL", sc, "run", "the run finishes (testhost: ... frames done) and the testhost exits with 0",
+               f"done={on.done} exit={on.exit}" + (" (timed out)" if on.exit == 124 else ""))
         continue
 
     # Every run, both frontends: backend lines only.
