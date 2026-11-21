@@ -30,8 +30,8 @@ namespace dxvk {
       Vector3 toRemix(const numos::Vector3& v) { return Vector3(v.x, v.y, v.z); }
       numos::Vector3 toNumos(const Vector3& v) { return numos::Vector3(v.x, v.y, v.z); }
 
-      // The settings the user menu shows (showNumosUserHaze and showNumosUserClouds in rtx_numos_ui.cpp).
-      // They are player settings, so they save to user.conf.
+      // The settings the user menu shows (showNumosUserHaze, showNumosUserClouds and showNumosUserNight in
+      // rtx_numos_ui.cpp). They are player settings, so they save to user.conf.
       constexpr const char* kUserSettingKeys[] = {
         "rtx.atmosphere.aerialPerspective",
         "rtx.atmosphere.aerosolDensity",
@@ -47,6 +47,9 @@ namespace dxvk {
         "rtx.atmosphere.cloudPerformancePreset",
         "rtx.atmosphere.cloudMarchRate",
         "rtx.atmosphere.nightGainStops",
+        "rtx.atmosphere.starGainStops",
+        "rtx.atmosphere.moonlightGainStops",
+        "rtx.atmosphere.moonDiscGainStops",
       };
 
       bool isUserSetting(const numos::SettingInfo& info) {

@@ -637,10 +637,18 @@ namespace dxvk {
     }
 
     void showNightTab() {
-      ImGui::TextWrapped("The night is drawn at its physical brightness, times the Night Gain below. How bright it looks "
-                         "is otherwise the exposure's job (auto-exposure limits and compensation in the tonemapping settings).");
+      ImGui::TextWrapped("The night is drawn at its physical brightness, times the Night Gain and the star and moon gains "
+                         "below. How bright it looks is otherwise the exposure's job (auto-exposure limits and compensation "
+                         "in the tonemapping settings).");
       setting("nightGainStops", "Night Gain", 0.05f, 0.0f, 16.0f, "%.2f stops");
       ImGui::TextDisabled("In force: x%.3g (fades in through twilight)", g_numosOutputs ? double(g_numosOutputs->nightGain) : 1.0);
+      setting("starGainStops", "Star Gain", 0.05f, -16.0f, 16.0f, "%+.2f stops");
+      setting("moonlightGainStops", "Moonlight Gain", 0.05f, -16.0f, 16.0f, "%+.2f stops");
+      setting("moonDiscGainStops", "Moon Disc Gain", 0.05f, -16.0f, 16.0f, "%+.2f stops");
+      ImGui::TextDisabled("In force: stars x%.3g, moonlight x%.3g, moon discs x%.3g",
+                          g_numosOutputs ? double(g_numosOutputs->starGain) : 1.0,
+                          g_numosOutputs ? double(g_numosOutputs->moonlightGain) : 1.0,
+                          g_numosOutputs ? double(g_numosOutputs->moonDiscGain) : 1.0);
       if (ImGui::TreeNode("Stars")) {
         setting("nightSkyStars", "Stars and Milky Way");
         setting("starScintillation", "Twinkle", 0.01f, 0.0f, 4.0f, "%.2f");
@@ -912,6 +920,18 @@ namespace dxvk {
                 "which looks darker on a screen than to your eyes at night. Each step of 1 doubles the brightness. "
                 "Sunlight, sunsets and your own lights are not changed.",
                 0.05f, 0.0f, 10.0f, "+%.1f");
+    userSetting("starGainStops", "Star Brightness",
+                "Brightens or dims the stars and the Milky Way on top of Night Brightness, without changing the moon. "
+                "Each step of 1 doubles the brightness. Daylight is not changed.",
+                0.05f, -8.0f, 8.0f, "%+.1f");
+    userSetting("moonlightGainStops", "Moonlight Brightness",
+                "Brightens or dims the moon's light on the world and the sky, on top of Night Brightness. Lower it if "
+                "the moon is too strong next to the stars. Daylight is not changed.",
+                0.05f, -8.0f, 8.0f, "%+.1f");
+    userSetting("moonDiscGainStops", "Moon Disc Brightness",
+                "Brightens or dims only the moon you see in the sky, not its light, so a blown-out moon can be tamed "
+                "without darkening the night.",
+                0.05f, -8.0f, 8.0f, "%+.1f");
   }
 
   void showNumosUserClouds(DxvkContext* ctx) {

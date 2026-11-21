@@ -30,6 +30,11 @@ Entry format:
 
 ## 2026-11-21
 
+### NUMOS: separate star, moonlight and moon disc brightness
+Night Gain scaled the stars, the Milky Way and the moons by one factor, and the moons and stars were lit by the sun after Sun Intensity and a weather preset's sun illuminance, so raising the stars blew out the moon and raising the sun brightened the night. The whole night sky is now lit by a fixed reference sun (the default sun), and three gains on top of Night Gain set the stars and Milky Way, the moonlight, and the visible moon discs apart. They fade in through twilight like Night Gain and leave daylight unchanged. Exposure follows the moonlight, not the discs. The look at default settings is unchanged; a config with a non-default Sun Intensity or sun illuminance gets a different night (a brighter sun no longer brightens it), which the new gains make up for.
+- Options: added `rtx.atmosphere.starGainStops`, `rtx.atmosphere.moonlightGainStops`, `rtx.atmosphere.moonDiscGainStops` (stops, default 0), in the Sky > Night tab and the user menu's night page.
+- Commits: the commit that adds this entry (NUMOS submodule bump and menu rows).
+
 ### Fix: D3D9 suite fails hung and crashed runs
 `tools/remix_replay/d3d9v2_scenarios.sh` passed a run's "the run finishes" check whenever the testhost had printed "frames done", so a run that then hung until the timeout, was killed or exited with an error still counted as finished. The run step now records the testhost's exit code (and a timeout) in the run's `out-` file, and the check also requires exit code 0.
 - Options: none.
