@@ -50,6 +50,8 @@
 #include <remix/remix_c.h>
 // NV-DXVK end
 
+#include "../dxvk/rtx_render/rtx_fork_hooks.h"
+
 namespace dxvk {
   // HDR10 output (rtx.tonemap.hdrEnabled): whether Windows has HDR turned on for the display showing `window`.
   // Some drivers accept an ST.2084 swap chain even with HDR off (Windows then converts it back to SDR), so
@@ -581,6 +583,7 @@ namespace dxvk {
     // concurrent remixapi_* call (a hard hang: RecursiveSpinlock never sleeps).
     if (m_presentsScene) {
       (void)remixapi_AutoInstancePersistentLights();
+      fork_hooks::nativePresentEndFrame();
     }
     // NV-DXVK end
 

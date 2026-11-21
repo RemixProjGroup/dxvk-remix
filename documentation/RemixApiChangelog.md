@@ -63,6 +63,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   indices as `blendWeights_count` and `blendIndices_count` elements, the totals
   `remix_c.h` defines. It multiplied them by `bonesPerVertex` and the vertex
   count again and read past the caller's arrays. The surface is unchanged.
+- 2026-11-21: the 32-bit bridge forwards `UpdateLightDefinition` and
+  `AutoInstancePersistentLights` to the runtime. They were stubs that did
+  nothing, and `UpdateLightDefinition` returned `GENERAL_FAILURE`, so a
+  32-bit plugin could change a light only by destroying and re-creating it.
+  An update now carries every light shape, as `CreateLight` does, and keeps
+  the light's identity. The client checks the handle and the base `sType` and
+  returns `SUCCESS` without waiting for the server. No struct or table slot
+  changed.
+- 2026-11-21: on the D3D9 host path, the begin-scene callback fires on every
+  frame, not only the first: the device's own `Present` ends the frame. It
+  still fires neither the end-scene nor the present callback.
+- 2026-11-21: `Shutdown` no longer releases a game's own D3D9 device that a
+  plugin registered with `dxvk_RegisterD3D9Device`. It releases only the
+  reference registering took. Devices made through `Startup` or
+  `dxvk_CreateD3D9` are released as before.
 
 ### Changed
 - 2026-10-30: `CreateMaterial` with a live hash no longer ignores the new data. An

@@ -32,6 +32,7 @@
 #include <remix/remix_c.h>
 
 #include "../../d3d9/d3d9_device.h"
+#include "../../d3d9/d3d9_interface.h"
 #include "../../d3d9/d3d9_surface.h"
 #include "../../d3d9/d3d9_swapchain.h"
 #include "../../d3d9/d3d9_texture.h"
@@ -62,10 +63,12 @@ namespace {
   }
 
   // A registered D3D9 device and the IDirect3D9Ex it belongs to.
+  // The host owns the device when it came from the API's own IDirect3D9Ex (Startup or dxvk_CreateD3D9).
+  // Otherwise the device is a game's, and registering holds one reference on its IDirect3D9Ex.
   class ApiD3D9Device final : public RemixApiDevice {
   public:
-    ApiD3D9Device(D3D9DeviceEx* device, IDirect3D9Ex* d3d9)
-      : RemixApiDevice(device->GetDXVKDevice()), m_device(device), m_d3d9(d3d9) {
+    ApiD3D9Device(D3D9DeviceEx* device, IDirect3D9Ex* d3d9, bool hostOwned)
+      : RemixApiDevice(device->GetDXVKDevice()), m_device(device), m_d3d9(d3d9), m_hostOwned(hostOwned) {
       m_device->EnableRemixApiProtection();
     }
 
@@ -125,9 +128,15 @@ namespace {
       return REMIXAPI_ERROR_CODE_SUCCESS;
     }
 
+    // Releases a host-owned device and its IDirect3D9Ex until they are destroyed.
+    // Releases only the reference that registering took when the device is a game's.
     void shutdown() override {
-      while (m_device->Release() != 0) { }
-      while (m_d3d9->Release() != 0) { }
+      if (m_hostOwned) {
+        while (m_device->Release() != 0) { }
+        while (m_d3d9->Release() != 0) { }
+      } else {
+        m_d3d9->Release();
+      }
     }
 
   protected:
@@ -145,6 +154,7 @@ namespace {
   private:
     D3D9DeviceEx* m_device;
     IDirect3D9Ex* m_d3d9;
+    bool          m_hostOwned;
   };
 
   ApiD3D9Device* registeredD3D9() {
@@ -235,7 +245,9 @@ namespace {
     }
     uint32_t width = 0, height = 0;
     outputSize(d3d9Device, width, height);
-    remix_api::registerDevice(std::make_unique<ApiD3D9Device>(dxvkDevice, dxvkD3d9Ex), width, height);
+    const auto* dxvkInterface = dynamic_cast<D3D9InterfaceEx*>(dxvkD3d9Ex);
+    const bool hostOwned = dxvkInterface != nullptr && dxvkInterface->IsCreatedByRemixApi();
+    remix_api::registerDevice(std::make_unique<ApiD3D9Device>(dxvkDevice, dxvkD3d9Ex, hostOwned), width, height);
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 

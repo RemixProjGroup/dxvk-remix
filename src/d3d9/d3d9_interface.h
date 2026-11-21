@@ -131,6 +131,9 @@ namespace dxvk {
 
     Rc<DxvkInstance> GetInstance() { return m_instance; }
 
+    // True when the Remix API created this object for a host (remixapi_Startup or dxvk_CreateD3D9).
+    bool IsCreatedByRemixApi() const { return m_withRemixAPI; }
+
   private:
 
     void CacheModes(D3D9Format Format);

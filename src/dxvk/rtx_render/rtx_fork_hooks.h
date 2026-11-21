@@ -303,6 +303,12 @@ namespace dxvk {
     // Implementation in rtx_fork_api_entry.cpp.
     void presentCallbackDispatch();
 
+    // Ends the frame, so the next API submission fires the beginScene callback again.
+    // Called from the D3D9 swapchain's Present of the scene output, which also ends the frame of a host that
+    // presents with the game's own device.
+    // Implementation in rtx_fork_api_entry.cpp.
+    void nativePresentEndFrame();
+
     // Fills the RegisterCallbacks, AutoInstancePersistentLights and UpdateLightDefinition interface slots.
     // Only these extern "C" functions can be named from another translation unit.
     // remixapi_InitializeLibrary assigns the anonymous-namespace entry points itself.

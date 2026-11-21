@@ -841,6 +841,10 @@ namespace fork_hooks {
     s_inFrame.store(false);
   }
 
+  void nativePresentEndFrame() {
+    s_inFrame.store(false);
+  }
+
   void remixApiVtableInit(remixapi_Interface& interf) {
     interf.RegisterCallbacks              = remixapi_RegisterCallbacks;
     interf.AutoInstancePersistentLights   = remixapi_AutoInstancePersistentLights;

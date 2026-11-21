@@ -63,6 +63,9 @@ namespace Commands {
     RemixApi_MixColorGradePresets,
     RemixApi_GetColorGrade,
     RemixApi_SaveColorGradePreset,
+    // Light updates. Both are asynchronous.
+    RemixApi_UpdateLightDefinition,
+    RemixApi_AutoInstancePersistentLights,
 
     Bridge_SharedHeap_AddSeg,
     Bridge_SharedHeap_Alloc,
@@ -512,6 +515,8 @@ namespace Commands {
     case RemixApi_MixColorGradePresets: return "RemixApi_MixColorGradePresets";
     case RemixApi_GetColorGrade: return "RemixApi_GetColorGrade";
     case RemixApi_SaveColorGradePreset: return "RemixApi_SaveColorGradePreset";
+    case RemixApi_UpdateLightDefinition: return "RemixApi_UpdateLightDefinition";
+    case RemixApi_AutoInstancePersistentLights: return "RemixApi_AutoInstancePersistentLights";
 
     case Bridge_SharedHeap_AddSeg: return "SharedHeap_AddSeg";
     case Bridge_SharedHeap_Alloc: return "SharedHeap_Alloc";

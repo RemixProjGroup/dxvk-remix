@@ -133,10 +133,10 @@ client forwards:
 
 | Table slot | Through the bridge |
 | :-- | :-- |
-| `CreateMaterial`, `DestroyMaterial`, `CreateTexture`, `DestroyTexture`, `CreateMesh`, `DestroyMesh`, `DrawInstance`, `CreateLight`, `DestroyLight`, `DrawLightInstance`, `SetConfigVariable` | Forwarded. The client checks a few arguments and returns without waiting for the server, so a failure on the server shows only in the server's log. |
+| `CreateMaterial`, `DestroyMaterial`, `CreateTexture`, `DestroyTexture`, `CreateMesh`, `DestroyMesh`, `DrawInstance`, `CreateLight`, `DestroyLight`, `DrawLightInstance`, `UpdateLightDefinition`, `AutoInstancePersistentLights`, `SetConfigVariable` | Forwarded. The client checks a few arguments and returns without waiting for the server, so a failure on the server shows only in the server's log. `UpdateLightDefinition` forwards every light shape, as `CreateLight` does. |
 | `SetGameValue`, `GetGameValue` | Forwarded, and they wait for the server's answer. A value longer than 4096 bytes reads as `GENERAL_FAILURE`. |
-| `GetUIState`, `SetUIState`, `AutoInstancePersistentLights`, `UpdateLightDefinition` | Stubs that log a warning once and do nothing. `UpdateLightDefinition` returns `GENERAL_FAILURE`. |
-| `dxvk_CreateD3D9`, `dxvk_RegisterD3D9Device` | Return `GENERAL_FAILURE`: the server registers the game's device itself. |
+| `GetUIState`, `SetUIState` | Stubs that log a warning once and do nothing. |
+| `dxvk_CreateD3D9`, `dxvk_RegisterD3D9Device` | Return `GENERAL_FAILURE`: the server registers the game's device itself. The other `dxvk_` slots are null. `dxvk_GetExternalSwapchain`, `dxvk_GetVkImage` and `dxvk_GetSharedD3D11TextureHandle` could not work through the bridge, because the handles they return belong to the server's process. |
 | Every other slot, `Startup`, `Shutdown`, `Present`, `SetupCamera` and `CreateMeshBatched` among them | Null. Check a slot before you call it. |
 
 The client also exports `remixapi_RegisterCallbacks` and the color grading functions (`remixapi_SetColorGradePreset`
@@ -234,8 +234,9 @@ shares it:
 3. Send API content during the game's frame. The game's draws keep working as before.
 
 The game ends the frame with its own `Present`, which also applies the batched work and keeps your lights in the
-scene. Do not call `Present` yourself: it would present the game's device a second time. Do not call `Shutdown`
-while the game still uses its device: `Shutdown` releases the registered device until it is destroyed.
+scene. Do not call `Present` yourself: it would present the game's device a second time. `Shutdown` leaves the
+game's device alone and releases only the reference that registering took, but it still unregisters the device and
+drops everything you created, so call it only when your plugin is done.
 
 ### D3D11 host
 
@@ -498,7 +499,8 @@ creating a mesh per material.
 
 Give each surface of a skinned mesh its blend data in `remixapi_MeshInfoSkinning`: `bonesPerVertex` weights and as
 many bone indices per vertex, so both arrays hold `bonesPerVertex * vertices_count` values. Then send the pose with
-every draw in `remixapi_InstanceInfoBoneTransformsEXT`. Bone transforms are in the mesh's object space, and the
+every draw in `remixapi_InstanceInfoBoneTransformsEXT`. Bone transforms are in the mesh's object space, not world
+space: each one takes a vertex as the mesh stores it to its posed position, so it includes the inverse bind pose. The
 instance transform then places the skinned result in the world:
 
 ```c
@@ -852,11 +854,12 @@ your surfaces in place of your material. Asset keys are not forwarded through th
 - **Callbacks** registered with `RegisterCallbacks` run on the thread that made the call that fired them, with no
   Remix lock held: begin-scene on the first `DrawInstance`, `DrawLightInstance` or `DrawRetainedInstances` of a frame,
   end-scene and present around `Present` and `RenderD3D11`. Through the bridge they run inside the game's
-  `BeginScene`, `EndScene` and `Present` instead. On the D3D9 host path, the game's own `Present` fires neither the
-  end-scene nor the present callback, so the begin-scene callback fires only once.
+  `BeginScene`, `EndScene` and `Present` instead. On the D3D9 host path, the game's own `Present` ends the frame, so
+  the begin-scene callback fires on the first submission of every frame, but it fires neither the end-scene nor the
+  present callback. Hook the game's `Present` for those.
 - **The object picking callback** may run on any thread.
-- **`Startup` and `Shutdown`** must not overlap any other API call. `Shutdown` releases the device while other calls
-  may still use it.
+- **`Startup` and `Shutdown`** must not overlap any other API call. `Shutdown` releases the device from `Startup` or
+  `dxvk_CreateD3D9` while other calls may still use it.
 - **D3D11 calls** have their own rules: `remixapi_RegisterD3D11Device`, `remixapi_RenderD3D11` and
   `remixapi_DrawScreenOverlayD3D11` on the game's render thread, and `remixapi_PrepareD3D11Texture(Ex)` on the
   thread of the immediate context, outside deferred recording.

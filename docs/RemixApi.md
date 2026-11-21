@@ -110,9 +110,11 @@ remixapi_ErrorCode Shutdown(void);
 `Startup` activates the renderer for a given HWND. Optional flags on
 `remixapi_StartupInfo` control sRGB conversion, swapchain ownership
 (`forceNoVkSwapchain` for OpenGL / external present paths), and editor
-mode. `Shutdown` releases the registered D3D9 device and everything the runtime holds
-for the host; a second call does nothing. It releases the device until it is destroyed,
-so a plugin that registered a game's own device must not call it while the game runs.
+mode. `Shutdown` unregisters the device and releases everything the runtime holds
+for the host; a second call does nothing. A device made through `Startup` or
+`dxvk_CreateD3D9` is released until it is destroyed. A game's own device that a
+plugin registered with `dxvk_RegisterD3D9Device` stays alive: `Shutdown` releases
+only the reference that registering took.
 
 ### `Present`
 
@@ -445,7 +447,7 @@ for additional behavior:
 
 | Extension | Effect |
 | :-- | :-- |
-| `remixapi_InstanceInfoBoneTransformsEXT` | Per-bone world transforms for skinned mesh playback. |
+| `remixapi_InstanceInfoBoneTransformsEXT` | Per-bone skinning transforms for skinned mesh playback, in the mesh's object space. Each one takes a vertex as the mesh stores it to its posed position, so it includes the inverse bind pose. The instance transform then places the result in the world. |
 | `remixapi_InstanceInfoBlendEXT` | D3D9-style alpha test/blend state, used when the material has `useDrawCallAlphaState=true`. |
 | `remixapi_InstanceInfoObjectPickingEXT` | Tags the instance with a 32-bit ID readable via the picking API. |
 | `remixapi_InstanceInfoParticleSystemEXT` | Spawns a GPU particle system bound to this instance. |

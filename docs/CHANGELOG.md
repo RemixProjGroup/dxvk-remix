@@ -86,6 +86,23 @@ When DLSS is the selected upscaler (the default) but the GPU cannot run it, Remi
 A failed prepare dispatch counts as a present without inputs again, so frame generation is configured off after a few failures instead of showing every real frame twice. After 30 failures in a row it stays off for the rest of the session, with one log line and an "off" status in the frame generation menu. The user's config is not changed.
 - Options: none.
 - Commits: the commit that adds this entry.
+### Fix: light updates through the bridge
+32-bit plugins can now update their lights in place: the bridge forwards `UpdateLightDefinition` (with every light shape, as `CreateLight` does) and `AutoInstancePersistentLights` to the server, which calls the runtime with the light's runtime handle, so the light keeps its identity instead of being destroyed and re-created. Both were client stubs, and `UpdateLightDefinition` returned `GENERAL_FAILURE`. Two bridge commands are added, so the bridge client and server must come from the same build.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApi-Plugin-Guide.md](../documentation/RemixApi-Plugin-Guide.md), [RemixApi-Migration.md](RemixApi-Migration.md), [RemixApiChangelog.md](../documentation/RemixApiChangelog.md)
+
+### Fix: Remix API begin-scene callback fires every frame on the D3D9 host path
+When a plugin registered the game's own D3D9 device, the begin-scene callback fired only on the first frame, because only the API's `Present` and `RenderD3D11` ended the frame. The device's own `Present` now ends it too, so the callback fires on the first submission of every frame. Hosts that present through the API see no change.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApi-Plugin-Guide.md](../documentation/RemixApi-Plugin-Guide.md), [RemixApiChangelog.md](../documentation/RemixApiChangelog.md)
+
+### Fix: Remix API Shutdown keeps the game's D3D9 device
+`Shutdown` released a registered D3D9 device until it was destroyed, and its `IDirect3D9Ex` too, also when a plugin had registered the game's own device, so the game crashed on its next call. It now does that only for a device made through the API's `IDirect3D9Ex` (`Startup` or `dxvk_CreateD3D9`), and for any other device releases only the reference that registering took.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixApi.md](RemixApi.md), [RemixApi-Plugin-Guide.md](../documentation/RemixApi-Plugin-Guide.md), [RemixApiChangelog.md](../documentation/RemixApiChangelog.md)
 
 ## 2026-11-18
 

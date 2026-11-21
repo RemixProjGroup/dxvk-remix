@@ -612,10 +612,10 @@ its input. For `CreateTexture` pixel data, keep the buffer alive until the call 
 **What does the bridge forward for 32-bit games?** The bridge client (`d3d9.dll` in the 32-bit game) needs
 `exposeRemixApi = True` in `bridge.conf`. It fills only these slots: `CreateMaterial`, `DestroyMaterial`,
 `CreateTexture`, `DestroyTexture`, `CreateMesh`, `DestroyMesh`, `DrawInstance`, `CreateLight`, `DestroyLight`,
-`DrawLightInstance`, `SetConfigVariable`, `dxvk_CreateD3D9`, `dxvk_RegisterD3D9Device`, `SetGameValue` and
-`GetGameValue`. `dxvk_CreateD3D9` and `dxvk_RegisterD3D9Device` return `GENERAL_FAILURE`, because the server
-registers the game's device itself. `GetUIState`, `SetUIState`, `AutoInstancePersistentLights` and
-`UpdateLightDefinition` are stubs that log once and do nothing. Every other slot, `SetupCamera`, `Startup` and
+`DrawLightInstance`, `UpdateLightDefinition`, `AutoInstancePersistentLights`, `SetConfigVariable`,
+`dxvk_CreateD3D9`, `dxvk_RegisterD3D9Device`, `SetGameValue` and `GetGameValue`. `dxvk_CreateD3D9` and
+`dxvk_RegisterD3D9Device` return `GENERAL_FAILURE`, because the server registers the game's device itself.
+`GetUIState` and `SetUIState` are stubs that log once and do nothing. Every other slot, `SetupCamera`, `Startup` and
 `Present` included, is null: the game's own D3D9 device drives the frame. Of the named exports, the client exports
 only `remixapi_RegisterCallbacks` and the five color grading calls (section 4.13). It forwards these chained structs:
 on materials the opaque, subsurface, translucent and portal extensions; on instances object picking, blend, bone
