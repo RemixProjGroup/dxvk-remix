@@ -30,6 +30,14 @@ Entry format:
 
 ## 2026-11-21
 
+### Lights: gobos on spot lights
+Replacement sphere lights with shaping can project a texture, a gobo, like a slide projector, authored with the `inputs:shaping:gobo:file`, `:scale`, `:offset`, `:rotation` and `:fov` USD attributes. The gobo's color multiplies the light and blocks it outside the projected texture, in every path that evaluates sphere light shaping (RTXDI, LightBVH, the NEE cache, the integrators and volumetrics). Ported from our upstream change 816f427d0 (on NVIDIA's main).
+- Options: added `rtx.lights.enableGobos` (default on, since it only changes lights that author a gobo), in the Light Gobos section of the light settings. Preset-independent: it costs nothing on lights without a gobo.
+- Packing: the gobo uses the sphere light's spare bytes (data0.w high half, data2) and flag bit 3. Flag bits 1 and 2 (view model, distant light cloud shadow) are unchanged.
+- Not applied: NUMOS froxel local-light injection evaluates the shaping cone itself and lights a gobo light as a plain spot.
+- Commits: the commit that adds this entry.
+- Docs: [LightGobos.md](../documentation/LightGobos.md)
+
 ### NUMOS: separate star, moonlight and moon disc brightness
 Night Gain scaled the stars, the Milky Way and the moons by one factor, and the moons and stars were lit by the sun after Sun Intensity and a weather preset's sun illuminance, so raising the stars blew out the moon and raising the sun brightened the night. The whole night sky is now lit by a fixed reference sun (the default sun), and three gains on top of Night Gain set the stars and Milky Way, the moonlight, and the visible moon discs apart. They fade in through twilight like Night Gain and leave daylight unchanged. Exposure follows the moonlight, not the discs. The look at default settings is unchanged; a config with a non-default Sun Intensity or sun illuminance gets a different night (a brighter sun no longer brightens it), which the new gains make up for.
 - Options: added `rtx.atmosphere.starGainStops`, `rtx.atmosphere.moonlightGainStops`, `rtx.atmosphere.moonDiscGainStops` (stops, default 0), in the Sky > Night tab and the user menu's night page.

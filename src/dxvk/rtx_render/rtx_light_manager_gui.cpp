@@ -142,6 +142,16 @@ namespace dxvk {
       ImGui::Unindent();
     }
 
+    if (RemixGui::CollapsingHeader("Light Gobos")) {
+      ImGui::Dummy({ 0,2 });
+      ImGui::Indent();
+
+      // Note: Lights are written to the GPU every frame, so toggling gobos needs no light rebuild.
+      RemixGui::Checkbox("Enable Light Gobos", &enableGobosObject());
+
+      ImGui::Unindent();
+    }
+
     if (RemixGui::CollapsingHeader("Fallback Light")) {
       ImGui::Dummy({ 0,2 });
       ImGui::Indent();

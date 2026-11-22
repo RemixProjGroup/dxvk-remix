@@ -32,4 +32,7 @@ static const uint lightTypeInvalid = lightTypeMask;
 
 static const uint lightTypeCount = 5;
 
+// Marks a sphere light that projects a gobo texture. Stored in the flag word of the packed light, data3.w.
+static const uint lightFlagGobo = 1u << 3;
+
 #endif // LIGHT_TYPES_H

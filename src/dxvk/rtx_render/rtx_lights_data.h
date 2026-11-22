@@ -78,6 +78,12 @@ namespace dxvk {
       extractTransform(&localToObject);
     }
 
+    // The USD asset attribute holding the gobo texture. Gobo textures load through the replacement texture path,
+    // so the texture is set separately from the other gobo attributes.
+    static const pxr::TfToken& getGoboFileToken();
+
+    void setGoboTexture(const TextureRef& texture);
+
   private:
     // Supported light data types
     enum LightType {
@@ -106,6 +112,8 @@ namespace dxvk {
 
     void deserialize(const pxr::UsdPrim& prim);
 
+    void deserializeGobo(const pxr::UsdPrim& prim);
+
     void sanitizeData();
 
     Vector3 calculateRadiance() const;
@@ -114,9 +122,18 @@ namespace dxvk {
 
     RtLightShaping getLightShaping(Vector3 zAxis) const;
 
+    RtLight createRtLight() const;
+
+    void attachGobo(RtLight& light) const;
+
     enum class DirtyFlags : uint32_t {
       LIST_LIGHT_CONSTANTS(WRITE_DIRTY_FLAGS)
       k_Transform,
+      k_GoboTexture,
+      k_GoboScale,
+      k_GoboOffset,
+      k_GoboRotation,
+      k_GoboFov,
     };
 
     // Note: Be very careful with what is passed to the Flags class's constructor. A bug previously existed where this all ones bit
@@ -142,6 +159,13 @@ namespace dxvk {
     Vector3 m_yAxis = Vector3(0.f, 1.f, 0.f);
     Vector3 m_zAxis = Vector3(0.f, 0.f, 1.f);
     float m_xScale = 1.f, m_yScale = 1.f, m_zScale = 1.f;
+    // Gobo parameters, see documentation/LightGobos.md.
+    TextureRef m_goboTexture;
+    Vector2 m_goboScale { 1.f, 1.f };
+    Vector2 m_goboOffset { 0.f, 0.f };
+    float m_goboRotationRadians = 0.f;
+    // Note: Zero means twice the shaping cone angle.
+    float m_goboFovRadians = 0.f;
     const bool m_isOverrideLight = false;
     const bool m_isRelativeTransform = false;
   };

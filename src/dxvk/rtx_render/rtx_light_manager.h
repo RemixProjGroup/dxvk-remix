@@ -182,6 +182,10 @@ public:
 
   void prepareSceneData(Rc<DxvkContext> ctx, CameraManager const& cameraManager);
 
+  // Resolves the bindless indices of gobo textures and their sampler.
+  // Must be called after all lights for the frame are added and before the bindless tables are built.
+  void trackGoboTextures();
+
   void addGameLight(frontend::FixedFunctionLight::Type type, const RtLight& light);
   RtLight* addLight(const RtLight& light, const RtLightAntiCullingType antiCullingType);
   RtLight* addLight(const RtLight& light, const SceneDraw& drawCallState, const RtLightAntiCullingType antiCullingType);
@@ -235,6 +239,11 @@ private:
   Rc<DxvkBuffer> m_lightMappingBuffer;
   Rc<DxvkBuffer> m_lightIdentityBuffer;
   LightBvh m_lightBvh;
+
+  // The texture cache generations the gobo texture indices in the light buffers were resolved in.
+  uint32_t m_lightBufferTextureGeneration = 0;
+  uint32_t m_previousLightBufferTextureGeneration = 0;
+  uint32_t m_goboSamplerIndex = BINDING_INDEX_INVALID;
 
   uint32_t m_currentActiveLightCount = 0;
   std::array<LightRange, lightTypeCount> m_lightTypeRanges;
@@ -344,6 +353,10 @@ private:
              "If true, scales the RectLight cone half-angle by the light's aspect ratio in tangent space, "
              "producing a cone that matches the rect's proportions. When false (default), the cone is uniform "
              "and independent of the light's width/height. Ignored when enableLegacyRectLightConeShaping is true.");
+  RTX_OPTION("rtx.lights", bool, enableGobos, true,
+             "Enables light gobos, textures that spot lights project onto the scene like a slide projector, for example window frames or foliage shadows. "
+             "Gobos are authored on replacement sphere lights with shaping through the inputs:shaping:gobo attributes. "
+             "Turning this off renders those lights without their gobo texture, which can help to compare the look or performance.");
 };
 
 }  // namespace dxvk

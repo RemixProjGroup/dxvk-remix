@@ -247,7 +247,7 @@ void RtSphereLight::applyTransform(const Matrix4& lightToWorld) {
   updateCachedHash();
 }
 
-void RtSphereLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel) const {
+void RtSphereLight::writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel, const RtLightGoboGPUData* pGobo) const {
   [[maybe_unused]] const std::size_t oldOffset = offset;
 
   writeGPUHelper(data, offset, m_position.x);
@@ -255,20 +255,43 @@ void RtSphereLight::writeGPUData(unsigned char* data, std::size_t& offset, bool 
   writeGPUHelper(data, offset, m_position.z);
   assert(m_radius < FLOAT16_MAX);
   writeGPUHelper(data, offset, glm::packHalf1x16(m_radius));
-  writeGPUPadding<2>(data, offset);
+
+  if (pGobo != nullptr) {
+    assert(pGobo->textureIndex < BINDING_INDEX_INVALID);
+    writeGPUHelper(data, offset, static_cast<uint16_t>(pGobo->textureIndex));
+  } else {
+    writeGPUPadding<2>(data, offset);
+  }
 
   writeGPUHelper(data, offset, packLogLuv32(m_radiance * s_radianceEncodeScale));  // pre-exposure x calibration
 
   m_shaping.writeGPUData(data, offset);
 
-  writeGPUPadding<24>(data, offset);
+  if (pGobo != nullptr) {
+    // Note: The gobo occupies data2, see lightGoboCreate in light_shaping.slangh.
+    assert(m_shaping.getEnabled());
+    assert(std::abs(pGobo->uvScale.x) < FLOAT16_MAX && std::abs(pGobo->uvScale.y) < FLOAT16_MAX);
+    assert(std::abs(pGobo->uvOffset.x) < FLOAT16_MAX && std::abs(pGobo->uvOffset.y) < FLOAT16_MAX);
+    writeGPUHelper(data, offset, glm::packHalf1x16(pGobo->tangent.x));
+    writeGPUHelper(data, offset, glm::packHalf1x16(pGobo->tangent.y));
+    writeGPUHelper(data, offset, glm::packHalf1x16(pGobo->tangent.z));
+    writeGPUHelperExplicit<2>(data, offset, pGobo->log2TextureSize);
+    writeGPUHelper(data, offset, glm::packHalf1x16(pGobo->uvScale.x));
+    writeGPUHelper(data, offset, glm::packHalf1x16(pGobo->uvScale.y));
+    writeGPUHelper(data, offset, glm::packHalf1x16(pGobo->uvOffset.x));
+    writeGPUHelper(data, offset, glm::packHalf1x16(pGobo->uvOffset.y));
+    writeGPUPadding<8>(data, offset);
+  } else {
+    writeGPUPadding<24>(data, offset);
+  }
 
   writeGPUDataVolumetricRadianceScale(data, oldOffset, offset, m_volumetricRadianceScale);
 
-  // Note: Sphere light type (0) + shaping enabled flag + ignoreViewModel flag
+  // Note: Sphere light type (0) + shaping enabled flag + ignoreViewModel flag + gobo flag
   uint32_t flags = lightTypeSphere << 29; // Light Type at bits 29,30,31.
   flags |= m_shaping.getEnabled() ? 1 << 0 : 0 << 0; // Shaping enabled flag at bit 0
   if (ignoreViewModel) flags |= 1 << 1; // ignoreViewModel flag at bit 1
+  flags |= pGobo != nullptr ? lightFlagGobo : 0; // Gobo flag at bit 3
   writeGPUHelper(data, offset, flags);
 
   assert(offset - oldOffset == kLightGPUSize);
@@ -1022,6 +1045,9 @@ void RtLight::copyFrom(const RtLight& light) {
   m_bufferIdx = light.m_bufferIdx;
   m_isMarkedForGarbageCollection = light.m_isMarkedForGarbageCollection;
   m_anticullingType = light.m_anticullingType;
+  m_gobo = light.m_gobo;
+  m_goboUp = light.m_goboUp;
+  m_goboTextureIndex = light.m_goboTextureIndex;
   
   // Copy anti-culling union members safely based on the anti-culling type
   switch (light.m_anticullingType) {
@@ -1049,7 +1075,7 @@ void RtLight::copyFrom(const RtLight& light) {
 namespace {
   template<int RtLightSize> struct CheckRtLightSize {
     // The second line of the build error should contain the new size of RtLight in the template argument, i.e. `dxvk::CheckRtLightSize<newSize>`
-    static_assert(RtLightSize == 272, "RtLight size has changed.  Fix the copyFrom function above this message, then update the expected size.");
+    static_assert(RtLightSize == 304, "RtLight size has changed.  Fix the copyFrom function above this message, then update the expected size.");
   };
   CheckRtLightSize<sizeof(RtLight)> _rtLightSizeTest;
 }
@@ -1112,6 +1138,48 @@ void RtLight::applyTransform(const Matrix4& lightToWorld) {
     m_distantLight.applyTransform(lightToWorld);
     break;
   }
+
+  if (m_gobo != nullptr) {
+    m_goboUp = safeNormalize(Matrix3(lightToWorld) * m_goboUp, Vector3(0.0f, 1.0f, 0.0f));
+  }
+}
+
+bool RtLight::getGoboGPUData(RtLightGoboGPUData& goboData) const {
+  if (m_gobo == nullptr || m_goboTextureIndex == BINDING_INDEX_INVALID || m_type != RtLightType::Sphere || !LightManager::enableGobos()) {
+    return false;
+  }
+
+  const RtLightShaping& shaping = m_sphereLight.getShaping();
+
+  if (!shaping.getEnabled()) {
+    return false;
+  }
+
+  // Build the projection frame from the shaping axis and the up vector, falling back to another vector when they are parallel.
+
+  const Vector3& axis = shaping.getDirection();
+  Vector3 up = m_goboUp - axis * dot(m_goboUp, axis);
+
+  if (lengthSqr(up) < 1e-6f) {
+    const Vector3 fallbackUp = std::abs(axis.y) < 0.99f ? Vector3(0.0f, 1.0f, 0.0f) : Vector3(1.0f, 0.0f, 0.0f);
+    up = fallbackUp - axis * dot(fallbackUp, axis);
+  }
+
+  up = normalize(up);
+
+  // Note: The GPU derives the V axis as cross(axis, tangent), which points opposite to the rotated up vector,
+  // so the top row of the texture is projected towards up.
+  const Vector3 right = cross(axis, up);
+  const float cosRotation = std::cos(m_gobo->rotationRadians);
+  const float sinRotation = std::sin(m_gobo->rotationRadians);
+
+  goboData.tangent = right * cosRotation + up * sinRotation;
+  goboData.uvScale = m_gobo->scale * (0.5f / std::tan(m_gobo->fovRadians * 0.5f));
+  goboData.uvOffset = m_gobo->offset;
+  goboData.textureIndex = m_goboTextureIndex;
+  goboData.log2TextureSize = m_gobo->log2TextureSize;
+
+  return true;
 }
 
 void RtLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
@@ -1122,8 +1190,12 @@ void RtLight::writeGPUData(unsigned char* data, std::size_t& offset) const {
 
     [[fallthrough]];
   case RtLightType::Sphere:
-    m_sphereLight.writeGPUData(data, offset, this->ignoreViewModel);
+  {
+    RtLightGoboGPUData goboData;
+    const bool hasGobo = getGoboGPUData(goboData);
+    m_sphereLight.writeGPUData(data, offset, this->ignoreViewModel, hasGobo ? &goboData : nullptr);
     break;
+  }
   case RtLightType::Rect:
     m_rectLight.writeGPUData(data, offset, this->ignoreViewModel);
     break;

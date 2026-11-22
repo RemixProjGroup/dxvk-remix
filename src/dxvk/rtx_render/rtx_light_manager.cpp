@@ -36,7 +36,9 @@
 #include "math.h"
 #include "rtx_lights.h"
 #include "rtx_intersection_test.h"
+#include "rtx_resources.h"
 #include "rtx_sparse_rendering.h"
+#include "rtx_texture_manager.h"
 
 /*  Light Manager (blurb)
 * 
@@ -345,6 +347,8 @@ namespace dxvk {
 
     std::swap(m_lightBuffer, m_previousLightBuffer);
     ++m_lightPrepSerial;
+    m_previousLightBufferTextureGeneration = m_lightBufferTextureGeneration;
+    m_lightBufferTextureGeneration = device()->getCommon()->getTextureManager().getTextureCacheGeneration();
 
     // Linearize the light list
     // Note: This is done rather than just iterating over the light list twice mostly so that the fallback light
@@ -676,6 +680,16 @@ namespace dxvk {
             return kNotSimilar;
           }
         }
+
+        const RtLightGobo* pGoboA = a.getGobo();
+        const RtLightGobo* pGoboB = b.getGobo();
+        if ((pGoboA == nullptr) != (pGoboB == nullptr)) {
+          return kNotSimilar;
+        }
+
+        if (pGoboA != nullptr && pGoboA->texture.getUniqueKey() != pGoboB->texture.getUniqueKey()) {
+          return kNotSimilar;
+        }
       }
 
       return similarPosition ? (1.f - distNormalized) : kNotSimilar;
@@ -906,6 +920,44 @@ namespace dxvk {
     return m_gpuDomeLightArgs;
   }
 
+  void LightManager::trackGoboTextures() {
+    if (!enableGobos()) {
+      return;
+    }
+
+    SceneManager& sceneManager = device()->getCommon()->getSceneManager();
+
+    // Note: Every gobo index is resolved again each frame, so no light keeps an index from an earlier texture table.
+    // A light that is updated after this call has no index and renders without its gobo for that frame.
+    const auto trackGoboTexture = [&sceneManager](const RtLight& light) {
+      const RtLightGobo* pGobo = light.getGobo();
+      if (pGobo == nullptr) {
+        return;
+      }
+
+      // Note: Tracked synchronously like the dome light texture so all of its mips stay resident.
+      uint32_t textureIndex = BINDING_INDEX_INVALID;
+      sceneManager.trackTexture(pGobo->texture, textureIndex, true, false);
+      light.setGoboTextureIndex(textureIndex);
+    };
+
+    for (auto&& pair : m_lights) {
+      trackGoboTexture(pair.second);
+    }
+
+    for (auto&& pair : m_externallyTrackedLights) {
+      trackGoboTexture(pair.second);
+    }
+
+    for (auto&& pair : m_externalLights) {
+      trackGoboTexture(pair.second);
+    }
+
+    Resources& resources = device()->getCommon()->getResources();
+    m_goboSamplerIndex = sceneManager.trackSampler(
+      resources.getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+  }
+
   void LightManager::addExternalDomeLight(remixapi_LightHandle handle, const DomeLight& domeLight) {
     auto found = m_externalDomeLights.find(handle);
     if (found != m_externalDomeLights.end()) {
@@ -943,6 +995,10 @@ namespace dxvk {
     // The distribution code makes sure that there is at least one sample for each non-empty type, and the rest is
     // approximate, i.e. the sample counts set by the user are just guidelines and the actual total count can be
     // slightly different.
+
+    raytraceArgs.lightGoboArgs.samplerIndex = m_goboSamplerIndex;
+    raytraceArgs.lightGoboArgs.enablePreviousLightGobos =
+      enableGobos() && m_previousLightBufferTextureGeneration == m_lightBufferTextureGeneration;
 
     raytraceArgs.rtxdiTotalSampleCount = 0;
     raytraceArgs.volumeRISTotalSampleCount = 0;

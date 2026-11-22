@@ -104,6 +104,13 @@ struct DomeLightArgs {
   uint textureIndex;
 };
 
+struct LightGoboArgs {
+  uint samplerIndex;
+  // False when the previous frame's lights may hold gobo texture indices from before a texture cache reset.
+  uint enablePreviousLightGobos;
+  uint2 pad0;
+};
+
 struct SssArgs {
   uint enableThinOpaque;
   uint enableDiffusionProfile;
@@ -177,6 +184,8 @@ struct RaytraceArgs {
   Camera renderTargetCamera;
 
   SparseRenderingArgs sparseRenderingArgs;
+
+  LightGoboArgs lightGoboArgs;
 
   // ------------------------- Structs above this line, non structs below this line -----------------------------------
 

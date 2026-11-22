@@ -153,3 +153,69 @@ float lightShapingCalcPlanarFalloff(
 
   return xFalloff * yFalloff;
 }
+
+// Light Gobo Functions
+
+LightGobo lightGoboCreate(bool enabled, uint16_t textureIndex, uvec4 data)
+{
+  // Decode the Light Gobo from the packed memory representation
+
+  LightGobo lightGobo = {};
+
+  // Note: An invalid texture index means no gobo, so a stale index never reaches the texture array.
+  if (enabled && textureIndex != BINDING_INDEX_INVALID)
+  {
+    const u16vec2 data0 = unpack16(data.x);
+    const u16vec2 data1 = unpack16(data.y);
+    const u16vec2 data2 = unpack16(data.z);
+    const u16vec2 data3 = unpack16(data.w);
+
+    lightGobo.enabled = true;
+    lightGobo.tangent = vec3(
+      uint16BitsToF32(data0.x),
+      uint16BitsToF32(data0.y),
+      uint16BitsToF32(data1.x));
+    lightGobo.log2TextureSize = float(data1.y);
+    lightGobo.uvScale = vec2(uint16BitsToF32(data2.x), uint16BitsToF32(data2.y));
+    lightGobo.uvOffset = vec2(uint16BitsToF32(data3.x), uint16BitsToF32(data3.y));
+    lightGobo.textureIndex = textureIndex;
+  }
+  else
+  {
+    lightGobo.enabled = false;
+  }
+
+  return lightGobo;
+}
+
+// Returns the gobo color that scales the light's radiance at a position.
+// Returns black behind the light and outside the projected texture.
+// Note: The projection starts at the light's center rather than the sampled point on the emitter, so the result
+// is the same for every sample of the light and adds no noise.
+vec3 lightGoboCalcAttenuation(
+  LightGobo lightGobo, vec3 primaryAxis, vec3 lightPosition, float emitterRadius, vec3 position, float lodBias)
+{
+  const vec3 lightToPosition = position - lightPosition;
+  const float axialDistance = dot(lightToPosition, primaryAxis);
+
+  if (axialDistance <= 0.0f)
+  {
+    return vec3(0.0f);
+  }
+
+  const vec3 bitangent = cross(primaryAxis, lightGobo.tangent);
+  const vec2 slope = vec2(dot(lightToPosition, lightGobo.tangent), dot(lightToPosition, bitangent)) / axialDistance;
+  const vec2 uv = 0.5f + slope * lightGobo.uvScale + lightGobo.uvOffset;
+
+  if (any(uv < 0.0f) || any(uv > 1.0f))
+  {
+    return vec3(0.0f);
+  }
+
+  // Note: Ray tracing passes have no derivatives, so the mip level is picked from the size of the emitter's
+  // projection on the texture. This also blurs the pattern for large emitters, as a real projector does.
+  const float uvFootprint = 2.0f * emitterRadius / axialDistance * max(abs(lightGobo.uvScale.x), abs(lightGobo.uvScale.y));
+  const float lod = max(lightGobo.log2TextureSize + log2(uvFootprint) + lodBias, 0.0f);
+
+  return textures[nonuniformEXT(uint(lightGobo.textureIndex))].SampleLevel(samplers[cb.lightGoboArgs.samplerIndex], uv, lod).rgb;
+}

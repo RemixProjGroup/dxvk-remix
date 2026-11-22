@@ -41,6 +41,8 @@
 #include <pxr/usd/usd/attribute.h>
 #include <pxr/base/gf/matrix4f.h>
 #include <pxr/base/gf/rotation.h>
+#include <pxr/base/gf/vec2d.h>
+#include <pxr/base/gf/vec2f.h>
 #include <pxr/usd/usdLux/sphereLight.h>
 #include <pxr/usd/usdLux/rectLight.h>
 #include <pxr/usd/usdLux/diskLight.h>
@@ -75,6 +77,14 @@
 namespace dxvk {
 
   RtLight LightData::toRtLight() const {
+    RtLight light = createRtLight();
+
+    attachGobo(light);
+
+    return light;
+  }
+
+  RtLight LightData::createRtLight() const {
     switch (m_lightType) {
     // Note: This default case should never be hit as an Unknown light type must be merged before it should be converted to LightData,
     // the assert is here just for debugging to assert when an unexpected light type is passed in (so this is an "unreachable"-style assert).
@@ -168,6 +178,27 @@ namespace dxvk {
       m_yScale = input.m_yScale;
       m_zScale = input.m_zScale;
     }
+
+    // Note: A gobo authored as an override on a captured light keeps its dirty flags, so the merge does not clear it.
+    if (!m_dirty.test(DirtyFlags::k_GoboTexture)) {
+      m_goboTexture = input.m_goboTexture;
+    }
+
+    if (!m_dirty.test(DirtyFlags::k_GoboScale)) {
+      m_goboScale = input.m_goboScale;
+    }
+
+    if (!m_dirty.test(DirtyFlags::k_GoboOffset)) {
+      m_goboOffset = input.m_goboOffset;
+    }
+
+    if (!m_dirty.test(DirtyFlags::k_GoboRotation)) {
+      m_goboRotationRadians = input.m_goboRotationRadians;
+    }
+
+    if (!m_dirty.test(DirtyFlags::k_GoboFov)) {
+      m_goboFovRadians = input.m_goboFovRadians;
+    }
   }
 
   std::optional<LightData> LightData::tryCreate(const frontend::FixedFunctionLight& light) {
@@ -253,6 +284,68 @@ namespace dxvk {
         hasNaNInf(transform[2][0]) || hasNaNInf(transform[2][1]) || hasNaNInf(transform[2][2]) ||
         hasNaNInf(transform[3][0]) || hasNaNInf(transform[3][1]) || hasNaNInf(transform[3][2])
       ) {
+        return false;
+      }
+
+      return true;
+    }
+
+    // USD attributes of a light gobo. Unlike the attributes in LIST_LIGHT_CONSTANTS, these have no legacy spelling without the inputs: prefix.
+    const pxr::TfToken kGoboFileToken("inputs:shaping:gobo:file");
+    const pxr::TfToken kGoboScaleToken("inputs:shaping:gobo:scale");
+    const pxr::TfToken kGoboOffsetToken("inputs:shaping:gobo:offset");
+    const pxr::TfToken kGoboRotationToken("inputs:shaping:gobo:rotation");
+    const pxr::TfToken kGoboFovToken("inputs:shaping:gobo:fov");
+
+    // Limits that keep the packed half precision UV transform finite.
+    constexpr float kGoboMaxUvTransform = 100.0f;
+    constexpr float kGoboMinFovRadians = 1.0f * kDegreesToRadians;
+    constexpr float kGoboMaxFovRadians = 179.0f * kDegreesToRadians;
+
+    // Returns true when the attribute holds a float or a double.
+    bool readGoboAttribute(const pxr::UsdPrim& prim, const pxr::TfToken& token, float& value) {
+      pxr::VtValue val;
+      prim.GetAttribute(token).Get(&val);
+
+      if (val.IsHolding<float>()) {
+        value = val.UncheckedGet<float>();
+      } else if (val.IsHolding<double>()) {
+        value = static_cast<float>(val.UncheckedGet<double>());
+      } else {
+        if (!val.IsEmpty()) {
+          Logger::warn(str::format("Ignoring USD attribute \'", token.GetString(), "\' on \'", prim.GetName().GetString(), "\', it must be a float."));
+        }
+        return false;
+      }
+
+      if (std::isnan(value)) {
+        Logger::warn(str::format("Invalid value (NaN) detected on USD attribute \'", token.GetString(), "\' on \'", prim.GetName().GetString(), "\'"));
+        return false;
+      }
+
+      return true;
+    }
+
+    // Returns true when the attribute holds a float2 or a double2.
+    bool readGoboAttribute(const pxr::UsdPrim& prim, const pxr::TfToken& token, Vector2& value) {
+      pxr::VtValue val;
+      prim.GetAttribute(token).Get(&val);
+
+      if (val.IsHolding<pxr::GfVec2f>()) {
+        const pxr::GfVec2f& vec = val.UncheckedGet<pxr::GfVec2f>();
+        value = Vector2(vec[0], vec[1]);
+      } else if (val.IsHolding<pxr::GfVec2d>()) {
+        const pxr::GfVec2d& vec = val.UncheckedGet<pxr::GfVec2d>();
+        value = Vector2(static_cast<float>(vec[0]), static_cast<float>(vec[1]));
+      } else {
+        if (!val.IsEmpty()) {
+          Logger::warn(str::format("Ignoring USD attribute \'", token.GetString(), "\' on \'", prim.GetName().GetString(), "\', it must be a float2."));
+        }
+        return false;
+      }
+
+      if (std::isnan(value.x) || std::isnan(value.y)) {
+        Logger::warn(str::format("Invalid value (NaN) detected on USD attribute \'", token.GetString(), "\' on \'", prim.GetName().GetString(), "\'"));
         return false;
       }
 
@@ -614,6 +707,8 @@ namespace dxvk {
       m_AngleRadians *= kDegreesToRadians;
     }
 
+    deserializeGobo(prim);
+
     // If this light is fully defined (i.e. a child light) then we need to use all attributes
     if (prim.GetSpecifier() == pxr::SdfSpecifier::SdfSpecifierDef) {
       m_dirty = m_allDirty;
@@ -646,6 +741,73 @@ namespace dxvk {
 
   void LightData::sanitizeData() {
     LIST_LIGHT_CONSTANTS(WRITE_CONSTANT_SANITIZATION)
+  }
+
+  const pxr::TfToken& LightData::getGoboFileToken() {
+    return kGoboFileToken;
+  }
+
+  void LightData::setGoboTexture(const TextureRef& texture) {
+    m_goboTexture = texture;
+    m_dirty.set(DirtyFlags::k_GoboTexture);
+  }
+
+  void LightData::deserializeGobo(const pxr::UsdPrim& prim) {
+    if (readGoboAttribute(prim, kGoboScaleToken, m_goboScale)) {
+      m_dirty.set(DirtyFlags::k_GoboScale);
+      m_goboScale = Vector2(clamp(m_goboScale.x, -kGoboMaxUvTransform, kGoboMaxUvTransform), clamp(m_goboScale.y, -kGoboMaxUvTransform, kGoboMaxUvTransform));
+    }
+
+    if (readGoboAttribute(prim, kGoboOffsetToken, m_goboOffset)) {
+      m_dirty.set(DirtyFlags::k_GoboOffset);
+      m_goboOffset = Vector2(clamp(m_goboOffset.x, -kGoboMaxUvTransform, kGoboMaxUvTransform), clamp(m_goboOffset.y, -kGoboMaxUvTransform, kGoboMaxUvTransform));
+    }
+
+    // Note: USD specifies angles in degrees, but we prefer radians.
+    float rotationDegrees = 0.0f;
+    if (readGoboAttribute(prim, kGoboRotationToken, rotationDegrees) && std::isfinite(rotationDegrees)) {
+      m_dirty.set(DirtyFlags::k_GoboRotation);
+      m_goboRotationRadians = std::fmod(rotationDegrees, 360.0f) * kDegreesToRadians;
+    }
+
+    // Note: A field of view of zero or less selects the default of twice the cone angle.
+    float fovDegrees = 0.0f;
+    if (readGoboAttribute(prim, kGoboFovToken, fovDegrees)) {
+      m_dirty.set(DirtyFlags::k_GoboFov);
+      m_goboFovRadians = std::max(fovDegrees, 0.0f) * kDegreesToRadians;
+    }
+  }
+
+  void LightData::attachGobo(RtLight& light) const {
+    if (!m_goboTexture.isValid()) {
+      return;
+    }
+
+    // Note: The gobo is projected along the shaping axis, so only sphere lights with shaping can carry one.
+    if (m_lightType != LightType::Sphere || !isShapingEnabled()) {
+      ONCE(Logger::warn("Ignoring a light gobo on a light that is not a sphere light with shaping. Light gobos are only supported on sphere lights with shaping."));
+      return;
+    }
+
+    auto gobo = std::make_shared<RtLightGobo>();
+    gobo->texture = m_goboTexture;
+    gobo->scale = m_goboScale;
+    gobo->offset = m_goboOffset;
+    gobo->rotationRadians = m_goboRotationRadians;
+
+    const float fovRadians = m_goboFovRadians > 0.0f ? m_goboFovRadians : 2.0f * std::abs(m_ConeAngleRadians);
+    gobo->fovRadians = std::clamp(fovRadians, kGoboMinFovRadians, kGoboMaxFovRadians);
+
+    // Note: The texture size picks the mip level on the GPU, and a texture without asset data uses the top mip.
+    const Rc<ManagedTexture>& managedTexture = m_goboTexture.getManagedTexture();
+    if (managedTexture != nullptr && managedTexture->m_assetData != nullptr) {
+      const VkExtent3D& extent = managedTexture->m_assetData->info().extent;
+      const uint32_t maxDimension = std::max(std::max(extent.width, extent.height), 1u);
+      gobo->log2TextureSize = static_cast<uint32_t>(std::ceil(std::log2(static_cast<float>(maxDimension))));
+    }
+
+    // Note: The light's local Y axis orients the gobo, so a gobo is turned by rotating the light.
+    light.setGobo(std::move(gobo), m_yAxis);
   }
 
 } // namespace dxvk

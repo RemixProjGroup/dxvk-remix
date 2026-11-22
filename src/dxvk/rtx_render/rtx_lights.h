@@ -23,10 +23,12 @@
 
 #include <optional>
 #include <limits>
+#include <memory>
 
 #include "rtx_utils.h"
 #include "rtx/utility/shader_types.h"
 #include "rtx/concept/light/light_types.h"
+#include "rtx/pass/common_binding_indices.h"
 #include "rtx_types.h"
 
 namespace dxvk 
@@ -121,6 +123,27 @@ private:
   float m_focusExponent;
 };
 
+// A texture projected from a sphere light along its shaping direction, see documentation/LightGobos.md.
+struct RtLightGobo {
+  TextureRef texture;
+  Vector2 scale { 1.0f, 1.0f };
+  Vector2 offset { 0.0f, 0.0f };
+  // Rotation around the shaping direction, counterclockwise as seen from the light.
+  float rotationRadians = 0.0f;
+  // The full angle the texture spans.
+  float fovRadians = 0.0f;
+  uint32_t log2TextureSize = 0;
+};
+
+// The gobo fields of a sphere light in the form the GPU decodes them, see lightGoboCreate in light_shaping.slangh.
+struct RtLightGoboGPUData {
+  Vector3 tangent;
+  Vector2 uvScale;
+  Vector2 uvOffset;
+  uint32_t textureIndex;
+  uint32_t log2TextureSize;
+};
+
 struct RtSphereLight {
   RtSphereLight(const Vector3& position, const Vector3& radiance, float radius,
                 const RtLightShaping& shaping, float volumetricRadianceScale = kVolumetricRadianceScaleDefaultValue,
@@ -133,7 +156,7 @@ struct RtSphereLight {
 
   void applyTransform(const Matrix4& lightToWorld);
 
-  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false) const;
+  void writeGPUData(unsigned char* data, std::size_t& offset, bool ignoreViewModel = false, const RtLightGoboGPUData* pGobo = nullptr) const;
 
   bool operator==(const RtSphereLight& rhs) const = delete;
 
@@ -661,6 +684,20 @@ struct RtLight {
     m_externallyTrackedLightId = id;
   }
 
+  // The up vector orients the gobo around the shaping direction and does not need to be orthogonal to it.
+  void setGobo(std::shared_ptr<const RtLightGobo> gobo, const Vector3& up) {
+    m_gobo = std::move(gobo);
+    m_goboUp = up;
+  }
+
+  const RtLightGobo* getGobo() const {
+    return m_gobo.get();
+  }
+
+  void setGoboTextureIndex(const uint32_t textureIndex) const {
+    m_goboTextureIndex = textureIndex;
+  }
+
   uint32_t isStaticCount = 0;
   bool isDynamic = false;
   // A sky provider's own light (NUMOS sun, moons, lightning): physical already, so the host calibration
@@ -691,6 +728,14 @@ private:
 
   uint64_t m_externallyTrackedLightId = kInvalidExternallyTrackedLightId;
 
+  // Gobo Information
+  // Note: Kept outside of the type union as the gobo owns a texture reference. Not part of the light hashes, so
+  // replacements keyed on a light's hash still match it.
+  std::shared_ptr<const RtLightGobo> m_gobo;
+  Vector3 m_goboUp { 0.0f, 1.0f, 0.0f };
+  // Note: Set each frame by LightManager::trackGoboTextures before the bindless tables are built.
+  mutable uint32_t m_goboTextureIndex = BINDING_INDEX_INVALID;
+
   // Shared Light Information
   mutable uint32_t m_frameLastTouched = kInvalidFrameIndex;
   mutable uint32_t m_bufferIdx = kNewLightIdx; // index into the light list (RTX-DI needs to understand how light indices change over time)
@@ -717,6 +762,8 @@ private:
   };
 
   void copyFrom(const RtLight& light);
+
+  bool getGoboGPUData(RtLightGoboGPUData& goboData) const;
 };
 
 } // namespace dxvk

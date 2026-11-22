@@ -25,6 +25,8 @@
 
 static const float lightWeightEpsilon = 1e-10f;
 static const float lightSamplingEpsilon = 1e-10f;
+// Note: Froxels are much coarser than pixels, so volumes sample light gobos at a blurrier mip level.
+static const float lightGoboVolumeLodBias = 2.0f;
 
 // Light Helper Structures
 

@@ -214,12 +214,13 @@ keeps every setting as you set it.
 - [Remix API changelog](documentation/RemixApiChangelog.md) and the [Remix Plus changelog](docs/CHANGELOG.md).
 - [Remix Sky API](docs/RemixSkyAPI.md): weather presets, game weather and the NUMOS settings.
 - [RemixFX post-processing effects](docs/RemixFx.md) and the [post-processing stack](docs/PostProcessingStack.md).
+- [Light gobos](docs/LightGobos.md): projecting textures from spot lights, with step-by-step setup for mods.
 - For mod authors: [mod order](documentation/RemixModOrder.md), [mod packaging](documentation/RemixModPackaging.md),
   [Remix Config](documentation/RemixConfig.md) and [Remix Logic](documentation/RemixLogic.md).
 - How features work: [SHaRC](documentation/SharcRadianceCache.md),
   [SCCR displacement](documentation/SccrDisplacement.md), [opacity micromaps](documentation/OpacityMicromap.md),
-  [anti-culling](documentation/AntiCullingSystem.md), [terrain](documentation/TerrainSystem.md) and the
-  [frame rate limit](documentation/FrameRateLimit.md).
+  [anti-culling](documentation/AntiCullingSystem.md), [terrain](documentation/TerrainSystem.md),
+  [light gobos](documentation/LightGobos.md) and the [frame rate limit](documentation/FrameRateLimit.md).
 - [RtxOptions.md](RtxOptions.md): every runtime option, generated from the code.
 
 ## Build from source

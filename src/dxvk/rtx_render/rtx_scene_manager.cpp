@@ -3305,6 +3305,8 @@ namespace dxvk {
     // uploaded, so a buffer built now is in this frame's table and the surface upload writes its slot this frame.
     m_device->getCommon()->metaSccrShell().prepareFrame(*ctx);
 
+    m_lightManager.trackGoboTextures();
+
     auto& textureManager = m_device->getCommon()->getTextureManager();
     {
       const auto bindlessStart = std::chrono::steady_clock::now();
