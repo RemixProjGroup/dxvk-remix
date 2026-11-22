@@ -84,16 +84,30 @@ multiplier on the user's own value (`x0.75, 0.9, 0.6` per channel), so the prese
 PartlyCloudy, Cloudy, Overcast, Haze, Fog, Storm, Drizzle, Altostratus) are written to the folder once (a
 deleted one stays deleted), and are then ordinary files.
 
-Edit them in the dev menu: Sky > Weather > Open Weather Presets opens the editor window. It lists the game's
-presets (every preset that is not one of NUMOS's), then the built-in ones (NUMOS's). It saves and reloads the
-files, and loads a preset file from any path into the folder; adds, duplicates, renames, deletes, reverts and
-saves presets as new files; previews one whatever the weather; binds weathers (the current one, or an id typed
-in); edits each setting live, ticked to override it; tunes a weather with the normal Sky sliders and saves that
-look to it; and saves the current look to the current weather in one click. Or edit the files and press Reload
-from file.
+Edit them in the dev menu: Sky > Weather > Open Weather Presets opens the editor window.
 
-Its seed tools: Randomize shows a random weather, Load from seed applies the seed in the box, Copy seed copies
-the current sky, and Save seed as preset writes the seed's look to a new preset file. Randomize draws each NUMOS
+- The header line shows the preset folder (the full path in its tooltip) and how many presets have unsaved
+  edits, with Save, Reload and Files & seeds, which shows the seed and file tools.
+- The status strip shows the game's weather, the preset bound to it and what the sky shows. Below it are
+  Follow game weather, Ease (`rtx.weather.transitionSeconds`), the preset shown without a game weather
+  (`rtx.weather.preset`), and Look..., which tunes the current weather with the normal Sky sliders or saves
+  the current look to it in one click.
+- On the left is the preset list: the custom presets (every preset that is not one of NUMOS's), then the
+  built-in ones, with each preset's share of the sky, and Add, Duplicate and Delete. Drag the bar beside it to
+  resize it.
+- On the right is the selected preset's editor. Click the name to rename the preset and its file. Next to it
+  are Enabled, Preview (shows the preset whatever the weather), Revert, Reset to built-in and a menu with Save
+  as new file. The weathers it applies to show as chips; x removes one and + Add binds the current weather
+  or an id typed in. It can have its own transition time.
+- The editor lists only the settings the preset overrides, by section, each with its value and an x that
+  removes the override. Add setting... searches every other setting. Show all settings also lists the
+  inherited ones, dimmed at the value the sky shows without the preset; a click overrides one. Edits apply
+  live.
+
+Or edit the files and press Reload.
+
+The seed tools (Files & seeds, Seed tab): Randomize shows a random weather, Load from seed applies the seed in
+the box, Copy seed copies the current sky, and Save seed as preset writes the seed's look to a new preset file. Randomize draws each NUMOS
 weather field that has a row in the editor uniformly from that row's slider range (switches on or off with
 equal chance). It leaves the cloud base, the second layer's base and camera offset, the fog base, the haze
 world scale, the colours and every other setting as they are, and does not change the user's settings: the

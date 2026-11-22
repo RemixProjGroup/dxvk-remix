@@ -56,6 +56,12 @@ Replacement sphere lights with shaping can project a texture, a gobo, like a sli
 - Commits: the commit that adds this entry.
 - Docs: [LightGobos.md](../documentation/LightGobos.md)
 
+### Weather Presets window redesigned
+The Weather Presets window was cluttered: about twelve rows of global controls sat above the presets, every setting was listed whatever a preset overrode, and sliders stretched across the window. The window now has a one-line header (folder, unsaved count, Save, Reload, and Files & seeds, which shows the seed and file tools in tabs), a status strip (game weather, the preset bound to it, what shows, Follow game weather, Ease, the preset without a game weather, and a Look... menu for tuning and saving the current look), and a resizable split between the preset list and the editor. The editor lists only the settings the preset overrides, by section with a count in each header, as label, fixed-width value and an x that removes the override; Add setting... searches the rest, and Show all settings lists the inherited ones dimmed, where a click overrides one. The name renames on a click, the weathers show as chips, and Save as new file moved to a menu. Presentation only: the same preset data, file format and behavior.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [RemixSkyAPI.md](RemixSkyAPI.md)
+
 ### NUMOS: separate star, moonlight and moon disc brightness
 Night Gain scaled the stars, the Milky Way and the moons by one factor, and the moons and stars were lit by the sun after Sun Intensity and a weather preset's sun illuminance, so raising the stars blew out the moon and raising the sun brightened the night. The whole night sky is now lit by a fixed reference sun (the default sun), and three gains on top of Night Gain set the stars and Milky Way, the moonlight, and the visible moon discs apart. They fade in through twilight like Night Gain and leave daylight unchanged. Exposure follows the moonlight, not the discs. The look at default settings is unchanged; a config with a non-default Sun Intensity or sun illuminance gets a different night (a brighter sun no longer brightens it), which the new gains make up for.
 - Options: added `rtx.atmosphere.starGainStops`, `rtx.atmosphere.moonlightGainStops`, `rtx.atmosphere.moonDiscGainStops` (stops, default 0), in the Sky > Night tab and the user menu's night page.

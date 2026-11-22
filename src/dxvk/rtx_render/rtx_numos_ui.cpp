@@ -1049,12 +1049,16 @@ namespace dxvk {
       char nameBuffer[128] = {};
       std::string nameFor;
       char addIdBuffer[256] = {};
-      char addFilter[128] = {};
+      char settingFilter[128] = {};
+      bool showAll = false;
+      bool renaming = false;
+      bool renameFocus = false;
+      bool showTools = false;
+      float listWidth = 0.0f;
       char newName[128] = {};
       char loadPath[512] = {};
       char seedText[8192] = {};
       std::string seedStatus;
-      bool confirmDelete = false;
       bool confirmImport = false;
 
       // The last nonzero color of each color-and-strength row, normalized to a largest channel of 1, by setting index.
@@ -1122,13 +1126,12 @@ namespace dxvk {
 
     struct PresetSection {
       const char* title;
-      bool open;
       std::vector<PresetRow> rows;
     };
 
     const std::vector<PresetSection>& presetSections() {
       static const std::vector<PresetSection> sections = {
-        { "Clouds", true, {
+        { "Clouds", {
           { "cloudCoverageMean", "Coverage", RowKind::Number, 0.005f, 0.0f, 1.0f, "%.2f", 0, 0 },
           { "cloudCoverageSpread", "Coverage spread", RowKind::Number, 0.01f, 0.0f, 1.0f, "%.2f", 0, 0 },
           { "cloudCoverageNoiseScale", "Coverage patch frequency", RowKind::Number, 0.0001f, 0.0f, 0.1f, "%.5f", 0, 0 },
@@ -1145,7 +1148,7 @@ namespace dxvk {
           { "cloudDiffuseSunStrength", "Diffuse sunlight", RowKind::Number, 0.01f, 0.0f, 1.0f, "%.2f", 0, 0 },
           { "cloudColor", "Cloud color", RowKind::Colour, 0, 0, 0, nullptr, 0, 0 },
         } },
-        { "Second layer (ground fog / dust)", true, {
+        { "Second layer (ground fog / dust)", {
           { "cloudLayer2Enable", "Enabled", RowKind::Switch, 0, 0, 0, nullptr, 0, 0 },
           { "cloudLayer2FollowCamera", "Follow the camera", RowKind::Switch, 0, 0, 0, nullptr, 0, 0, true },
           { "cloudLayer2CameraOffsetMeters", "Base relative to the camera", RowKind::Number, 1.0f, -10000.0f, 10000.0f, "%.0f m", 0, 1, true },
@@ -1156,25 +1159,25 @@ namespace dxvk {
           { "cloudLayer2TypeMean", "Cloud type", RowKind::Number, 0.01f, 0.0f, 1.0f, "%.2f", 0, 0 },
           { "cloudLayer2Albedo", "Albedo", RowKind::Colour, 0, 0, 0, nullptr, 0, 0 },
         } },
-        { "Wind", true, {
+        { "Wind", {
           { "cloudWindSpeed", "Wind speed", RowKind::SpeedMetersPerSecond, 0.5f, 0.0f, 1000.0f, "%.1f m/s", 0, 0 },
           { "cloudWindDirection", "Wind direction", RowKind::Number, 1.0f, 0.0f, 360.0f, "%.1f deg", 0, 0 },
         } },
-        { "Atmosphere", true, {
+        { "Atmosphere", {
           { "airTint", "Air color", RowKind::Colour, 0, 0, 0, nullptr, 0, 0 },
           { "airDensity", "Air density", RowKind::Number, 0.01f, 0.0f, 100.0f, "%.2f", 0, 0 },
           { "aerosolTint", "Haze color", RowKind::Colour, 0, 0, 0, nullptr, 0, 0 },
           { "aerosolDensity", "Haze density", RowKind::Number, 0.05f, 0.0f, 100.0f, "%.2f", 0, 0 },
           { "hazeWorldScale", "Haze world scale", RowKind::Number, 0.005f, 0.01f, 10.0f, "%.3f", 0, 0, true },
         } },
-        { "Sun", true, {
+        { "Sun", {
           { "sunIlluminance", "Sunlight", RowKind::ColourStrength, 0.1f, 0.0f, 100.0f, "%.1f", 0, 0 },
         } },
-        { "Lightning", false, {
+        { "Lightning", {
           { "lightningStrikesPerMinute", "Strikes per minute", RowKind::Number, 0.1f, 0.0f, 60.0f, "%.1f", 0, 0 },
           { "lightningColor", "Flash color", RowKind::Colour, 0, 0, 0, nullptr, 0, 0 },
         } },
-        { "Fog (height fog)", false, {
+        { "Fog (height fog)", {
           { "fogVisibilityMeters", "Visibility", RowKind::Number, 10.0f, 0.0f, 100000.0f, "%.0f m", ImGuiSliderFlags_Logarithmic, 0 },
           { "fogBaseHeightMeters", "Base height", RowKind::Number, 1.0f, -10000.0f, 10000.0f, "%.0f m", 0, 0, true },
           { "fogHeightFalloffMeters", "Height falloff", RowKind::Number, 1.0f, 1.0f, 10000.0f, "%.0f m", 0, 0 },
@@ -1218,63 +1221,115 @@ namespace dxvk {
       return *reinterpret_cast<const T*>(reinterpret_cast<const char*>(&s) + info.offset);
     }
 
-    // The width of the longest curated row label, so every label shows in full.
-    float presetLabelWidth() {
-      float width = 0.0f;
+    // The label of a setting no curated row shows: its key without the prefix, in words.
+    std::string otherLabel(const numos::SettingInfo& info) {
+      return labelFor(info.key.rfind(kKeyPrefix, 0) == 0 ? info.key.substr(std::strlen(kKeyPrefix)) : info.key);
+    }
+
+    // The width of the longest row label the editor can show for the preset, so every label shows in full.
+    float presetLabelWidth(const NumosWeather::Preset& p) {
+      float width = ImGui::CalcTextSize("Transition").x;
       for (const PresetSection& section : presetSections()) {
         for (const PresetRow& row : section.rows) {
           width = std::max(width, ImGui::CalcTextSize(row.label).x);
         }
       }
+      const auto& infos = numos::settingInfos();
+      for (size_t i = 0; i < infos.size(); ++i) {
+        if (p.set[i] && !curatedKeys()[i]) {
+          width = std::max(width, ImGui::CalcTextSize(otherLabel(infos[i]).c_str()).x);
+        }
+      }
       return width + ImGui::GetStyle().ItemSpacing.x;
     }
 
-    // One table row of a setting: the override tick, the label and the control.
-    // Unticked, the control shows the sky's value read-only, in the hint color on a faint field.
-    // A multiplier shows the value it gives over the user's setting, and an edit stores the
-    // shown value as an absolute one.
-    void presetRow(NumosWeather& weather, NumosWeather::Preset& p, PresetWindow& window, const PresetRow& row) {
-      const std::string key = std::string(kKeyPrefix) + row.name;
-      const numos::SettingInfo* info = numos::findSetting(key);
-      const ImVec4 hint = hintTextColor();
-      ImGui::TableNextRow();
-      if (info == nullptr) {
-        ImGui::TableSetColumnIndex(1);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(hint, "%s", row.label);
-        ImGui::TableSetColumnIndex(2);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(hint, "%s: not in this NUMOS version", key.c_str());
+    // The fixed width of every value control, so values line up close to their labels.
+    float presetValueWidth() {
+      return ImGui::GetFontSize() * 14.0f;
+    }
+
+    // The color of marks that need attention, such as unsaved changes and tuning.
+    ImVec4 attentionColor() {
+      return ImVec4(1.0f, 0.8f, 0.3f, 1.0f);
+    }
+
+    // Puts the next item on the same line when `width` more pixels fit before `right`, a screen x.
+    void sameLineIfFits(float width, float right) {
+      if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + width <= right) {
+        ImGui::SameLine();
+      }
+    }
+
+    // The width Button() and SmallButton() give a label.
+    float buttonWidth(const char* label) {
+      return ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    }
+
+    // A table of label, value, a button that adds or removes the override, and a note.
+    bool beginSettingTable(const char* id, float labelWidth) {
+      if (!ImGui::BeginTable(id, 4, ImGuiTableFlags_SizingFixedFit)) {
+        return false;
+      }
+      ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+      ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthFixed, presetValueWidth());
+      ImGui::TableSetupColumn("##action", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
+      ImGui::TableSetupColumn("##note", ImGuiTableColumnFlags_WidthStretch);
+      return true;
+    }
+
+    // The tooltip of a setting row. An inherited row also says that a click overrides it.
+    void settingTooltip(bool own, const char* description) {
+      if (own) {
+        RemixGui::SetTooltipToLastWidgetOnHover(description);
         return;
       }
-      const size_t i = size_t(info - numos::settingInfos().data());
-      const char* description = info->description ? info->description : "";
-      ImGui::PushID(key.c_str());
+      const std::string tip = std::string(description) + (description[0] ? "\n\n" : "") +
+                              "Inherited: the sky shows this value without the preset. Click to override it in this preset.";
+      RemixGui::SetTooltipToLastWidgetOnHover(tip.c_str());
+    }
 
+    const numos::SettingInfo* rowInfo(const PresetRow& row) {
+      return numos::findSetting(std::string(kKeyPrefix) + row.name);
+    }
+
+    size_t settingIndex(const numos::SettingInfo& info) {
+      return size_t(&info - numos::settingInfos().data());
+    }
+
+    // One table row of a curated setting: label, value, and a button that removes or adds the override.
+    // An inherited row shows the sky's value read-only, in the hint color on a faint field, and a click
+    // on it adds the override.
+    // A multiplier shows the value it gives over the user's setting, and an edit stores the shown value
+    // as an absolute one.
+    void presetRow(NumosWeather& weather, NumosWeather::Preset& p, PresetWindow& window, const PresetRow& row) {
+      const numos::SettingInfo* info = rowInfo(row);
+      const ImVec4 hint = hintTextColor();
+      const float valueWidth = presetValueWidth();
+      ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
-      bool set = p.set[i];
-      if (ImGui::Checkbox("##set", &set)) {
-        if (set) {
-          weather.addKey(p, i);
-        } else {
-          weather.removeKey(p, i);
-        }
+      ImGui::AlignTextToFramePadding();
+      if (info == nullptr) {
+        ImGui::TextColored(hint, "%s", row.label);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(hint, "not in this NUMOS version");
+        const std::string key = std::string(kKeyPrefix) + row.name;
+        RemixGui::SetTooltipToLastWidgetOnHover(key.c_str());
+        return;
       }
-      RemixGui::SetTooltipToLastWidgetOnHover("Override this setting in this preset. Off: the user's own value shows.");
-
+      const size_t i = settingIndex(*info);
+      const char* description = info->description ? info->description : "";
       const bool own = p.set[i];
       const bool multiplier = own && p.relative[i];
-      ImGui::TableSetColumnIndex(1);
-      ImGui::AlignTextToFramePadding();
+      bool addOverride = false;
+      ImGui::PushID(info->key.c_str());
+
       ImGui::TextColored(own ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : hint, "%s", row.label);
-      RemixGui::SetTooltipToLastWidgetOnHover(description);
+      addOverride |= !own && ImGui::IsItemClicked();
+      settingTooltip(own, description);
 
-      // The control fills the value column, less the room for the multiplier note.
-      ImGui::TableSetColumnIndex(2);
-      const char* multiplierNote = "(x your setting)";
-      const float controlWidth = multiplier ? -(ImGui::CalcTextSize(multiplierNote).x + ImGui::GetStyle().ItemSpacing.x) : -FLT_MIN;
-
-      // An unticked control keeps full opacity and reads as read-only by its hint-colored text and faint field.
+      // An inherited control keeps full opacity and reads as read-only by its hint-colored text and faint field.
+      ImGui::TableSetColumnIndex(1);
       if (!own) {
         ImVec4 field = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
         field.w *= 0.4f;
@@ -1303,7 +1358,7 @@ namespace dxvk {
                 : multiplier ? presetField<float>(*p.values, *info) * presetField<float>(base, *info)
                 : presetField<float>(*p.values, *info);
         v *= scale;
-        ImGui::SetNextItemWidth(controlWidth);
+        ImGui::SetNextItemWidth(valueWidth);
         edited = ImGui::DragFloat("##value", &v, row.speed, row.mn, row.mx, row.format, row.flags | kClamp);
         if (edited && own) {
           presetField<float>(*p.values, *info) = v / scale;
@@ -1322,7 +1377,7 @@ namespace dxvk {
         }
         if (row.kind == RowKind::Colour) {
           float c[3] = { v.x, v.y, v.z };
-          ImGui::SetNextItemWidth(controlWidth);
+          ImGui::SetNextItemWidth(valueWidth);
           edited = ImGui::ColorEdit3("##value", c, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
           v = numos::Vector3(c[0], c[1], c[2]);
         } else {
@@ -1337,7 +1392,7 @@ namespace dxvk {
           float s = strength;
           edited = ImGui::ColorEdit3("##value", c, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs);
           ImGui::SameLine();
-          ImGui::SetNextItemWidth(controlWidth);
+          ImGui::SetNextItemWidth(std::max(valueWidth - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x, 1.0f));
           const std::string format = std::string("strength ") + row.format;
           edited |= ImGui::DragFloat("##strength", &s, row.speed, row.mn, row.mx, format.c_str(), kClamp);
           const float cmax = std::max(std::max(c[0], c[1]), c[2]);
@@ -1356,84 +1411,262 @@ namespace dxvk {
       if (!own) {
         ImGui::PopStyleColor(2);
         ImGui::PopStyleVar();
+        addOverride |= ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
       }
-      RemixGui::SetTooltipToLastWidgetOnHover(description);
+      settingTooltip(own, description);
       if (edited && own) {
         p.relative[i] = false;
         p.dirty = true;
       }
+
+      ImGui::TableSetColumnIndex(2);
+      if (own) {
+        if (ImGui::SmallButton("x")) {
+          weather.removeKey(p, i);
+        }
+        RemixGui::SetTooltipToLastWidgetOnHover("Stop overriding this setting. The sky goes back to the inherited value.");
+      } else {
+        addOverride |= ImGui::SmallButton("+");
+        RemixGui::SetTooltipToLastWidgetOnHover("Override this setting in this preset, starting from the value shown.");
+      }
+
       if (multiplier && !edited) {
-        ImGui::SameLine();
-        ImGui::TextColored(hint, "%s", multiplierNote);
+        ImGui::TableSetColumnIndex(3);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(hint, "(x your setting)");
         RemixGui::SetTooltipToLastWidgetOnHover("Stored as a multiplier on your own value, so it follows your tuning. Editing it "
                                                 "here stores the shown value as an absolute one (Revert undoes that).");
+      }
+      if (addOverride) {
+        weather.addKey(p, i);
       }
       ImGui::PopID();
     }
 
-    // Every key the preset sets that no curated row shows, and a search to add more.
-    void otherSettings(NumosWeather& weather, NumosWeather::Preset& p, PresetWindow& window) {
-      const auto& infos = numos::settingInfos();
-      size_t removeIndex = SIZE_MAX;
-      for (size_t i = 0; i < infos.size(); ++i) {
-        if (!p.set[i] || curatedKeys()[i]) {
-          continue;
-        }
-        ImGui::PushID(int(i));
-        if (ImGui::SmallButton("x")) {
-          removeIndex = i;
-        }
-        RemixGui::SetTooltipToLastWidgetOnHover("Stop overriding this setting (the user's value shows instead).");
-        ImGui::SameLine();
-        const std::string name = infos[i].key.rfind(kKeyPrefix, 0) == 0 ? infos[i].key.substr(std::strlen(kKeyPrefix)) : infos[i].key;
-        if (editPresetValue(infos[i], *p.values, labelFor(name) + (p.relative[i] ? " (multiplier)" : "") + "###" + infos[i].key)) {
-          p.dirty = true;
-        }
-        ImGui::PopID();
+    // One table row of a setting the preset overrides that no curated row shows. A multiplier shows
+    // and edits the stored factor.
+    void otherRow(NumosWeather& weather, NumosWeather::Preset& p, size_t i) {
+      const numos::SettingInfo& info = numos::settingInfos()[i];
+      const bool relative = p.relative[i];
+      ImGui::TableNextRow();
+      ImGui::PushID(info.key.c_str());
+      ImGui::TableSetColumnIndex(0);
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextUnformatted(otherLabel(info).c_str());
+      RemixGui::SetTooltipToLastWidgetOnHover(info.key.c_str());
+      ImGui::TableSetColumnIndex(1);
+      ImGui::SetNextItemWidth(presetValueWidth());
+      if (editPresetValue(info, *p.values, "##value")) {
+        p.dirty = true;
       }
-      if (removeIndex != SIZE_MAX) {
-        weather.removeKey(p, removeIndex);
+      ImGui::TableSetColumnIndex(2);
+      if (ImGui::SmallButton("x")) {
+        weather.removeKey(p, i);
       }
-      ImGui::InputText("Add setting (search)", window.addFilter, sizeof(window.addFilter));
-      if (window.addFilter[0]) {
-        int shown = 0;
-        for (size_t i = 0; i < infos.size() && shown < 12; ++i) {
-          if (p.set[i] || (infos[i].flags & numos::NUMOS_SETTING_NO_SAVE) || !containsNoCase(infos[i].key, window.addFilter)) {
+      RemixGui::SetTooltipToLastWidgetOnHover("Stop overriding this setting. The sky goes back to the inherited value.");
+      if (relative) {
+        ImGui::TableSetColumnIndex(3);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(hintTextColor(), "(multiplier)");
+        RemixGui::SetTooltipToLastWidgetOnHover("This value multiplies your own setting, so the preset follows your tuning.");
+      }
+      ImGui::PopID();
+    }
+
+    // A searchable list of every setting the preset does not override, by section. A click adds the override.
+    void addSettingPopup(NumosWeather& weather, NumosWeather::Preset& p, PresetWindow& window) {
+      if (!ImGui::BeginPopup("AddSettingPopup")) {
+        return;
+      }
+      const float width = ImGui::GetFontSize() * 22.0f;
+      if (ImGui::IsWindowAppearing()) {
+        ImGui::SetKeyboardFocusHere();
+      }
+      ImGui::SetNextItemWidth(width);
+      ImGui::InputTextWithHint("##search", "Search settings", window.settingFilter, sizeof(window.settingFilter));
+      const std::string needle = window.settingFilter;
+      const ImVec4 hint = hintTextColor();
+      size_t addIndex = SIZE_MAX;
+      bool any = false;
+      ImGui::BeginChild("settings", ImVec2(width, ImGui::GetTextLineHeightWithSpacing() * 16.0f), false);
+      for (const PresetSection& section : presetSections()) {
+        bool header = false;
+        for (const PresetRow& row : section.rows) {
+          const numos::SettingInfo* info = rowInfo(row);
+          if (info == nullptr || p.set[settingIndex(*info)]) {
             continue;
           }
-          ++shown;
-          ImGui::PushID(int(i) + 100000);
-          if (ImGui::SmallButton("+")) {
-            weather.addKey(p, i);
+          if (!containsNoCase(row.label, needle) && !containsNoCase(section.title, needle) && !containsNoCase(info->key, needle)) {
+            continue;
           }
-          ImGui::SameLine();
-          ImGui::TextUnformatted(infos[i].key.c_str());
+          if (!header) {
+            ImGui::TextColored(hint, "%s", section.title);
+            header = true;
+          }
+          ImGui::PushID(info->key.c_str());
+          ImGui::Indent();
+          if (ImGui::Selectable(row.label)) {
+            addIndex = settingIndex(*info);
+          }
+          ImGui::Unindent();
+          if (info->description && info->description[0]) {
+            RemixGui::SetTooltipToLastWidgetOnHover(info->description);
+          }
           ImGui::PopID();
+          any = true;
         }
+      }
+      const auto& infos = numos::settingInfos();
+      bool header = false;
+      for (size_t i = 0; i < infos.size(); ++i) {
+        if (p.set[i] || curatedKeys()[i] || (infos[i].flags & numos::NUMOS_SETTING_NO_SAVE)) {
+          continue;
+        }
+        const std::string label = otherLabel(infos[i]);
+        if (!containsNoCase(label, needle) && !containsNoCase(infos[i].key, needle)) {
+          continue;
+        }
+        if (!header) {
+          ImGui::TextColored(hint, "Other settings");
+          header = true;
+        }
+        ImGui::PushID(infos[i].key.c_str());
+        ImGui::Indent();
+        if (ImGui::Selectable(label.c_str())) {
+          addIndex = i;
+        }
+        ImGui::Unindent();
+        RemixGui::SetTooltipToLastWidgetOnHover(infos[i].key.c_str());
+        ImGui::PopID();
+        any = true;
+      }
+      if (!any) {
+        hintText("No setting matches.");
+      }
+      ImGui::EndChild();
+      if (addIndex != SIZE_MAX) {
+        weather.addKey(p, addIndex);
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::EndPopup();
+    }
+
+    // The settings of the preset, by section. By default only the overridden ones show.
+    void presetSettings(NumosWeather& weather, NumosWeather::Preset& p, PresetWindow& window, float labelWidth) {
+      const auto& infos = numos::settingInfos();
+      const size_t total = size_t(std::count(p.set.begin(), p.set.end(), true));
+      if (ImGui::Button("Add setting...")) {
+        window.settingFilter[0] = '\0';
+        ImGui::OpenPopup("AddSettingPopup");
+      }
+      RemixGui::SetTooltipToLastWidgetOnHover("Lists every setting this preset does not override yet. Pick one to override it.");
+      addSettingPopup(weather, p, window);
+      ImGui::SameLine();
+      ImGui::Checkbox("Show all settings", &window.showAll);
+      RemixGui::SetTooltipToLastWidgetOnHover("Also lists the settings this preset does not override, dimmed at the value the sky "
+                                              "shows without the preset. Click one to override it.");
+      ImGui::SameLine();
+      ImGui::TextColored(hintTextColor(), "%d overridden", int(total));
+      RemixGui::SetTooltipToLastWidgetOnHover("Edits apply live. Save writes the preset file.");
+
+      if (total == 0 && !window.showAll) {
+        hintText("This preset overrides no settings, so the sky shows the inherited ones. Add a setting, or show all settings.");
+        return;
+      }
+
+      // Layer 2's base is relative to the camera while it follows, else a height.
+      const numos::SettingInfo* follow = numos::findSetting("rtx.atmosphere.cloudLayer2FollowCamera");
+      bool follows = false;
+      if (follow != nullptr) {
+        follows = p.set[settingIndex(*follow)] ? presetField<bool>(*p.values, *follow) : presetField<bool>(weather.current(), *follow);
+      }
+
+      for (const PresetSection& section : presetSections()) {
+        size_t count = 0;
+        for (const PresetRow& row : section.rows) {
+          const numos::SettingInfo* info = rowInfo(row);
+          count += info != nullptr && p.set[settingIndex(*info)];
+        }
+        if (count == 0 && !window.showAll) {
+          continue;
+        }
+        const std::string title = count ? std::string(section.title) + " (" + std::to_string(count) + ")###" + section.title
+                                        : std::string(section.title) + "###" + section.title;
+        if (!ImGui::CollapsingHeader(title.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+          continue;
+        }
+        if (beginSettingTable(section.title, labelWidth)) {
+          for (const PresetRow& row : section.rows) {
+            const numos::SettingInfo* info = rowInfo(row);
+            const bool own = info != nullptr && p.set[settingIndex(*info)];
+            const bool followMismatch = (row.follow > 0 && !follows) || (row.follow < 0 && follows);
+            if (own || (window.showAll && !followMismatch)) {
+              presetRow(weather, p, window, row);
+            }
+          }
+          ImGui::EndTable();
+        }
+        ImGui::Spacing();
+      }
+
+      size_t others = 0;
+      for (size_t i = 0; i < infos.size(); ++i) {
+        others += p.set[i] && !curatedKeys()[i];
+      }
+      if (others == 0) {
+        return;
+      }
+      const std::string title = "Other settings (" + std::to_string(others) + ")###Other settings";
+      if (ImGui::CollapsingHeader(title.c_str(), ImGuiTreeNodeFlags_DefaultOpen) && beginSettingTable("Other settings", labelWidth)) {
+        for (size_t i = 0; i < infos.size(); ++i) {
+          if (p.set[i] && !curatedKeys()[i]) {
+            otherRow(weather, p, i);
+          }
+        }
+        ImGui::EndTable();
       }
     }
 
+    // The weathers the preset applies to, as removable chips, and a button that adds one.
     void presetWeathers(NumosWeather& weather, NumosWeather::Preset& p, PresetWindow& window) {
+      const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+      ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
       for (size_t i = 0; i < p.bindings.size(); ++i) {
+        const std::string label = p.bindings[i] + "  x";
+        if (i > 0) {
+          sameLineIfFits(buttonWidth(label.c_str()), right);
+        }
         ImGui::PushID(int(i));
-        ImGui::TextUnformatted(p.bindings[i].c_str());
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Remove")) {
+        const bool remove = ImGui::SmallButton(label.c_str());
+        RemixGui::SetTooltipToLastWidgetOnHover("Remove this weather from the preset.");
+        ImGui::PopID();
+        if (remove) {
           p.bindings.erase(p.bindings.begin() + i);
           p.dirty = true;
-          ImGui::PopID();
           break;
         }
-        ImGui::PopID();
       }
+      ImGui::PopStyleColor();
       if (p.bindings.empty()) {
-        hintText("No weathers: this preset shows only when chosen or previewed.");
+        ImGui::TextColored(hintTextColor(), "None");
+        RemixGui::SetTooltipToLastWidgetOnHover("This preset shows only when chosen or previewed.");
       }
+      sameLineIfFits(buttonWidth("+ Add"), right);
+      if (ImGui::SmallButton("+ Add")) {
+        window.addIdBuffer[0] = '\0';
+        ImGui::OpenPopup("AddWeatherPopup");
+      }
+      RemixGui::SetTooltipToLastWidgetOnHover("Binds a game weather to this preset.");
 
+      if (!ImGui::BeginPopup("AddWeatherPopup")) {
+        return;
+      }
       const std::string current = firstId(NumosWeather::gameWeather());
       NumosWeather::Preset* owner = current.empty() ? nullptr : weather.boundPreset(current);
       ImGui::BeginDisabled(current.empty() || hasBinding(p, current));
-      if (ImGui::Button("Add current weather")) {
+      const std::string addCurrent = (current.empty() ? std::string("Add the current weather") : "Add the current weather: " + current) +
+                                     "###addCurrent";
+      if (ImGui::Button(addCurrent.c_str())) {
         if (owner != nullptr && owner != &p) {
           // A weather belongs to one preset.
           owner->bindings.erase(std::remove_if(owner->bindings.begin(), owner->bindings.end(), [&](const std::string& b) {
@@ -1445,25 +1678,28 @@ namespace dxvk {
         }
         p.bindings.push_back(current);
         p.dirty = true;
+        ImGui::CloseCurrentPopup();
       }
       ImGui::EndDisabled();
       const std::string addTip = current.empty() ? std::string("The game reports no weather now.")
         : "Binds " + current + " (the most specific id the game reports)" +
           (owner != nullptr && owner != &p ? ", moving it here from " + owner->name + "." : ".");
       RemixGui::SetTooltipToLastWidgetOnHover(addTip.c_str());
+      ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0f);
+      const bool enter = ImGui::InputTextWithHint("##addId", "weather id", window.addIdBuffer, sizeof(window.addIdBuffer),
+                                                  ImGuiInputTextFlags_EnterReturnsTrue);
       ImGui::SameLine();
-      ImGui::SetNextItemWidth(160.0f);
-      ImGui::InputTextWithHint("##addId", "weather id", window.addIdBuffer, sizeof(window.addIdBuffer));
-      ImGui::SameLine();
-      if (ImGui::Button("Add by id")) {
+      if (ImGui::Button("Add by id") || enter) {
         const std::string id = firstId(window.addIdBuffer);
         if (!id.empty() && !hasBinding(p, id)) {
           p.bindings.push_back(id);
           p.dirty = true;
         }
         window.addIdBuffer[0] = '\0';
+        ImGui::CloseCurrentPopup();
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Binds any id the game reports: a form id, an editor name or a weather class.");
+      ImGui::EndPopup();
     }
 
     // A popup that asks for a name. Returns true on the frame the name is confirmed, with the name in `out`.
@@ -1505,50 +1741,65 @@ namespace dxvk {
                                                     : "Save failed: " + error;
     }
 
+    // The preset's name, which turns into a text field on a click. The field renames the preset and its
+    // file when it loses focus. Escape restores the old name, so nothing is renamed.
+    void presetName(NumosWeather& weather, NumosWeather::Preset& p, PresetWindow& window) {
+      if (!window.renaming) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(p.name.c_str());
+        if (ImGui::IsItemClicked()) {
+          window.renaming = true;
+          window.renameFocus = true;
+        }
+        RemixGui::SetTooltipToLastWidgetOnHover("Click to rename the preset and its file.");
+        if (p.dirty) {
+          ImGui::SameLine();
+          ImGui::TextColored(attentionColor(), "unsaved");
+        }
+        return;
+      }
+      if (window.renameFocus) {
+        ImGui::SetKeyboardFocusHere();
+        window.renameFocus = false;
+      }
+      ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16.0f);
+      ImGui::InputText("##name", window.nameBuffer, sizeof(window.nameBuffer));
+      if (ImGui::IsItemDeactivated()) {
+        if (p.name != window.nameBuffer) {
+          std::string error;
+          window.status = weather.rename(p, window.nameBuffer, &error) ? "Renamed to " + p.name + "." : "Rename failed: " + error;
+          window.selected = p.name;
+        }
+        window.renaming = false;
+        window.nameFor.clear();
+      }
+      RemixGui::SetTooltipToLastWidgetOnHover("Renames the preset and its file. Escape keeps the old name.");
+    }
+
     // Draws the selected preset's editor. Returns false when the preset list changed (the preset may
     // have moved), so the caller stops drawing it this frame.
     bool presetEditor(NumosWeather& weather, NumosWeather::Preset& p, PresetWindow& window) {
       if (window.nameFor != p.name) {
         std::snprintf(window.nameBuffer, sizeof(window.nameBuffer), "%s", p.name.c_str());
         window.nameFor = p.name;
-        window.confirmDelete = false;
+        window.renaming = false;
       }
-      ImGui::SetNextItemWidth(220.0f);
-      const bool enter = ImGui::InputText("Name", window.nameBuffer, sizeof(window.nameBuffer), ImGuiInputTextFlags_EnterReturnsTrue);
-      ImGui::SameLine();
-      if ((ImGui::Button("Rename") || enter) && p.name != window.nameBuffer) {
-        std::string error;
-        window.status = weather.rename(p, window.nameBuffer, &error) ? "Renamed to " + p.name + "." : "Rename failed: " + error;
-        window.selected = p.name;
-        window.nameFor.clear();
-      }
-      RemixGui::SetTooltipToLastWidgetOnHover("Renames the preset and its file.");
-      ImGui::SameLine();
-      ImGui::BeginDisabled(weather.tuning());
-      if (ImGui::Button("Save as new file...")) {
-        openNamePopup("SaveAsPopup", window, weather.uniqueName(p.name + " copy"));
-      }
-      ImGui::EndDisabled();
-      RemixGui::SetTooltipToLastWidgetOnHover("Saves this preset, edits included, as a new preset file under a new name. "
-                                              "Weathers are not copied: a weather belongs to one preset.");
-      std::string newName;
-      if (namePopup("SaveAsPopup", "Name of the new preset file:", window, newName)) {
-        const NumosWeather::Preset copy = p;
-        saveNew(weather, weather.create(weather.uniqueName(newName), &copy), window, "Saved as");
-        return false;
-      }
+      const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
 
+      // The header line: name, switches, actions, and the menu with the rarer actions.
+      presetName(weather, p, window);
+      sameLineIfFits(ImGui::GetFrameHeight() + ImGui::CalcTextSize("Enabled").x + ImGui::GetStyle().ItemInnerSpacing.x, right);
       if (ImGui::Checkbox("Enabled", &p.enabled)) {
         p.dirty = true;
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Off: the preset ignores its weathers (it still shows when chosen or previewed).");
-      ImGui::SameLine();
+      sameLineIfFits(ImGui::GetFrameHeight() + ImGui::CalcTextSize("Preview").x + ImGui::GetStyle().ItemInnerSpacing.x, right);
       bool preview = weather.preview() == p.name;
-      if (ImGui::Checkbox("Preview (force this preset)", &preview)) {
+      if (ImGui::Checkbox("Preview", &preview)) {
         weather.setPreview(preview ? p.name : std::string());
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Shows this preset whatever the weather, until unticked. Edits show live.");
-      ImGui::SameLine();
+      sameLineIfFits(buttonWidth("Revert"), right);
       ImGui::BeginDisabled(!weather.hasSavedCopy(p) || !p.dirty || weather.tuning());
       if (ImGui::Button("Revert")) {
         weather.revert(p);
@@ -1558,76 +1809,93 @@ namespace dxvk {
       ImGui::EndDisabled();
       RemixGui::SetTooltipToLastWidgetOnHover("Back to this preset as last saved.");
       if (p.numosBuiltIn) {
-        ImGui::SameLine();
+        sameLineIfFits(buttonWidth("Reset to built-in"), right);
         if (ImGui::Button("Reset to built-in")) {
           weather.resetToNumos(p);
           window.status = "Reset " + p.name + " to the built-in definition (not saved).";
         }
         RemixGui::SetTooltipToLastWidgetOnHover("Replaces the settings with the sky library's own definition of this preset. Weathers stay.");
       }
-
-      bool ownTransition = p.transitionSeconds >= 0.0f;
-      if (ImGui::Checkbox("Own transition time", &ownTransition)) {
-        p.transitionSeconds = ownTransition ? NumosWeather::transitionSeconds() : -1.0f;
-        p.dirty = true;
+      sameLineIfFits(buttonWidth("..."), right);
+      if (ImGui::Button("...###PresetMenuButton")) {
+        ImGui::OpenPopup("PresetMenu");
       }
-      RemixGui::SetTooltipToLastWidgetOnHover("How long the sky takes to blend into this preset. Off: the Ease time above.");
-      if (ownTransition) {
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(120.0f);
-        if (ImGui::DragFloat("s###PresetTransition", &p.transitionSeconds, 0.1f, 0.0f, 600.0f, "%.1f", kClamp)) {
+      RemixGui::SetTooltipToLastWidgetOnHover("More actions for this preset.");
+      bool saveAs = false;
+      if (ImGui::BeginPopup("PresetMenu")) {
+        if (ImGui::MenuItem("Rename")) {
+          window.renaming = true;
+          window.renameFocus = true;
+        }
+        if (ImGui::MenuItem("Save as new file...", nullptr, false, !weather.tuning())) {
+          saveAs = true;
+        }
+        RemixGui::SetTooltipToLastWidgetOnHover("Saves this preset, edits included, as a new preset file under a new name. "
+                                                "Weathers are not copied: a weather belongs to one preset.");
+        ImGui::EndPopup();
+      }
+      if (saveAs) {
+        openNamePopup("SaveAsPopup", window, weather.uniqueName(p.name + " copy"));
+      }
+      std::string newName;
+      if (namePopup("SaveAsPopup", "Name of the new preset file:", window, newName)) {
+        const NumosWeather::Preset copy = p;
+        saveNew(weather, weather.create(weather.uniqueName(newName), &copy), window, "Saved as");
+        return false;
+      }
+
+      // The weathers and the transition time, aligned with the setting rows below.
+      ImGui::Spacing();
+      const float labelWidth = presetLabelWidth(p);
+      if (ImGui::BeginTable("presetProperties", 2, ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+        ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("Weathers");
+        RemixGui::SetTooltipToLastWidgetOnHover("The game weathers this preset applies to.");
+        ImGui::TableSetColumnIndex(1);
+        presetWeathers(weather, p, window);
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Transition");
+        ImGui::TableSetColumnIndex(1);
+        bool ownTransition = p.transitionSeconds >= 0.0f;
+        if (ImGui::Checkbox("Own time", &ownTransition)) {
+          p.transitionSeconds = ownTransition ? NumosWeather::transitionSeconds() : -1.0f;
           p.dirty = true;
         }
-      }
-
-      ImGui::Spacing();
-      if (ImGui::CollapsingHeader("Weathers", ImGuiTreeNodeFlags_DefaultOpen)) {
-        presetWeathers(weather, p, window);
-      }
-
-      ImGui::Spacing();
-      hintText("Tick a setting to override it in this preset. Edits apply live; Save writes the file.");
-      const float labelWidth = presetLabelWidth();
-      for (const PresetSection& section : presetSections()) {
-        if (!ImGui::CollapsingHeader(section.title, section.open ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
-          continue;
-        }
-        // Layer 2's base is relative to the camera while it follows, else a height.
-        const numos::SettingInfo* follow = numos::findSetting("rtx.atmosphere.cloudLayer2FollowCamera");
-        bool follows = false;
-        if (follow != nullptr) {
-          const size_t fi = size_t(follow - numos::settingInfos().data());
-          follows = p.set[fi] ? presetField<bool>(*p.values, *follow) : presetField<bool>(weather.current(), *follow);
-        }
-        if (ImGui::BeginTable(section.title, 3, ImGuiTableFlags_SizingFixedFit)) {
-          ImGui::TableSetupColumn("##set", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
-          ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
-          ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
-          for (const PresetRow& row : section.rows) {
-            if ((row.follow > 0 && !follows) || (row.follow < 0 && follows)) {
-              continue;
-            }
-            presetRow(weather, p, window, row);
+        RemixGui::SetTooltipToLastWidgetOnHover("How long the sky takes to blend into this preset. Off: the Ease time.");
+        ImGui::SameLine();
+        if (ownTransition) {
+          ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
+          if (ImGui::DragFloat("##PresetTransition", &p.transitionSeconds, 0.1f, 0.0f, 600.0f, "%.1f s", kClamp)) {
+            p.dirty = true;
           }
-          ImGui::EndTable();
+        } else {
+          ImGui::TextColored(hintTextColor(), "Ease time, %.1f s", NumosWeather::transitionSeconds());
         }
-        ImGui::Spacing();
+        ImGui::EndTable();
       }
-      if (ImGui::CollapsingHeader("Other settings")) {
-        otherSettings(weather, p, window);
-      }
+
+      ImGui::Separator();
+      presetSettings(weather, p, window, labelWidth);
       return true;
     }
 
-    // The name a preset has in the list, with its off and unsaved marks.
+    // The name a preset has in the list, with its unsaved mark.
     std::string presetListName(const NumosWeather::Preset& p) {
-      return std::string(p.enabled ? "" : "(off) ") + p.name + (p.dirty ? " *" : "");
+      return p.name + (p.dirty ? " *" : "");
     }
 
-    // Each row draws the name on the left, clipped before a right-aligned column with the share of the
-    // sky the preset makes up. A share of 0% is drawn in the hint color.
+    // Each row draws the name on the left, clipped before the share of the sky the preset makes up.
+    // The share is right-aligned in the hint color, and only drawn while it is above zero.
+    // A disabled preset's name is drawn in the hint color.
     void presetListEntries(NumosWeather& weather, PresetWindow& window, bool builtIn) {
-      const float percentColumn = ImGui::CalcTextSize("100%").x;
+      const ImU32 hint = ImGui::GetColorU32(hintTextColor());
       for (const NumosWeather::Preset& p : weather.presets()) {
         if (p.numosBuiltIn != builtIn) {
           continue;
@@ -1638,20 +1906,27 @@ namespace dxvk {
         if (ImGui::Selectable(id.c_str(), window.selected == p.name)) {
           window.selected = p.name;
         }
+        const float weight = showingWeight(weather, p) * 100.0f;
+        char percent[16] = {};
+        if (weight >= 0.5f) {
+          std::snprintf(percent, sizeof(percent), "%.0f%%", weight);
+        }
+        const float percentWidth = percent[0] ? ImGui::CalcTextSize(percent).x + ImGui::GetStyle().ItemSpacing.x : 0.0f;
         const std::string name = presetListName(p);
-        const float nameRight = right - percentColumn - ImGui::GetStyle().ItemSpacing.x;
-        if (pos.x + ImGui::CalcTextSize(name.c_str()).x > nameRight) {
+        const float nameRight = right - percentWidth;
+        if (!p.enabled) {
+          const std::string tip = name + " is off: it ignores its weathers.";
+          RemixGui::SetTooltipToLastWidgetOnHover(tip.c_str());
+        } else if (pos.x + ImGui::CalcTextSize(name.c_str()).x > nameRight) {
           RemixGui::SetTooltipToLastWidgetOnHover(name.c_str());
         }
-        const float weight = showingWeight(weather, p) * 100.0f;
-        char percent[16];
-        std::snprintf(percent, sizeof(percent), "%.0f%%", weight);
         ImDrawList* draw = ImGui::GetWindowDrawList();
         draw->PushClipRect(pos, ImVec2(nameRight, pos.y + ImGui::GetTextLineHeight()), true);
-        draw->AddText(pos, ImGui::GetColorU32(ImGuiCol_Text), name.c_str());
+        draw->AddText(pos, p.enabled ? ImGui::GetColorU32(ImGuiCol_Text) : hint, name.c_str());
         draw->PopClipRect();
-        const ImU32 percentColor = weight >= 0.5f ? ImGui::GetColorU32(ImGuiCol_Text) : ImGui::GetColorU32(hintTextColor());
-        draw->AddText(ImVec2(right - ImGui::CalcTextSize(percent).x, pos.y), percentColor, percent);
+        if (percent[0]) {
+          draw->AddText(ImVec2(right - ImGui::CalcTextSize(percent).x, pos.y), hint, percent);
+        }
       }
     }
 
@@ -1663,73 +1938,157 @@ namespace dxvk {
         names = std::max(names, ImGui::CalcTextSize(presetListName(p).c_str()).x);
       }
       const float rows = names + style.ItemSpacing.x + ImGui::CalcTextSize("100%").x;
-      const float buttons = ImGui::CalcTextSize("AddDuplicateDelete").x + style.FramePadding.x * 6.0f + style.ItemSpacing.x * 2.0f;
+      const float buttons = buttonWidth("Add") + buttonWidth("Duplicate") + buttonWidth("Delete") + style.ItemSpacing.x * 2.0f;
       const float content = std::max(rows, buttons) + style.WindowPadding.x * 2.0f + style.ScrollbarSize;
       return std::min(content, ImGui::GetContentRegionAvail().x * 0.4f);
     }
 
-    // The preset list: the game's presets, then the built-in ones, and Add / Duplicate / Delete.
+    // The preset list: the custom presets, then the built-in ones, and Add / Duplicate / Delete below it.
     void presetList(NumosWeather& weather, PresetWindow& window) {
-      ImGui::BeginChild("presetList", ImVec2(presetListWidth(weather), 0.0f), true);
-      presetListEntries(weather, window, false);
-      ImGui::Spacing();
-      hintText("Built-in");
+      const ImVec4 hint = hintTextColor();
+      ImGui::BeginGroup();
+      ImGui::BeginChild("presetList", ImVec2(window.listWidth, -ImGui::GetFrameHeightWithSpacing()), true);
+      const bool anyCustom = std::any_of(weather.presets().begin(), weather.presets().end(),
+                                         [](const NumosWeather::Preset& p) { return !p.numosBuiltIn; });
+      if (anyCustom) {
+        ImGui::TextColored(hint, "Custom");
+        RemixGui::SetTooltipToLastWidgetOnHover("Every preset that is not built in: the game's and your own.");
+        ImGui::Separator();
+        presetListEntries(weather, window, false);
+        ImGui::Spacing();
+      }
+      ImGui::TextColored(hint, "Built-in");
       RemixGui::SetTooltipToLastWidgetOnHover("The sky library's own presets (Clear ... Altostratus), as files that can be edited and "
                                               "bound like any other.");
       ImGui::Separator();
       presetListEntries(weather, window, true);
-      ImGui::Separator();
-
-      NumosWeather::Preset* selected = weather.find(window.selected);
-      if (window.confirmDelete && selected != nullptr) {
-        ImGui::TextWrapped("Delete %s.conf?", selected->name.c_str());
-        if (ImGui::Button("Really delete the file")) {
-          std::string error;
-          const std::string name = selected->name;
-          window.status = weather.remove(name, &error) ? "Deleted " + name + ".conf." : "Delete failed: " + error;
-          window.selected.clear();
-          window.confirmDelete = false;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Keep")) {
-          window.confirmDelete = false;
-        }
-        ImGui::EndChild();
-        return;
-      }
-      window.confirmDelete = false;
+      ImGui::EndChild();
 
       ImGui::BeginDisabled(weather.tuning());
-      if (ImGui::Button("Add")) {
+      if (ImGui::SmallButton("Add")) {
         const NumosWeather::Preset empty;
         window.selected = weather.create(weather.uniqueName("New preset"), &empty).name;
         window.status = "Added " + window.selected + " (not saved).";
       }
-      RemixGui::SetTooltipToLastWidgetOnHover("A new empty preset: tick the settings it should set.");
+      RemixGui::SetTooltipToLastWidgetOnHover("A new empty preset: add the settings it should override.");
       ImGui::SameLine();
-      selected = weather.find(window.selected);
+      NumosWeather::Preset* selected = weather.find(window.selected);
       ImGui::BeginDisabled(selected == nullptr);
-      if (ImGui::Button("Duplicate") && selected != nullptr) {
+      if (ImGui::SmallButton("Duplicate") && selected != nullptr) {
         const NumosWeather::Preset copy = *selected;
         window.selected = weather.create(weather.uniqueName(copy.name + " copy"), &copy).name;
         window.status = "Duplicated as " + window.selected + " (not saved; weathers are not copied, a weather belongs to one preset).";
       }
       ImGui::SameLine();
-      if (ImGui::Button("Delete")) {
-        window.confirmDelete = true;
+      if (ImGui::SmallButton("Delete")) {
+        ImGui::OpenPopup("DeletePopup");
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Deletes the selected preset and its file.");
       ImGui::EndDisabled();
       ImGui::EndDisabled();
+
+      selected = weather.find(window.selected);
+      if (ImGui::BeginPopup("DeletePopup")) {
+        if (selected == nullptr) {
+          ImGui::CloseCurrentPopup();
+        } else {
+          ImGui::Text("Delete %s.conf?", selected->name.c_str());
+          if (ImGui::Button("Delete the file")) {
+            std::string error;
+            const std::string name = selected->name;
+            window.status = weather.remove(name, &error) ? "Deleted " + name + ".conf." : "Delete failed: " + error;
+            window.selected.clear();
+            ImGui::CloseCurrentPopup();
+          }
+          ImGui::SameLine();
+          if (ImGui::Button("Keep")) {
+            ImGui::CloseCurrentPopup();
+          }
+        }
+        ImGui::EndPopup();
+      }
+      ImGui::EndGroup();
+    }
+
+    // The preset list and the selected preset's editor side by side, split by a bar that can be dragged.
+    void presetPanes(NumosWeather& weather, PresetWindow& window) {
+      if (weather.find(window.selected) == nullptr) {
+        window.selected = weather.presets().empty() ? std::string() : weather.presets().front().name;
+      }
+      const float avail = ImGui::GetContentRegionAvail().x;
+      if (window.listWidth <= 0.0f) {
+        window.listWidth = presetListWidth(weather);
+      }
+      const float minWidth = ImGui::GetFontSize() * 8.0f;
+      window.listWidth = std::clamp(window.listWidth, minWidth, std::max(minWidth, avail * 0.5f));
+      presetList(weather, window);
+
+      ImGui::SameLine(0.0f, 0.0f);
+      const float splitterWidth = std::max(ImGui::GetStyle().ItemSpacing.x * 2.0f, 6.0f);
+      const ImVec2 splitterPos = ImGui::GetCursorScreenPos();
+      const float splitterHeight = std::max(ImGui::GetContentRegionAvail().y, 1.0f);
+      ImGui::InvisibleButton("##splitter", ImVec2(splitterWidth, splitterHeight));
+      const bool hovered = ImGui::IsItemHovered();
+      const bool active = ImGui::IsItemActive();
+      if (hovered || active) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+      }
+      if (active) {
+        window.listWidth += ImGui::GetIO().MouseDelta.x;
+      }
+      const ImU32 lineColor = ImGui::GetColorU32(active ? ImGuiCol_SeparatorActive : hovered ? ImGuiCol_SeparatorHovered : ImGuiCol_Separator);
+      const float lineX = std::floor(splitterPos.x + splitterWidth * 0.5f);
+      ImGui::GetWindowDrawList()->AddLine(ImVec2(lineX, splitterPos.y), ImVec2(lineX, splitterPos.y + splitterHeight), lineColor,
+                                          active || hovered ? 2.0f : 1.0f);
+
+      ImGui::SameLine(0.0f, 0.0f);
+      ImGui::BeginChild("presetEdit", ImVec2(0.0f, 0.0f), false);
+      if (NumosWeather::Preset* p = weather.find(window.selected)) {
+        presetEditor(weather, *p, window);
+      } else {
+        hintText("Select or add a preset.");
+      }
       ImGui::EndChild();
     }
 
+    // The Files tab: loading a preset file, the preset folder and the import of an older preset file.
     void presetFiles(NumosWeather& weather, PresetWindow& window) {
-      if (!ImGui::TreeNode("Files")) {
-        return;
+      ImGui::BeginDisabled(weather.tuning());
+      if (ImGui::Button("Load preset file...")) {
+        ImGui::OpenPopup("LoadFilePopup");
       }
+      RemixGui::SetTooltipToLastWidgetOnHover("Loads a preset file from anywhere (a shared one, or a backup) into the preset folder.");
+      if (ImGui::BeginPopup("LoadFilePopup")) {
+        ImGui::TextUnformatted("Path of the preset file (.conf), absolute or relative to the game's folder:");
+        if (ImGui::IsWindowAppearing()) {
+          ImGui::SetKeyboardFocusHere();
+        }
+        ImGui::SetNextItemWidth(420.0f);
+        const bool enter = ImGui::InputText("##path", window.loadPath, sizeof(window.loadPath), ImGuiInputTextFlags_EnterReturnsTrue);
+        if ((ImGui::Button("Load") || enter) && window.loadPath[0]) {
+          std::string path = window.loadPath;
+          path.erase(std::remove(path.begin(), path.end(), '"'), path.end());
+          std::string error;
+          if (NumosWeather::Preset* loaded = weather.loadFile(path, &error)) {
+            window.selected = loaded->name;
+            window.nameFor.clear();
+            window.status = "Loaded " + path + " as " + loaded->name + ".";
+          } else {
+            window.status = "Load failed: " + error;
+          }
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+      }
+      ImGui::EndDisabled();
+      hintText("Folder in use: " + weather.directory());
+
       if (RemixGui::InputText("Preset folder", &NumosWeather::presetDirectoryObject())) {
-        window.status = "Folder changed: press Reload from file to load it.";
+        window.status = "Folder changed: press Reload to load it.";
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Folder of the preset files, relative to the game's folder unless absolute.");
       RemixGui::InputText("Older preset file", &NumosWeather::legacyPresetFileObject());
@@ -1753,7 +2112,6 @@ namespace dxvk {
         }
       }
       ImGui::EndDisabled();
-      ImGui::TreePop();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1789,8 +2147,10 @@ namespace dxvk {
       return w;
     }
 
+    // The Seed tab: random weathers and seeds, and saving a seed's look as a preset.
     void seedTools(DxvkContext* ctx, NumosWeather& weather, PresetWindow& window) {
       RtxNumos& numosObject = ctx->getCommonObjects()->metaNumos();
+      const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
       ImGui::BeginDisabled(weather.tuning());
       if (ImGui::Button("Randomize")) {
         const numos::WeatherSnapshot w = randomWeather(weather.current());
@@ -1800,10 +2160,10 @@ namespace dxvk {
         window.seedStatus = "A random weather is showing; its seed is in the box. Save seed as preset keeps it.";
       }
       RemixGui::SetTooltipToLastWidgetOnHover(
-        "Shows a new random weather: each weather setting of the sections below (clouds, second layer, wind, air and "
-        "haze density, fog, lightning) is drawn from its slider range. Colours, heights, placement and scale stay as "
+        "Shows a new random weather: each weather setting of the editor's sections (clouds, second layer, wind, air and "
+        "haze density, fog, lightning) is drawn from its slider range. Colors, heights, placement and scale stay as "
         "they are, and your own settings are not changed. It shows until a preset or the game's weather takes over.");
-      ImGui::SameLine();
+      sameLineIfFits(buttonWidth("Load from seed"), right);
       if (ImGui::Button("Load from seed")) {
         numos::SeedContents contents;
         std::string error;
@@ -1830,7 +2190,7 @@ namespace dxvk {
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Applies the seed in the box: its settings become your settings (user layer), and its "
                                               "weather shows until a preset or the game's weather takes over.");
-      ImGui::SameLine();
+      sameLineIfFits(buttonWidth("Copy seed"), right);
       if (ImGui::Button("Copy seed")) {
         const std::string seed = currentSeed(ctx, weather.currentSnapshot());
         ImGui::SetClipboardText(seed.c_str());
@@ -1839,20 +2199,21 @@ namespace dxvk {
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Copies a text seed of the current sky: every sky setting, the weather and the clouds' "
                                               "accumulated motion. Paste it here (or in the NUMOS viewer) to get the same sky back.");
-      ImGui::SameLine();
+      sameLineIfFits(buttonWidth("Paste"), right);
       if (ImGui::Button("Paste")) {
         if (const char* clip = ImGui::GetClipboardText()) {
           std::snprintf(window.seedText, sizeof(window.seedText), "%s", clip);
         }
       }
-      ImGui::SameLine();
+      RemixGui::SetTooltipToLastWidgetOnHover("Puts the clipboard's text in the seed box.");
+      sameLineIfFits(buttonWidth("Save seed as preset..."), right);
       ImGui::BeginDisabled(window.seedText[0] == '\0');
       if (ImGui::Button("Save seed as preset...")) {
         openNamePopup("SeedPresetPopup", window, weather.uniqueName("Seed"));
       }
       ImGui::EndDisabled();
       RemixGui::SetTooltipToLastWidgetOnHover("Writes the look of the seed in the box to a new preset file: every weather setting and "
-                                              "every setting of the sections below, as the seed has them.");
+                                              "every setting of the editor's sections, as the seed has them.");
       std::string name;
       if (namePopup("SeedPresetPopup", "Name of the new preset file:", window, name)) {
         numos::SeedContents contents;
@@ -1869,21 +2230,49 @@ namespace dxvk {
         }
       }
       ImGui::EndDisabled();
-      ImGui::InputText("Seed###NumosSeed", window.seedText, sizeof(window.seedText));
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      ImGui::InputTextWithHint("##NumosSeed", "Seed: paste one here, or press Copy seed", window.seedText, sizeof(window.seedText));
       if (!window.seedStatus.empty()) {
-        ImGui::TextWrapped("%s", window.seedStatus.c_str());
+        hintText(window.seedStatus);
       }
     }
 
-    void presetWindowBody(DxvkContext* ctx, NumosWeather& weather, PresetWindow& window) {
-      bool anyDirty = false;
-      for (const NumosWeather::Preset& p : weather.presets()) {
-        anyDirty = anyDirty || p.dirty;
+    // The last part of a path, for a short display of the preset folder.
+    std::string folderName(const std::string& path) {
+      const size_t end = path.find_last_not_of("/\\");
+      if (end == std::string::npos) {
+        return path;
+      }
+      const size_t start = path.find_last_of("/\\", end);
+      return path.substr(start == std::string::npos ? 0 : start + 1, end - (start == std::string::npos ? 0 : start + 1) + 1);
+    }
+
+    // The header line: the preset folder and its unsaved count, then Save, Reload and the tools toggle
+    // on the right.
+    void presetHeader(NumosWeather& weather, PresetWindow& window) {
+      const ImGuiStyle& style = ImGui::GetStyle();
+      const int dirty = int(std::count_if(weather.presets().begin(), weather.presets().end(),
+                                          [](const NumosWeather::Preset& p) { return p.dirty; }));
+      const std::string directory = weather.directory();
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextColored(hintTextColor(), "Folder:");
+      ImGui::SameLine();
+      ImGui::TextUnformatted(folderName(directory).c_str());
+      RemixGui::SetTooltipToLastWidgetOnHover(directory.c_str());
+      ImGui::SameLine();
+      if (dirty > 0) {
+        ImGui::TextColored(attentionColor(), "%d unsaved", dirty);
+      } else {
+        ImGui::TextColored(hintTextColor(), "all saved");
       }
 
-      // Files and global controls.
-      ImGui::TextWrapped("Folder: %s%s", weather.directory().c_str(), anyDirty ? "   * unsaved changes" : "");
+      const char* toolsLabel = "Files & seeds";
+      const float buttons = buttonWidth("Save") + buttonWidth("Reload") + buttonWidth(toolsLabel) + style.ItemSpacing.x * 2.0f;
+      const float rightX = ImGui::GetWindowContentRegionMax().x - buttons;
+      const float minX = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x + style.ItemSpacing.x;
+      ImGui::SameLine(std::max(rightX, minX));
       ImGui::BeginDisabled(weather.tuning());
+      ImGui::BeginDisabled(dirty == 0);
       if (ImGui::Button("Save")) {
         size_t saved = 0;
         std::string errors;
@@ -1900,54 +2289,100 @@ namespace dxvk {
         }
         window.status = "Saved " + std::to_string(saved) + " presets." + (errors.empty() ? "" : " Failed:" + errors);
       }
+      ImGui::EndDisabled();
       RemixGui::SetTooltipToLastWidgetOnHover("Writes every edited preset to its file.");
       ImGui::SameLine();
-      if (ImGui::Button("Reload from file")) {
+      if (ImGui::Button("Reload")) {
         weather.reload();
         window.status = "Reloaded the preset files (unsaved edits discarded).";
       }
       RemixGui::SetTooltipToLastWidgetOnHover("Reads every preset file in the folder again. Unsaved edits are discarded.");
-      ImGui::SameLine();
-      if (ImGui::Button("Load preset file...")) {
-        ImGui::OpenPopup("LoadFilePopup");
-      }
-      RemixGui::SetTooltipToLastWidgetOnHover("Loads a preset file from anywhere (a shared one, or a backup) into the preset folder.");
-      if (ImGui::BeginPopup("LoadFilePopup")) {
-        ImGui::TextUnformatted("Path of the preset file (.conf), absolute or relative to the game's folder:");
-        if (ImGui::IsWindowAppearing()) {
-          ImGui::SetKeyboardFocusHere();
-        }
-        ImGui::SetNextItemWidth(420.0f);
-        const bool enter = ImGui::InputText("##path", window.loadPath, sizeof(window.loadPath), ImGuiInputTextFlags_EnterReturnsTrue);
-        if ((ImGui::Button("Load") || enter) && window.loadPath[0]) {
-          std::string path = window.loadPath;
-          path.erase(std::remove(path.begin(), path.end(), '"'), path.end());
-          std::string error;
-          if (NumosWeather::Preset* loaded = weather.loadFile(path, &error)) {
-            window.selected = loaded->name;
-            window.nameFor.clear();
-            window.status = "Loaded " + path + " as " + loaded->name + ".";
-          } else {
-            window.status = "Load failed: " + error;
-          }
-          ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) {
-          ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-      }
       ImGui::EndDisabled();
       ImGui::SameLine();
-      RemixGui::Checkbox("Follow game weather", &NumosWeather::followGameObject());
+      const bool toolsOpen = window.showTools;
+      if (toolsOpen) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+      }
+      if (ImGui::Button(toolsLabel)) {
+        window.showTools = !window.showTools;
+      }
+      if (toolsOpen) {
+        ImGui::PopStyleColor();
+      }
+      RemixGui::SetTooltipToLastWidgetOnHover("Shows or hides the seed tools (random weathers, seeds) and the file tools (loading a "
+                                              "preset file, the preset folder, importing an older preset file).");
+    }
+
+    // The status strip: the game's weather and what the sky shows, then how the presets follow the game.
+    void presetStatus(NumosWeather& weather, PresetWindow& window) {
+      const ImVec4 hint = hintTextColor();
+      const float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+      const std::string gameIds = NumosWeather::gameWeather();
+      NumosWeather::Preset* bound = gameIds.empty() ? nullptr : weather.boundPreset(gameIds);
+
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextColored(hint, "Game weather:");
       ImGui::SameLine();
-      RemixGui::PushLabelColumnFixedWidth(ImGui::CalcTextSize("Ease (s)").x + ImGui::GetStyle().FramePadding.x * 2.0f);
-      RemixGui::DragFloat("Ease (s)", &NumosWeather::transitionSecondsObject(), 0.1f, 0.0f, 600.0f, "%.1f", kClamp);
-      RemixGui::PopLabelColumnFixedWidth();
+      if (gameIds.empty()) {
+        ImGui::TextUnformatted("none");
+        RemixGui::SetTooltipToLastWidgetOnHover("The game reports no weather (interior, menu, or no game integration).");
+      } else {
+        ImGui::Text("%s  ->  %s", gameIds.c_str(), bound ? bound->name.c_str() : "no preset");
+        RemixGui::SetTooltipToLastWidgetOnHover("The ids the game reports, most specific first, and the preset bound to them.");
+        const std::string outgoing = NumosWeather::gameWeatherOutgoing();
+        if (!outgoing.empty() && outgoing != gameIds && NumosWeather::gameWeatherBlend() >= 0.0f) {
+          const NumosWeather::Preset* out = weather.boundPreset(outgoing);
+          char text[512];
+          std::snprintf(text, sizeof(text), "(from %s  ->  %s, %.0f%% done)", outgoing.c_str(), out ? out->name.c_str() : "no preset",
+                        NumosWeather::gameWeatherBlend() * 100.0f);
+          sameLineIfFits(ImGui::CalcTextSize(text).x, right);
+          ImGui::TextColored(hint, "%s", text);
+        }
+      }
+      const std::string& active = weather.activePreset();
+      const std::string showing = (active.empty() ? std::string("settings only") : active) + (weather.preview().empty() ? "" : " (preview)");
+      sameLineIfFits(ImGui::CalcTextSize("Showing:").x + ImGui::GetStyle().ItemSpacing.x + ImGui::CalcTextSize(showing.c_str()).x, right);
+      ImGui::TextColored(hint, "Showing:");
+      ImGui::SameLine();
+      ImGui::TextUnformatted(showing.c_str());
+      if (weather.transitionProgress() < 1.0f) {
+        const float barWidth = ImGui::GetFontSize() * 6.0f;
+        sameLineIfFits(barWidth, right);
+        ImGui::ProgressBar(weather.transitionProgress(), ImVec2(barWidth, 0.0f), "blending");
+      }
+
+      // Follow game weather and Ease are options, so their edits go through the option layer checks.
+      bool follow = NumosWeather::followGame();
+      if (ImGui::Checkbox("Follow game weather", &follow)) {
+        RemixGui::CheckRtxOptionPopups(&NumosWeather::followGameObject());
+        NumosWeather::followGameObject().setDeferred(follow);
+      }
+      RemixGui::SetTooltipToLastWidgetOnHover("Shows the preset bound to the weather the game reports. Off: the preset chosen for "
+                                              "\"Without a game weather\" only.");
+      const float easeWidth = ImGui::GetFontSize() * 5.0f;
+      sameLineIfFits(ImGui::CalcTextSize("Ease").x + ImGui::GetStyle().ItemSpacing.x + easeWidth, right);
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextUnformatted("Ease");
+      RemixGui::SetTooltipToLastWidgetOnHover("Blend time into a new weather, for presets without a transition time of their own. "
+                                              "0 is instant.");
+      ImGui::SameLine();
+      float ease = NumosWeather::transitionSeconds();
+      ImGui::SetNextItemWidth(easeWidth);
+      if (ImGui::DragFloat("##Ease", &ease, 0.1f, 0.0f, 600.0f, "%.1f s", kClamp)) {
+        RemixGui::CheckRtxOptionPopups(&NumosWeather::transitionSecondsObject());
+        NumosWeather::transitionSecondsObject().setDeferred(ease);
+      }
+      RemixGui::SetTooltipToLastWidgetOnHover("Blend time into a new weather, for presets without a transition time of their own. "
+                                              "0 is instant.");
+
       const std::string chosen = NumosWeather::preset();
-      ImGui::SetNextItemWidth(220.0f);
-      if (ImGui::BeginCombo("Without a game weather", chosen.empty() ? "(settings only)" : chosen.c_str())) {
+      const float comboWidth = ImGui::GetFontSize() * 10.0f;
+      sameLineIfFits(ImGui::CalcTextSize("Without a game weather").x + ImGui::GetStyle().ItemSpacing.x + comboWidth, right);
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextUnformatted("Without a game weather");
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(comboWidth);
+      if (ImGui::BeginCombo("##WithoutGameWeather", chosen.empty() ? "(settings only)" : chosen.c_str())) {
         if (ImGui::Selectable("(settings only)", chosen.empty())) {
           NumosWeather::presetObject().setDeferred(std::string());
         }
@@ -1960,72 +2395,52 @@ namespace dxvk {
       }
       RemixGui::SetTooltipToLastWidgetOnHover("The preset shown while the game reports no weather bound to a preset (or Follow game "
                                               "weather is off).");
-      presetFiles(weather, window);
-      if (!window.status.empty()) {
-        hintText(window.status);
-      }
-
-      // The current weather.
-      ImGui::Separator();
-      const std::string gameIds = NumosWeather::gameWeather();
-      NumosWeather::Preset* bound = gameIds.empty() ? nullptr : weather.boundPreset(gameIds);
-      if (!gameIds.empty()) {
-        ImGui::Text("Current weather: %s  ->  %s", gameIds.c_str(), bound ? bound->name.c_str() : "no preset");
-        const std::string outgoing = NumosWeather::gameWeatherOutgoing();
-        if (!outgoing.empty() && outgoing != gameIds && NumosWeather::gameWeatherBlend() >= 0.0f) {
-          const NumosWeather::Preset* out = weather.boundPreset(outgoing);
-          ImGui::Text("Changing from: %s  ->  %s   %.0f%% done", outgoing.c_str(), out ? out->name.c_str() : "no preset",
-                      NumosWeather::gameWeatherBlend() * 100.0f);
-        }
-      } else {
-        hintText("The game reports no weather (interior, menu, or no game integration).");
-      }
-      const std::string& active = weather.activePreset();
-      ImGui::Text("Showing: %s%s", active.empty() ? "the settings alone" : active.c_str(),
-                  weather.preview().empty() ? "" : "  [preview]");
-      if (weather.transitionProgress() < 1.0f) {
-        ImGui::SameLine();
-        ImGui::ProgressBar(weather.transitionProgress(), ImVec2(-1.0f, 0.0f), "Blending");
-      }
 
       // Tuning and saving the current look.
       const std::string weatherId = firstId(gameIds);
       if (!weather.tuning()) {
-        NumosWeather::Preset* selected = weather.find(window.selected);
-        const bool canTune = !weatherId.empty() || selected != nullptr;
-        ImGui::BeginDisabled(!canTune);
-        if (ImGui::Button("Tune this weather with the Sky sliders...")) {
-          weather.setPreview(std::string());
-          if (!weatherId.empty()) {
-            weather.beginTuning(bound ? bound->name : std::string(), weatherId);
-          } else {
-            weather.beginTuning(selected->name, std::string());
+        sameLineIfFits(buttonWidth("Look..."), right);
+        if (ImGui::Button("Look...")) {
+          ImGui::OpenPopup("LookMenu");
+        }
+        RemixGui::SetTooltipToLastWidgetOnHover("Tunes the current weather with the Sky sliders, or saves what is on screen to it.");
+        if (ImGui::BeginPopup("LookMenu")) {
+          NumosWeather::Preset* selected = weather.find(window.selected);
+          const bool canTune = !weatherId.empty() || selected != nullptr;
+          if (ImGui::MenuItem("Tune this weather with the Sky sliders", nullptr, false, canTune)) {
+            weather.setPreview(std::string());
+            if (!weatherId.empty()) {
+              weather.beginTuning(bound ? bound->name : std::string(), weatherId);
+            } else {
+              weather.beginTuning(selected->name, std::string());
+            }
+            window.status = "Tuning: adjust the Sky tabs (Sky, Clouds, Haze), then press Save look.";
           }
-          window.status = "Tuning: adjust the Sky tabs (Sky, Clouds, Haze), then press Save look.";
+          RemixGui::SetTooltipToLastWidgetOnHover(
+            "Copies what you see now into the normal Sky tabs and pauses the presets, so the sliders show exactly what "
+            "will be saved. Then press Save look. Your own settings are put back afterwards. Without a game weather it "
+            "tunes the selected preset.");
+          if (ImGui::MenuItem("Save current look to this weather", nullptr, false, canTune)) {
+            NumosWeather::Preset* target = !weatherId.empty() ? bound : selected;
+            NumosWeather::Preset& stored = weather.storeLook(target, weatherId);
+            std::string error;
+            window.selected = stored.name;
+            window.status = weather.save(stored, &error) ? "Saved the current look to " + stored.name + "."
+                                                         : "Save failed: " + error;
+          }
+          RemixGui::SetTooltipToLastWidgetOnHover(
+            "One click: stores exactly what is on screen now (clouds, second layer, air and haze, fog, wind, lightning, and "
+            "every other setting the preset already sets) into this weather's preset, a new one if the weather has none, "
+            "and saves its file. Without a game weather it stores into the selected preset.");
+          ImGui::EndPopup();
         }
-        RemixGui::SetTooltipToLastWidgetOnHover(
-          "Copies what you see now into the normal Sky tabs and pauses the presets, so the sliders show exactly what "
-          "will be saved. Then press Save look. Your own settings are put back afterwards. Without a game weather it "
-          "tunes the selected preset.");
-        ImGui::SameLine();
-        if (ImGui::Button("Save current look to this weather")) {
-          NumosWeather::Preset* target = !weatherId.empty() ? bound : selected;
-          NumosWeather::Preset& stored = weather.storeLook(target, weatherId);
-          std::string error;
-          window.selected = stored.name;
-          window.status = weather.save(stored, &error) ? "Saved the current look to " + stored.name + "."
-                                                       : "Save failed: " + error;
-        }
-        RemixGui::SetTooltipToLastWidgetOnHover(
-          "One click: stores exactly what is on screen now (clouds, second layer, air and haze, fog, wind, lightning, and "
-          "every other setting the preset already sets) into this weather's preset, a new one if the weather has none, "
-          "and saves its file. Without a game weather it stores into the selected preset.");
-        ImGui::EndDisabled();
       } else {
         const std::string& target = weather.tuningPreset();
-        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Tuning %s  ->  %s",
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(attentionColor(), "Tuning %s  ->  %s",
                            weather.tuningWeather().empty() ? "the selected preset" : weather.tuningWeather().c_str(),
                            target.empty() ? "a new preset" : target.c_str());
+        ImGui::SameLine();
         if (ImGui::Button("Save look")) {
           if (NumosWeather::Preset* stored = weather.finishTuning(true)) {
             window.selected = stored->name;
@@ -2040,25 +2455,30 @@ namespace dxvk {
           window.status = "Tuning cancelled; your settings are restored.";
         }
       }
+    }
 
-      // Seeds.
-      ImGui::Separator();
-      seedTools(ctx, weather, window);
-
-      // The preset list and the selected preset's editor.
-      ImGui::Separator();
-      if (weather.find(window.selected) == nullptr) {
-        window.selected = weather.presets().empty() ? std::string() : weather.presets().front().name;
+    void presetWindowBody(DxvkContext* ctx, NumosWeather& weather, PresetWindow& window) {
+      presetHeader(weather, window);
+      if (window.showTools) {
+        if (ImGui::BeginTabBar("PresetTools")) {
+          if (ImGui::BeginTabItem("Seed")) {
+            seedTools(ctx, weather, window);
+            ImGui::EndTabItem();
+          }
+          if (ImGui::BeginTabItem("Files")) {
+            presetFiles(weather, window);
+            ImGui::EndTabItem();
+          }
+          ImGui::EndTabBar();
+        }
       }
-      presetList(weather, window);
-      ImGui::SameLine();
-      ImGui::BeginChild("presetEdit", ImVec2(0.0f, 0.0f), false);
-      if (NumosWeather::Preset* p = weather.find(window.selected)) {
-        presetEditor(weather, *p, window);
-      } else {
-        hintText("Select or add a preset.");
+      ImGui::Separator();
+      presetStatus(weather, window);
+      if (!window.status.empty()) {
+        hintText(window.status);
       }
-      ImGui::EndChild();
+      ImGui::Separator();
+      presetPanes(weather, window);
     }
   }
 
@@ -2087,7 +2507,8 @@ namespace dxvk {
       return;
     }
     RtxOptionLayerTarget layerTarget(RtxOptionEditTarget::User);
-    ImGui::SetNextWindowSize(ImVec2(820.0f, 760.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(900.0f, 760.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(560.0f, 360.0f), ImVec2(FLT_MAX, FLT_MAX));
     if (!ImGui::Begin("Weather Presets", &window.open)) {
       ImGui::End();
       return;
