@@ -49,7 +49,9 @@ void main(uint2 threadId : SV_DispatchThreadID)
 
   const float exposure = sanitizeExposure(getExposure(InExposure, cb.enableAutoExposure, cb.exposureFactor));
   inputColor *= exposure;
-  float3 outputColor = tonemap(inputColor, 1.0f, cb.tonemapPrimaries, cb.grade);
+  // A grade with negative matrix terms can push a channel below zero, and the gamma encode would turn that
+  // into a NaN. DLSS-NR's input must stay finite and within 0 to 1.
+  float3 outputColor = saturate(tonemap(inputColor, 1.0f, cb.tonemapPrimaries, cb.grade));
 
   outputColor = linearToGamma(outputColor);
   OutColorTexture[threadId] = vec4(outputColor.rgb, 1.0f);

@@ -67,11 +67,17 @@ void main(uint2 threadId : SV_DispatchThreadID)
   const float3 originalHdrColor = sanitizeRadiance(imageLoad(InOutColorTexture, threadId).rgb);
   const float exposure = sanitizeExposure(getExposure(InExposure, cb.enableAutoExposure, cb.exposureFactor));
   const float3 toneMappingInput = originalHdrColor * exposure;
-  const float3 originalToneMapped = tonemap(toneMappingInput, 1.0f, cb.tonemapPrimaries, cb.grade);
+  const float3 curveOutput = tonemap(toneMappingInput, 1.0f, cb.tonemapPrimaries, cb.grade);
+
+  // This matches the fast tone mapping pass, which clamps before DLSS-NR.
+  const float3 originalToneMapped = saturate(curveOutput);
   const float3 inverseScalar = toneMappingInput / max(originalToneMapped, float3(1e-6f));
+
+  // A channel clamped up from below zero has no inverse, so the pixel keeps its original HDR color.
   const bool isValidInverseScalar =
     isValidValue(inverseScalar) &&
-    all(inverseScalar >= float3(0.0f));
+    all(inverseScalar >= float3(0.0f)) &&
+    all(curveOutput >= float3(0.0f));
 
   float3 outputColor = isValidInverseScalar
     ? inputColor.xyz * inverseScalar
