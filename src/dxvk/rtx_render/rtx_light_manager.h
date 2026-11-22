@@ -127,7 +127,7 @@ struct LightDebugInfo {
   float shapingFocusExponent = 0.0f;
 
   // Gobo parameters, see documentation/LightGobos.md.
-  // goboRendered is false when the gobo has no texture index this frame or gobos are disabled.
+  // goboRendered follows RtLight::isGoboRendered, and goboTextureIndex is only valid while it is true.
   bool hasGobo = false;
   bool goboRendered = false;
   std::string goboTextureName;

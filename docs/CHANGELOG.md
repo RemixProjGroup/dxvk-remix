@@ -28,6 +28,14 @@ Entry format:
 - Docs: [RemixApi.md](RemixApi.md)   (only if a public doc covers it)
 ```
 
+## 2026-11-22
+
+### Fix: gobos wait for a resident texture and track its mip size
+A gobo whose texture was not loaded sampled the black dummy texture, which turned its light off. The light now renders without its gobo until the texture has an image, and the gobo's mip selection follows the resident top mip every frame. The light debug view shows such a gobo as not rendered.
+- Options: none.
+- Commits: the commit that adds this entry.
+- Docs: [LightGobos.md](LightGobos.md)
+
 ## 2026-11-21
 
 ### Fix: a `def` light override no longer resets the light

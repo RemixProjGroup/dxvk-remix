@@ -1299,8 +1299,10 @@ namespace dxvk {
 
       if (const RtLightGobo* pGobo = light->getGobo()) {
         info.hasGobo = true;
-        info.goboTextureIndex = light->getGoboTextureIndex();
-        info.goboRendered = enableGobos() && info.goboTextureIndex != BINDING_INDEX_INVALID && info.shapingEnabled;
+        info.goboRendered = light->isGoboRendered();
+        if (info.goboRendered) {
+          info.goboTextureIndex = light->getGoboTextureIndex();
+        }
         info.goboFovRadians = pGobo->fovRadians;
         info.goboRotationRadians = pGobo->rotationRadians;
         info.goboScale = pGobo->scale;

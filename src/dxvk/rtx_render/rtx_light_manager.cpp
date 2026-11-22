@@ -938,7 +938,26 @@ namespace dxvk {
       // Note: Tracked synchronously like the dome light texture so all of its mips stay resident.
       uint32_t textureIndex = BINDING_INDEX_INVALID;
       sceneManager.trackTexture(pGobo->texture, textureIndex, true, false);
-      light.setGoboTextureIndex(textureIndex);
+
+      // Note: A texture without an image would sample the black dummy texture and turn the light off,
+      // so the light renders without its gobo until the texture has an image.
+      const DxvkImageView* pImageView = pGobo->texture.getImageView();
+      if (textureIndex >= BINDING_INDEX_INVALID || pImageView == nullptr) {
+        const Rc<ManagedTexture>& managedTexture = pGobo->texture.getManagedTexture();
+        if (managedTexture != nullptr && managedTexture->m_state.load() == ManagedTexture::State::kFailed) {
+          ONCE(Logger::warn("A light gobo texture failed to load. Lights using it are rendered without their gobo."));
+        }
+
+        light.setGoboTexture(BINDING_INDEX_INVALID, 0);
+        return;
+      }
+
+      // Note: The size of the resident top mip picks the mip level on the GPU,
+      // so it is read every frame to follow streaming and hot reloads.
+      const VkExtent3D extent = pImageView->mipLevelExtent(0);
+      const uint32_t maxDimension = std::max(std::max(extent.width, extent.height), 1u);
+      const uint16_t log2TextureSize = static_cast<uint16_t>(std::ceil(std::log2(static_cast<float>(maxDimension))));
+      light.setGoboTexture(static_cast<uint16_t>(textureIndex), log2TextureSize);
     };
 
     for (auto&& pair : m_lights) {

@@ -25,7 +25,7 @@ The runtime and USD part is open upstream as [NVIDIAGameWorks/dxvk-remix#174](ht
 3. **Add the override.** In `mod.usda`, write `over "light_<KEY>"` under `over "RootNode"` and `over "lights"`, and author the gobo attributes from the table below, as in Adding a gobo to an existing light. Use `over`, not `def`.
 4. **Add the texture.** Put the DDS next to `mod.usda`, or in a subfolder such as `textures\`, and point `inputs:shaping:gobo:file` at it with a relative path such as `@./textures/window_gobo.dds@`. See Authoring gobo textures.
 5. **Restart the game.** Mods are loaded at startup.
-6. **Verify.** Open the light debug view (see Debugging and verification) and hover the light. The tooltip shows "Gobo: Rendered" and a texture index, and a magenta frame shows where the texture lands.
+6. **Verify.** Open the light debug view (see Debugging and verification) and hover the light. The tooltip shows "Gobo: Rendered" and a texture index once the texture has loaded, and a magenta frame shows where the texture lands.
 
 ### Attributes
 
@@ -33,13 +33,13 @@ Add these attributes to a `SphereLight` that has shaping:
 
 | Attribute | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `inputs:shaping:gobo:file` | asset | none | The gobo texture, a DDS file. It is resolved relative to the layer, like material textures. |
+| `inputs:shaping:gobo:file` | asset | none | The gobo texture, a DDS file. A relative path is relative to the layer that authors it, like material textures. |
 | `inputs:shaping:gobo:scale` | float2 | (1, 1) | Scales the texture coordinates around the texture's center. Values above 1 make the projected image smaller. Negative values mirror it. Each component is clamped to [-100, 100]. |
 | `inputs:shaping:gobo:offset` | float2 | (0, 0) | Shifts the texture coordinates, in texture widths and heights. Each component is clamped to [-100, 100]. |
 | `inputs:shaping:gobo:rotation` | float | 0 | Rotates the image around the light's direction, in degrees, counterclockwise as seen from the light. |
-| `inputs:shaping:gobo:fov` | float | 0 | The full angle the texture spans, in degrees. Zero uses twice the shaping cone angle, so the texture fills the cone. Other values are clamped to [1, 179]. |
+| `inputs:shaping:gobo:fov` | float | 0 | The full angle the texture spans, in degrees. Zero or less uses twice the shaping cone angle, so the texture fills the cone. Other values are clamped to [1, 179]. |
 
-Only the `inputs:` spelling is read. The light needs shaping, either authored in the same prim or inherited from the light it overrides.
+Only the `inputs:` spelling is read. `double` and `double2` values are accepted as well, and NaN values are ignored with a warning. The light needs shaping, either authored in the same prim or inherited from the light it overrides.
 
 ### Adding a gobo to an existing light
 
@@ -93,12 +93,14 @@ The prim name is `light_` followed by the 16-digit hexadecimal key of the light 
 
 ### Orientation
 
-The light projects along its shaping direction, which is the light's -Z axis in USD. The light's local Y axis is the up direction of the image, so rotating the light turns the gobo with it. The top row of the texture is projected toward up. When the up direction is parallel to the shaping direction, the runtime picks another axis.
+The light projects along its shaping direction, which is the light's -Z axis in USD. The light's local Y axis is the up direction of the image, so rotating the light turns the gobo with it. The top row of the texture is projected toward up. When the up direction is parallel to the shaping direction, the runtime picks another axis. A captured game light has only a direction and no orientation, so its up direction is world Y, and `inputs:shaping:gobo:rotation` turns the image.
 
 ## Authoring gobo textures
 
-- **Format:** DDS, loaded like material textures. Uncompressed RGBA8 keeps sharp edges. BC1 or BC7 also work when the pattern tolerates block compression.
-- **Size:** 256 to 1024 pixels on a side. Gobos are fully loaded into video memory and never streamed, so keep them small.
+- **Format:** DDS with an RGB format, loaded like material textures. Uncompressed RGBA8 keeps sharp edges. BC1 or BC7 also work when the pattern tolerates block compression.
+- **Color space:** use the sRGB variant of the format, such as `BC7_UNORM_SRGB`, for an image painted by eye, which is almost always the case. A linear format makes the grays and colors of such an image too bright.
+- **No one channel formats:** do not use BC4 or R8. The gobo reads red, green and blue, and those formats leave green and blue at zero, which tints the light red.
+- **Size:** square, a power of two, 256 to 1024 pixels on a side. The whole mip chain is kept in video memory, and soft or large lights blur the pattern anyway, so keep it small.
 - **Mip maps:** include a full mip chain. The renderer blurs the pattern with lower mips for large emitters and for volumetric lighting. A texture without mips aliases at a distance.
 - **Values:** the RGB color multiplies the light. Black blocks, white passes, gray dims, and color tints. Alpha is ignored.
 - **Edges:** leave a black border, or let the pattern fade at the edges, if the cone should not show the texture's square outline. Light outside the texture is blocked either way.
@@ -108,7 +110,7 @@ The light projects along its shaping direction, which is the light's -Z axis in 
 A simple test texture is a 256x256 uncompressed RGBA DDS showing a round window with blinds and a cross. Paint it in any editor and convert it with Microsoft's DirectXTex `texconv`, which generates the mip chain:
 
 ```
-texconv -f R8G8B8A8_UNORM -m 0 -o textures window_gobo.png
+texconv -f R8G8B8A8_UNORM_SRGB -srgb -m 0 -o textures window_gobo.png
 ```
 
 Use your own textures in mods and examples, not files extracted from a game.
@@ -121,8 +123,8 @@ Use your own textures in mods and examples, not files extracted from a game.
 2. Each gobo field has its own dirty flag. `LightData::merge` keeps the dirty fields and takes the rest from the source light, so a gobo authored as an override survives the merge with a captured D3D9 or API light.
 3. A `light_<key>` prim is always treated as an override, whether it is written as `over` or `def`. Only new lights, such as child lights, take schema defaults for unauthored attributes.
 4. `LightData::toRtLight` attaches an immutable `RtLightGobo` and the light's local Y axis to the `RtLight`. The gobo is held outside the light type union and outside the light hashes, so replacement matching is unchanged.
-5. `LightManager::trackGoboTextures` runs every frame after the lights are added and before the bindless tables are built. It resolves the texture index of every gobo, including those on replacement lights of Remix API lights, and the index of one shared linear clamp sampler.
-6. `RtLight::writeGPUData` builds the projection frame and packs the gobo into the sphere light. The incremental light upload compares packed bytes, so a changed texture index re-uploads the slot.
+5. `LightManager::trackGoboTextures` runs every frame after the lights are added and before the bindless tables are built. It tracks every gobo texture, including those on replacement lights of Remix API lights, and stores its bindless index and the log2 size of its resident top mip on the light. A texture without an image gets no index, so the light renders without its gobo rather than sampling the black dummy texture. It also resolves the index of one shared linear clamp sampler.
+6. `RtLight::writeGPUData` builds the projection frame and packs the gobo into the sphere light. The incremental light upload compares packed bytes, so a changed texture index or size re-uploads the slot.
 
 ### GPU layout
 
@@ -132,7 +134,7 @@ The gobo uses the sphere light's free bytes, so `MemoryPolymorphicLight` stays 6
 | --- | --- |
 | `data0.w` bits 16-31 | Texture index |
 | `data2.x` | Tangent X and Y, half precision |
-| `data2.y` | Tangent Z, half precision, and the log2 of the texture's largest dimension in bits 16-31 |
+| `data2.y` | Tangent Z, half precision, and the log2 of the resident top mip's largest dimension in bits 16-31 |
 | `data2.z` | UV scale X and Y, half precision. The CPU folds in `0.5 / tan(fov / 2)`. |
 | `data2.w` | UV offset X and Y, half precision |
 | `data3.w` bit 3 | `lightFlagGobo` |
@@ -164,18 +166,31 @@ Open the Remix menu, expand **Lighting**, then **Light Statistics**, and turn on
 
 | Field | Meaning |
 | --- | --- |
-| Gobo | "Rendered", or "Not rendered this frame" when gobos are off, the light has no shaping or the texture has no index |
+| Gobo | "Rendered", or "Not rendered this frame" when gobos are off or the texture is not loaded |
 | Texture | The texture's file name |
-| Size | The texture's width and height |
-| Texture Index | The bindless index, or "None" when the texture was not resolved |
+| Size | The width and height of the texture file, which can be larger than the mip that is loaded |
+| Texture Index | The bindless index, or "None" when the gobo is not rendered |
 | Field of View | The full projection angle in degrees, after the zero default and the clamp |
 | Rotation, Scale, Offset | The authored transform, after clamping |
 
 A working gobo on a 35-degree spot light shows "Gobo: Rendered", a texture index, "Field of View: 70.00 deg" and the magenta frame inside the cone.
 
+A light without any Gobo lines has no gobo attached. Its texture was not found or was rejected, or the light is not a sphere light with shaping.
+
+### Log messages
+
+Check the log when a light shows no gobo. The light keeps rendering without its gobo in each case.
+
+| Message | Meaning |
+| --- | --- |
+| `Texture <path> asset data cannot be found or corrupted.` | The path is wrong, or the file is not a valid DDS. |
+| `Ignoring a light gobo on a light that is not a sphere light with shaping.` | The light is not a spot light. This is logged once. |
+| `A light gobo texture failed to load.` | The texture manager marked the texture's load as failed. This is logged once. |
+| `Ignoring replacement texture with unsupported format` | The GPU cannot sample the DDS format. |
+
 ### Comparing with and without gobos
 
-`rtx.lights.enableGobos` turns all gobos off. It defaults on, since it only changes lights that author a gobo. The menu control is **Lighting > Light Gobos > Enable Light Gobos**. Gobo state is written to the GPU every frame, so the toggle takes effect immediately.
+`rtx.lights.enableGobos` turns all gobos off. It defaults on, since it only changes lights that author a gobo. The menu control is **Game Setup > Step 2: Parameter Tuning > Light Gobos > Enable Light Gobos**. Gobo state is written to the GPU every frame, so the toggle takes effect immediately.
 
 ```ini
 rtx.lights.enableGobos = False
@@ -188,7 +203,10 @@ rtx.lights.enableGobos = False
 | The light vanishes, or moves to the world origin with radiance 1, after adding a gobo | An older runtime treated a `def SphereLight "light_<key>"` as a new light and reset every unauthored value to the schema default | Update the runtime. Write the override as `over` regardless, which is correct on every version. |
 | "Texture Index: None" on an API light the mod replaces, and no gobo | An older runtime did not resolve gobo textures on replacement lights of API lights | Update the runtime. |
 | The override has no effect | The prim name uses the debug view's "Initial Hash", but the API light is matched by its asset key or an alias | Use the key the host plugin reports. |
-| "Gobo: Not rendered this frame" | The light has no shaping, or gobos are off | Author `inputs:shaping:cone:angle`, or check `rtx.lights.enableGobos`. |
+| "Gobo: Not rendered this frame" | The texture is not loaded, or gobos are off | Wait for the texture to load, check the log, or check `rtx.lights.enableGobos`. |
+| No Gobo lines in the tooltip | The texture was rejected, the light has no shaping, or the override did not match | Check the log and the key, or author `inputs:shaping:cone:angle`. |
+| The light turns red | The texture is BC4, R8 or another one channel format | Export with an RGB format. |
+| The grays and colors are too bright | The image was saved with a linear format | Export with an sRGB format. |
 | The pattern is blurry | Large light radius, or the texture lacks mips and was downsampled | Lower `inputs:radius` and export with a full mip chain. |
 | A warning about a gobo on an unsupported light | The gobo is on a rect, disk, cylinder or distant light | Move it to a sphere light with shaping. |
 
@@ -198,11 +216,12 @@ rtx.lights.enableGobos = False
 
 - Gobos only work on sphere lights with shaping. A gobo on any other light, or on a sphere light without shaping, is ignored, and a warning is logged once.
 - Gobos that a game defines for its own lights are not passed through yet. They need the gobo API extension below.
-- Texture alpha is ignored, and there are no flipbooks or IES profiles yet.
+- Texture alpha is ignored, and there are no flipbooks or IES profiles yet. Gobos cannot be animated.
+- The whole mip chain of a gobo texture is kept in video memory. Until the texture is loaded, the light renders without its gobo.
 - The NUMOS "Light Glow in Haze" effect evaluates the cone itself and ignores the gobo, so the haze glow shows the full unmasked cone.
 - Light selection weights ignore the gobo, as they ignore shaping. A mostly black gobo wastes some light samples and adds noise.
 - The pattern lives in the lighting signal, so denoisers cannot tell it from noise. NRD in particular may soften sharp edges, more so in motion.
-- The Remix Toolkit does not show the gobo attributes yet. They can be authored by hand in a `.usda` layer.
+- The Remix Toolkit does not show the gobo attributes yet, and its viewport does not render gobos. They can be authored by hand in a `.usda` layer. Toolkit packaging collects asset paths, so it picks up the texture.
 
 ### Roadmap
 

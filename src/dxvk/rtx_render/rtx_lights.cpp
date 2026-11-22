@@ -1048,6 +1048,7 @@ void RtLight::copyFrom(const RtLight& light) {
   m_gobo = light.m_gobo;
   m_goboUp = light.m_goboUp;
   m_goboTextureIndex = light.m_goboTextureIndex;
+  m_goboLog2TextureSize = light.m_goboLog2TextureSize;
   
   // Copy anti-culling union members safely based on the anti-culling type
   switch (light.m_anticullingType) {
@@ -1144,8 +1145,16 @@ void RtLight::applyTransform(const Matrix4& lightToWorld) {
   }
 }
 
+bool RtLight::isGoboRendered() const {
+  if (m_gobo == nullptr || m_goboTextureIndex == BINDING_INDEX_INVALID || m_type != RtLightType::Sphere || !LightManager::enableGobos()) {
+    return false;
+  }
+
+  return m_sphereLight.getShaping().getEnabled();
+}
+
 bool RtLight::getGoboGPUData(RtLightGoboGPUData& goboData) const {
-  if (m_goboTextureIndex == BINDING_INDEX_INVALID || !LightManager::enableGobos()) {
+  if (!isGoboRendered()) {
     return false;
   }
 
@@ -1185,7 +1194,7 @@ bool RtLight::calcGoboProjection(RtLightGoboGPUData& goboData) const {
   goboData.uvScale = m_gobo->scale * (0.5f / std::tan(m_gobo->fovRadians * 0.5f));
   goboData.uvOffset = m_gobo->offset;
   goboData.textureIndex = m_goboTextureIndex;
-  goboData.log2TextureSize = m_gobo->log2TextureSize;
+  goboData.log2TextureSize = m_goboLog2TextureSize;
 
   return true;
 }

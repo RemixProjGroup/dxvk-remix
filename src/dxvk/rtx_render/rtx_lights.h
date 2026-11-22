@@ -132,7 +132,6 @@ struct RtLightGobo {
   float rotationRadians = 0.0f;
   // The full angle the texture spans.
   float fovRadians = 0.0f;
-  uint32_t log2TextureSize = 0;
 };
 
 // The gobo fields of a sphere light in the form the GPU decodes them, see lightGoboCreate in light_shaping.slangh.
@@ -694,13 +693,20 @@ struct RtLight {
     return m_gobo.get();
   }
 
-  void setGoboTextureIndex(const uint32_t textureIndex) const {
+  // Sets the gobo texture's bindless index and the log2 of its largest dimension for the current frame.
+  // An index of BINDING_INDEX_INVALID renders the light without its gobo.
+  void setGoboTexture(const uint16_t textureIndex, const uint16_t log2TextureSize) const {
     m_goboTextureIndex = textureIndex;
+    m_goboLog2TextureSize = log2TextureSize;
   }
 
-  uint32_t getGoboTextureIndex() const {
+  uint16_t getGoboTextureIndex() const {
     return m_goboTextureIndex;
   }
+
+  // Returns true when the light's gobo is written to the GPU this frame.
+  // Returns false when the light has no gobo, the gobo texture is not resident, shaping is off or gobos are disabled.
+  bool isGoboRendered() const;
 
   // Computes the gobo's projection frame in the form the GPU decodes it, whether or not the gobo is rendered this frame.
   // Returns false when the light has no gobo or is not a sphere light with shaping.
@@ -742,7 +748,8 @@ private:
   std::shared_ptr<const RtLightGobo> m_gobo;
   Vector3 m_goboUp { 0.0f, 1.0f, 0.0f };
   // Note: Set each frame by LightManager::trackGoboTextures before the bindless tables are built.
-  mutable uint32_t m_goboTextureIndex = BINDING_INDEX_INVALID;
+  mutable uint16_t m_goboTextureIndex = BINDING_INDEX_INVALID;
+  mutable uint16_t m_goboLog2TextureSize = 0;
 
   // Shared Light Information
   mutable uint32_t m_frameLastTouched = kInvalidFrameIndex;

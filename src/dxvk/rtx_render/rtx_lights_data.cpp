@@ -800,14 +800,6 @@ namespace dxvk {
     const float fovRadians = m_goboFovRadians > 0.0f ? m_goboFovRadians : 2.0f * std::abs(m_ConeAngleRadians);
     gobo->fovRadians = std::clamp(fovRadians, kGoboMinFovRadians, kGoboMaxFovRadians);
 
-    // Note: The texture size picks the mip level on the GPU, and a texture without asset data uses the top mip.
-    const Rc<ManagedTexture>& managedTexture = m_goboTexture.getManagedTexture();
-    if (managedTexture != nullptr && managedTexture->m_assetData != nullptr) {
-      const VkExtent3D& extent = managedTexture->m_assetData->info().extent;
-      const uint32_t maxDimension = std::max(std::max(extent.width, extent.height), 1u);
-      gobo->log2TextureSize = static_cast<uint32_t>(std::ceil(std::log2(static_cast<float>(maxDimension))));
-    }
-
     // Note: The light's local Y axis orients the gobo, so a gobo is turned by rotating the light.
     light.setGobo(std::move(gobo), m_yAxis);
   }
