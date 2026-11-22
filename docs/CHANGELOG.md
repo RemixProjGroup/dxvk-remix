@@ -30,6 +30,11 @@ Entry format:
 
 ## 2026-11-22
 
+### Fix: RtxOptions.md matches the runtime's documentation writer again
+Regenerating `RtxOptions.md` with `scripts/gen_rtx_options_md.py` gave a different header and appended environment variable names, which the runtime's writer does not, so `test_documentation` failed. The script now writes the runtime's format.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ### Fix: gobos wait for a resident texture and track its mip size
 A gobo whose texture was not loaded sampled the black dummy texture, which turned its light off. The light now renders without its gobo until the texture has an image, and the gobo's mip selection follows the resident top mip every frame. The light debug view shows such a gobo as not rendered.
 - Options: none.
