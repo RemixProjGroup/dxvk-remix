@@ -709,8 +709,10 @@ namespace dxvk {
 
     deserializeGobo(prim);
 
-    // If this light is fully defined (i.e. a child light) then we need to use all attributes
-    if (prim.GetSpecifier() == pxr::SdfSpecifier::SdfSpecifierDef) {
+    // A child light defined with `def` is a new light, so its unauthored attributes take their schema defaults.
+    // A light named after the light it replaces is an override even when it is a `def`, so only its authored
+    // attributes replace the source light's values and the rest come from the source light.
+    if (prim.GetSpecifier() == pxr::SdfSpecifier::SdfSpecifierDef && !m_isOverrideLight) {
       m_dirty = m_allDirty;
     }
 

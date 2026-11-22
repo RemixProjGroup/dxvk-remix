@@ -181,6 +181,11 @@ exe = executable('test_legacy_material_fresnel', files('test_legacy_material_fre
 test('test_legacy_material_fresnel', exe, env: test_env)
 tests += exe
 
+exe = executable('test_light_data_merge', files('test_light_data_merge.cpp'),
+  include_directories : test_include_path, dependencies : [ d3d9_dep, test_unit_deps ], link_with: [ d3d9_dll, dxvk_lib ], win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
+test('test_light_data_merge', exe, env: test_env)
+tests += exe
+
 # The RayQuery G-buffer slim variant coverage over every feature combination (self-contained, no runtime link).
 exe = executable('test_gbuffer_variant_coverage',  files('test_gbuffer_variant_coverage.cpp'),  dependencies : test_unit_deps, win_subsystem : 'console', override_options: ['cpp_std='+dxvk_cpp_std])
 test('test_gbuffer_variant_coverage', exe, env: test_env)

@@ -30,6 +30,16 @@ Entry format:
 
 ## 2026-11-21
 
+### Fix: a `def` light override no longer resets the light
+A `light_<hash>` prim written as `def` instead of `over` took schema defaults for every attribute it did not author, so a replacement that only added a gobo put the light at the world origin with no radius, unit intensity and no shaping, and the light vanished. A light named after the light it replaces is now an override whether it is a `def` or an `over`: only its authored attributes replace the game light's values. Child lights under it still take schema defaults when they are `def`.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### Lights: the debug view draws every light type, spot cones and gobos
+The light debug view drew every sphere light as a plain disc, so spot lights looked like point lights, and it skipped distant and dome lights. It now draws each light type in its own color with a legend: sphere and spot emitters at their true radius, spot cones with the dashed inner edge where the softness ends, rect and disk outlines with their facing arrow and shaping cone (the rect pyramid follows the legacy and ratio scaling cone options), cylinder caps with the axis, the area a gobo projects onto at the end of a spot cone, a direction gizmo with the angular diameter for each distant light, and a panel for the dome light. An optional dashed range hint shows where a light's inverse-square illuminance falls below a threshold. The hover tooltip adds the light's source (game, replacement, externally tracked, Remix API, fallback, sky provider), intensity, inner cone angle and the gobo's texture, size, index, field of view, rotation, scale and offset. The view still draws from the render thread's snapshot, built only while the view is on.
+- Options: added `rtx.lights.debugShowCones` (default on), `rtx.lights.debugShowRange`, `rtx.lights.debugRangeThreshold`, `rtx.lights.debugShowDistantAndDome` (default on), `rtx.lights.debugShowSphereLights` / `SpotLights` / `RectLights` / `DiskLights` / `CylinderLights` (default on), `rtx.lights.debugColorMode`, `rtx.lights.debugLabelMode`, `rtx.lights.debugMaxDrawDistance`, `rtx.lights.debugMaxLights` (default 1024), all debug-only and not saved, under Lighting > Light Statistics. Removed `rtx.lights.debugDrawLightHashes`, which `rtx.lights.debugLabelMode` = 1 replaces. The view is off by default, and the filters inside it default to showing everything. Preset-independent: debug only.
+- Commits: the commit that adds this entry.
+
 ### Lights: gobos on spot lights
 Replacement sphere lights with shaping can project a texture, a gobo, like a slide projector, authored with the `inputs:shaping:gobo:file`, `:scale`, `:offset`, `:rotation` and `:fov` USD attributes. The gobo's color multiplies the light and blocks it outside the projected texture, in every path that evaluates sphere light shaping (RTXDI, LightBVH, the NEE cache, the integrators and volumetrics). Ported from our upstream change 816f427d0 (on NVIDIA's main).
 - Options: added `rtx.lights.enableGobos` (default on, since it only changes lights that author a gobo), in the Light Gobos section of the light settings. Preset-independent: it costs nothing on lights without a gobo.
