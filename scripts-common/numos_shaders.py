@@ -9,7 +9,9 @@ runtime refuses any SPIR-V whose hash differs from the table, so a mismatch fail
 instead of leaving a black sky at run time.
 
 install copies the SPIR-V to <destination>/numos/spirv and the night sky data to
-<destination>/numos/nightsky, where the runtime loads them from beside d3d9.dll.
+<destination>/numos/nightsky, where the runtime loads them from beside d3d9.dll. It also copies
+NUMOS's license and notices to <destination>/numos, which its licenses require with the binaries,
+and fails if one of them is missing.
 """
 import pathlib
 import shutil
@@ -33,6 +35,9 @@ def install(numos, spirv, dest):
         for f in src.glob(pattern):
             if f.is_file():
                 shutil.copy2(f, dst / f.name)
+    for name in ('LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md'):
+        shutil.copy2(numos / name, dest / 'numos' / name)
+    shutil.copytree(numos / 'licenses', dest / 'numos' / 'licenses', dirs_exist_ok=True)
 
 
 def main():

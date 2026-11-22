@@ -41,6 +41,11 @@ A gobo whose texture was not loaded sampled the black dummy texture, which turne
 - Commits: the commit that adds this entry.
 - Docs: [LightGobos.md](LightGobos.md)
 
+### Fix: runtime packages carry the NUMOS license and notices
+The install copied only NUMOS's SPIR-V and night sky data, so binary packages had no copy of its Apache-2.0 license, its NOTICE, or the MIT notice of its community contributors. The install now also copies `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md` and `licenses/` into the `numos` folder and fails if one is missing. `ThirdPartyLicenses.txt` has a NUMOS section with the notice, the contributors' license and the night sky data credits.
+- Options: none.
+- Commits: the commit that adds this entry.
+
 ## 2026-11-21
 
 ### Fix: a `def` light override no longer resets the light
