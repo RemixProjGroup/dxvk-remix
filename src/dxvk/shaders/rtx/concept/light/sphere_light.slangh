@@ -67,7 +67,7 @@ SphereLight sphereLightCreate(DecodedPolymorphicLight decodedPolymorphicLight)
   // Note: A gobo is projected along the shaping axis, so it requires shaping.
   sphereLight.gobo = lightGoboCreate(
     sphereLight.shaping.enabled && (decodedPolymorphicLight.data3.w & lightFlagGobo) != 0u,
-    data03.y, decodedPolymorphicLight.data2);
+    data03.y, decodedPolymorphicLight.data2, decodedPolymorphicLight.data3);
 
   return sphereLight;
 }
@@ -110,7 +110,7 @@ float sphereLightCalcWeight(SphereLight sphereLight, VolumeInteraction viewVolum
   return positionalWeight;
 }
 
-vec3 sphereLightCalcShaping(SphereLight sphereLight, vec3 lightToViewDirection, vec3 position, float goboLodBias)
+vec3 sphereLightCalcShaping(SphereLight sphereLight, vec3 lightToViewDirection, vec3 position, LightGoboReceiver goboReceiver)
 {
   const float radialFalloff = lightShapingCalcRadialFalloff(sphereLight.shaping, lightToViewDirection);
 
@@ -121,10 +121,10 @@ vec3 sphereLightCalcShaping(SphereLight sphereLight, vec3 lightToViewDirection, 
   }
 
   return radialFalloff * lightGoboCalcAttenuation(
-    sphereLight.gobo, sphereLight.shaping.primaryAxis, sphereLight.position, sphereLight.radius, position, goboLodBias);
+    sphereLight.gobo, sphereLight.shaping.primaryAxis, sphereLight.position, sphereLight.radius, position, goboReceiver);
 }
 
-LightSample sphereLightSampleArea(SphereLight sphereLight, vec2 sampleCoordinates, vec3 position, float goboLodBias)
+LightSample sphereLightSampleArea(SphereLight sphereLight, vec2 sampleCoordinates, vec3 position, LightGoboReceiver goboReceiver)
 {
   const vec3 lightVector = sphereLight.position - position;
   const float lightDistance2 = squareLength(lightVector);
@@ -178,7 +178,7 @@ LightSample sphereLightSampleArea(SphereLight sphereLight, vec2 sampleCoordinate
   // Calculate light shaping
 
   const vec3 lightToViewDirection = vec3(normalize(position - spherePositionSample));
-  const vec3 lightShaping = sphereLightCalcShaping(sphereLight, lightToViewDirection, position, goboLodBias);
+  const vec3 lightShaping = sphereLightCalcShaping(sphereLight, lightToViewDirection, position, goboReceiver);
 
   // Create the light sample
 
@@ -196,16 +196,24 @@ LightSample sphereLightSampleArea(
   SphereLight sphereLight, vec2 sampleCoordinates,
   MinimalSurfaceInteraction viewSurfaceInteraction)
 {
+  LightGoboReceiver goboReceiver;
+  goboReceiver.normal = viewSurfaceInteraction.geometryNormal;
+  goboReceiver.isVolume = false;
+
   return sphereLightSampleArea(
     sphereLight, sampleCoordinates,
-    viewSurfaceInteraction.position, 0.0f);
+    viewSurfaceInteraction.position, goboReceiver);
 }
 
 LightSample sphereLightSampleArea(
   SphereLight sphereLight, vec2 sampleCoordinates,
   VolumeInteraction viewVolumeInteraction)
 {
+  LightGoboReceiver goboReceiver;
+  goboReceiver.normal = vec3(0.0f);
+  goboReceiver.isVolume = true;
+
   return sphereLightSampleArea(
     sphereLight, sampleCoordinates,
-    viewVolumeInteraction.position, lightGoboVolumeLodBias);
+    viewVolumeInteraction.position, goboReceiver);
 }

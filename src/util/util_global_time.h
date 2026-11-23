@@ -53,6 +53,9 @@ namespace dxvk {
     // whole milliseconds since startup
     uint64_t absoluteTimeMs() const;
 
+    // Milliseconds of animation time, wrapped at 2^24 ms.
+    uint32_t animationTimeMs() const;
+
     // whole milliseconds since startup, ignoring deterministic time settings.
     uint64_t realTimeSinceStartMs() const;
 

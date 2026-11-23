@@ -35,6 +35,17 @@ With a grade that has negative matrix terms, such as Warm Amber, the tone curve 
 - Options: none.
 - Commits: the commit that adds this entry.
 
+### Fix: replacement lights no longer stop taking updates
+Externally tracked lights (mesh replacement lights, game light replacements, retained scene lights) stopped copying updates after `numFramesToKeepLights / 2` updates, whether or not the update changed anything, so a light on a moving mesh froze and edits after a hot reload were lost. A light now only sleeps after that many updates in a row that change nothing, and any change wakes it. The comparison covers every member an update copies, not the hashes, which leave out the radiance, the volumetric scale, the light flags and the gobo. A sleeping or updated light keeps its buffer index and identity, so it keeps its temporal data.
+- Options: none.
+- Commits: the commit that adds this entry.
+
+### Light gobos: flipbooks, motion and filtering, and fixes from a review
+Gobos gained the full attribute set of the upstream change: aspect, wrap modes, strength, invert, alpha, color space, scrolling, rotation, shake, time offsets and flipbooks with blending and four loop modes, filtered with one anisotropic fetch from the pixel or froxel footprint and the emitter size, with a short volumetric history in the cones of animated gobos. Fixes since: one channel textures show as gray, flipbook lookups stay inside their cell at every mip, textures without mips clamp at the mip they have, gobos on game lights are upright in Z-up and left-handed worlds, and the tangent decodes as the CPU encodes it. From the review: the side of the image that is right now follows the handedness of the main camera instead of `rtx.leftHandedCoordinateSystem`, so a left-handed game needs no option, and the handedness holds while the camera is missing. Child lights of a light replacement get an upright image whichever way the game light points. Each wrap mode has its own sampler, so anisotropic taps no longer wrap to the opposite edge of a clamped, extended or mirrored image. A large emitter softens the edge of a clamped image like its content. A camera at the receiver no longer gives a NaN footprint. The debug view no longer starts the clock of a gobo that plays once before it renders, and its tooltip lists every gobo option. A light's conversion no longer allocates a gobo each frame.
+- Options: none. `rtx.leftHandedCoordinateSystem` no longer affects gobos.
+- Commits: the commit that adds this entry.
+- Docs: [LightGobos.md](LightGobos.md), [documentation/LightGobos.md](../documentation/LightGobos.md)
+
 ### Fix: RtxOptions.md matches the runtime's documentation writer again
 Regenerating `RtxOptions.md` with `scripts/gen_rtx_options_md.py` gave a different header and appended environment variable names, which the runtime's writer does not, so `test_documentation` failed. The script now writes the runtime's format.
 - Options: none.

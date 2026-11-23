@@ -134,10 +134,11 @@ struct LightDebugInfo {
   uint32_t goboTextureWidth = 0;
   uint32_t goboTextureHeight = 0;
   uint32_t goboTextureIndex = BINDING_INDEX_INVALID;
-  float goboFovRadians = 0.0f;
-  float goboRotationRadians = 0.0f;
-  Vector2 goboScale = Vector2(1.0f);
-  Vector2 goboOffset = Vector2(0.0f);
+  // The gobo's settings, with the field of view resolved.
+  RtLightGobo gobo;
+  float goboAspect = 1.0f;
+  double goboTimeOffset = 0.0;
+  uint32_t goboCell = 0;
   bool goboProjectionValid = false;
   RtLightGoboGPUData goboProjection = {};
 
@@ -285,7 +286,12 @@ private:
   // The texture cache generations the gobo texture indices in the light buffers were resolved in.
   uint32_t m_lightBufferTextureGeneration = 0;
   uint32_t m_previousLightBufferTextureGeneration = 0;
-  uint32_t m_goboSamplerIndex = BINDING_INDEX_INVALID;
+  // The gobo sampler of each wrap mode, indexed by lightGoboWrapClamp to lightGoboWrapExtend.
+  std::array<uint32_t, 4> m_goboSamplerIndices = { BINDING_INDEX_INVALID, BINDING_INDEX_INVALID, BINDING_INDEX_INVALID, BINDING_INDEX_INVALID };
+  // The world's handedness as the main camera last showed it, see LightUtils::getWorldHandedness.
+  bool m_isWorldLeftHanded = false;
+  // The squared camera distance and buffer index of the nearest animated gobo lights.
+  std::vector<std::pair<float, uint32_t>> m_animatedGoboLights;
 
   uint32_t m_currentActiveLightCount = 0;
   std::array<LightRange, lightTypeCount> m_lightTypeRanges;

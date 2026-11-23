@@ -43,11 +43,24 @@ struct LightGobo
 
   // Note: The texture's U axis in world space. The V axis is cross(primaryAxis, tangent).
   vec3 tangent;
-  // Note: Maps the projected slope to UV space, with the field of view and the user scale already applied.
+  // Note: Maps the projected slope to the UV space of one flipbook cell, with the field of view, aspect and scale applied.
   vec2 uvScale;
   vec2 uvOffset;
-  float log2TextureSize;
+  float strength;
+  float frameBlend;
+  uvec2 spriteSheetSize;
+  uint cell;
+  uint nextCell;
+  uint flags;
   uint16_t textureIndex;
+};
+
+// The point that receives a gobo's light, which sets how widely the gobo is filtered.
+struct LightGoboReceiver
+{
+  // Note: The normal is zero for volumes and for surfaces without a normal.
+  vec3 normal;
+  bool isVolume;
 };
 
 struct MemoryPolymorphicLight

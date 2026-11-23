@@ -151,7 +151,7 @@ namespace dxvk {
     void flushPendingLightMutations(LightManager& mgr);
 
     // Updates an externally tracked or external API light in place, with static-light sleep.
-    // A static light stops copying new data once isStaticCount reaches numFramesToPutLightsToSleep,
+    // A static light stops copying unchanged data once isStaticCount reaches numFramesToPutLightsToSleep,
     // which preserves its temporal denoiser data.
     // Pass kInvalidExternallyTrackedLightId as externalId for an external API light.
     // Implementation in rtx_fork_light.cpp.

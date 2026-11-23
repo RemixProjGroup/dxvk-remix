@@ -105,10 +105,15 @@ struct DomeLightArgs {
 };
 
 struct LightGoboArgs {
-  uint samplerIndex;
+  // The sampler of each wrap mode, indexed by lightGoboWrapClamp to lightGoboWrapExtend.
+  uvec4 samplerIndices;
   // False when the previous frame's lights may hold gobo texture indices from before a texture cache reset.
   uint enablePreviousLightGobos;
-  uint2 pad0;
+  uint animatedLightCount;
+  uint pad0;
+  uint pad1;
+  // The light buffer indices of the animated gobo lights that shorten the volumetric history.
+  uvec4 animatedLightIndices[lightGoboAnimatedLightCapacity / 4];
 };
 
 struct SssArgs {

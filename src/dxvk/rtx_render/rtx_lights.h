@@ -66,6 +66,7 @@ enum class RtLightAntiCullingType {
 };
 
 constexpr uint64_t kInvalidExternallyTrackedLightId = std::numeric_limits<uint64_t>::max();
+constexpr uint64_t kGoboNotStarted = std::numeric_limits<uint64_t>::max();
 constexpr uint32_t kInvalidLightIdentity = 0;
 
 struct RtLightShaping {
@@ -123,6 +124,33 @@ private:
   float m_focusExponent;
 };
 
+enum class RtLightGoboWrapMode : uint8_t {
+  Clamp = lightGoboWrapClamp,   // The image has black around it
+  Repeat = lightGoboWrapRepeat,
+  Mirror = lightGoboWrapMirror,
+  Extend = lightGoboWrapExtend, // The edge texels continue outside of the image
+};
+
+enum class RtLightGoboLoopMode : uint8_t {
+  Loop,
+  Once,
+  PingPong,
+  Random,
+};
+
+enum class RtLightGoboColorSpace : uint8_t {
+  Auto, // The texture format decides
+  Srgb,
+};
+
+// The flipbook cells shown at a point in time.
+struct RtLightGoboFrames {
+  uint32_t cell = 0;
+  uint32_t nextCell = 0;
+  // The weight of the next cell.
+  float blend = 0.0f;
+};
+
 // A texture projected from a sphere light along its shaping direction, see documentation/LightGobos.md.
 struct RtLightGobo {
   TextureRef texture;
@@ -130,17 +158,66 @@ struct RtLightGobo {
   Vector2 offset { 0.0f, 0.0f };
   // Rotation around the shaping direction, counterclockwise as seen from the light.
   float rotationRadians = 0.0f;
-  // The full angle the texture spans.
+  // The full angle that the longer side of the image spans.
   float fovRadians = 0.0f;
+  // The width over the height of the image. Zero derives it from the texels of one flipbook cell.
+  float aspect = 0.0f;
+  RtLightGoboWrapMode wrapMode = RtLightGoboWrapMode::Clamp;
+
+  float strength = 1.0f;
+  bool invert = false;
+  bool useAlpha = false;
+  RtLightGoboColorSpace colorSpace = RtLightGoboColorSpace::Auto;
+
+  Vector2 scrollSpeed { 0.0f, 0.0f };
+  float rotationSpeedRadians = 0.0f;
+  float shakeAngleRadians = 0.0f;
+  float shakeFrequency = 0.0f;
+  float timeOffset = 0.0f;
+  float timeOffsetRandom = 0.0f;
+
+  uint32_t spriteSheetRows = 1;
+  uint32_t spriteSheetCols = 1;
+  // Note: A negative frame rate plays in reverse.
+  float spriteSheetFps = 0.0f;
+  uint32_t spriteSheetFirstFrame = 0;
+  // Note: Zero plays up to the last cell of the sheet.
+  uint32_t spriteSheetFrameCount = 0;
+  bool spriteSheetBlend = false;
+  RtLightGoboLoopMode spriteSheetLoopMode = RtLightGoboLoopMode::Loop;
+
+  // Returns the seconds added to the light's clock. The seed tells copies of a light apart.
+  double getTimeOffset(uint32_t seed) const;
+
+  RtLightGoboFrames getFrames(double timeSeconds, uint32_t seed) const;
+  Vector2 getOffset(double timeSeconds) const;
+  float getRotationRadians(double timeSeconds) const;
+  float getAspect(uint32_t textureWidth, uint32_t textureHeight) const;
+
+  // Returns true when the image changes over time.
+  // Returns false once a flipbook that plays once has ended and nothing else moves.
+  bool isAnimated(double playTimeSeconds) const;
+
+  bool isWrapping() const {
+    return wrapMode == RtLightGoboWrapMode::Repeat || wrapMode == RtLightGoboWrapMode::Mirror;
+  }
+
+private:
+  uint32_t getPlayedFrameCount() const;
 };
 
 // The gobo fields of a sphere light in the form the GPU decodes them, see lightGoboCreate in light_shaping.slangh.
 struct RtLightGoboGPUData {
+  RtLightGoboFrames frames;
   Vector3 tangent;
   Vector2 uvScale;
   Vector2 uvOffset;
+  float strength;
   uint32_t textureIndex;
-  uint32_t log2TextureSize;
+  uint32_t spriteSheetRows;
+  uint32_t spriteSheetCols;
+  uint32_t flags;
+  RtLightGoboWrapMode wrapMode;
 };
 
 struct RtSphereLight {
@@ -517,11 +594,20 @@ struct RtLight {
 
   void applyTransform(const Matrix4& lightToWorld);
 
-  void writeGPUData(unsigned char* data, std::size_t& offset) const;
+  // Turns the gobo of a light placed relative to a parent light, after applyTransform with the parent's transform.
+  // A parent that only has a direction gets a roll around it that depends on the direction, which this removes.
+  // A light without a roll against the parent's Y axis gets an upright image, and other lights keep their roll.
+  void levelGoboUp(const Matrix4& parentToWorld, const Vector3& sceneUp);
+
+  // The world's handedness picks the side of a gobo's image that is right, see LightUtils::getWorldHandedness.
+  void writeGPUData(unsigned char* data, std::size_t& offset, bool isWorldLeftHanded) const;
 
   RtLight& operator=(const RtLight& rtLight);
   
   bool operator==(const RtLight& rhs) const = delete;
+
+  // Returns true when assigning the light would change nothing that is rendered or tracked.
+  bool isUnchangedBy(const RtLight& newLight) const;
 
   Vector4 getColorAndIntensity() const;
 
@@ -693,12 +779,17 @@ struct RtLight {
     return m_gobo.get();
   }
 
-  // Sets the gobo texture's bindless index and the log2 of its largest dimension for the current frame.
+  // Sets the gobo texture's state for the current frame. The size is that of the asset's top mip.
   // An index of BINDING_INDEX_INVALID renders the light without its gobo.
-  void setGoboTexture(const uint16_t textureIndex, const uint16_t log2TextureSize) const {
-    m_goboTextureIndex = textureIndex;
-    m_goboLog2TextureSize = log2TextureSize;
-  }
+  void setGoboTexture(const uint16_t textureIndex, const uint32_t width, const uint32_t height, const VkFormat format) const;
+
+  // Returns the width over the height of the gobo's image, resolved for the current texture.
+  float getGoboAspect() const;
+
+  // Returns the time that the gobo's flipbook plays at, including the light's time offset.
+  double getGoboPlayTime() const;
+
+  bool isGoboAnimated() const;
 
   uint16_t getGoboTextureIndex() const {
     return m_goboTextureIndex;
@@ -710,7 +801,7 @@ struct RtLight {
 
   // Computes the gobo's projection frame in the form the GPU decodes it, whether or not the gobo is rendered this frame.
   // Returns false when the light has no gobo or is not a sphere light with shaping.
-  bool calcGoboProjection(RtLightGoboGPUData& goboData) const;
+  bool calcGoboProjection(RtLightGoboGPUData& goboData, bool isWorldLeftHanded) const;
 
   uint32_t isStaticCount = 0;
   bool isDynamic = false;
@@ -749,7 +840,13 @@ private:
   Vector3 m_goboUp { 0.0f, 1.0f, 0.0f };
   // Note: Set each frame by LightManager::trackGoboTextures before the bindless tables are built.
   mutable uint16_t m_goboTextureIndex = BINDING_INDEX_INVALID;
-  mutable uint16_t m_goboLog2TextureSize = 0;
+  mutable uint16_t m_goboTextureWidth = 1;
+  mutable uint16_t m_goboTextureHeight = 1;
+  mutable bool m_goboTextureIsGrayscale = false;
+  mutable bool m_goboTextureIsSrgb = false;
+  // Note: Set when the gobo is first written to the GPU. Assigning to the light keeps it,
+  // so updating the light does not restart a flipbook that plays once.
+  mutable uint64_t m_goboStartTimeUs = kGoboNotStarted;
 
   // Shared Light Information
   mutable uint32_t m_frameLastTouched = kInvalidFrameIndex;
@@ -778,7 +875,7 @@ private:
 
   void copyFrom(const RtLight& light);
 
-  bool getGoboGPUData(RtLightGoboGPUData& goboData) const;
+  bool getGoboGPUData(RtLightGoboGPUData& goboData, bool isWorldLeftHanded) const;
 };
 
 } // namespace dxvk

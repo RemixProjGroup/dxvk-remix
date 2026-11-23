@@ -34,6 +34,7 @@
 #include "rtx/pass/common_binding_indices.h"
 #include "rtx/pass/raytrace_args.h"
 #include "math.h"
+#include "rtx_light_utils.h"
 #include "rtx_lights.h"
 #include "rtx_intersection_test.h"
 #include "rtx_resources.h"
@@ -465,6 +466,18 @@ namespace dxvk {
       m_lightIdentityData.clear();
     }
 
+    m_animatedGoboLights.clear();
+    const RtCamera& mainCamera = cameraManager.getMainCamera();
+    const Vector3 cameraPosition = mainCamera.getPosition();
+
+    // Note: The handedness is kept while the main camera is missing, as in menus and loading screens.
+    if (cameraManager.isCameraValid(CameraType::Main)) {
+      const int handedness = LightUtils::getWorldHandedness(mainCamera.getWorldToView(false), mainCamera.getViewToProjection());
+      if (handedness != 0) {
+        m_isWorldLeftHanded = handedness > 0;
+      }
+    }
+
     // Write the light data into the previously allocated ranges
     for (auto&& linearizedLight : m_linearizedLights) {
       RtLight& light = *linearizedLight;
@@ -502,16 +515,21 @@ namespace dxvk {
           unsigned char scratch[kLightGPUSize];
           std::memset(scratch, 0xff, kLightGPUSize);
           size_t scratchOffset = 0;
-          light.writeGPUData(scratch, scratchOffset);
+          light.writeGPUData(scratch, scratchOffset, m_isWorldLeftHanded);
           if (std::memcmp(scratch, m_lightsGPUData.data() + dataOffset, kLightGPUSize) != 0) {
             std::memcpy(m_lightsGPUData.data() + dataOffset, scratch, kLightGPUSize);
             m_lightSlotChangedSerial[newBufferIdx] = m_lightPrepSerial;
           }
         } else {
-          light.writeGPUData(m_lightsGPUData.data(), dataOffset);
+          light.writeGPUData(m_lightsGPUData.data(), dataOffset, m_isWorldLeftHanded);
           if (newBufferIdx < m_lightSlotChangedSerial.size()) {
             m_lightSlotChangedSerial[newBufferIdx] = m_lightPrepSerial;
           }
+        }
+
+        // Note: Volumetric lighting keeps a short history in the cones of these lights, see documentation/LightGobos.md.
+        if (light.getGobo() != nullptr && light.getVolumetricRadianceScale() > 0.0f && light.isGoboAnimated()) {
+          m_animatedGoboLights.emplace_back(lengthSqr(light.getPosition() - cameraPosition), newBufferIdx);
         }
 
         // Update the position in buffer for next frame
@@ -523,6 +541,12 @@ namespace dxvk {
         // This light is either disabled or didn't fit into the buffer, so set its buffer index to invalid.
         light.setBufferIdx(kNewLightIdx);
       }
+    }
+
+    if (m_animatedGoboLights.size() > lightGoboAnimatedLightCapacity) {
+      const auto nearestEnd = m_animatedGoboLights.begin() + lightGoboAnimatedLightCapacity;
+      std::nth_element(m_animatedGoboLights.begin(), nearestEnd, m_animatedGoboLights.end());
+      m_animatedGoboLights.resize(lightGoboAnimatedLightCapacity);
     }
 
     // Build the sorted section (B) of the identity table from section (A) so the GPU can map a
@@ -921,6 +945,10 @@ namespace dxvk {
   }
 
   void LightManager::trackGoboTextures() {
+    // Note: Queued API light changes are applied first. A light that changes after its index is assigned would render
+    // without its gobo for that frame.
+    fork_hooks::flushPendingLightMutations(*this);
+
     if (!enableGobos()) {
       return;
     }
@@ -948,16 +976,15 @@ namespace dxvk {
           ONCE(Logger::warn("A light gobo texture failed to load. Lights using it are rendered without their gobo."));
         }
 
-        light.setGoboTexture(BINDING_INDEX_INVALID, 0);
+        light.setGoboTexture(BINDING_INDEX_INVALID, 1, 1, VK_FORMAT_UNDEFINED);
         return;
       }
 
-      // Note: The size of the resident top mip picks the mip level on the GPU,
-      // so it is read every frame to follow streaming and hot reloads.
-      const VkExtent3D extent = pImageView->mipLevelExtent(0);
-      const uint32_t maxDimension = std::max(std::max(extent.width, extent.height), 1u);
-      const uint16_t log2TextureSize = static_cast<uint16_t>(std::ceil(std::log2(static_cast<float>(maxDimension))));
-      light.setGoboTexture(static_cast<uint16_t>(textureIndex), log2TextureSize);
+      // Note: The automatic aspect uses the asset's size, as smaller mips round the sides of the image.
+      const Rc<ManagedTexture>& managedTexture = pGobo->texture.getManagedTexture();
+      const bool hasAssetData = managedTexture != nullptr && managedTexture->m_assetData != nullptr;
+      const VkExtent3D extent = hasAssetData ? managedTexture->m_assetData->info().extent : pImageView->mipLevelExtent(0);
+      light.setGoboTexture(static_cast<uint16_t>(textureIndex), extent.width, extent.height, pImageView->info().format);
     };
 
     for (auto&& pair : m_lights) {
@@ -972,9 +999,16 @@ namespace dxvk {
       trackGoboTexture(pair.second);
     }
 
+    // Note: An image without flipbook cells wraps or clamps in its sampler, so anisotropic taps past its edge follow its wrap mode.
     Resources& resources = device()->getCommon()->getResources();
-    m_goboSamplerIndex = sceneManager.trackSampler(
-      resources.getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE));
+    const auto trackGoboSampler = [&](const VkSamplerAddressMode addressMode) {
+      return sceneManager.trackSampler(resources.getSampler(VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, addressMode, 0.0f, true));
+    };
+
+    m_goboSamplerIndices[lightGoboWrapClamp] = trackGoboSampler(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+    m_goboSamplerIndices[lightGoboWrapRepeat] = trackGoboSampler(VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    m_goboSamplerIndices[lightGoboWrapMirror] = trackGoboSampler(VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT);
+    m_goboSamplerIndices[lightGoboWrapExtend] = m_goboSamplerIndices[lightGoboWrapClamp];
   }
 
   void LightManager::addExternalDomeLight(remixapi_LightHandle handle, const DomeLight& domeLight) {
@@ -1015,9 +1049,21 @@ namespace dxvk {
     // approximate, i.e. the sample counts set by the user are just guidelines and the actual total count can be
     // slightly different.
 
-    raytraceArgs.lightGoboArgs.samplerIndex = m_goboSamplerIndex;
+    raytraceArgs.lightGoboArgs.samplerIndices.x = m_goboSamplerIndices[lightGoboWrapClamp];
+    raytraceArgs.lightGoboArgs.samplerIndices.y = m_goboSamplerIndices[lightGoboWrapRepeat];
+    raytraceArgs.lightGoboArgs.samplerIndices.z = m_goboSamplerIndices[lightGoboWrapMirror];
+    raytraceArgs.lightGoboArgs.samplerIndices.w = m_goboSamplerIndices[lightGoboWrapExtend];
     raytraceArgs.lightGoboArgs.enablePreviousLightGobos =
       enableGobos() && m_previousLightBufferTextureGeneration == m_lightBufferTextureGeneration;
+
+    uint32_t animatedLightIndices[lightGoboAnimatedLightCapacity] = {};
+    for (size_t i = 0; i < m_animatedGoboLights.size(); ++i) {
+      animatedLightIndices[i] = m_animatedGoboLights[i].second;
+    }
+
+    static_assert(sizeof(animatedLightIndices) == sizeof(raytraceArgs.lightGoboArgs.animatedLightIndices));
+    std::memcpy(raytraceArgs.lightGoboArgs.animatedLightIndices, animatedLightIndices, sizeof(animatedLightIndices));
+    raytraceArgs.lightGoboArgs.animatedLightCount = static_cast<uint32_t>(m_animatedGoboLights.size());
 
     raytraceArgs.rtxdiTotalSampleCount = 0;
     raytraceArgs.volumeRISTotalSampleCount = 0;

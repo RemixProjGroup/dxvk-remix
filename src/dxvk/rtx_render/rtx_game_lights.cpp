@@ -111,6 +111,11 @@ namespace dxvk {
         }
         if (replacementLight.relativeTransform()) {
           rtReplacement.applyTransform(transform);
+
+          // Note: The transform of a spot or directional light only has a direction, see RtLight::levelGoboUp.
+          if (light.type != frontend::FixedFunctionLight::Type::Point) {
+            rtReplacement.levelGoboUp(transform, SceneManager::getSceneUp());
+          }
         }
         if (slot < entry.lights.size() && entry.lights[slot] != nullptr) {
           lightManager.updateExternallyTrackedLight(entry.lights[slot], rtReplacement);
